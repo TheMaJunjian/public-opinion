@@ -27,21 +27,33 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const branch = 'copilot/copilot-merge-test';
-            const inputPrNumber = context.payload.inputs?.pr_number;
 
-            // Find the open PR for this branch
-            const { data: prs } = await github.rest.pulls.list({
-              owner, repo,
-              head: `${owner}:${branch}`,
-              state: 'open'
-            });
+            // Support explicit PR number from workflow_dispatch input, or auto-discover
+            const inputPrNumber = context.payload.inputs?.pr_number
+              ? parseInt(context.payload.inputs.pr_number, 10)
+              : null;
 
-            if (prs.length === 0) {
-              core.setFailed('No open PR found for branch ' + branch);
-              return;
+            let pr;
+            if (inputPrNumber) {
+              const { data } = await github.rest.pulls.get({
+                owner, repo, pull_number: inputPrNumber
+              });
+              pr = data;
+              console.log(`Using specified PR #${pr.number}: ${pr.title}`);
+            } else {
+              // Auto-discover open PR for this branch
+              const { data: prs } = await github.rest.pulls.list({
+                owner, repo,
+                head: `${owner}:${branch}`,
+                state: 'open'
+              });
+              if (prs.length === 0) {
+                core.setFailed('No open PR found for branch ' + branch);
+                return;
+              }
+              pr = prs[0];
+              console.log(`Auto-discovered PR #${pr.number}: ${pr.title}`);
             }
-
-            const pr = prs[0];
             console.log(`Found PR #${pr.number}: ${pr.title} (draft=${pr.draft})`);
 
             // Convert draft -> ready for review via GraphQL

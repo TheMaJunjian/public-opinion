@@ -18,7 +18,9 @@ services:
     environment:
       DATABASE_URL: postgresql://gonglun:gonglun_password@postgres:5432/gonglun
       PORT: 3000
-    # JWT_SECRET must be set via a .env file or external secret manager
+      # JWT_SECRET 通过宿主机的 .env 文件注入，生产环境请使用强随机值
+      # 示例：echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+      JWT_SECRET: ${JWT_SECRET:-change_this_in_production}
     depends_on:
       - postgres
 

@@ -1,0 +1,469 @@
+openapi: 3.0.3
+info:
+  title: 公论 (GongLun) API
+  description: 公论结构化讨论系统后端 API
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:3000/api
+    description: 本地开发服务器
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Topic:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [OPEN, ARCHIVED]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        createdBy:
+          $ref: '#/components/schemas/User'
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        topicId:
+          type: string
+        contentType:
+          type: string
+          enum: [TEXT, MARKDOWN]
+        content:
+          type: string
+        quoteSourceId:
+          type: string
+          nullable: true
+        quotedText:
+          type: string
+          nullable: true
+        quotedTextHash:
+          type: string
+          nullable: true
+        quoteContextBefore:
+          type: string
+          nullable: true
+        quoteContextAfter:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          $ref: '#/components/schemas/User'
+
+    Relation:
+      type: object
+      properties:
+        id:
+          type: string
+        topicId:
+          type: string
+        relationType:
+          type: string
+          enum: [QUOTE, REPLY, SUPPORT, OPPOSE, CORRECT, LINK, UNLINK]
+        sourceMessageId:
+          type: string
+        targetRefs:
+          type: array
+          items:
+            type: object
+            properties:
+              targetMessageId:
+                type: string
+              targetSelectedText:
+                type: string
+              targetSelectedTextHash:
+                type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          $ref: '#/components/schemas/User'
+
+    PaginatedResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: {}
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+            totalPages:
+              type: integer
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+paths:
+  /auth/register:
+    post:
+      tags: [认证]
+      summary: 注册新用户
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 2
+                  maxLength: 30
+                password:
+                  type: string
+                  minLength: 6
+            example:
+              username: "alice"
+              password: "password123"
+      responses:
+        '201':
+          description: 注册成功
+        '400':
+          description: 参数校验失败
+        '409':
+          description: 用户名已存在
+
+  /auth/login:
+    post:
+      tags: [认证]
+      summary: 用户登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+            example:
+              username: "alice"
+              password: "password123"
+      responses:
+        '200':
+          description: 登录成功，返回 JWT
+        '401':
+          description: 用户名或密码错误
+
+  /auth/logout:
+    post:
+      tags: [认证]
+      summary: 登出
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 已登出
+        '401':
+          description: 未认证
+
+  /topics:
+    get:
+      tags: [话题]
+      summary: 获取话题列表
+      parameters:
+        - in: query
+          name: query
+          schema:
+            type: string
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [createdAt, updatedAt]
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 话题列表
+
+    post:
+      tags: [话题]
+      summary: 创建话题
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  maxLength: 80
+                body:
+                  type: string
+                  maxLength: 5000
+      responses:
+        '201':
+          description: 话题创建成功
+        '401':
+          description: 未认证
+
+  /topics/{topicId}:
+    get:
+      tags: [话题]
+      summary: 获取单个话题
+      parameters:
+        - in: path
+          name: topicId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 话题详情
+        '404':
+          description: 话题不存在
+
+    patch:
+      tags: [话题]
+      summary: 更新话题状态
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: topicId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [OPEN, ARCHIVED]
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: 无权限
+        '404':
+          description: 话题不存在
+
+    delete:
+      tags: [话题]
+      summary: 删除话题
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: topicId
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 删除成功
+        '403':
+          description: 无权限
+        '404':
+          description: 话题不存在
+
+  /topics/{topicId}/messages:
+    get:
+      tags: [消息]
+      summary: 获取话题消息列表
+      parameters:
+        - in: path
+          name: topicId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 消息列表
+
+    post:
+      tags: [消息]
+      summary: 发布消息
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: topicId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                contentType:
+                  type: string
+                  enum: [TEXT, MARKDOWN]
+                content:
+                  type: string
+                  maxLength: 20000
+                quoteSourceId:
+                  type: string
+                quotedText:
+                  type: string
+                  maxLength: 2000
+                quoteContextBefore:
+                  type: string
+                  maxLength: 200
+                quoteContextAfter:
+                  type: string
+                  maxLength: 200
+      responses:
+        '201':
+          description: 消息创建成功
+        '403':
+          description: 话题已归档
+
+  /topics/{topicId}/relations:
+    get:
+      tags: [关系]
+      summary: 获取话题关系列表
+      parameters:
+        - in: path
+          name: topicId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: 关系列表
+
+    post:
+      tags: [关系]
+      summary: 创建消息关系
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: topicId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [relationType, sourceMessageId, targetRefs]
+              properties:
+                relationType:
+                  type: string
+                  enum: [QUOTE, REPLY, SUPPORT, OPPOSE, CORRECT, LINK, UNLINK]
+                sourceMessageId:
+                  type: string
+                targetRefs:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [targetMessageId]
+                    properties:
+                      targetMessageId:
+                        type: string
+                      targetSelectedText:
+                        type: string
+                      targetSelectedTextHash:
+                        type: string
+      responses:
+        '201':
+          description: 关系创建成功
+        '403':
+          description: 话题已归档
+        '404':
+          description: 消息不存在

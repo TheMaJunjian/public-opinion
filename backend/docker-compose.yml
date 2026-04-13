@@ -1,0 +1,28 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gonglun
+      POSTGRES_PASSWORD: gonglun_password
+      POSTGRES_DB: gonglun
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://gonglun:gonglun_password@postgres:5432/gonglun
+      PORT: 3000
+      # JWT_SECRET 通过宿主机的 .env 文件注入，生产环境请使用强随机值
+      # 示例：echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+      JWT_SECRET: ${JWT_SECRET:-change_this_in_production}
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:

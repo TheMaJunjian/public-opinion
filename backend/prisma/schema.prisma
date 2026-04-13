@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  topics    Topic[]
+  messages  Message[]
+  relations Relation[]
+}
+
+model Topic {
+  id          String      @id @default(cuid())
+  title       String
+  body        String?
+  status      TopicStatus @default(OPEN)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  createdById String
+  createdBy   User        @relation(fields: [createdById], references: [id])
+
+  messages  Message[]
+  relations Relation[]
+}
+
+enum TopicStatus {
+  OPEN
+  ARCHIVED
+}
+
+model Message {
+  id            String      @id @default(cuid())
+  topicId       String
+  createdById   String
+  contentType   ContentType @default(TEXT)
+  content       String
+  quoteSourceId       String?
+  quotedText          String?
+  quotedTextHash      String?
+  quoteContextBefore  String?
+  quoteContextAfter   String?
+  createdAt  DateTime @default(now())
+
+  topic     Topic    @relation(fields: [topicId], references: [id])
+  createdBy User     @relation(fields: [createdById], references: [id])
+}
+
+enum ContentType {
+  TEXT
+  MARKDOWN
+}
+
+model Relation {
+  id              String       @id @default(cuid())
+  topicId         String
+  createdById     String
+  relationType    RelationType
+  sourceMessageId String
+  targetRefs      Json
+  createdAt       DateTime     @default(now())
+
+  topic     Topic    @relation(fields: [topicId], references: [id])
+  createdBy User     @relation(fields: [createdById], references: [id])
+}
+
+enum RelationType {
+  QUOTE
+  REPLY
+  SUPPORT
+  OPPOSE
+  CORRECT
+  LINK
+  UNLINK
+}

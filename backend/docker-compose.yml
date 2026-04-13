@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gonglun
+      POSTGRES_PASSWORD: gonglun_password
+      POSTGRES_DB: gonglun
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://gonglun:gonglun_password@postgres:5432/gonglun
+      JWT_SECRET: change_this_in_production
+      PORT: 3000
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:

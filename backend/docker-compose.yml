@@ -17,8 +17,8 @@ services:
       - "3000:3000"
     environment:
       DATABASE_URL: postgresql://gonglun:gonglun_password@postgres:5432/gonglun
-      JWT_SECRET: change_this_in_production
       PORT: 3000
+    # JWT_SECRET must be set via a .env file or external secret manager
     depends_on:
       - postgres
 

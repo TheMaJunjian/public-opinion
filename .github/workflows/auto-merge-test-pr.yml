@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - copilot/copilot-merge-test
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to merge (default: 5)'
+        required: false
+        default: '5'
 
 permissions:
   contents: write
@@ -21,6 +27,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const branch = 'copilot/copilot-merge-test';
+            const inputPrNumber = context.payload.inputs?.pr_number;
 
             // Find the open PR for this branch
             const { data: prs } = await github.rest.pulls.list({

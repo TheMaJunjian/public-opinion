@@ -25,12 +25,14 @@ const authLimiter = rateLimit({
   message: { error: '请求过于频繁，请稍后再试' },
 });
 
+// 写操作限流（仅限 POST / PATCH / DELETE）
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: '请求过于频繁，请稍后再试' },
+  skip: (req) => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS',
 });
 
 // Load OpenAPI spec and mount Swagger UI

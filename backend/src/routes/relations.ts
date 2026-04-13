@@ -80,11 +80,17 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     const targetIds = data.targetRefs.map((r) => r.targetMessageId);
+    // 检查目标消息 ID 是否有重复
+    const uniqueTargetIds = [...new Set(targetIds)];
+    if (uniqueTargetIds.length !== targetIds.length) {
+      res.status(400).json({ error: 'targetRefs 中存在重复的目标消息 ID' });
+      return;
+    }
     const targetMessages = await prisma.message.findMany({
-      where: { id: { in: targetIds }, topicId },
+      where: { id: { in: uniqueTargetIds }, topicId },
       select: { id: true },
     });
-    if (targetMessages.length !== targetIds.length) {
+    if (targetMessages.length !== uniqueTargetIds.length) {
       res.status(404).json({ error: '部分目标消息不存在或不属于该话题' });
       return;
     }

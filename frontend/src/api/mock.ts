@@ -8,6 +8,9 @@ const users: User[] = [
   { id: 'u3', username: 'charlie', createdAt: '2024-01-03T00:00:00Z' },
 ];
 
+/**
+ * 示例话题：体现公论"永恒、递归、迭代、追溯、求是的会议"特性
+ */
 const topics: Topic[] = [
   {
     id: 't1',
@@ -17,7 +20,7 @@ const topics: Topic[] = [
     createdAt: '2024-02-01T10:00:00Z',
     updatedAt: '2024-02-10T15:00:00Z',
     createdBy: users[0],
-    _count: { messages: 4, relations: 3 },
+    _count: { messages: 7, relations: 7 },
   },
   {
     id: 't2',
@@ -27,26 +30,38 @@ const topics: Topic[] = [
     createdAt: '2024-02-05T09:00:00Z',
     updatedAt: '2024-02-12T11:00:00Z',
     createdBy: users[1],
-    _count: { messages: 3, relations: 2 },
+    _count: { messages: 3, relations: 3 },
   },
   {
     id: 't3',
-    title: '城市化进程与乡村振兴',
-    body: '中国城镇化率已超过65%，但农村地区仍面临人口外流、产业空心化等问题。',
+    title: '乡村振兴：产业支撑还是文化传承优先？',
+    body: '城镇化率已超65%，农村面临人口外流、产业空心化。振兴到底应从何处发力？',
     status: 'ARCHIVED',
     createdAt: '2024-01-15T08:00:00Z',
     updatedAt: '2024-01-30T16:00:00Z',
     createdBy: users[2],
-    _count: { messages: 2, relations: 1 },
+    _count: { messages: 3, relations: 2 },
   },
 ];
 
+/**
+ * 示例消息：展示非线性树的多层讨论结构
+ *
+ * t1 树结构（在 relations 中定义）：
+ *   m1（根：AI取代论）
+ *     └─[REPLY]  m2（反驳：AI创造新职业）
+ *         ├─[SUPPORT] m4（历史比较论支持m2）
+ *         └─[OPPOSE]  m3（不平等论反对m2）
+ *             └─[CORRECT] m5（数据纠正m3的说法）
+ *   m6（根：政策建议，独立线程）
+ *     └─[REPLY] m7（追问政策细节）
+ */
 const messages: Message[] = [
   {
     id: 'm1',
     topicId: 't1',
     contentType: 'TEXT',
-    content: 'AI确实在很多领域取代了重复性劳动，比如流水线工人、数据录入员等。这是不可避免的趋势。',
+    content: 'AI确实在很多领域取代了重复性劳动，比如流水线工人、数据录入员等。这是不可避免的趋势，历史上没有任何技术浪潮能被阻止。',
     createdAt: '2024-02-02T10:00:00Z',
     createdBy: users[0],
   },
@@ -54,7 +69,7 @@ const messages: Message[] = [
     id: 'm2',
     topicId: 't1',
     contentType: 'TEXT',
-    content: '但是AI也在创造新的工作机会，比如AI训练师、提示词工程师等新职业正在涌现。',
+    content: '但是AI也在创造新的工作机会，比如AI训练师、提示词工程师等新职业正在涌现。净效应未必是负的。',
     createdAt: '2024-02-03T11:00:00Z',
     createdBy: users[1],
   },
@@ -62,7 +77,7 @@ const messages: Message[] = [
     id: 'm3',
     topicId: 't1',
     contentType: 'TEXT',
-    content: '我认为AI的发展会导致贫富差距扩大，掌握AI技术的人会获益，而没有技能的人会被淘汰。',
+    content: '新职业集中在高学历群体，AI的发展反而会加剧贫富分化——没有技能的低收入群体将首当其冲被淘汰。',
     createdAt: '2024-02-04T12:00:00Z',
     createdBy: users[2],
   },
@@ -70,107 +85,125 @@ const messages: Message[] = [
     id: 'm4',
     topicId: 't1',
     contentType: 'TEXT',
-    content: '历史上每次技术革命都带来了就业结构的变化，工业革命并没有让大多数人失业，AI也是如此。',
+    content: '历史上每次技术革命都带来了就业结构的变化，但整体就业并未减少。工业革命如此，信息革命如此，AI很可能也是如此。',
     createdAt: '2024-02-05T09:00:00Z',
     createdBy: users[0],
   },
   {
     id: 'm5',
-    topicId: 't2',
+    topicId: 't1',
     contentType: 'TEXT',
-    content: '远程办公让我节省了每天2小时的通勤时间，工作效率反而提高了。',
-    createdAt: '2024-02-06T10:00:00Z',
+    content: '需要纠正一点：根据麦肯锡2023年报告，AI创造的新岗位目前主要集中在大城市和受过高等教育的人群，短期内确实存在结构性失业风险，这与m3的判断部分吻合，但程度没有那么极端。',
+    createdAt: '2024-02-06T08:00:00Z',
     createdBy: users[1],
   },
   {
     id: 'm6',
-    topicId: 't2',
+    topicId: 't1',
     contentType: 'TEXT',
-    content: '但是居家办公的边界感很差，经常出现工作时间延长、难以切换到生活状态的问题。',
-    createdAt: '2024-02-07T14:00:00Z',
+    content: '无论结论如何，政策层面应当建立"再培训基金"，对被AI替代的工人提供职业转型支持，这是共识层面最低成本的应对。',
+    createdAt: '2024-02-07T10:00:00Z',
     createdBy: users[2],
   },
   {
     id: 'm7',
-    topicId: 't2',
+    topicId: 't1',
     contentType: 'TEXT',
-    content: '团队协作和创新需要面对面交流，完全远程会影响团队凝聚力和创造力。',
-    createdAt: '2024-02-08T16:00:00Z',
+    content: '再培训基金听起来好，但资金从哪里来？对AI企业征收"自动化税"是可行方案吗？',
+    createdAt: '2024-02-08T09:00:00Z',
     createdBy: users[0],
   },
+  // t2 消息
   {
     id: 'm8',
-    topicId: 't3',
+    topicId: 't2',
     contentType: 'TEXT',
-    content: '乡村振兴的关键在于产业振兴，没有产业支撑的振兴只是空谈。',
-    createdAt: '2024-01-16T10:00:00Z',
+    content: '远程办公让我节省了每天2小时的通勤时间，工作效率反而提高了20%，健康状况也改善了。',
+    createdAt: '2024-02-06T10:00:00Z',
     createdBy: users[1],
   },
   {
     id: 'm9',
-    topicId: 't3',
+    topicId: 't2',
     contentType: 'TEXT',
-    content: '数字经济为农村发展提供了新机遇，电商直播让农产品直达消费者。',
-    createdAt: '2024-01-20T11:00:00Z',
+    content: '居家办公的边界感很差，经常出现工作时间延长、无法切换的问题；而且团队协作和创新需要面对面，完全远程会影响凝聚力。',
+    createdAt: '2024-02-07T14:00:00Z',
     createdBy: users[2],
   },
-];
-
-const relations: Relation[] = [
   {
-    id: 'r1',
-    topicId: 't1',
-    relationType: 'SUPPORT',
-    sourceMessageId: 'm4',
-    targetRefs: [{ targetMessageId: 'm2' }],
-    createdAt: '2024-02-05T10:00:00Z',
+    id: 'm10',
+    topicId: 't2',
+    contentType: 'TEXT',
+    content: '混合办公（每周2-3天在家，其余到岗）可以兼顾两者优势，这已经是很多科技公司的共识。',
+    createdAt: '2024-02-08T16:00:00Z',
     createdBy: users[0],
   },
+  // t3 消息
   {
-    id: 'r2',
-    topicId: 't1',
-    relationType: 'OPPOSE',
-    sourceMessageId: 'm3',
-    targetRefs: [{ targetMessageId: 'm2' }],
-    createdAt: '2024-02-04T13:00:00Z',
-    createdBy: users[2],
-  },
-  {
-    id: 'r3',
-    topicId: 't1',
-    relationType: 'REPLY',
-    sourceMessageId: 'm2',
-    targetRefs: [{ targetMessageId: 'm1' }],
-    createdAt: '2024-02-03T11:30:00Z',
+    id: 'm11',
+    topicId: 't3',
+    contentType: 'TEXT',
+    content: '乡村振兴的关键在于产业振兴，没有产业支撑的振兴只是空谈。文化保护是奢侈品，先解决温饱再谈文化。',
+    createdAt: '2024-01-16T10:00:00Z',
     createdBy: users[1],
   },
   {
-    id: 'r4',
-    topicId: 't2',
-    relationType: 'OPPOSE',
-    sourceMessageId: 'm6',
-    targetRefs: [{ targetMessageId: 'm5' }],
-    createdAt: '2024-02-07T15:00:00Z',
+    id: 'm12',
+    topicId: 't3',
+    contentType: 'TEXT',
+    content: '数字经济为农村发展提供了新机遇，电商直播让农产品直达消费者，这本身就是产业+文化的结合。',
+    createdAt: '2024-01-20T11:00:00Z',
     createdBy: users[2],
   },
   {
-    id: 'r5',
-    topicId: 't2',
-    relationType: 'SUPPORT',
-    sourceMessageId: 'm7',
-    targetRefs: [{ targetMessageId: 'm6' }],
-    createdAt: '2024-02-08T17:00:00Z',
+    id: 'm13',
+    topicId: 't3',
+    contentType: 'TEXT',
+    content: '不能把"先产业后文化"当作对立命题，传统手工艺、民俗旅游本身就是高附加值产业，文化保护就是产业振兴。',
+    createdAt: '2024-01-22T09:00:00Z',
     createdBy: users[0],
   },
-  {
-    id: 'r6',
-    topicId: 't3',
-    relationType: 'CORRECT',
-    sourceMessageId: 'm9',
-    targetRefs: [{ targetMessageId: 'm8' }],
-    createdAt: '2024-01-20T12:00:00Z',
-    createdBy: users[2],
-  },
+];
+
+/**
+ * 关系数据：定义消息之间的非线性连接
+ * 关系本身也是可查询、可追溯的信息节点
+ *
+ * t1 树：
+ *   m2 -[REPLY]→   m1
+ *   m4 -[SUPPORT]→ m2
+ *   m3 -[OPPOSE]→  m2
+ *   m5 -[CORRECT]→ m3
+ *   m7 -[REPLY]→   m6
+ *
+ * t2 树：
+ *   m9  -[OPPOSE]→  m8
+ *   m10 -[REPLY]→   m9
+ *
+ * t3 树：
+ *   m12 -[OPPOSE]→  m11  （"数字经济"反对"纯产业论"）
+ *   m13 -[CORRECT]→ m11  （"文化即产业"纠正m11）
+ */
+
+const relations: Relation[] = [
+  // t1: m2 回复 m1（反驳AI取代论）
+  { id: 'r1', topicId: 't1', relationType: 'REPLY',   sourceMessageId: 'm2', targetRefs: [{ targetMessageId: 'm1' }], createdAt: '2024-02-03T11:30:00Z', createdBy: users[1] },
+  // t1: m4 支持 m2（历史比较论支持新职业论）
+  { id: 'r2', topicId: 't1', relationType: 'SUPPORT', sourceMessageId: 'm4', targetRefs: [{ targetMessageId: 'm2' }], createdAt: '2024-02-05T10:00:00Z', createdBy: users[0] },
+  // t1: m3 反对 m2（不平等论反对新职业论）
+  { id: 'r3', topicId: 't1', relationType: 'OPPOSE',  sourceMessageId: 'm3', targetRefs: [{ targetMessageId: 'm2' }], createdAt: '2024-02-04T13:00:00Z', createdBy: users[2] },
+  // t1: m5 纠正 m3（引用报告数据纠正不平等论的程度）
+  { id: 'r4', topicId: 't1', relationType: 'CORRECT', sourceMessageId: 'm5', targetRefs: [{ targetMessageId: 'm3' }], createdAt: '2024-02-06T09:00:00Z', createdBy: users[1] },
+  // t1: m7 回复 m6（追问再培训基金的资金来源）
+  { id: 'r5', topicId: 't1', relationType: 'REPLY',   sourceMessageId: 'm7', targetRefs: [{ targetMessageId: 'm6' }], createdAt: '2024-02-08T09:30:00Z', createdBy: users[0] },
+  // t2: m9 反对 m8
+  { id: 'r6', topicId: 't2', relationType: 'OPPOSE',  sourceMessageId: 'm9',  targetRefs: [{ targetMessageId: 'm8' }],  createdAt: '2024-02-07T15:00:00Z', createdBy: users[2] },
+  // t2: m10 回复 m9（混合办公方案）
+  { id: 'r7', topicId: 't2', relationType: 'REPLY',   sourceMessageId: 'm10', targetRefs: [{ targetMessageId: 'm9' }],  createdAt: '2024-02-08T17:00:00Z', createdBy: users[0] },
+  // t3: m12 反对 m11
+  { id: 'r8', topicId: 't3', relationType: 'OPPOSE',  sourceMessageId: 'm12', targetRefs: [{ targetMessageId: 'm11' }], createdAt: '2024-01-20T12:00:00Z', createdBy: users[2] },
+  // t3: m13 纠正 m11（文化即产业）
+  { id: 'r9', topicId: 't3', relationType: 'CORRECT', sourceMessageId: 'm13', targetRefs: [{ targetMessageId: 'm11' }], createdAt: '2024-01-22T10:00:00Z', createdBy: users[0] },
 ];
 
 let mockToken: string | null = null;

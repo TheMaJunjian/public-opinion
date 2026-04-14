@@ -65,7 +65,9 @@ export default function TopicListPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">话题广场</h1>
-          <p className="text-sm text-gray-500 mt-0.5">探索和参与公共讨论</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            非线性表显示和交互系统 · 消息是节点，关系也是消息
+          </p>
         </div>
         {user && (
           <button

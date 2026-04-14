@@ -4,10 +4,13 @@ import type { Topic, Message, Relation } from '../types';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import MessageCard from '../components/MessageCard';
+import MessageThread from '../components/MessageThread';
 import MessageForm from '../components/MessageForm';
 import RelationForm from '../components/RelationForm';
 import RelationBadge from '../components/RelationBadge';
+import { buildMessageTree, computeStanceStats } from '../utils/graph';
 
+/** 话题详情页：展示消息流与关系图谱，支持"线性"与"非线性"两种视图切换 */
 export default function TopicDetailPage() {
   const { topicId } = useParams<{ topicId: string }>();
   const { user } = useAuth();
@@ -20,6 +23,8 @@ export default function TopicDetailPage() {
   const [msgPage, setMsgPage] = useState(1);
   const [msgTotalPages, setMsgTotalPages] = useState(1);
   const [activeTab, setActiveTab] = useState<'relations' | 'addRelation'>('relations');
+  /** 视图模式：非线性树视图（默认）或线性时间轴 */
+  const [viewMode, setViewMode] = useState<'tree' | 'linear'>('tree');
 
   const load = useCallback(async () => {
     if (!topicId) return;
@@ -73,9 +78,13 @@ export default function TopicDetailPage() {
 
   const isOwner = user?.id === topic.createdBy.id;
 
+  // 构建非线性树结构与立场统计（仅 tree 视图使用）
+  const messageTree = viewMode === 'tree' ? buildMessageTree(messages, relations) : [];
+  const stanceStatsMap = computeStanceStats(messages, relations);
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
-      {/* Header */}
+      {/* 话题头部 */}
       <div className="mb-6">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -113,16 +122,83 @@ export default function TopicDetailPage() {
       </div>
 
       <div className="flex gap-6">
-        {/* Main: Messages */}
-        <div className="flex-1 min-w-0 space-y-4">
+        {/* 主区域：消息视图 */}
+        <div className="flex-1 min-w-0">
+          {/* 视图切换工具栏 */}
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm text-gray-500">
+              共 {messages.length} 条观点 · {relations.length} 条关系
+            </span>
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+              <button
+                onClick={() => setViewMode('tree')}
+                className={`px-3 py-1.5 font-medium transition-colors ${
+                  viewMode === 'tree'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-gray-500 hover:bg-gray-50'
+                }`}
+                title="非线性树状视图：按关系结构展示讨论分支"
+              >
+                非线性视图
+              </button>
+              <button
+                onClick={() => setViewMode('linear')}
+                className={`px-3 py-1.5 font-medium transition-colors border-l border-gray-200 ${
+                  viewMode === 'linear'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-gray-500 hover:bg-gray-50'
+                }`}
+                title="线性时间轴视图：按发布时间顺序排列"
+              >
+                时间轴
+              </button>
+            </div>
+          </div>
+
           {messages.length === 0 ? (
             <div className="text-center py-10 text-gray-400 bg-white border border-gray-200 rounded-lg">
               暂无观点，来第一个发言吧！
             </div>
+          ) : viewMode === 'tree' ? (
+            /* 非线性树视图 */
+            <div className="space-y-4">
+              {messageTree.length > 0 ? (
+                messageTree.map(node => (
+                  <MessageThread
+                    key={node.message.id}
+                    node={node}
+                    topicId={topicId!}
+                    stanceStatsMap={stanceStatsMap}
+                    depth={0}
+                  />
+                ))
+              ) : (
+                /* 无树型关系时，降级为平铺卡片 */
+                messages.map(msg => (
+                  <MessageCard
+                    key={msg.id}
+                    message={msg}
+                    topicId={topicId!}
+                    stanceStats={stanceStatsMap.get(msg.id)}
+                  />
+                ))
+              )}
+            </div>
           ) : (
-            messages.map(msg => <MessageCard key={msg.id} message={msg} topicId={topicId!} />)
+            /* 线性时间轴视图 */
+            <div className="space-y-4">
+              {messages.map(msg => (
+                <MessageCard
+                  key={msg.id}
+                  message={msg}
+                  topicId={topicId!}
+                  stanceStats={stanceStatsMap.get(msg.id)}
+                />
+              ))}
+            </div>
           )}
 
+          {/* 分页 */}
           {msgTotalPages > 1 && (
             <div className="flex justify-center gap-3 mt-4">
               <button onClick={() => setMsgPage(p => Math.max(1, p - 1))} disabled={msgPage === 1}
@@ -133,8 +209,11 @@ export default function TopicDetailPage() {
             </div>
           )}
 
+          {/* 发言表单 */}
           {user && topic.status === 'OPEN' && (
-            <MessageForm onSubmit={handleCreateMessage} />
+            <div className="mt-6">
+              <MessageForm onSubmit={handleCreateMessage} />
+            </div>
           )}
           {!user && (
             <p className="text-center text-sm text-gray-400 py-4">
@@ -143,7 +222,7 @@ export default function TopicDetailPage() {
           )}
         </div>
 
-        {/* Sidebar: Relations */}
+        {/* 侧边栏：关联图谱 */}
         <aside className="w-80 shrink-0 space-y-4">
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
             <div className="flex border-b border-gray-200">
@@ -170,12 +249,16 @@ export default function TopicDetailPage() {
                   <div className="space-y-2">
                     {relations.map(rel => {
                       const src = messages.find(m => m.id === rel.sourceMessageId);
-                      const tgts = rel.targetRefs.map(ref => messages.find(m => m.id === ref.targetMessageId)).filter(Boolean);
+                      const tgts = rel.targetRefs
+                        .map(ref => messages.find(m => m.id === ref.targetMessageId))
+                        .filter(Boolean);
                       return (
                         <div key={rel.id} className="text-xs text-gray-600 flex flex-wrap items-center gap-1.5">
                           <span className="font-medium">{src?.createdBy.username ?? '?'}</span>
                           <RelationBadge type={rel.relationType} />
-                          {tgts.map(t => t && <span key={t.id} className="font-medium">{t.createdBy.username}</span>)}
+                          {tgts.map(t => t && (
+                            <span key={t.id} className="font-medium">{t.createdBy.username}</span>
+                          ))}
                         </div>
                       );
                     })}
@@ -186,6 +269,40 @@ export default function TopicDetailPage() {
               )}
             </div>
           </div>
+
+          {/* 立场统计汇总 */}
+          {messages.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">立场统计</h3>
+              <div className="space-y-1.5">
+                {messages.map(msg => {
+                  const stats = stanceStatsMap.get(msg.id);
+                  if (!stats || (stats.support === 0 && stats.oppose === 0)) return null;
+                  const total = stats.support + stats.oppose;
+                  const supportPct = total > 0 ? Math.round((stats.support / total) * 100) : 0;
+                  return (
+                    <div key={msg.id} className="text-xs">
+                      <div className="text-gray-500 truncate mb-0.5">{msg.content.slice(0, 28)}…</div>
+                      <div className="flex items-center gap-1">
+                        <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="h-full bg-green-400 rounded-full"
+                            style={{ width: `${supportPct}%` }}
+                          />
+                        </div>
+                        <span className="text-green-600 w-8 text-right">{stats.support}↑</span>
+                        <span className="text-red-500 w-8 text-right">{stats.oppose}↓</span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {messages.every(m => {
+                  const s = stanceStatsMap.get(m.id);
+                  return !s || (s.support === 0 && s.oppose === 0);
+                }) && <p className="text-xs text-gray-400">尚无立场表达</p>}
+              </div>
+            </div>
+          )}
         </aside>
       </div>
     </div>

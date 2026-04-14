@@ -56,3 +56,23 @@ export interface PaginatedResponse<T> {
 }
 
 export type RelationType = 'QUOTE' | 'REPLY' | 'SUPPORT' | 'OPPOSE' | 'CORRECT' | 'LINK' | 'UNLINK';
+
+/** 某条消息被其他消息「支持」或「反对」的汇总统计 */
+export interface StanceStats {
+  support: number;
+  oppose: number;
+}
+
+/**
+ * MessageNode — 非线性树结构的节点
+ *
+ * 公论核心理念：消息是节点；消息的关系也是消息。
+ * buildMessageTree() 将线性消息列表转换为该树形结构。
+ */
+export interface MessageNode {
+  message: Message;
+  /** 将该节点引入树的关系类型（REPLY/SUPPORT/OPPOSE/CORRECT），根节点无此字段 */
+  relationType?: string;
+  relationId?: string;
+  children: MessageNode[];
+}

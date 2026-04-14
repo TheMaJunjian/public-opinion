@@ -5,6 +5,7 @@ interface Props {
   topic: Topic;
 }
 
+/** 话题卡片：显示话题概要，非线性结构的条目入口 */
 export default function TopicCard({ topic }: Props) {
   const isOpen = topic.status === 'OPEN';
   return (
@@ -29,8 +30,11 @@ export default function TopicCard({ topic }: Props) {
         <span>由 <span className="font-medium text-gray-600">{topic.createdBy.username}</span> 发起</span>
         {topic._count && (
           <>
+            {/* 观点数 = 节点数；关联数 = 关系数（非线性表结构的核心统计） */}
             <span>💬 {topic._count.messages} 条观点</span>
-            {topic._count.relations != null && <span>🔗 {topic._count.relations} 条关联</span>}
+            {topic._count.relations != null && (
+              <span>🔗 {topic._count.relations} 条关联</span>
+            )}
           </>
         )}
         <span>{new Date(topic.createdAt).toLocaleDateString('zh-CN')}</span>

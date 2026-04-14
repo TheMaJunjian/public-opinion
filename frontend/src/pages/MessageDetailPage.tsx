@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import type { Message, Relation } from '../types';
 import { api } from '../api';
+import { computeStanceStats } from '../utils/graph';
 import MessageCard from '../components/MessageCard';
 import RelationView from '../components/RelationView';
 
+/** 消息详情页：展示单条观点及其完整关联分析（非线性节点视图） */
 export default function MessageDetailPage() {
   const { topicId, messageId } = useParams<{ topicId: string; messageId: string }>();
   const [message, setMessage] = useState<Message | null>(null);
@@ -36,9 +38,12 @@ export default function MessageDetailPage() {
   if (error) return <div className="text-center py-20 text-red-500">{error}</div>;
   if (!message) return null;
 
-  // Related messages IDs for display
+  const stanceStatsMap = computeStanceStats(messages, relations);
+
+  // 与当前消息相关的其他节点
   const relatedIds = new Set<string>();
-  relations.filter(r => r.sourceMessageId === messageId || r.targetRefs.some(ref => ref.targetMessageId === messageId))
+  relations
+    .filter(r => r.sourceMessageId === messageId || r.targetRefs.some(ref => ref.targetMessageId === messageId))
     .forEach(r => {
       relatedIds.add(r.sourceMessageId);
       r.targetRefs.forEach(ref => relatedIds.add(ref.targetMessageId));
@@ -56,8 +61,13 @@ export default function MessageDetailPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
-          <h2 className="text-base font-semibold text-gray-700 mb-3">观点详情</h2>
-          <MessageCard message={message} topicId={topicId!} highlighted />
+          <h2 className="text-base font-semibold text-gray-700 mb-3">节点详情</h2>
+          <MessageCard
+            message={message}
+            topicId={topicId!}
+            highlighted
+            stanceStats={stanceStatsMap.get(message.id)}
+          />
         </div>
 
         <div>
@@ -72,10 +82,15 @@ export default function MessageDetailPage() {
           </div>
           {relatedMessages.length > 0 && (
             <div className="mt-4">
-              <h3 className="text-sm font-semibold text-gray-600 mb-2">相关观点</h3>
+              <h3 className="text-sm font-semibold text-gray-600 mb-2">相关节点</h3>
               <div className="space-y-2">
                 {relatedMessages.map(m => (
-                  <MessageCard key={m.id} message={m} topicId={topicId!} />
+                  <MessageCard
+                    key={m.id}
+                    message={m}
+                    topicId={topicId!}
+                    stanceStats={stanceStatsMap.get(m.id)}
+                  />
                 ))}
               </div>
             </div>

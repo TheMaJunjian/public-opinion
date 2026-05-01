@@ -1,22 +1,11 @@
 import { useState } from 'react';
 
 interface Props {
-  onSubmit: (data: {
-    content: string;
-    quoteSourceId?: string;
-    quotedText?: string;
-    quoteContextBefore?: string;
-    quoteContextAfter?: string;
-  }) => Promise<void>;
+  onSubmit: (data: { content: string; contentType?: 'TEXT' | 'MARKDOWN' }) => Promise<void>;
 }
 
 export default function MessageForm({ onSubmit }: Props) {
   const [content, setContent] = useState('');
-  const [showQuote, setShowQuote] = useState(false);
-  const [quoteSourceId, setQuoteSourceId] = useState('');
-  const [quotedText, setQuotedText] = useState('');
-  const [quoteContextBefore, setQuoteContextBefore] = useState('');
-  const [quoteContextAfter, setQuoteContextAfter] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -26,19 +15,8 @@ export default function MessageForm({ onSubmit }: Props) {
     setError('');
     setSubmitting(true);
     try {
-      await onSubmit({
-        content: content.trim(),
-        quoteSourceId: showQuote ? quoteSourceId : undefined,
-        quotedText: showQuote ? quotedText : undefined,
-        quoteContextBefore: showQuote ? quoteContextBefore : undefined,
-        quoteContextAfter: showQuote ? quoteContextAfter : undefined,
-      });
+      await onSubmit({ content: content.trim() });
       setContent('');
-      setQuoteSourceId('');
-      setQuotedText('');
-      setQuoteContextBefore('');
-      setQuoteContextAfter('');
-      setShowQuote(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '发表失败，请重试');
     } finally {
@@ -57,45 +35,9 @@ export default function MessageForm({ onSubmit }: Props) {
         rows={4}
         className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
       />
-      <div className="mt-2">
-        <button
-          type="button"
-          onClick={() => setShowQuote(!showQuote)}
-          className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-        >
-          {showQuote ? '▲ 收起引用' : '▼ 添加引用（可选）'}
-        </button>
-      </div>
-      {showQuote && (
-        <div className="mt-3 space-y-2 border-t pt-3">
-          <input
-            value={quoteSourceId}
-            onChange={e => setQuoteSourceId(e.target.value)}
-            placeholder="引用来源消息 ID（可选）"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-          <input
-            value={quotedText}
-            onChange={e => setQuotedText(e.target.value)}
-            placeholder="引用文本片段"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-          <div className="flex gap-2">
-            <input
-              value={quoteContextBefore}
-              onChange={e => setQuoteContextBefore(e.target.value)}
-              placeholder="前置上下文"
-              className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            />
-            <input
-              value={quoteContextAfter}
-              onChange={e => setQuoteContextAfter(e.target.value)}
-              placeholder="后置上下文"
-              className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            />
-          </div>
-        </div>
-      )}
+      <p className="text-xs text-gray-400 mt-1">
+        提示：发表后可通过"添加关系"与其他观点建立关联（引用、支持、反驳等）
+      </p>
       <div className="mt-3 flex justify-end">
         <button
           type="submit"
@@ -108,3 +50,4 @@ export default function MessageForm({ onSubmit }: Props) {
     </form>
   );
 }
+

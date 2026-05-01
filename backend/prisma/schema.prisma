@@ -61,24 +61,14 @@ enum ContentType {
 }
 
 model Relation {
-  id              String       @id @default(cuid())
+  id              String   @id @default(cuid())
   topicId         String
   createdById     String
-  relationType    RelationType
+  relationType    String
   sourceMessageId String
   targetRefs      Json
-  createdAt       DateTime     @default(now())
+  createdAt       DateTime @default(now())
 
   topic     Topic    @relation(fields: [topicId], references: [id])
   createdBy User     @relation(fields: [createdById], references: [id])
-}
-
-enum RelationType {
-  QUOTE
-  REPLY
-  SUPPORT
-  OPPOSE
-  CORRECT
-  LINK
-  UNLINK
 }

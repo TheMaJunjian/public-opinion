@@ -5,22 +5,78 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const relationsRouter = Router({ mergeParams: true });
 
-const targetRefSchema = z.object({
-  targetMessageId: z.string().min(1, '目标消息 ID 不能为空'),
-  targetSelectedText: z.string().max(2000).optional(),
-  targetSelectedTextHash: z.string().optional(),
-});
+// ============================================================
+// Validation Schemas
+// ============================================================
+
+/**
+ * All currently supported relation types.
+ * Using a string enum here for runtime validation; the DB column is plain TEXT
+ * so new types can be added here without a migration.
+ */
+const RELATION_TYPES = [
+  'ANNOTATION',   // 注释
+  'REFERENCE',    // 引用
+  'REPLY',        // 回复
+  'AGREE',        // 赞同
+  'DISAGREE',     // 反对
+  'SUPPORT',      // 支持（含立场表达）
+  'REBUT',        // 反驳
+  'CORRECT',      // 更正
+  'SUPPLEMENT',   // 补充
+  'CLASSIFY',     // 分类
+  'MERGE',        // 归并
+  'SUMMARY',      // 总结
+  'RECOMMEND',    // 推荐
+  'ARCHIVE',      // 冷藏
+] as const;
+
+/**
+ * TargetRef - a discriminated union for what a relation points to.
+ *
+ * 'message'       - targets a whole text message
+ * 'text-fragment' - targets a specific fragment of a text message
+ * 'relation'      - targets a relation message (or a specific selectable part of it)
+ *
+ * Sources (sourceMessageId) must always be text messages.
+ * Targets can be text messages, fragments, OR relation messages.
+ */
+const targetRefSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('message'),
+    messageId: z.string().min(1, '消息 ID 不能为空'),
+  }),
+  z.object({
+    kind: z.literal('text-fragment'),
+    messageId: z.string().min(1, '消息 ID 不能为空'),
+    text: z.string().min(1).max(2000),
+    hash: z.string().min(1),
+    contextBefore: z.string().max(200).optional(),
+    contextAfter: z.string().max(200).optional(),
+  }),
+  z.object({
+    kind: z.literal('relation'),
+    relationId: z.string().min(1, '关系消息 ID 不能为空'),
+    part: z.enum(['label', 'decoration', 'frame', 'whole']).optional(),
+  }),
+]);
 
 const createRelationSchema = z.object({
-  relationType: z.enum(['QUOTE', 'REPLY', 'SUPPORT', 'OPPOSE', 'CORRECT', 'LINK', 'UNLINK']),
+  relationType: z.enum(RELATION_TYPES, {
+    errorMap: () => ({ message: `关系类型必须是以下之一: ${RELATION_TYPES.join(', ')}` }),
+  }),
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空'),
-  targetRefs: z.array(targetRefSchema).min(1, '至少需要一个目标引用'),
+  targetRefs: z.array(targetRefSchema).min(1, '至少需要一个目标引用').max(20),
 });
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
 });
+
+// ============================================================
+// Routes
+// ============================================================
 
 // GET /api/topics/:topicId/relations
 relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -71,6 +127,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
+    // sourceMessageId must reference a text message in this topic
     const sourceMessage = await prisma.message.findFirst({
       where: { id: data.sourceMessageId, topicId },
     });
@@ -79,20 +136,46 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    const targetIds = data.targetRefs.map((r) => r.targetMessageId);
-    // 检查目标消息 ID 是否有重复
-    const uniqueTargetIds = [...new Set(targetIds)];
-    if (uniqueTargetIds.length !== targetIds.length) {
-      res.status(400).json({ error: 'targetRefs 中存在重复的目标消息 ID' });
+    // Validate all target refs
+    const targetMessageIds = data.targetRefs
+      .filter(r => r.kind === 'message' || r.kind === 'text-fragment')
+      .map(r => (r as { kind: 'message' | 'text-fragment'; messageId: string }).messageId);
+
+    const targetRelationIds = data.targetRefs
+      .filter(r => r.kind === 'relation')
+      .map(r => (r as { kind: 'relation'; relationId: string }).relationId);
+
+    // Check for duplicate target IDs
+    const allTargetIds = [...targetMessageIds, ...targetRelationIds];
+    if (new Set(allTargetIds).size !== allTargetIds.length) {
+      res.status(400).json({ error: 'targetRefs 中存在重复的目标 ID' });
       return;
     }
-    const targetMessages = await prisma.message.findMany({
-      where: { id: { in: uniqueTargetIds }, topicId },
-      select: { id: true },
-    });
-    if (targetMessages.length !== uniqueTargetIds.length) {
-      res.status(404).json({ error: '部分目标消息不存在或不属于该话题' });
-      return;
+
+    // Validate target messages exist in this topic
+    if (targetMessageIds.length > 0) {
+      const uniqueMessageIds = [...new Set(targetMessageIds)];
+      const foundMessages = await prisma.message.findMany({
+        where: { id: { in: uniqueMessageIds }, topicId },
+        select: { id: true },
+      });
+      if (foundMessages.length !== uniqueMessageIds.length) {
+        res.status(404).json({ error: '部分目标消息不存在或不属于该话题' });
+        return;
+      }
+    }
+
+    // Validate target relations exist in this topic
+    if (targetRelationIds.length > 0) {
+      const uniqueRelationIds = [...new Set(targetRelationIds)];
+      const foundRelations = await prisma.relation.findMany({
+        where: { id: { in: uniqueRelationIds }, topicId },
+        select: { id: true },
+      });
+      if (foundRelations.length !== uniqueRelationIds.length) {
+        res.status(404).json({ error: '部分目标关系消息不存在或不属于该话题' });
+        return;
+      }
     }
 
     const relation = await prisma.relation.create({

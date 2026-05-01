@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import type { Message, Relation } from '../types';
+import { getTargetMessageIds } from '../types';
 import { api } from '../api';
 import { computeStanceStats } from '../utils/graph';
 import MessageCard from '../components/MessageCard';
 import RelationView from '../components/RelationView';
 
-/** 消息详情页：展示单条观点及其完整关联分析（非线性节点视图） */
+/** Message detail page: shows a single message and its full relation analysis */
 export default function MessageDetailPage() {
   const { topicId, messageId } = useParams<{ topicId: string; messageId: string }>();
   const [message, setMessage] = useState<Message | null>(null);
@@ -19,8 +20,8 @@ export default function MessageDetailPage() {
     if (!topicId || !messageId) return;
     setLoading(true);
     Promise.all([
-      api.getMessages(topicId, { limit: 50 }),
-      api.getRelations(topicId, { limit: 50 }),
+      api.getMessages(topicId, { limit: 100 }),
+      api.getRelations(topicId, { limit: 100 }),
     ]).then(([msgRes, relRes]) => {
       setMessages(msgRes.data);
       setRelations(relRes.data);
@@ -40,13 +41,18 @@ export default function MessageDetailPage() {
 
   const stanceStatsMap = computeStanceStats(messages, relations);
 
-  // 与当前消息相关的其他节点
+  // Find related messages (those connected to this message via any relation)
   const relatedIds = new Set<string>();
   relations
-    .filter(r => r.sourceMessageId === messageId || r.targetRefs.some(ref => ref.targetMessageId === messageId))
+    .filter(r => {
+      if (r.sourceMessageId === messageId) return true;
+      return r.targetRefs.some(ref =>
+        (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === messageId,
+      );
+    })
     .forEach(r => {
       relatedIds.add(r.sourceMessageId);
-      r.targetRefs.forEach(ref => relatedIds.add(ref.targetMessageId));
+      getTargetMessageIds(r.targetRefs).forEach(id => relatedIds.add(id));
     });
   relatedIds.delete(messageId!);
   const relatedMessages = messages.filter(m => relatedIds.has(m.id));
@@ -100,3 +106,4 @@ export default function MessageDetailPage() {
     </div>
   );
 }
+

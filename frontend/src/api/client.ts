@@ -74,10 +74,6 @@ export function getMessages(topicId: string, params?: { page?: number; limit?: n
 export function createMessage(topicId: string, data: {
   contentType?: 'TEXT' | 'MARKDOWN';
   content: string;
-  quoteSourceId?: string;
-  quotedText?: string;
-  quoteContextBefore?: string;
-  quoteContextAfter?: string;
 }) {
   return request<import('../types').Message>(`/topics/${topicId}/messages`, {
     method: 'POST',
@@ -102,3 +98,4 @@ export function createRelation(topicId: string, data: {
     body: JSON.stringify(data),
   });
 }
+

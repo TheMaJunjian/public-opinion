@@ -1,55 +1,74 @@
 /**
- * graph.ts — 非线性表结构工具函数
+ * graph.ts — Graph algorithms for the non-linear message view
  *
- * 公论的核心理念：消息是节点；消息的关系也是消息。
- * 这里提供将"线性消息列表 + 关系列表"转换为可渲染树的算法，
- * 以及计算每条消息的"立场统计"（支持/反对数量）的工具。
+ * Core philosophy: messages are nodes; relation messages are also messages.
+ *
+ * This module provides:
+ *   buildMessageTree()     - Convert messages + relations into a renderable tree
+ *   computeStanceStats()   - Count support/oppose votes per message
+ *   buildFocusSubgraph()   - Filter to messages within N hops of a focus set (focus mode)
+ *   computeTextHops()      - BFS hop distance between text messages through relations
  */
 
-import type { Message, Relation, MessageNode, StanceStats } from '../types';
+import type { Message, Relation, MessageNode, StanceStats, TargetRef } from '../types';
+import { getPresentationSpec, getTargetMessageIds } from '../types';
 
-/** 这些关系类型会形成树结构（子→父） */
-const TREE_RELATION_TYPES = new Set(['REPLY', 'SUPPORT', 'OPPOSE', 'CORRECT']);
+// ============================================================
+// Tree Building
+// ============================================================
 
 /**
- * buildMessageTree — 将消息列表与关系列表转换为非线性树结构
+ * buildMessageTree — Convert a flat message list + relations into a tree structure.
  *
- * 规则：
- *   sourceMessageId 是"子"（作出回应的消息）
- *   targetRef.targetMessageId 是"父"（被回应的消息）
+ * Only relations with formsTrees=true (REPLY, SUPPORT, REBUT, CORRECT, SUPPLEMENT)
+ * form parent-child tree connections.
  *
- * 根节点：没有任何"树型关系"父节点的消息
- * 子节点：通过 REPLY/SUPPORT/OPPOSE/CORRECT 关系指向另一条消息的消息
+ * Convention:
+ *   sourceMessageId  = child  (the message making the claim/response)
+ *   targetRef.messageId = parent (the message being responded to)
+ *
+ * Root nodes: messages with no tree-forming parent relation.
  */
 export function buildMessageTree(messages: Message[], relations: Relation[]): MessageNode[] {
-  // 只取树型关系
-  const treeRels = relations.filter(r => TREE_RELATION_TYPES.has(r.relationType));
+  // Only take tree-forming relations that target text messages (not relation messages)
+  const treeRels = relations.filter(r => {
+    const spec = getPresentationSpec(r.relationType);
+    return spec.formsTrees && r.targetRefs.some(ref => ref.kind === 'message' || ref.kind === 'text-fragment');
+  });
 
-  // childId → {parentId, relationType, relationId}
-  // 若一条消息同时回应多条（多 targetRefs），取第一条作为"主父"
+  // Build child → parent mapping (take first message target as the parent)
   const childParentMap = new Map<string, { parentId: string; relationType: string; relationId: string }>();
 
   for (const rel of treeRels) {
-    if (!childParentMap.has(rel.sourceMessageId) && rel.targetRefs.length > 0) {
-      childParentMap.set(rel.sourceMessageId, {
-        parentId: rel.targetRefs[0].targetMessageId,
-        relationType: rel.relationType,
-        relationId: rel.id,
-      });
-    }
+    if (childParentMap.has(rel.sourceMessageId)) continue;
+    const firstMessageTarget = rel.targetRefs.find(
+      (r): r is Extract<TargetRef, { kind: 'message' | 'text-fragment' }> =>
+        r.kind === 'message' || r.kind === 'text-fragment',
+    );
+    if (!firstMessageTarget) continue;
+    childParentMap.set(rel.sourceMessageId, {
+      parentId: firstMessageTarget.messageId,
+      relationType: rel.relationType,
+      relationId: rel.id,
+    });
   }
 
-  // parentId → 子节点列表（含关系信息）
+  // Build parentId → children mapping
   const childrenMap = new Map<string, MessageNode[]>();
   for (const [childId, info] of childParentMap.entries()) {
     const msg = messages.find(m => m.id === childId);
     if (!msg) continue;
     const siblings = childrenMap.get(info.parentId) ?? [];
-    siblings.push({ message: msg, relationType: info.relationType, relationId: info.relationId, children: [] });
+    siblings.push({
+      message: msg,
+      relationType: info.relationType,
+      relationId: info.relationId,
+      children: [],
+    });
     childrenMap.set(info.parentId, siblings);
   }
 
-  // 递归构建节点（填充 children）
+  // Recursively build nodes
   function buildNode(msg: Message, relationType?: string, relationId?: string): MessageNode {
     const rawChildren = childrenMap.get(msg.id) ?? [];
     return {
@@ -60,17 +79,22 @@ export function buildMessageTree(messages: Message[], relations: Relation[]): Me
     };
   }
 
-  // 根节点：未出现在任何子→父映射的消息
+  // Root nodes: messages that are not children in any tree relation
   const rootMessages = messages.filter(m => !childParentMap.has(m.id));
   return rootMessages.map(m => buildNode(m));
 }
 
+// ============================================================
+// Stance Statistics
+// ============================================================
+
 /**
- * computeStanceStats — 计算每条消息的"立场统计"（支持/反对数）
+ * computeStanceStats — Count support/oppose votes for each message.
  *
- * 统计规则：
- *   当某条关系 relationType=SUPPORT 且 targetRef.targetMessageId=X 时，X 的 support++
- *   当 relationType=OPPOSE 时，X 的 oppose++
+ * Uses the PresentationSpec stanceEffect to determine which relation types count.
+ * This is extensible: adding AGREE/DISAGREE/SUPPORT/REBUT all work automatically.
+ *
+ * Only counts relations targeting whole messages or text fragments (not relation messages).
  */
 export function computeStanceStats(messages: Message[], relations: Relation[]): Map<string, StanceStats> {
   const statsMap = new Map<string, StanceStats>();
@@ -79,13 +103,159 @@ export function computeStanceStats(messages: Message[], relations: Relation[]): 
   }
 
   for (const rel of relations) {
+    const spec = getPresentationSpec(rel.relationType);
+    if (!spec.stanceEffect) continue;
+
     for (const ref of rel.targetRefs) {
-      const stats = statsMap.get(ref.targetMessageId);
+      if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
+      const stats = statsMap.get(ref.messageId);
       if (!stats) continue;
-      if (rel.relationType === 'SUPPORT') stats.support++;
-      else if (rel.relationType === 'OPPOSE') stats.oppose++;
+      if (spec.stanceEffect === 'support') stats.support++;
+      else if (spec.stanceEffect === 'oppose') stats.oppose++;
     }
   }
 
   return statsMap;
 }
+
+// ============================================================
+// Focus Mode — Hop-Based Subgraph Filtering
+// ============================================================
+
+/**
+ * computeTextHops — BFS to find all text messages within maxHops of the start set.
+ *
+ * Hop definition (corrected per design spec):
+ *   1 hop = one relation message connecting two text messages.
+ *   Distance is measured TEXT-MESSAGE to TEXT-MESSAGE through RELATION MESSAGES.
+ *
+ * Algorithm:
+ *   Build an adjacency graph where text messages are nodes.
+ *   Two text messages are adjacent if there is ANY relation that:
+ *     - Has one as sourceMessageId
+ *     - Has the other in its targetRefs (as message or text-fragment)
+ *   Then BFS from startSet up to maxHops steps.
+ *
+ * @returns Set of text message IDs within maxHops of the start set
+ */
+export function computeTextHops(
+  messages: Message[],
+  relations: Relation[],
+  startSet: Set<string>,
+  maxHops: number,
+): Set<string> {
+  // Build adjacency: messageId → Set<adjacent messageId>
+  const adjacency = new Map<string, Set<string>>();
+  const messageIds = new Set(messages.map(m => m.id));
+
+  for (const rel of relations) {
+    const src = rel.sourceMessageId;
+    if (!messageIds.has(src)) continue;
+
+    for (const ref of rel.targetRefs) {
+      if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
+      const tgt = ref.messageId;
+      if (!messageIds.has(tgt)) continue;
+      if (src === tgt) continue;
+
+      if (!adjacency.has(src)) adjacency.set(src, new Set());
+      if (!adjacency.has(tgt)) adjacency.set(tgt, new Set());
+      adjacency.get(src)!.add(tgt);
+      adjacency.get(tgt)!.add(src);
+    }
+  }
+
+  // BFS
+  const visited = new Set<string>(startSet);
+  let frontier = new Set<string>(startSet);
+
+  for (let hop = 0; hop < maxHops; hop++) {
+    const nextFrontier = new Set<string>();
+    for (const id of frontier) {
+      for (const neighbor of adjacency.get(id) ?? []) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          nextFrontier.add(neighbor);
+        }
+      }
+    }
+    if (nextFrontier.size === 0) break;
+    frontier = nextFrontier;
+  }
+
+  return visited;
+}
+
+/**
+ * buildFocusSubgraph — Returns the filtered sets of messages and relations for focus mode.
+ *
+ * Rules:
+ *   1. Only text messages within maxHops of focusMessageIds are shown.
+ *   2. A relation is shown only when ALL of its text-message endpoints are visible.
+ *      (This includes recursive relations that target relation messages —
+ *       those are shown when the text messages on both sides of the chain are visible.)
+ *
+ * @param messages       All text messages in the topic
+ * @param relations      All relations in the topic
+ * @param focusMessageIds  The "seed" message IDs for focus mode
+ * @param maxHops        Maximum hop distance from focus set
+ */
+export function buildFocusSubgraph(
+  messages: Message[],
+  relations: Relation[],
+  focusMessageIds: Set<string>,
+  maxHops: number,
+): { visibleMessages: Set<string>; visibleRelations: Set<string> } {
+  const visibleMessages = computeTextHops(messages, relations, focusMessageIds, maxHops);
+
+  // A relation is visible if:
+  // - Its source message is visible, AND
+  // - All of its target refs resolve to visible entities:
+  //     message/text-fragment targets → the messageId must be visible
+  //     relation targets              → the relation must itself be visible (recursive)
+  // We resolve this iteratively (fixed-point) because of relation→relation targeting.
+
+  const visibleRelations = new Set<string>();
+  const relMap = new Map<string, Relation>(relations.map(r => [r.id, r]));
+
+  // First pass: mark relations whose source + all message-targets are visible
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const rel of relations) {
+      if (visibleRelations.has(rel.id)) continue;
+      if (!visibleMessages.has(rel.sourceMessageId)) continue;
+
+      const allTargetsVisible = rel.targetRefs.every(ref => {
+        if (ref.kind === 'message' || ref.kind === 'text-fragment') {
+          return visibleMessages.has(ref.messageId);
+        }
+        if (ref.kind === 'relation') {
+          // The targeted relation must itself be visible
+          return visibleRelations.has(ref.relationId) || !relMap.has(ref.relationId);
+        }
+        return true;
+      });
+
+      if (allTargetsVisible) {
+        visibleRelations.add(rel.id);
+        changed = true;
+      }
+    }
+  }
+
+  return { visibleMessages, visibleRelations };
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+/**
+ * getRelationTargetMessageIds — convenience wrapper for finding all text-message
+ * IDs referenced by a relation's targetRefs.
+ */
+export function getRelationTargetMessageIds(relation: Relation): string[] {
+  return getTargetMessageIds(relation.targetRefs);
+}
+

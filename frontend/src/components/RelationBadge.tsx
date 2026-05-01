@@ -47,5 +47,3 @@ export default function RelationBadge({ type, className = '' }: Props) {
 
 // Re-export PRESENTATION_SPECS is intentionally NOT done here to keep fast-refresh happy.
 // Import directly from '../types' when needed.
-
-

@@ -213,7 +213,7 @@ export default function TopicDetailPage() {
     const spec = getPresentationSpec(r.relationType);
     return spec.kind !== 'decoration'; // decorations are shown on message cards via stanceStats
   });
-  // All filterd-out relations (for dimmed display in focus mode)
+  // All filtered-out relations (for dimmed display in focus mode)
   const filteredOutRelations = focusMode && focusSubgraph
     ? relations.filter(r => !focusSubgraph!.visibleRelations.has(r.id))
     : [];

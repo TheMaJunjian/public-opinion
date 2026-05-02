@@ -143,6 +143,9 @@ export default function TopicDetailPage() {
   const [sources, setSources] = useState<DraftItem[]>([]);
   const [targets, setTargets] = useState<DraftItem[]>([]);
 
+  // Text-selection mode — set of message IDs currently in text-select mode
+  const [textSelectMessages, setTextSelectMessages] = useState<Set<string>>(new Set());
+
   // ── Load ────────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     if (!topicId) return;
@@ -174,6 +177,11 @@ export default function TopicDetailPage() {
     await load();
   }
 
+  async function handleSendMessage(content: string) {
+    await api.createMessage(topicId!, { content });
+    await load();
+  }
+
   async function handleArchive() {
     if (!topic) return;
     await api.updateTopic(topicId!, { status: topic.status === 'OPEN' ? 'ARCHIVED' : 'OPEN' });
@@ -197,6 +205,34 @@ export default function TopicDetailPage() {
     }
   }
 
+  function handleDoubleClickMessage(id: string) {
+    // Toggle text-selection mode for this message card
+    setTextSelectMessages(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function handleSelectTextFragment(messageId: string, text: string) {
+    // Simple deterministic hash for the fragment text
+    let h = 5381;
+    for (let i = 0; i < text.length; i++) {
+      h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+    }
+    const hash = (h >>> 0).toString(16).padStart(8, '0');
+    const item: DraftItem = { type: 'text-fragment', id: messageId, fragmentText: text, fragmentHash: hash };
+    // Avoid duplicate fragments with same text
+    const exists = draft.some(d => d.type === 'text-fragment' && d.id === messageId && d.fragmentText === text);
+    if (!exists) {
+      setDraft(prev => [...prev, item]);
+    }
+  }
+
   function handleClickRelation(id: string) {
     const existsIdx = draft.findIndex(d => d.type === 'relation' && d.id === id);
     if (existsIdx >= 0) {
@@ -212,7 +248,7 @@ export default function TopicDetailPage() {
 
   function handleDraftToSources(idx: number) {
     const item = draft[idx];
-    if (item.type !== 'message') return; // sources: text messages only
+    if (item.type !== 'message') return; // sources: whole text messages only
     setSources([item]); // one source at a time
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
@@ -308,9 +344,9 @@ export default function TopicDetailPage() {
 
   // ── Selection sets for graph highlighting ────────────────────────────────────
   const selectedMessageIds = new Set<string>([
-    ...draft.filter(d => d.type === 'message').map(d => d.id),
+    ...draft.filter(d => d.type === 'message' || d.type === 'text-fragment').map(d => d.id),
     ...sources.map(d => d.id),
-    ...targets.filter(d => d.type === 'message').map(d => d.id),
+    ...targets.filter(d => d.type === 'message' || d.type === 'text-fragment').map(d => d.id),
   ]);
   const selectedRelationIds = new Set<string>([
     ...draft.filter(d => d.type === 'relation').map(d => d.id),
@@ -466,8 +502,11 @@ export default function TopicDetailPage() {
                 selectedRelationIds={selectedRelationIds}
                 focusVisibleMessages={focusSubgraph?.visibleMessages ?? null}
                 focusVisibleRelations={focusSubgraph?.visibleRelations ?? null}
+                textSelectMessageIds={textSelectMessages}
                 onClickMessage={handleClickMessage}
+                onDoubleClickMessage={handleDoubleClickMessage}
                 onClickRelation={handleClickRelation}
+                onSelectTextFragment={handleSelectTextFragment}
               />
             </div>
           ) : viewMode === 'tree' ? (
@@ -559,6 +598,7 @@ export default function TopicDetailPage() {
                 onSourcesRemove={handleSourcesRemove}
                 onTargetsRemove={handleTargetsRemove}
                 onClearAll={handleClearAll}
+                onSendMessage={handleSendMessage}
                 onCreateRelation={handleCreateRelation}
                 onImport={handleImport}
                 onExport={handleExport}

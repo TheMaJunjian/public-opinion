@@ -228,8 +228,14 @@ interface Props {
   selectedRelationIds: Set<string>;
   focusVisibleMessages: Set<string> | null;
   focusVisibleRelations: Set<string> | null;
+  /** Set of message IDs currently in text-selection mode (entered via double-click) */
+  textSelectMessageIds: Set<string>;
   onClickMessage: (id: string) => void;
+  /** Called when user double-clicks a message card to toggle text-selection mode */
+  onDoubleClickMessage: (id: string) => void;
   onClickRelation: (id: string) => void;
+  /** Called when user selects text inside a card that is in text-selection mode */
+  onSelectTextFragment: (messageId: string, text: string) => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -242,8 +248,11 @@ export default function GraphView({
   selectedRelationIds,
   focusVisibleMessages,
   focusVisibleRelations,
+  textSelectMessageIds,
   onClickMessage,
+  onDoubleClickMessage,
   onClickRelation,
+  onSelectTextFragment,
 }: Props) {
   const visibleMessages = focusVisibleMessages
     ? messages.filter(m => focusVisibleMessages.has(m.id))
@@ -419,45 +428,86 @@ export default function GraphView({
           if (!pos) return null;
 
           const isSelected = selectedMessageIds.has(msg.id);
+          const isTextSelect = textSelectMessageIds.has(msg.id);
           const stats = stanceStatsMap.get(msg.id);
           const decos = decorationMap.get(msg.id) ?? [];
 
           return (
             <div
               key={msg.id}
-              onClick={() => onClickMessage(msg.id)}
-              title={`${msg.createdBy.username}: ${msg.content}\n\n点击选中/取消选中消息`}
-              className="absolute cursor-pointer select-none rounded-lg border-2 bg-white transition-all"
+              onClick={() => {
+                // In text-select mode, single click does NOT toggle selection;
+                // it only exits text-select mode (handled by double-click toggle).
+                if (isTextSelect) return;
+                onClickMessage(msg.id);
+              }}
+              onDoubleClick={() => onDoubleClickMessage(msg.id)}
+              onMouseUp={() => {
+                if (!isTextSelect) return;
+                const selection = window.getSelection();
+                if (!selection || selection.isCollapsed) return;
+                const text = selection.toString().trim();
+                if (text) {
+                  onSelectTextFragment(msg.id, text);
+                  selection.removeAllRanges();
+                }
+              }}
+              title={
+                isTextSelect
+                  ? `文本选取模式：选取文字后自动加入候选区；双击退出`
+                  : `${msg.createdBy.username}: ${msg.content}\n\n单击选中/取消 · 双击进入文本选取模式`
+              }
+              className={`absolute rounded-lg border-2 bg-white transition-all ${
+                isTextSelect ? 'cursor-text' : 'cursor-pointer select-none'
+              }`}
               style={{
                 left: pos.x,
                 top: pos.y,
                 width: CARD_W,
-                height: CARD_H,
-                borderColor: isSelected ? '#6366f1' : '#e5e7eb',
-                boxShadow: isSelected
+                height: isTextSelect ? 'auto' : CARD_H,
+                minHeight: CARD_H,
+                borderColor: isTextSelect
+                  ? '#2563eb'
+                  : isSelected
+                  ? '#6366f1'
+                  : '#e5e7eb',
+                boxShadow: isTextSelect
+                  ? '0 0 0 3px #2563eb33, 0 2px 8px rgba(0,0,0,0.12)'
+                  : isSelected
                   ? '0 0 0 3px #6366f133, 0 1px 3px rgba(0,0,0,0.1)'
                   : '0 1px 2px rgba(0,0,0,0.06)',
-                zIndex: 5,
-                overflow: 'hidden',
+                zIndex: isTextSelect ? 20 : 5,
+                overflow: isTextSelect ? 'visible' : 'hidden',
               }}
             >
               {/* Card body */}
               <div className="p-2.5 flex flex-col h-full">
-                {/* Author + timestamp */}
+                {/* Author + timestamp + text-select indicator */}
                 <div className="flex items-center justify-between mb-1.5 gap-1">
                   <span
                     className="text-xs font-semibold truncate"
-                    style={{ color: isSelected ? '#4f46e5' : '#374151' }}
+                    style={{ color: isTextSelect ? '#1d4ed8' : isSelected ? '#4f46e5' : '#374151' }}
                   >
                     {msg.createdBy.username}
                   </span>
-                  <span className="text-xs text-gray-400 shrink-0">
-                    {new Date(msg.createdAt).toLocaleDateString('zh-CN')}
-                  </span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isTextSelect && (
+                      <span className="text-xs font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded px-1 py-0.5 leading-none">
+                        文本选取
+                      </span>
+                    )}
+                    <span className="text-xs text-gray-400">
+                      {new Date(msg.createdAt).toLocaleDateString('zh-CN')}
+                    </span>
+                  </div>
                 </div>
 
-                {/* Content (truncated to fit card height) */}
-                <p className="text-xs text-gray-700 leading-relaxed flex-1 overflow-hidden line-clamp-3">
+                {/* Content — selectable text when in text-select mode */}
+                <p
+                  className={`text-xs text-gray-700 leading-relaxed flex-1 ${
+                    isTextSelect ? 'whitespace-pre-wrap' : 'overflow-hidden line-clamp-3'
+                  }`}
+                >
                   {msg.content}
                 </p>
 
@@ -496,7 +546,7 @@ export default function GraphView({
               </div>
 
               {/* Selected indicator */}
-              {isSelected && (
+              {isSelected && !isTextSelect && (
                 <div
                   className="absolute top-1 right-1 text-indigo-600 text-xs font-bold"
                   title="已选中"

@@ -22,7 +22,7 @@ function makeMsg(id: string, username = 'user'): Message {
     contentType: 'TEXT',
     content: `Content of message ${id}`,
     createdAt: new Date().toISOString(),
-    createdBy: { id: `u-${username}`, username },
+    createdBy: { id: `u-${username}`, username, createdAt: new Date().toISOString() },
   };
 }
 
@@ -39,7 +39,7 @@ function makeRelation(
     sourceMessageId,
     targetRefs: [targetRef],
     createdAt: new Date().toISOString(),
-    createdBy: { id: 'u-user', username: 'user' },
+    createdBy: { id: 'u-user', username: 'user', createdAt: new Date().toISOString() },
   };
 }
 

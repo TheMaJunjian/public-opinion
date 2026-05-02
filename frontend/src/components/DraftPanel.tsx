@@ -187,7 +187,7 @@ export default function DraftPanel({
   onImport,
   onExport,
   relationType,
-  onRelationTypeChange: _onRelationTypeChange,
+  onRelationTypeChange: _onRelationTypeChange, // managed by parent toolbar; accepted for API consistency
   focusMode,
   focusMessageId,
   focusHops,
@@ -490,15 +490,17 @@ export default function DraftPanel({
                           title="整条消息加入来源集合"
                         >→来源</button>
                       )}
-                      {/* Add all to targets */}
+                      {/* Add all to targets — process in descending index order to avoid index shifts */}
                       <button
                         onClick={() => {
-                          // Add whole message first if present
+                          const indices: number[] = [];
                           if (group.hasWhole && group.wholeIndex !== null) {
-                            onDraftToTargets(group.wholeIndex);
+                            indices.push(group.wholeIndex);
                           }
-                          // Add each fragment
-                          group.fragments.forEach(f => onDraftToTargets(f.index));
+                          group.fragments.forEach(f => indices.push(f.index));
+                          // Sort descending so each removal doesn't invalidate lower indices
+                          indices.sort((a, b) => b - a);
+                          indices.forEach(idx => onDraftToTargets(idx));
                         }}
                         className="px-1 py-0.5 bg-green-50 text-green-600 hover:bg-green-100 rounded font-medium border border-green-200"
                         title="加入目标集合"
@@ -602,12 +604,12 @@ export default function DraftPanel({
           <div className="flex gap-2 mt-2">
             <button
               onClick={() => {
-                // Add all whole-message items to sources
-                draftGroups.forEach(g => {
-                  if (g.hasWhole && g.wholeIndex !== null) {
-                    onDraftToSources(g.wholeIndex);
-                  }
-                });
+                // Add all whole-message items to sources — process in descending index order
+                const indices = draftGroups
+                  .filter(g => g.hasWhole && g.wholeIndex !== null)
+                  .map(g => g.wholeIndex as number)
+                  .sort((a, b) => b - a);
+                indices.forEach(idx => onDraftToSources(idx));
               }}
               className="flex-1 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded text-xs font-medium hover:bg-blue-100"
               title="将候选区中的整条消息加入来源集合"

@@ -219,12 +219,24 @@ export default function TopicDetailPage() {
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
 
+  function handleDraftRemoveBatch(indices: number[]) {
+    const idxSet = new Set(indices);
+    setDraft(prev => prev.filter((_, i) => !idxSet.has(i)));
+  }
+
   function handleDraftToSources(idx: number) {
     const item = draft[idx];
     // Sources: only text messages (not relation messages, not text-fragments per design)
     if (item.type !== 'message') return;
     setSources([item]); // one source at a time
     setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleDraftToSourcesBatch(indices: number[]) {
+    const idxSet = new Set(indices);
+    const items = draft.filter((item, i) => idxSet.has(i) && item.type === 'message');
+    if (items.length > 0) setSources([items[items.length - 1]]); // keep last (one source at a time)
+    setDraft(prev => prev.filter((_, i) => !idxSet.has(i)));
   }
 
   function handleDraftToTargets(idx: number) {
@@ -239,6 +251,22 @@ export default function TopicDetailPage() {
     });
     if (!isDuplicate) setTargets(prev => [...prev, item]);
     setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleDraftToTargetsBatch(indices: number[]) {
+    const idxSet = new Set(indices);
+    const newItems = draft.filter((item, i) => {
+      if (!idxSet.has(i)) return false;
+      return !targets.some(t => {
+        if (t.type !== item.type) return false;
+        if (t.type === 'message' && item.type === 'message') return t.id === item.id;
+        if (t.type === 'text-fragment' && item.type === 'text-fragment') return t.messageId === item.messageId && t.text === item.text;
+        if (t.type === 'relation' && item.type === 'relation') return t.id === item.id;
+        return false;
+      });
+    });
+    if (newItems.length > 0) setTargets(prev => [...prev, ...newItems]);
+    setDraft(prev => prev.filter((_, i) => !idxSet.has(i)));
   }
 
   function handleDraftToTargetsAll() {
@@ -589,8 +617,11 @@ export default function TopicDetailPage() {
                 sources={sources}
                 targets={targets}
                 onDraftRemove={handleDraftRemove}
+                onDraftRemoveBatch={handleDraftRemoveBatch}
                 onDraftToSources={handleDraftToSources}
+                onDraftToSourcesBatch={handleDraftToSourcesBatch}
                 onDraftToTargets={handleDraftToTargets}
+                onDraftToTargetsBatch={handleDraftToTargetsBatch}
                 onDraftToTargetsAll={handleDraftToTargetsAll}
                 onSourcesRemove={handleSourcesRemove}
                 onTargetsRemove={handleTargetsRemove}

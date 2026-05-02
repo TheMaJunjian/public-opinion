@@ -64,8 +64,11 @@ interface Props {
   sources: DraftItem[];
   targets: DraftItem[];
   onDraftRemove: (idx: number) => void;
+  onDraftRemoveBatch: (indices: number[]) => void;
   onDraftToSources: (idx: number) => void;
+  onDraftToSourcesBatch: (indices: number[]) => void;
   onDraftToTargets: (idx: number) => void;
+  onDraftToTargetsBatch: (indices: number[]) => void;
   onDraftToTargetsAll: () => void;
   onSourcesRemove: (idx: number) => void;
   onTargetsRemove: (idx: number) => void;
@@ -175,8 +178,11 @@ export default function DraftPanel({
   sources,
   targets,
   onDraftRemove,
+  onDraftRemoveBatch,
   onDraftToSources,
+  onDraftToSourcesBatch,
   onDraftToTargets,
+  onDraftToTargetsBatch,
   onDraftToTargetsAll,
   onSourcesRemove,
   onTargetsRemove,
@@ -326,14 +332,7 @@ export default function DraftPanel({
 
   // ── Helpers: delete all fragments of a group ─────────────────────────────
   function handleDeleteGroupFragments(group: DraftMessageGroup) {
-    // Remove in reverse order to preserve indices
-    const indices = group.fragments.map(f => f.index).sort((a, b) => b - a);
-    // We need to call onDraftRemove for each, but since it changes the array,
-    // we compute indices relative to the original draft array and remove them all at once.
-    // The parent manages state, so we remove them from highest to lowest index.
-    for (const idx of indices) {
-      onDraftRemove(idx);
-    }
+    onDraftRemoveBatch(group.fragments.map(f => f.index));
   }
 
   function handleDeleteWholeGroup(group: DraftMessageGroup) {
@@ -490,7 +489,7 @@ export default function DraftPanel({
                           title="整条消息加入来源集合"
                         >→来源</button>
                       )}
-                      {/* Add all to targets — process in descending index order to avoid index shifts */}
+                      {/* Add all to targets in a single batch operation */}
                       <button
                         onClick={() => {
                           const indices: number[] = [];
@@ -498,9 +497,7 @@ export default function DraftPanel({
                             indices.push(group.wholeIndex);
                           }
                           group.fragments.forEach(f => indices.push(f.index));
-                          // Sort descending so each removal doesn't invalidate lower indices
-                          indices.sort((a, b) => b - a);
-                          indices.forEach(idx => onDraftToTargets(idx));
+                          onDraftToTargetsBatch(indices);
                         }}
                         className="px-1 py-0.5 bg-green-50 text-green-600 hover:bg-green-100 rounded font-medium border border-green-200"
                         title="加入目标集合"
@@ -604,12 +601,11 @@ export default function DraftPanel({
           <div className="flex gap-2 mt-2">
             <button
               onClick={() => {
-                // Add all whole-message items to sources — process in descending index order
+                // Add all whole-message items to sources in a single batch operation
                 const indices = draftGroups
                   .filter(g => g.hasWhole && g.wholeIndex !== null)
-                  .map(g => g.wholeIndex as number)
-                  .sort((a, b) => b - a);
-                indices.forEach(idx => onDraftToSources(idx));
+                  .map(g => g.wholeIndex as number);
+                onDraftToSourcesBatch(indices);
               }}
               className="flex-1 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded text-xs font-medium hover:bg-blue-100"
               title="将候选区中的整条消息加入来源集合"

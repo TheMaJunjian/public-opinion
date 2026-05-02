@@ -23,9 +23,25 @@
  *   - replace-overlay / frame-group: fallback to edge-label for now
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { Message, Relation, StanceStats } from '../types';
 import { getPresentationSpec } from '../types';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * FNV-1a inspired hash for text fragment identification.
+ * Returns a hex string suitable for client-side deduplication of text fragments.
+ * NOT cryptographically secure — do not use for security-sensitive purposes.
+ */
+function simpleHash(str: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 
@@ -73,6 +89,9 @@ const COLOR_BG: Record<string, string> = {
  * dependencies exist in the data.
  */
 const MAX_LAYOUT_ITERATIONS = 200;
+
+/** Max characters to show in the text-fragment capture tooltip preview */
+const FRAGMENT_PREVIEW_LENGTH = 20;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -134,14 +153,6 @@ function buildEdgePath(
   const path = `M ${x1} ${y1} C ${cpx1} ${cpy1} ${cpx2} ${cpy2} ${x2} ${y2}`;
   const labelPos = bezierMid(x1, y1, cpx1, cpy1, cpx2, cpy2, x2, y2);
   return { path, labelPos, arrowEnd: { x: x2, y: y2 } };
-}
-
-/** Build a self-loop / fallback path when source === target or no target found */
-function buildSelfLoopPath(from: CardPos): { path: string; labelPos: EdgeLabelPos; arrowEnd: { x: number; y: number } } {
-  const x = from.x + CARD_W / 2;
-  const y = from.y;
-  const path = `M ${x} ${y} C ${x + 40} ${y - 40} ${x - 40} ${y - 40} ${x} ${y}`;
-  return { path, labelPos: { cx: x, cy: y - 30 }, arrowEnd: { x, y } };
 }
 
 // ─── Layout algorithm ─────────────────────────────────────────────────────────
@@ -230,6 +241,8 @@ interface Props {
   focusVisibleRelations: Set<string> | null;
   onClickMessage: (id: string) => void;
   onClickRelation: (id: string) => void;
+  /** Called when a user selects a text fragment from a message card (double-click mode) */
+  onAddTextFragment?: (messageId: string, text: string, hash: string) => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -244,7 +257,19 @@ export default function GraphView({
   focusVisibleRelations,
   onClickMessage,
   onClickRelation,
+  onAddTextFragment,
 }: Props) {
+  // ── Text selection mode state ─────────────────────────────────────────────
+  /** The message ID currently in text selection mode (double-click toggles) */
+  const [textSelectMsgId, setTextSelectMsgId] = useState<string | null>(null);
+  /** Pending text fragment info after user selects text in text-select mode */
+  const [pendingFragment, setPendingFragment] = useState<{
+    msgId: string;
+    text: string;
+    hash: string;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
   const visibleMessages = focusVisibleMessages
     ? messages.filter(m => focusVisibleMessages.has(m.id))
     : messages;
@@ -262,7 +287,10 @@ export default function GraphView({
   // ── Build edge renders ────────────────────────────────────────────────────
   const edges = useMemo<EdgeRender[]>(() => {
     const result: EdgeRender[] = [];
+    // Map from relationId → label center position (used to target relation messages)
+    const relLabelPositions = new Map<string, EdgeLabelPos>();
 
+    // First pass: process relations whose targets are TEXT messages
     for (const rel of visibleRelations) {
       const spec = getPresentationSpec(rel.relationType);
       if (spec.kind !== 'edge-label' && spec.kind !== 'edge-decoration') continue;
@@ -270,26 +298,17 @@ export default function GraphView({
       const fromPos = posMap.get(rel.sourceMessageId);
       if (!fromPos) continue;
 
-      // Find the primary target position
       let toPos: CardPos | undefined;
       for (const ref of rel.targetRefs) {
         if (ref.kind === 'message' || ref.kind === 'text-fragment') {
           const p = posMap.get(ref.messageId);
           if (p) { toPos = p; break; }
         }
-        // If targeting a relation message, find the relation's source message position
-        if (ref.kind === 'relation') {
-          const targetRel = relations.find(r => r.id === ref.relationId);
-          if (targetRel) {
-            const p = posMap.get(targetRel.sourceMessageId);
-            if (p) { toPos = p; break; }
-          }
-        }
       }
+      if (!toPos) continue; // defer to second pass if no message target found
 
-      const { path, labelPos, arrowEnd } = toPos
-        ? buildEdgePath(fromPos, toPos)
-        : buildSelfLoopPath(fromPos);
+      const { path, labelPos, arrowEnd } = buildEdgePath(fromPos, toPos);
+      relLabelPositions.set(rel.id, labelPos);
 
       result.push({
         id: rel.id,
@@ -303,8 +322,54 @@ export default function GraphView({
       });
     }
 
+    // Second pass: process relations whose targets are RELATION MESSAGES
+    // These use the label positions computed in the first pass
+    for (const rel of visibleRelations) {
+      if (relLabelPositions.has(rel.id)) continue; // already processed
+
+      const spec = getPresentationSpec(rel.relationType);
+      if (spec.kind !== 'edge-label' && spec.kind !== 'edge-decoration') continue;
+
+      const fromPos = posMap.get(rel.sourceMessageId);
+      if (!fromPos) continue;
+
+      let targetPoint: { x: number; y: number } | undefined;
+      for (const ref of rel.targetRefs) {
+        if (ref.kind === 'relation') {
+          const targetLabelPos = relLabelPositions.get(ref.relationId);
+          if (targetLabelPos) {
+            targetPoint = { x: targetLabelPos.cx, y: targetLabelPos.cy };
+            break;
+          }
+        }
+      }
+      if (!targetPoint) continue;
+
+      // Build a bezier from source message right-center to the target label point
+      const x1 = fromPos.x + CARD_W;
+      const y1 = fromPos.y + CARD_H / 2;
+      const dx = Math.abs(targetPoint.x - x1);
+      const cpx1 = x1 + dx * 0.45;
+      const cpy1 = y1;
+      const cpx2 = targetPoint.x - dx * 0.45;
+      const cpy2 = targetPoint.y;
+      const path = `M ${x1} ${y1} C ${cpx1} ${cpy1} ${cpx2} ${cpy2} ${targetPoint.x} ${targetPoint.y}`;
+      const labelPos = bezierMid(x1, y1, cpx1, cpy1, cpx2, cpy2, targetPoint.x, targetPoint.y);
+
+      relLabelPositions.set(rel.id, labelPos);
+      result.push({
+        id: rel.id,
+        relationType: rel.relationType,
+        label: `${rel.createdBy.username} · ${spec.label}`,
+        color: spec.color,
+        path,
+        labelPos,
+        arrowEnd: { x: targetPoint.x, y: targetPoint.y },
+      });
+    }
+
     return result;
-  }, [visibleRelations, posMap, relations]);
+  }, [visibleRelations, posMap]);
 
   // ── Decoration map: messageId → list of relation decorations ─────────────
   const decorationMap = useMemo(() => {
@@ -419,44 +484,80 @@ export default function GraphView({
           if (!pos) return null;
 
           const isSelected = selectedMessageIds.has(msg.id);
+          const isTextSelect = textSelectMsgId === msg.id;
           const stats = stanceStatsMap.get(msg.id);
           const decos = decorationMap.get(msg.id) ?? [];
 
           return (
             <div
               key={msg.id}
-              onClick={() => onClickMessage(msg.id)}
-              title={`${msg.createdBy.username}: ${msg.content}\n\n点击选中/取消选中消息`}
-              className="absolute cursor-pointer select-none rounded-lg border-2 bg-white transition-all"
+              onClick={_e => {
+                // In text-select mode, single click should not toggle selection
+                if (isTextSelect) return;
+                onClickMessage(msg.id);
+              }}
+              onDoubleClick={e => {
+                e.stopPropagation();
+                // Toggle text selection mode for this card
+                if (textSelectMsgId === msg.id) {
+                  setTextSelectMsgId(null);
+                  setPendingFragment(null);
+                } else {
+                  setTextSelectMsgId(msg.id);
+                  setPendingFragment(null);
+                }
+              }}
+              onMouseUp={e => {
+                if (!isTextSelect) return;
+                const sel = window.getSelection();
+                if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+                  setPendingFragment(null);
+                  return;
+                }
+                const text = sel.toString().trim();
+                if (!text) { setPendingFragment(null); return; }
+                const hash = simpleHash(text);
+                setPendingFragment({ msgId: msg.id, text, hash, clientX: e.clientX, clientY: e.clientY });
+              }}
+              title={isTextSelect
+                ? '双击退出文本选择模式；拖选文字后可加入候选区'
+                : `${msg.createdBy.username}: ${msg.content}\n\n单击选中/取消；双击进入文本选择模式`
+              }
+              className="absolute rounded-lg border-2 bg-white transition-all"
               style={{
                 left: pos.x,
                 top: pos.y,
                 width: CARD_W,
                 height: CARD_H,
-                borderColor: isSelected ? '#6366f1' : '#e5e7eb',
-                boxShadow: isSelected
+                borderColor: isTextSelect ? '#f59e0b' : isSelected ? '#6366f1' : '#e5e7eb',
+                boxShadow: isTextSelect
+                  ? '0 0 0 3px #f59e0b33, 0 1px 3px rgba(0,0,0,0.1)'
+                  : isSelected
                   ? '0 0 0 3px #6366f133, 0 1px 3px rgba(0,0,0,0.1)'
                   : '0 1px 2px rgba(0,0,0,0.06)',
-                zIndex: 5,
+                zIndex: isTextSelect ? 20 : 5,
                 overflow: 'hidden',
+                cursor: isTextSelect ? 'text' : 'pointer',
+                userSelect: isTextSelect ? 'text' : 'none',
               }}
             >
               {/* Card body */}
               <div className="p-2.5 flex flex-col h-full">
-                {/* Author + timestamp */}
+                {/* Author + timestamp + text-select mode indicator */}
                 <div className="flex items-center justify-between mb-1.5 gap-1">
                   <span
                     className="text-xs font-semibold truncate"
-                    style={{ color: isSelected ? '#4f46e5' : '#374151' }}
+                    style={{ color: isTextSelect ? '#b45309' : isSelected ? '#4f46e5' : '#374151' }}
                   >
                     {msg.createdBy.username}
+                    {isTextSelect && <span className="ml-1 text-amber-500 font-normal">✏ 选择模式</span>}
                   </span>
                   <span className="text-xs text-gray-400 shrink-0">
                     {new Date(msg.createdAt).toLocaleDateString('zh-CN')}
                   </span>
                 </div>
 
-                {/* Content (truncated to fit card height) */}
+                {/* Content */}
                 <p className="text-xs text-gray-700 leading-relaxed flex-1 overflow-hidden line-clamp-3">
                   {msg.content}
                 </p>
@@ -496,7 +597,7 @@ export default function GraphView({
               </div>
 
               {/* Selected indicator */}
-              {isSelected && (
+              {isSelected && !isTextSelect && (
                 <div
                   className="absolute top-1 right-1 text-indigo-600 text-xs font-bold"
                   title="已选中"
@@ -507,6 +608,36 @@ export default function GraphView({
             </div>
           );
         })}
+
+        {/* ── Text fragment capture tooltip (fixed positioning at cursor) ── */}
+        {pendingFragment && onAddTextFragment && (
+          <div
+            className="fixed z-50 flex items-center gap-1 bg-amber-500 text-white text-xs px-2 py-1 rounded shadow-lg"
+            style={{ left: pendingFragment.clientX, top: pendingFragment.clientY + 12 }}
+          >
+            <span className="truncate max-w-24">"{pendingFragment.text.slice(0, FRAGMENT_PREVIEW_LENGTH)}{pendingFragment.text.length > FRAGMENT_PREVIEW_LENGTH ? '…' : ''}"</span>
+            <button
+              className="bg-white text-amber-700 px-1.5 py-0.5 rounded font-semibold hover:bg-amber-50"
+              onClick={() => {
+                onAddTextFragment(pendingFragment.msgId, pendingFragment.text, pendingFragment.hash);
+                window.getSelection()?.removeAllRanges();
+                setPendingFragment(null);
+                setTextSelectMsgId(null);
+              }}
+            >
+              加入候选
+            </button>
+            <button
+              className="text-white/70 hover:text-white"
+              onClick={() => {
+                window.getSelection()?.removeAllRanges();
+                setPendingFragment(null);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

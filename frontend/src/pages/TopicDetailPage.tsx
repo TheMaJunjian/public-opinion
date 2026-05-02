@@ -206,20 +206,35 @@ export default function TopicDetailPage() {
     }
   }
 
+  /** Called when user selects a text fragment from a message card (double-click mode) */
+  function handleAddTextFragment(messageId: string, text: string, hash: string) {
+    // Check if this exact fragment is already in draft (same messageId + same hash)
+    const exists = draft.some(d => d.type === 'text-fragment' && d.id === messageId && d.hash === hash);
+    if (!exists) {
+      setDraft(prev => [...prev, { type: 'text-fragment', id: messageId, text, hash }]);
+    }
+  }
+
   function handleDraftRemove(idx: number) {
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
 
   function handleDraftToSources(idx: number) {
     const item = draft[idx];
-    if (item.type !== 'message') return; // sources: text messages only
+    // Sources: text messages and their fragments only
+    if (item.type !== 'message' && item.type !== 'text-fragment') return;
     setSources([item]); // one source at a time
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
 
   function handleDraftToTargets(idx: number) {
     const item = draft[idx];
-    const exists = targets.some(t => t.type === item.type && t.id === item.id);
+    // Deduplicate by type + id, and for text-fragments also by hash to allow different fragments from same message
+    const exists = targets.some(t => {
+      if (t.type !== item.type || t.id !== item.id) return false;
+      if (item.type === 'text-fragment') return t.hash === item.hash;
+      return true;
+    });
     if (!exists) setTargets(prev => [...prev, item]);
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
@@ -261,6 +276,13 @@ export default function TopicDetailPage() {
       targetRefs: data.targetRefs,
     });
 
+    await load();
+  }
+
+  /** Workflow: send message only without creating a relation */
+  async function handleSendMessage(content: string) {
+    if (!topicId) return;
+    await api.createMessage(topicId, { content });
     await load();
   }
 
@@ -456,7 +478,7 @@ export default function TopicDetailPage() {
           ) : viewMode === 'graph' ? (
             <div>
               <p className="text-xs text-gray-400 mb-2">
-                点击消息卡片或关系标签将其加入候选区，然后在右侧建立关系。
+                单击消息卡片加入候选区；双击进入文本选择模式（拖选片段后点击"加入候选"）；单击关系标签加入候选区。
               </p>
               <GraphView
                 messages={visibleMessages}
@@ -468,10 +490,14 @@ export default function TopicDetailPage() {
                 focusVisibleRelations={focusSubgraph?.visibleRelations ?? null}
                 onClickMessage={handleClickMessage}
                 onClickRelation={handleClickRelation}
+                onAddTextFragment={handleAddTextFragment}
               />
             </div>
           ) : viewMode === 'tree' ? (
             <div className="space-y-3">
+              {viewMode === 'tree' && user && (
+                <p className="text-xs text-gray-400">点击消息卡片将其加入候选区</p>
+              )}
               {messageTree.length > 0
                 ? messageTree.map(node => (
                     <MessageThread
@@ -488,17 +514,24 @@ export default function TopicDetailPage() {
                       message={msg}
                       topicId={topicId!}
                       stanceStats={stanceStatsMap.get(msg.id)}
+                      onClick={user ? () => handleClickMessage(msg.id) : undefined}
+                      isSelected={selectedMessageIds.has(msg.id)}
                     />
                   ))}
             </div>
           ) : (
             <div className="space-y-3">
+              {user && (
+                <p className="text-xs text-gray-400">点击消息卡片将其加入候选区</p>
+              )}
               {visibleMessages.map(msg => (
                 <MessageCard
                   key={msg.id}
                   message={msg}
                   topicId={topicId!}
                   stanceStats={stanceStatsMap.get(msg.id)}
+                  onClick={user ? () => handleClickMessage(msg.id) : undefined}
+                  isSelected={selectedMessageIds.has(msg.id)}
                 />
               ))}
             </div>
@@ -560,6 +593,7 @@ export default function TopicDetailPage() {
                 onTargetsRemove={handleTargetsRemove}
                 onClearAll={handleClearAll}
                 onCreateRelation={handleCreateRelation}
+                onSendMessage={topic.status === 'OPEN' ? handleSendMessage : undefined}
                 onImport={handleImport}
                 onExport={handleExport}
               />

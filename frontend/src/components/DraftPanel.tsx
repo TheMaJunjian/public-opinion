@@ -21,7 +21,7 @@
  *   D. 仅用已有消息建立关系（Sources/Targets集合）
  */
 
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import type { Message, Relation, TargetRef } from '../types';
 import { getPresentationSpec } from '../types';
 
@@ -70,8 +70,6 @@ interface Props {
   onDraftToTargets: (idx: number) => void;
   onDraftToTargetsBatch: (indices: number[]) => void;
   onDraftToTargetsAll: () => void;
-  /** Move all text-message items from draft to sources (all at once) */
-  onDraftToSourcesAll: () => void;
   onSourcesRemove: (idx: number) => void;
   onTargetsRemove: (idx: number) => void;
   onClearAll: () => void;
@@ -106,50 +104,6 @@ interface Props {
   /** Recent messages for the quick reference section */
   recentTextMessages: Message[];
   recentRelations: Relation[];
-}
-
-// ─── Draft grouping ───────────────────────────────────────────────────────────
-
-/**
- * A draft group represents all draft entries belonging to one text message:
- * - optionally a whole-message selection (wholeIdx !== null)
- * - zero or more text-fragment selections
- */
-interface MessageDraftGroup {
-  messageId: string;
-  /** Index in the draft array for the whole-message item, or null if not present */
-  wholeIdx: number | null;
-  /** Fragments belonging to this message */
-  fragments: Array<{ idx: number; text: string; hash: string }>;
-}
-
-interface RelationDraftItem {
-  idx: number;
-  item: Extract<DraftItem, { type: 'relation' }>;
-}
-
-function buildDraftGroups(draft: DraftItem[]): {
-  msgGroups: MessageDraftGroup[];
-  relItems: RelationDraftItem[];
-} {
-  const groupMap = new Map<string, MessageDraftGroup>();
-  const relItems: RelationDraftItem[] = [];
-
-  draft.forEach((item, idx) => {
-    if (item.type === 'message') {
-      const g = groupMap.get(item.id) ?? { messageId: item.id, wholeIdx: null, fragments: [] };
-      g.wholeIdx = idx;
-      groupMap.set(item.id, g);
-    } else if (item.type === 'text-fragment') {
-      const g = groupMap.get(item.messageId) ?? { messageId: item.messageId, wholeIdx: null, fragments: [] };
-      g.fragments.push({ idx, text: item.text, hash: item.hash });
-      groupMap.set(item.messageId, g);
-    } else if (item.type === 'relation') {
-      relItems.push({ idx, item });
-    }
-  });
-
-  return { msgGroups: Array.from(groupMap.values()), relItems };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

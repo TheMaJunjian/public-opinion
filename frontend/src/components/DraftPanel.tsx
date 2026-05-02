@@ -199,8 +199,9 @@ export default function DraftPanel({
     clearError();
     if (sources.length === 0) { setError('来源集合为空，请先从候选区移入文本消息'); return; }
     if (targets.length === 0) { setError('目标集合为空，请先从候选区移入消息或关系'); return; }
-    const sourceId = sources[0].type === 'message' ? sources[0].id : null;
-    if (!sourceId) { setError('来源必须是文本消息'); return; }
+    const firstSource = sources[0];
+    if (firstSource.type !== 'message') { setError('来源必须是文本消息'); return; }
+    const sourceId = firstSource.id;
     setSubmitting(true);
     try {
       await onRelateOnly({

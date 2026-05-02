@@ -183,7 +183,7 @@ export default function TopicDetailPage() {
   // ── Draft management ────────────────────────────────────────────────────────
 
   function handleClickMessage(id: string) {
-    const existsIdx = draft.findIndex(d => d.type === 'message' && (d as { type: 'message'; id: string }).id === id);
+    const existsIdx = draft.findIndex(d => d.type === 'message' && d.id === id);
     if (existsIdx >= 0) {
       setDraft(prev => prev.filter((_, i) => i !== existsIdx));
     } else {
@@ -192,7 +192,7 @@ export default function TopicDetailPage() {
   }
 
   function handleClickRelation(id: string) {
-    const existsIdx = draft.findIndex(d => d.type === 'relation' && (d as { type: 'relation'; id: string }).id === id);
+    const existsIdx = draft.findIndex(d => d.type === 'relation' && d.id === id);
     if (existsIdx >= 0) {
       setDraft(prev => prev.filter((_, i) => i !== existsIdx));
     } else {
@@ -203,9 +203,7 @@ export default function TopicDetailPage() {
   function handleSelectFragment(messageId: string, text: string, hash: string) {
     // Toggle: if this exact fragment is already in draft, remove it; otherwise add
     const existsIdx = draft.findIndex(
-      d => d.type === 'text-fragment' &&
-        (d as { type: 'text-fragment'; messageId: string; text: string }).messageId === messageId &&
-        (d as { type: 'text-fragment'; messageId: string; text: string }).text === text,
+      d => d.type === 'text-fragment' && d.messageId === messageId && d.text === text,
     );
     if (existsIdx >= 0) {
       setDraft(prev => prev.filter((_, i) => i !== existsIdx));

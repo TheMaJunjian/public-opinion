@@ -136,14 +136,6 @@ function buildEdgePath(
   return { path, labelPos, arrowEnd: { x: x2, y: y2 } };
 }
 
-/** Build a self-loop / fallback path when source === target or no target found */
-function buildSelfLoopPath(from: CardPos): { path: string; labelPos: EdgeLabelPos; arrowEnd: { x: number; y: number } } {
-  const x = from.x + CARD_W / 2;
-  const y = from.y;
-  const path = `M ${x} ${y} C ${x + 40} ${y - 40} ${x - 40} ${y - 40} ${x} ${y}`;
-  return { path, labelPos: { cx: x, cy: y - 30 }, arrowEnd: { x, y } };
-}
-
 // ─── Layout algorithm ─────────────────────────────────────────────────────────
 
 function computeLayout(
@@ -293,9 +285,16 @@ export default function GraphView({
   );
 
   // ── Build edge renders ────────────────────────────────────────────────────
+  // Two-pass approach to correctly target relation-message labels:
+  //   Pass 1: build edges that target TEXT messages (record each edge's label position)
+  //   Pass 2: build edges that target RELATION messages (point to the label position
+  //           recorded in Pass 1, not the relation's source card position)
   const edges = useMemo<EdgeRender[]>(() => {
     const result: EdgeRender[] = [];
+    // Map from relationId → label center (populated during Pass 1)
+    const relLabelPositions = new Map<string, EdgeLabelPos>();
 
+    // Pass 1: relations whose primary target is a TEXT message
     for (const rel of visibleRelations) {
       const spec = getPresentationSpec(rel.relationType);
       if (spec.kind !== 'edge-label' && spec.kind !== 'edge-decoration') continue;
@@ -303,27 +302,17 @@ export default function GraphView({
       const fromPos = posMap.get(rel.sourceMessageId);
       if (!fromPos) continue;
 
-      // Find the primary target position
       let toPos: CardPos | undefined;
       for (const ref of rel.targetRefs) {
         if (ref.kind === 'message' || ref.kind === 'text-fragment') {
           const p = posMap.get(ref.messageId);
           if (p) { toPos = p; break; }
         }
-        // If targeting a relation message, find the relation's source message position
-        if (ref.kind === 'relation') {
-          const targetRel = relations.find(r => r.id === ref.relationId);
-          if (targetRel) {
-            const p = posMap.get(targetRel.sourceMessageId);
-            if (p) { toPos = p; break; }
-          }
-        }
       }
+      if (!toPos) continue; // no text-message target — will be handled in Pass 2
 
-      const { path, labelPos, arrowEnd } = toPos
-        ? buildEdgePath(fromPos, toPos)
-        : buildSelfLoopPath(fromPos);
-
+      const { path, labelPos, arrowEnd } = buildEdgePath(fromPos, toPos);
+      relLabelPositions.set(rel.id, labelPos);
       result.push({
         id: rel.id,
         relationType: rel.relationType,
@@ -336,8 +325,52 @@ export default function GraphView({
       });
     }
 
+    // Pass 2: relations that target RELATION MESSAGES
+    // Arrow points to the target relation's label position (its clickable badge),
+    // NOT to the source text message of that relation.
+    for (const rel of visibleRelations) {
+      if (relLabelPositions.has(rel.id)) continue; // already handled in Pass 1
+
+      const spec = getPresentationSpec(rel.relationType);
+      if (spec.kind !== 'edge-label' && spec.kind !== 'edge-decoration') continue;
+
+      const fromPos = posMap.get(rel.sourceMessageId);
+      if (!fromPos) continue;
+
+      let targetPoint: { x: number; y: number } | undefined;
+      for (const ref of rel.targetRefs) {
+        if (ref.kind === 'relation') {
+          const lp = relLabelPositions.get(ref.relationId);
+          if (lp) { targetPoint = { x: lp.cx, y: lp.cy }; break; }
+        }
+      }
+      if (!targetPoint) continue;
+
+      // Build bezier from source-message right-center to the target label point
+      const x1 = fromPos.x + CARD_W;
+      const y1 = fromPos.y + CARD_H / 2;
+      const dx = Math.abs(targetPoint.x - x1);
+      const cpx1 = x1 + dx * 0.45;
+      const cpy1 = y1;
+      const cpx2 = targetPoint.x - dx * 0.45;
+      const cpy2 = targetPoint.y;
+      const path = `M ${x1} ${y1} C ${cpx1} ${cpy1} ${cpx2} ${cpy2} ${targetPoint.x} ${targetPoint.y}`;
+      const labelPos = bezierMid(x1, y1, cpx1, cpy1, cpx2, cpy2, targetPoint.x, targetPoint.y);
+
+      relLabelPositions.set(rel.id, labelPos);
+      result.push({
+        id: rel.id,
+        relationType: rel.relationType,
+        label: `${rel.createdBy.username} · ${spec.label}`,
+        color: spec.color,
+        path,
+        labelPos,
+        arrowEnd: { x: targetPoint.x, y: targetPoint.y },
+      });
+    }
+
     return result;
-  }, [visibleRelations, posMap, relations]);
+  }, [visibleRelations, posMap]);
 
   // ── Decoration map: messageId → list of relation decorations ─────────────
   const decorationMap = useMemo(() => {

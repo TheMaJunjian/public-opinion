@@ -63,6 +63,17 @@ const COLOR_BG: Record<string, string> = {
   slate: '#f1f5f9',
 };
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+/**
+ * Maximum iterations for the column-assignment propagation loop.
+ * In a DAG (directed acyclic graph) with N messages, N iterations are sufficient
+ * to stabilize column assignments. 200 provides a comfortable bound for any
+ * realistic discussion graph while preventing infinite loops if circular
+ * dependencies exist in the data.
+ */
+const MAX_LAYOUT_ITERATIONS = 200;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CardPos {
@@ -161,7 +172,7 @@ function computeLayout(
   // Propagate: source should be at col(target) + 1
   let changed = true;
   let guard = 0;
-  while (changed && guard++ < 200) {
+  while (changed && guard++ < MAX_LAYOUT_ITERATIONS) {
     changed = false;
     for (const rel of edgeRels) {
       const srcId = rel.sourceMessageId;
@@ -415,7 +426,7 @@ export default function GraphView({
             <div
               key={msg.id}
               onClick={() => onClickMessage(msg.id)}
-              title="点击选中/取消选中消息"
+              title={`${msg.createdBy.username}: ${msg.content}\n\n点击选中/取消选中消息`}
               className="absolute cursor-pointer select-none rounded-lg border-2 bg-white transition-all"
               style={{
                 left: pos.x,

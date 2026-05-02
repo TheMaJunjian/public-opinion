@@ -1,60 +1,43 @@
 /**
- * TopicDetailPage.tsx — Main topic view with graph, focus mode, and relation management.
- *
- * ============================================================
- * Architecture overview
- * ============================================================
+ * TopicDetailPage.tsx — Main topic view integrating GraphView, DraftPanel, and list view.
  *
  * This page is the core of the public-opinion app. It integrates:
  *
- * 1. MESSAGE VIEW (tree / linear)
- *    - Tree view: relations with formsTrees=true create a parent-child hierarchy.
- *    - Linear view: messages in chronological order.
+ * 1. GRAPH VIEW (图视图)
+ *    - SVG-based non-linear view with message cards + relation edges.
+ *    - Clicking a card/label sends it to the Draft area.
  *
- * 2. RELATION DISPLAY
- *    Relations are rendered according to their PresentationSpec:
- *    - edge-label / edge-decoration: displayed as a sidebar list with source→target
- *    - decoration: shown as stance badges on message cards
- *    - Other kinds: partially implemented, extensible
+ * 2. TREE / LINEAR VIEW (树视图 / 时间轴)
+ *    - Fallback linear views for browsing.
  *
- * 3. FOCUS MODE
- *    When enabled, filters to only show text messages within N hops of the
- *    selected focus message. Hop = one relation step between text messages.
- *    Relations are shown only when both their text-message endpoints are visible.
- *    (See buildFocusSubgraph() in graph.ts for the algorithm.)
+ * 3. DRAFT PANEL (候选区 / 来源集合 / 目标集合)
+ *    - Draft → Sources (text only) or Targets (any).
+ *    - Sources + Targets + relation type → create relation.
  *
- * 4. RELATION FORM
- *    Allows creating relations with:
- *    - Source: text message only (per design spec)
- *    - Target: text message, text fragment, OR relation message (bug fix)
+ * 4. FOCUS MODE
+ *    - Filters to N hops from a focal message.
+ *    - hop = text-message-to-text-message distance through relations.
  *
- * ============================================================
- * Key bug fix
- * ============================================================
- * OLD: targetRefs used { targetMessageId } — always resolved to a text message.
- * NEW: targetRefs use { kind: 'message'|'text-fragment'|'relation', ... }
- *      When targeting a relation, the target correctly resolves to the
- *      RELATION MESSAGE ITSELF, not the text messages it connects.
+ * 5. IMPORT / EXPORT
+ *    - JSON v2 format (no old format compatibility).
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Topic, Message, Relation } from '../types';
+import type { Topic, Message, Relation, TargetRef } from '../types';
 import { getPresentationSpec, PRESENTATION_SPECS } from '../types';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
-import MessageCard from '../components/MessageCard';
+import GraphView from '../components/GraphView';
 import MessageThread from '../components/MessageThread';
+import MessageCard from '../components/MessageCard';
 import MessageForm from '../components/MessageForm';
-import RelationForm from '../components/RelationForm';
 import RelationBadge from '../components/RelationBadge';
+import DraftPanel, { type DraftItem } from '../components/DraftPanel';
 import { buildMessageTree, computeStanceStats, buildFocusSubgraph } from '../utils/graph';
 
-// ============================================================
-// Sub-components
-// ============================================================
+// ─── RelationItem sub-component ──────────────────────────────────────────────
 
-/** Inline display of a single relation (for the relations sidebar list) */
 function RelationItem({
   relation,
   messages,
@@ -69,7 +52,6 @@ function RelationItem({
   const src = messages.find(m => m.id === relation.sourceMessageId);
   const spec = getPresentationSpec(relation.relationType);
 
-  // Render target refs inline
   const targetLabels = relation.targetRefs.map((ref, i) => {
     if (ref.kind === 'message' || ref.kind === 'text-fragment') {
       const msg = messages.find(m => m.id === ref.messageId);
@@ -101,25 +83,45 @@ function RelationItem({
   });
 
   return (
-    <div className={`text-xs flex flex-wrap items-center gap-1.5 py-1 ${isFiltered ? 'opacity-40' : ''}`}>
+    <div className={`text-xs flex flex-wrap items-center gap-1.5 py-1.5 ${isFiltered ? 'opacity-40' : ''}`}>
       <span className="font-medium text-gray-700">{src?.createdBy.username ?? '?'}</span>
       <RelationBadge type={relation.relationType} />
-      {targetLabels}
-      {spec.kind === 'edge-label' || spec.kind === 'edge-decoration' ? (
+      {(spec.kind === 'edge-label' || spec.kind === 'edge-decoration') && (
         <span className="text-gray-400">→</span>
-      ) : null}
+      )}
+      {targetLabels}
     </div>
   );
 }
 
-// ============================================================
-// Main Page Component
-// ============================================================
+// ─── Export / Import helpers ──────────────────────────────────────────────────
+
+interface ExportData {
+  version: 2;
+  exportedAt: string;
+  topic: { id: string; title: string; body?: string };
+  messages: Message[];
+  relations: Relation[];
+}
+
+function buildExportJson(topic: Topic, messages: Message[], relations: Relation[]): string {
+  const data: ExportData = {
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    topic: { id: topic.id, title: topic.title, body: topic.body },
+    messages,
+    relations,
+  };
+  return JSON.stringify(data, null, 2);
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 export default function TopicDetailPage() {
   const { topicId } = useParams<{ topicId: string }>();
   const { user } = useAuth();
   const navigate = useNavigate();
+
   const [topic, setTopic] = useState<Topic | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [relations, setRelations] = useState<Relation[]>([]);
@@ -127,14 +129,21 @@ export default function TopicDetailPage() {
   const [error, setError] = useState('');
   const [msgPage, setMsgPage] = useState(1);
   const [msgTotalPages, setMsgTotalPages] = useState(1);
-  const [activeTab, setActiveTab] = useState<'relations' | 'addRelation'>('relations');
-  const [viewMode, setViewMode] = useState<'tree' | 'linear'>('tree');
 
-  // ── Focus mode state ──────────────────────────────────────
+  const [viewMode, setViewMode] = useState<'graph' | 'tree' | 'linear'>('graph');
+  const [relTab, setRelTab] = useState<'list' | 'legend'>('list');
+
+  // Focus mode
   const [focusMode, setFocusMode] = useState(false);
-  const [focusMessageId, setFocusMessageId] = useState<string>('');
+  const [focusMessageId, setFocusMessageId] = useState('');
   const [focusHops, setFocusHops] = useState(2);
 
+  // Draft / Sources / Targets
+  const [draft, setDraft] = useState<DraftItem[]>([]);
+  const [sources, setSources] = useState<DraftItem[]>([]);
+  const [targets, setTargets] = useState<DraftItem[]>([]);
+
+  // ── Load ────────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     if (!topicId) return;
     setLoading(true);
@@ -142,8 +151,8 @@ export default function TopicDetailPage() {
     try {
       const [topicRes, msgRes, relRes] = await Promise.all([
         api.getTopic(topicId),
-        api.getMessages(topicId, { page: msgPage, limit: 20 }),
-        api.getRelations(topicId, { limit: 100 }),
+        api.getMessages(topicId, { page: msgPage, limit: 50 }),
+        api.getRelations(topicId, { limit: 200 }),
       ]);
       setTopic(topicRes);
       setMessages(msgRes.data);
@@ -158,15 +167,11 @@ export default function TopicDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // ── Topic actions ───────────────────────────────────────────────────────────
+
   async function handleCreateMessage(data: Parameters<typeof api.createMessage>[1]) {
     await api.createMessage(topicId!, data);
     await load();
-  }
-
-  async function handleCreateRelation(data: Parameters<typeof api.createRelation>[1]) {
-    await api.createRelation(topicId!, data);
-    await load();
-    setActiveTab('relations');
   }
 
   async function handleArchive() {
@@ -176,10 +181,111 @@ export default function TopicDetailPage() {
   }
 
   async function handleDelete() {
-    if (!confirm('确认删除该话题？')) return;
+    if (!confirm('确认删除该话题？此操作不可撤销。')) return;
     await api.deleteTopic(topicId!);
     navigate('/');
   }
+
+  // ── Draft management ────────────────────────────────────────────────────────
+
+  function handleClickMessage(id: string) {
+    const existsIdx = draft.findIndex(d => d.type === 'message' && d.id === id);
+    if (existsIdx >= 0) {
+      setDraft(prev => prev.filter((_, i) => i !== existsIdx));
+    } else {
+      setDraft(prev => [...prev, { type: 'message', id }]);
+    }
+  }
+
+  function handleClickRelation(id: string) {
+    const existsIdx = draft.findIndex(d => d.type === 'relation' && d.id === id);
+    if (existsIdx >= 0) {
+      setDraft(prev => prev.filter((_, i) => i !== existsIdx));
+    } else {
+      setDraft(prev => [...prev, { type: 'relation', id, part: 'label' }]);
+    }
+  }
+
+  function handleDraftRemove(idx: number) {
+    setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleDraftToSources(idx: number) {
+    const item = draft[idx];
+    if (item.type !== 'message') return; // sources: text messages only
+    setSources([item]); // one source at a time
+    setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleDraftToTargets(idx: number) {
+    const item = draft[idx];
+    const exists = targets.some(t => t.type === item.type && t.id === item.id);
+    if (!exists) setTargets(prev => [...prev, item]);
+    setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleSourcesRemove(idx: number) {
+    setSources(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleTargetsRemove(idx: number) {
+    setTargets(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleClearAll() {
+    setDraft([]);
+    setSources([]);
+    setTargets([]);
+  }
+
+  // ── Create relation ─────────────────────────────────────────────────────────
+
+  async function handleCreateRelation(data: {
+    relationType: string;
+    sourceMessageId: string;
+    targetRefs: TargetRef[];
+    newMessageContent?: string;
+  }) {
+    if (!topicId) return;
+
+    let sourceId = data.sourceMessageId;
+    if (data.newMessageContent) {
+      const newMsg = await api.createMessage(topicId, { content: data.newMessageContent });
+      sourceId = newMsg.id;
+    }
+    if (!sourceId) throw new Error('来源消息 ID 为空');
+
+    await api.createRelation(topicId, {
+      relationType: data.relationType,
+      sourceMessageId: sourceId,
+      targetRefs: data.targetRefs,
+    });
+
+    await load();
+  }
+
+  // ── Import / Export ─────────────────────────────────────────────────────────
+
+  function handleExport(): string {
+    if (!topic) return '{}';
+    return buildExportJson(topic, messages, relations);
+  }
+
+  function handleImport(json: string) {
+    let data: ExportData;
+    try {
+      data = JSON.parse(json);
+    } catch {
+      throw new Error('JSON 格式错误');
+    }
+    if (data.version !== 2) throw new Error('仅支持 version: 2 格式');
+    alert(
+      `导入预览：${data.messages?.length ?? 0} 条消息，${data.relations?.length ?? 0} 条关系\n` +
+        `话题：${data.topic?.title ?? '未知'}\n\n⚠️ 后端批量导入 API 尚未实现，数据仅做预览。`,
+    );
+  }
+
+  // ── Render guards ───────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-center py-20 text-gray-400">加载中…</div>;
   if (error) return <div className="text-center py-20 text-red-500">{error}</div>;
@@ -187,48 +293,53 @@ export default function TopicDetailPage() {
 
   const isOwner = user?.id === topic.createdBy.id;
 
-  // ── Focus mode filtering ──────────────────────────────────
-  let visibleMessages = messages;
-  let visibleRelations = relations;
+  // ── Focus mode ──────────────────────────────────────────────────────────────
   let focusSubgraph: { visibleMessages: Set<string>; visibleRelations: Set<string> } | null = null;
-
   if (focusMode && focusMessageId) {
-    focusSubgraph = buildFocusSubgraph(
-      messages,
-      relations,
-      new Set([focusMessageId]),
-      focusHops,
-    );
-    visibleMessages = messages.filter(m => focusSubgraph!.visibleMessages.has(m.id));
-    visibleRelations = relations.filter(r => focusSubgraph!.visibleRelations.has(r.id));
+    focusSubgraph = buildFocusSubgraph(messages, relations, new Set([focusMessageId]), focusHops);
   }
 
-  // ── Tree building + stats ─────────────────────────────────
+  const visibleMessages = focusSubgraph
+    ? messages.filter(m => focusSubgraph!.visibleMessages.has(m.id))
+    : messages;
+  const visibleRelations = focusSubgraph
+    ? relations.filter(r => focusSubgraph!.visibleRelations.has(r.id))
+    : relations;
+
+  // ── Selection sets for graph highlighting ────────────────────────────────────
+  const selectedMessageIds = new Set<string>([
+    ...draft.filter(d => d.type === 'message').map(d => d.id),
+    ...sources.map(d => d.id),
+    ...targets.filter(d => d.type === 'message').map(d => d.id),
+  ]);
+  const selectedRelationIds = new Set<string>([
+    ...draft.filter(d => d.type === 'relation').map(d => d.id),
+    ...targets.filter(d => d.type === 'relation').map(d => d.id),
+  ]);
+
+  // ── Tree building ───────────────────────────────────────────────────────────
   const messageTree = viewMode === 'tree' ? buildMessageTree(visibleMessages, visibleRelations) : [];
   const stanceStatsMap = computeStanceStats(visibleMessages, visibleRelations);
 
-  // ── Relations sidebar categorization ─────────────────────
-  // Non-tree relations to show in the sidebar (with relation-as-target highlight)
-  const sidebarRelations = visibleRelations.filter(r => {
-    const spec = getPresentationSpec(r.relationType);
-    return spec.kind !== 'decoration'; // decorations are shown on message cards via stanceStats
-  });
-  // All filtered-out relations (for dimmed display in focus mode)
-  const filteredOutRelations = focusMode && focusSubgraph
-    ? relations.filter(r => !focusSubgraph!.visibleRelations.has(r.id))
-    : [];
+  // ── Relations for sidebar ────────────────────────────────────────────────────
+  const filteredOutRelations =
+    focusMode && focusSubgraph
+      ? relations.filter(r => !focusSubgraph!.visibleRelations.has(r.id))
+      : [];
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
+    <div className="max-w-screen-xl mx-auto px-4 py-6">
       {/* Topic header */}
-      <div className="mb-6">
+      <div className="mb-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
               <h1 className="text-2xl font-bold text-gray-900">{topic.title}</h1>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                topic.status === 'OPEN' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
-              }`}>
+              <span
+                className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                  topic.status === 'OPEN' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                }`}
+              >
                 {topic.status === 'OPEN' ? '进行中' : '已归档'}
               </span>
             </div>
@@ -240,12 +351,16 @@ export default function TopicDetailPage() {
           </div>
           {isOwner && (
             <div className="flex gap-2 shrink-0">
-              <button onClick={handleArchive}
-                className="text-sm px-3 py-1.5 border border-gray-300 rounded hover:bg-gray-50 text-gray-600">
+              <button
+                onClick={handleArchive}
+                className="text-sm px-3 py-1.5 border border-gray-300 rounded hover:bg-gray-50 text-gray-600"
+              >
                 {topic.status === 'OPEN' ? '归档' : '重开'}
               </button>
-              <button onClick={handleDelete}
-                className="text-sm px-3 py-1.5 border border-red-300 text-red-600 rounded hover:bg-red-50">
+              <button
+                onClick={handleDelete}
+                className="text-sm px-3 py-1.5 border border-red-300 text-red-600 rounded hover:bg-red-50"
+              >
                 删除
               </button>
             </div>
@@ -253,128 +368,166 @@ export default function TopicDetailPage() {
         </div>
       </div>
 
-      <div className="flex gap-6">
-        {/* Main area: message view */}
-        <div className="flex-1 min-w-0">
-          {/* Toolbar */}
-          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-            <span className="text-sm text-gray-500">
-              {focusMode && focusSubgraph
-                ? `焦点模式：显示 ${visibleMessages.length}/${messages.length} 条消息`
-                : `共 ${messages.length} 条观点 · ${relations.length} 条关系`}
-            </span>
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <span className="text-sm text-gray-500 mr-1">
+          {focusMode && focusSubgraph
+            ? `焦点模式：${visibleMessages.length}/${messages.length} 条`
+            : `${messages.length} 条消息 · ${relations.length} 条关系`}
+        </span>
 
-            <div className="flex items-center gap-2">
-              {/* View mode toggle */}
-              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
-                <button onClick={() => setViewMode('tree')}
-                  className={`px-3 py-1.5 font-medium transition-colors ${
-                    viewMode === 'tree' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'
-                  }`} title="非线性树状视图">
-                  非线性视图
-                </button>
-                <button onClick={() => setViewMode('linear')}
-                  className={`px-3 py-1.5 font-medium transition-colors border-l border-gray-200 ${
-                    viewMode === 'linear' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'
-                  }`} title="线性时间轴">
-                  时间轴
-                </button>
-              </div>
+        {/* View mode toggle */}
+        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+          {(
+            [
+              { key: 'graph',  label: '图视图',  title: '非线性图视图（message cards + relation edges）' },
+              { key: 'tree',   label: '树视图',  title: '非线性树视图' },
+              { key: 'linear', label: '时间轴',  title: '线性时间轴视图' },
+            ] as const
+          ).map(({ key, label, title }, i) => (
+            <button
+              key={key}
+              onClick={() => setViewMode(key)}
+              title={title}
+              className={`px-3 py-1.5 font-medium transition-colors ${i > 0 ? 'border-l border-gray-200' : ''} ${
+                viewMode === key ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-              {/* Focus mode toggle */}
-              <button
-                onClick={() => { setFocusMode(f => !f); if (focusMode) setFocusMessageId(''); }}
-                className={`px-3 py-1.5 text-sm font-medium rounded border transition-colors ${
-                  focusMode
-                    ? 'bg-amber-100 text-amber-700 border-amber-300'
-                    : 'text-gray-500 border-gray-200 hover:bg-gray-50'
-                }`}
-                title="焦点模式：只显示与焦点消息相关的子图"
-              >
-                {focusMode ? '◎ 焦点模式' : '○ 焦点模式'}
-              </button>
-            </div>
+        {/* Focus mode toggle */}
+        <button
+          onClick={() => { setFocusMode(f => !f); if (focusMode) setFocusMessageId(''); }}
+          className={`px-3 py-1.5 text-sm font-medium rounded border transition-colors ${
+            focusMode
+              ? 'bg-amber-100 text-amber-700 border-amber-300'
+              : 'text-gray-500 border-gray-200 hover:bg-gray-50'
+          }`}
+        >
+          {focusMode ? '◎ 焦点模式' : '○ 焦点模式'}
+        </button>
+      </div>
+
+      {/* Focus controls */}
+      {focusMode && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-sm font-medium text-amber-800">焦点消息</label>
+            <select
+              value={focusMessageId}
+              onChange={e => setFocusMessageId(e.target.value)}
+              className="flex-1 min-w-0 border border-amber-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+            >
+              <option value="">选择焦点消息…</option>
+              {messages.map(m => (
+                <option key={m.id} value={m.id}>
+                  [{m.createdBy.username}] {m.content.slice(0, 40)}{m.content.length > 40 ? '…' : ''}
+                </option>
+              ))}
+            </select>
+            <label className="text-sm font-medium text-amber-800 shrink-0">跳数</label>
+            <select
+              value={focusHops}
+              onChange={e => setFocusHops(Number(e.target.value))}
+              className="border border-amber-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+            >
+              {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
           </div>
+          <p className="text-xs text-amber-600">
+            hop = 文本消息之间经过的关系消息数；仅显示焦点消息 {focusHops} 跳以内的消息与关系。
+          </p>
+        </div>
+      )}
 
-          {/* Focus mode controls */}
-          {focusMode && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
-              <div className="flex items-center gap-3 flex-wrap">
-                <label className="text-sm font-medium text-amber-800">焦点消息</label>
-                <select
-                  value={focusMessageId}
-                  onChange={e => setFocusMessageId(e.target.value)}
-                  className="flex-1 min-w-0 border border-amber-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-                >
-                  <option value="">选择焦点消息…</option>
-                  {messages.map(m => (
-                    <option key={m.id} value={m.id}>
-                      [{m.createdBy.username}] {m.content.slice(0, 40)}{m.content.length > 40 ? '…' : ''}
-                    </option>
-                  ))}
-                </select>
-                <label className="text-sm font-medium text-amber-800">跳数 (hop)</label>
-                <select
-                  value={focusHops}
-                  onChange={e => setFocusHops(Number(e.target.value))}
-                  className="border border-amber-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-                >
-                  {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </div>
-              <p className="text-xs text-amber-600">
-                hop = 文本消息之间经过的关系消息数。仅显示在焦点消息 {focusHops} 跳以内的消息与关系。
-              </p>
-            </div>
-          )}
+      {/* Main layout */}
+      <div className="flex gap-5 items-start">
 
-          {/* Message list */}
+        {/* Message view (left) */}
+        <div className="flex-1 min-w-0 space-y-4">
+
           {visibleMessages.length === 0 ? (
             <div className="text-center py-10 text-gray-400 bg-white border border-gray-200 rounded-lg">
               {focusMode ? '焦点范围内暂无消息' : '暂无观点，来第一个发言吧！'}
             </div>
+          ) : viewMode === 'graph' ? (
+            <div>
+              <p className="text-xs text-gray-400 mb-2">
+                点击消息卡片或关系标签将其加入候选区，然后在右侧建立关系。
+              </p>
+              <GraphView
+                messages={visibleMessages}
+                relations={visibleRelations}
+                stanceStatsMap={stanceStatsMap}
+                selectedMessageIds={selectedMessageIds}
+                selectedRelationIds={selectedRelationIds}
+                focusVisibleMessages={focusSubgraph?.visibleMessages ?? null}
+                focusVisibleRelations={focusSubgraph?.visibleRelations ?? null}
+                onClickMessage={handleClickMessage}
+                onClickRelation={handleClickRelation}
+              />
+            </div>
           ) : viewMode === 'tree' ? (
-            <div className="space-y-4">
-              {messageTree.length > 0 ? (
-                messageTree.map(node => (
-                  <MessageThread
-                    key={node.message.id}
-                    node={node}
-                    topicId={topicId!}
-                    stanceStatsMap={stanceStatsMap}
-                    depth={0}
-                  />
-                ))
-              ) : (
-                visibleMessages.map(msg => (
-                  <MessageCard key={msg.id} message={msg} topicId={topicId!}
-                    stanceStats={stanceStatsMap.get(msg.id)} />
-                ))
-              )}
+            <div className="space-y-3">
+              {messageTree.length > 0
+                ? messageTree.map(node => (
+                    <MessageThread
+                      key={node.message.id}
+                      node={node}
+                      topicId={topicId!}
+                      stanceStatsMap={stanceStatsMap}
+                      depth={0}
+                    />
+                  ))
+                : visibleMessages.map(msg => (
+                    <MessageCard
+                      key={msg.id}
+                      message={msg}
+                      topicId={topicId!}
+                      stanceStats={stanceStatsMap.get(msg.id)}
+                    />
+                  ))}
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {visibleMessages.map(msg => (
-                <MessageCard key={msg.id} message={msg} topicId={topicId!}
-                  stanceStats={stanceStatsMap.get(msg.id)} />
+                <MessageCard
+                  key={msg.id}
+                  message={msg}
+                  topicId={topicId!}
+                  stanceStats={stanceStatsMap.get(msg.id)}
+                />
               ))}
             </div>
           )}
 
-          {/* Pagination */}
-          {msgTotalPages > 1 && !focusMode && (
-            <div className="flex justify-center gap-3 mt-4">
-              <button onClick={() => setMsgPage(p => Math.max(1, p - 1))} disabled={msgPage === 1}
-                className="px-3 py-1.5 text-sm border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50">← 上一页</button>
+          {/* Pagination (tree/linear only) */}
+          {msgTotalPages > 1 && viewMode !== 'graph' && !focusMode && (
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => setMsgPage(p => Math.max(1, p - 1))}
+                disabled={msgPage === 1}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50"
+              >
+                ← 上一页
+              </button>
               <span className="text-sm text-gray-500">{msgPage} / {msgTotalPages}</span>
-              <button onClick={() => setMsgPage(p => Math.min(msgTotalPages, p + 1))} disabled={msgPage === msgTotalPages}
-                className="px-3 py-1.5 text-sm border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50">下一页 →</button>
+              <button
+                onClick={() => setMsgPage(p => Math.min(msgTotalPages, p + 1))}
+                disabled={msgPage === msgTotalPages}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50"
+              >
+                下一页 →
+              </button>
             </div>
           )}
 
-          {/* Post new message */}
+          {/* New message form */}
           {user && topic.status === 'OPEN' && (
-            <div className="mt-6">
+            <div className="mt-2">
               <MessageForm onSubmit={handleCreateMessage} />
             </div>
           )}
@@ -385,30 +538,66 @@ export default function TopicDetailPage() {
           )}
         </div>
 
-        {/* Sidebar */}
-        <aside className="w-80 shrink-0 space-y-4">
-          {/* Relations panel */}
+        {/* Right panel */}
+        <div className="shrink-0 space-y-4" style={{ width: 300 }}>
+
+          {/* Draft + Create relation panel */}
+          {user && topic.status === 'OPEN' && (
+            <div className="bg-white border border-gray-200 rounded-lg p-4">
+              <h3 className="text-sm font-bold text-gray-800 mb-3 flex items-center gap-2">
+                <span className="text-indigo-600">⊕</span> 关系操作
+              </h3>
+              <DraftPanel
+                messages={messages}
+                relations={relations}
+                draft={draft}
+                sources={sources}
+                targets={targets}
+                onDraftRemove={handleDraftRemove}
+                onDraftToSources={handleDraftToSources}
+                onDraftToTargets={handleDraftToTargets}
+                onSourcesRemove={handleSourcesRemove}
+                onTargetsRemove={handleTargetsRemove}
+                onClearAll={handleClearAll}
+                onCreateRelation={handleCreateRelation}
+                onImport={handleImport}
+                onExport={handleExport}
+              />
+            </div>
+          )}
+
+          {/* Relations list */}
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
             <div className="flex border-b border-gray-200">
-              <button onClick={() => setActiveTab('relations')}
-                className={`flex-1 py-2.5 text-sm font-medium ${activeTab === 'relations' ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-500' : 'text-gray-500 hover:bg-gray-50'}`}>
+              <button
+                onClick={() => setRelTab('list')}
+                className={`flex-1 py-2.5 text-sm font-medium ${
+                  relTab === 'list'
+                    ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-500'
+                    : 'text-gray-500 hover:bg-gray-50'
+                }`}
+              >
                 关系列表 ({relations.length})
               </button>
-              {user && topic.status === 'OPEN' && (
-                <button onClick={() => setActiveTab('addRelation')}
-                  className={`flex-1 py-2.5 text-sm font-medium ${activeTab === 'addRelation' ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-500' : 'text-gray-500 hover:bg-gray-50'}`}>
-                  + 添加关系
-                </button>
-              )}
+              <button
+                onClick={() => setRelTab('legend')}
+                className={`flex-1 py-2.5 text-sm font-medium ${
+                  relTab === 'legend'
+                    ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-500'
+                    : 'text-gray-500 hover:bg-gray-50'
+                }`}
+              >
+                类型图例
+              </button>
             </div>
-            <div className="p-4">
-              {activeTab === 'relations' ? (
+
+            <div className="p-3">
+              {relTab === 'list' ? (
                 relations.length === 0 ? (
-                  <p className="text-sm text-gray-400">暂无关系</p>
+                  <p className="text-sm text-gray-400 text-center py-3">暂无关系</p>
                 ) : (
-                  <div className="divide-y divide-gray-100">
-                    {/* Visible relations in focus mode */}
-                    {sidebarRelations.map(rel => (
+                  <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
+                    {visibleRelations.map(rel => (
                       <RelationItem
                         key={rel.id}
                         relation={rel}
@@ -417,11 +606,12 @@ export default function TopicDetailPage() {
                         isFiltered={false}
                       />
                     ))}
-                    {/* Dimmed filtered-out relations in focus mode */}
                     {filteredOutRelations.length > 0 && (
                       <>
                         <div className="pt-2 pb-1">
-                          <span className="text-xs text-gray-400">焦点范围外的关系（{filteredOutRelations.length}条）：</span>
+                          <span className="text-xs text-gray-400">
+                            焦点范围外（{filteredOutRelations.length}条）：
+                          </span>
                         </div>
                         {filteredOutRelations.slice(0, 5).map(rel => (
                           <RelationItem
@@ -433,26 +623,43 @@ export default function TopicDetailPage() {
                           />
                         ))}
                         {filteredOutRelations.length > 5 && (
-                          <p className="text-xs text-gray-400 pt-1">还有 {filteredOutRelations.length - 5} 条…</p>
+                          <p className="text-xs text-gray-400 pt-1">
+                            还有 {filteredOutRelations.length - 5} 条…
+                          </p>
                         )}
                       </>
                     )}
                   </div>
                 )
               ) : (
-                <RelationForm
-                  messages={messages}
-                  relations={relations}
-                  onSubmit={handleCreateRelation}
-                />
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(PRESENTATION_SPECS).map(([type, spec]) => (
+                      <div key={type} title={`显示形式：${spec.kind}`}>
+                        <RelationBadge type={type} />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 space-y-1 text-xs text-gray-500">
+                    <p><span className="font-medium">→</span> 连接线+标签</p>
+                    <p><span className="font-medium">⇒</span> 连接线+装饰</p>
+                    <p><span className="font-medium">◆</span> 消息装饰</p>
+                    <p><span className="font-medium">★</span> 内联标记</p>
+                    <p><span className="font-medium">↺</span> 替换覆盖</p>
+                    <p><span className="font-medium">⬡</span> 分组框架</p>
+                  </div>
+                </div>
               )}
             </div>
           </div>
 
           {/* Stance statistics */}
-          {visibleMessages.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">立场统计</h3>
+          {visibleMessages.some(m => {
+            const s = stanceStatsMap.get(m.id);
+            return s && (s.support > 0 || s.oppose > 0);
+          }) && (
+            <div className="bg-white border border-gray-200 rounded-lg p-3">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">立场统计</h3>
               <div className="space-y-1.5">
                 {visibleMessages.map(msg => {
                   const stats = stanceStatsMap.get(msg.id);
@@ -461,10 +668,15 @@ export default function TopicDetailPage() {
                   const supportPct = total > 0 ? Math.round((stats.support / total) * 100) : 0;
                   return (
                     <div key={msg.id} className="text-xs">
-                      <div className="text-gray-500 truncate mb-0.5">{msg.content.slice(0, 28)}…</div>
+                      <div className="text-gray-500 truncate mb-0.5">
+                        {msg.content.slice(0, 28)}…
+                      </div>
                       <div className="flex items-center gap-1">
                         <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                          <div className="h-full bg-green-400 rounded-full" style={{ width: `${supportPct}%` }} />
+                          <div
+                            className="h-full bg-green-400 rounded-full"
+                            style={{ width: `${supportPct}%` }}
+                          />
                         </div>
                         <span className="text-green-600 w-8 text-right">▲{stats.support}</span>
                         <span className="text-red-500 w-8 text-right">▼{stats.oppose}</span>
@@ -472,24 +684,10 @@ export default function TopicDetailPage() {
                     </div>
                   );
                 })}
-                {visibleMessages.every(m => {
-                  const s = stanceStatsMap.get(m.id);
-                  return !s || (s.support === 0 && s.oppose === 0);
-                }) && <p className="text-xs text-gray-400">尚无立场表达</p>}
               </div>
             </div>
           )}
-
-          {/* Relation types legend */}
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">关系类型图例</h3>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.keys(PRESENTATION_SPECS).map(type => (
-                <RelationBadge key={type} type={type} />
-              ))}
-            </div>
-          </div>
-        </aside>
+        </div>
       </div>
     </div>
   );

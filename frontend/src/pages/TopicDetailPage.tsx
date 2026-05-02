@@ -30,7 +30,7 @@ import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import GraphView from '../components/GraphView';
 import MessageThread from '../components/MessageThread';
-import MessageCard from '../components/MessageCard';
+import InteractiveMessageList from '../components/InteractiveMessageList';
 import RelationBadge from '../components/RelationBadge';
 import DraftPanel, { type DraftItem } from '../components/DraftPanel';
 import { buildMessageTree, computeStanceStats, buildFocusSubgraph } from '../utils/graph';
@@ -132,7 +132,10 @@ export default function TopicDetailPage() {
   const [viewMode, setViewMode] = useState<'graph' | 'tree' | 'linear'>('graph');
   const [relTab, setRelTab] = useState<'list' | 'legend'>('list');
 
-  // Focus mode
+  // Relation type (lifted to top-level, shown in toolbar + passed to DraftPanel)
+  const [relationType, setRelationType] = useState('REPLY');
+
+  // Focus mode (lifted to TopicDetailPage, controls passed to DraftPanel)
   const [focusMode, setFocusMode] = useState(false);
   const [focusMessageId, setFocusMessageId] = useState('');
   const [focusHops, setFocusHops] = useState(2);
@@ -216,12 +219,24 @@ export default function TopicDetailPage() {
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
 
+  function handleDraftRemoveBatch(indices: number[]) {
+    const idxSet = new Set(indices);
+    setDraft(prev => prev.filter((_, i) => !idxSet.has(i)));
+  }
+
   function handleDraftToSources(idx: number) {
     const item = draft[idx];
     // Sources: only text messages (not relation messages, not text-fragments per design)
     if (item.type !== 'message') return;
     setSources([item]); // one source at a time
     setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleDraftToSourcesBatch(indices: number[]) {
+    const idxSet = new Set(indices);
+    const items = draft.filter((item, i) => idxSet.has(i) && item.type === 'message');
+    if (items.length > 0) setSources([items[items.length - 1]]); // keep last (one source at a time)
+    setDraft(prev => prev.filter((_, i) => !idxSet.has(i)));
   }
 
   function handleDraftToTargets(idx: number) {
@@ -236,6 +251,22 @@ export default function TopicDetailPage() {
     });
     if (!isDuplicate) setTargets(prev => [...prev, item]);
     setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleDraftToTargetsBatch(indices: number[]) {
+    const idxSet = new Set(indices);
+    const newItems = draft.filter((item, i) => {
+      if (!idxSet.has(i)) return false;
+      return !targets.some(t => {
+        if (t.type !== item.type) return false;
+        if (t.type === 'message' && item.type === 'message') return t.id === item.id;
+        if (t.type === 'text-fragment' && item.type === 'text-fragment') return t.messageId === item.messageId && t.text === item.text;
+        if (t.type === 'relation' && item.type === 'relation') return t.id === item.id;
+        return false;
+      });
+    });
+    if (newItems.length > 0) setTargets(prev => [...prev, ...newItems]);
+    setDraft(prev => prev.filter((_, i) => !idxSet.has(i)));
   }
 
   function handleDraftToTargetsAll() {
@@ -406,89 +437,78 @@ export default function TopicDetailPage() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <span className="text-sm text-gray-500 mr-1">
-          {focusMode && focusSubgraph
-            ? `焦点模式：${visibleMessages.length}/${messages.length} 条`
-            : `${messages.length} 条消息 · ${relations.length} 条关系`}
-        </span>
+      <div className="mb-4 space-y-3">
+        {/* Row 1: Stats + view mode + focus indicator */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-gray-500">
+            {focusMode && focusSubgraph
+              ? `◎ 焦点模式：${visibleMessages.length}/${messages.length} 条`
+              : `${messages.length} 条消息 · ${relations.length} 条关系`}
+          </span>
 
-        {/* View mode toggle */}
-        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
-          {(
-            [
-              { key: 'graph',  label: '图视图',  title: '非线性图视图（message cards + relation edges）' },
-              { key: 'tree',   label: '树视图',  title: '非线性树视图' },
-              { key: 'linear', label: '时间轴',  title: '线性时间轴视图' },
-            ] as const
-          ).map(({ key, label, title }, i) => (
-            <button
-              key={key}
-              onClick={() => setViewMode(key)}
-              title={title}
-              className={`px-3 py-1.5 font-medium transition-colors ${i > 0 ? 'border-l border-gray-200' : ''} ${
-                viewMode === key ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Focus mode toggle */}
-        <button
-          onClick={() => { setFocusMode(f => !f); if (focusMode) setFocusMessageId(''); }}
-          className={`px-3 py-1.5 text-sm font-medium rounded border transition-colors ${
-            focusMode
-              ? 'bg-amber-100 text-amber-700 border-amber-300'
-              : 'text-gray-500 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          {focusMode ? '◎ 焦点模式' : '○ 焦点模式'}
-        </button>
-      </div>
-
-      {/* Focus controls */}
-      {focusMode && (
-        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
-          <div className="flex items-center gap-3 flex-wrap">
-            <label className="text-sm font-medium text-amber-800">焦点消息</label>
-            <select
-              value={focusMessageId}
-              onChange={e => setFocusMessageId(e.target.value)}
-              className="flex-1 min-w-0 border border-amber-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-            >
-              <option value="">选择焦点消息…</option>
-              {messages.map(m => (
-                <option key={m.id} value={m.id}>
-                  [{m.createdBy.username}] {m.content.slice(0, 40)}{m.content.length > 40 ? '…' : ''}
-                </option>
-              ))}
-            </select>
-            <label className="text-sm font-medium text-amber-800 shrink-0">跳数</label>
-            <select
-              value={focusHops}
-              onChange={e => setFocusHops(Number(e.target.value))}
-              className="border border-amber-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-            >
-              {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
-            <button
-              onClick={() => setFocusMessageId('')}
-              className="text-xs px-2 py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-100"
-              title="退出当前焦点（保持焦点模式）"
-            >退出焦点</button>
-            <button
-              onClick={() => { setFocusMode(false); setFocusMessageId(''); }}
-              className="text-xs px-2 py-1 border border-red-300 rounded text-red-600 hover:bg-red-50"
-              title="关闭焦点模式"
-            >退出全部</button>
+          {/* View mode toggle */}
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+            {(
+              [
+                { key: 'graph',  label: '图视图',  title: '非线性图视图（message cards + relation edges）' },
+                { key: 'tree',   label: '树视图',  title: '非线性树视图' },
+                { key: 'linear', label: '列表视图', title: '线性列表视图（带交互选择）' },
+              ] as const
+            ).map(({ key, label, title }, i) => (
+              <button
+                key={key}
+                onClick={() => setViewMode(key)}
+                title={title}
+                className={`px-3 py-1.5 font-medium transition-colors ${i > 0 ? 'border-l border-gray-200' : ''} ${
+                  viewMode === key ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <p className="text-xs text-amber-600">
-            hop = 文本消息之间经过的关系消息数；仅显示焦点消息 {focusHops} 跳以内的消息与关系。
-          </p>
         </div>
-      )}
+
+        {/* Row 2: Relation type buttons */}
+        <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-200 rounded-lg px-3 py-2">
+          <span className="text-xs font-medium text-gray-500 shrink-0">关系类型</span>
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(PRESENTATION_SPECS)
+              .filter(([, s]) =>
+                s.kind === 'edge-label' ||
+                s.kind === 'edge-decoration' ||
+                s.kind === 'decoration',
+              )
+              .map(([key, s]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setRelationType(key)}
+                  title={`${s.label} · ${s.kind}`}
+                  className={`text-xs px-2 py-0.5 rounded border font-medium transition-all ${
+                    relationType === key
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'border-gray-200 text-gray-600 hover:border-indigo-300 hover:text-indigo-600'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+          </div>
+          {(() => {
+            const spec = getPresentationSpec(relationType);
+            return (
+              <span className="text-xs text-gray-400 ml-1">
+                {spec.kind === 'edge-label' ? '连接+标签' :
+                  spec.kind === 'edge-decoration' ? '连接+装饰' :
+                  spec.kind === 'decoration' ? '装饰' : spec.kind}
+                {spec.stanceEffect ? ` · ${spec.stanceEffect === 'support' ? '✓支持' : '✗反对'}` : ''}
+              </span>
+            );
+          })()}
+          <span className="text-xs text-gray-300 ml-auto hidden sm:block">焦点/候选/建关系等控制在右侧面板</span>
+        </div>
+      </div>
 
       {/* Main layout */}
       <div className="flex gap-5 items-start">
@@ -501,23 +521,18 @@ export default function TopicDetailPage() {
               {focusMode ? '焦点范围内暂无消息' : '暂无观点，来第一个发言吧！'}
             </div>
           ) : viewMode === 'graph' ? (
-            <div>
-              <p className="text-xs text-gray-400 mb-2">
-                单击消息卡片将其加入候选区；双击消息卡片进入文本选择模式（拖选文字创建片段）；点击关系标签将关系加入候选区。
-              </p>
-              <GraphView
-                messages={visibleMessages}
-                relations={visibleRelations}
-                stanceStatsMap={stanceStatsMap}
-                selectedMessageIds={selectedMessageIds}
-                selectedRelationIds={selectedRelationIds}
-                focusVisibleMessages={focusSubgraph?.visibleMessages ?? null}
-                focusVisibleRelations={focusSubgraph?.visibleRelations ?? null}
-                onClickMessage={handleClickMessage}
-                onClickRelation={handleClickRelation}
-                onSelectFragment={handleSelectFragment}
-              />
-            </div>
+            <GraphView
+              messages={visibleMessages}
+              relations={visibleRelations}
+              stanceStatsMap={stanceStatsMap}
+              selectedMessageIds={selectedMessageIds}
+              selectedRelationIds={selectedRelationIds}
+              focusVisibleMessages={focusSubgraph?.visibleMessages ?? null}
+              focusVisibleRelations={focusSubgraph?.visibleRelations ?? null}
+              onClickMessage={handleClickMessage}
+              onClickRelation={handleClickRelation}
+              onSelectFragment={handleSelectFragment}
+            />
           ) : viewMode === 'tree' ? (
             <div className="space-y-3">
               {messageTree.length > 0
@@ -530,26 +545,31 @@ export default function TopicDetailPage() {
                       depth={0}
                     />
                   ))
-                : visibleMessages.map(msg => (
-                    <MessageCard
-                      key={msg.id}
-                      message={msg}
-                      topicId={topicId!}
-                      stanceStats={stanceStatsMap.get(msg.id)}
-                    />
-                  ))}
+                : (
+                  <InteractiveMessageList
+                    messages={visibleMessages}
+                    relations={visibleRelations}
+                    stanceStatsMap={stanceStatsMap}
+                    selectedMessageIds={selectedMessageIds}
+                    selectedRelationIds={selectedRelationIds}
+                    onClickMessage={handleClickMessage}
+                    onClickRelation={handleClickRelation}
+                    onSelectFragment={handleSelectFragment}
+                  />
+                )}
             </div>
           ) : (
-            <div className="space-y-3">
-              {visibleMessages.map(msg => (
-                <MessageCard
-                  key={msg.id}
-                  message={msg}
-                  topicId={topicId!}
-                  stanceStats={stanceStatsMap.get(msg.id)}
-                />
-              ))}
-            </div>
+            /* Linear list view — interactive */
+            <InteractiveMessageList
+              messages={visibleMessages}
+              relations={visibleRelations}
+              stanceStatsMap={stanceStatsMap}
+              selectedMessageIds={selectedMessageIds}
+              selectedRelationIds={selectedRelationIds}
+              onClickMessage={handleClickMessage}
+              onClickRelation={handleClickRelation}
+              onSelectFragment={handleSelectFragment}
+            />
           )}
 
           {/* Pagination (tree/linear only) */}
@@ -582,7 +602,7 @@ export default function TopicDetailPage() {
         </div>
 
         {/* Right panel */}
-        <div className="shrink-0 space-y-4" style={{ width: 300 }}>
+        <div className="shrink-0 space-y-4" style={{ width: 320 }}>
 
           {/* Draft + Action panel */}
           {user && topic.status === 'OPEN' && (
@@ -597,8 +617,11 @@ export default function TopicDetailPage() {
                 sources={sources}
                 targets={targets}
                 onDraftRemove={handleDraftRemove}
+                onDraftRemoveBatch={handleDraftRemoveBatch}
                 onDraftToSources={handleDraftToSources}
+                onDraftToSourcesBatch={handleDraftToSourcesBatch}
                 onDraftToTargets={handleDraftToTargets}
+                onDraftToTargetsBatch={handleDraftToTargetsBatch}
                 onDraftToTargetsAll={handleDraftToTargetsAll}
                 onSourcesRemove={handleSourcesRemove}
                 onTargetsRemove={handleTargetsRemove}
@@ -608,6 +631,18 @@ export default function TopicDetailPage() {
                 onRelateOnly={handleRelateOnly}
                 onImport={handleImport}
                 onExport={handleExport}
+                relationType={relationType}
+                onRelationTypeChange={setRelationType}
+                focusMode={focusMode}
+                focusMessageId={focusMessageId}
+                focusHops={focusHops}
+                onFocusToggle={() => { setFocusMode(f => !f); if (focusMode) setFocusMessageId(''); }}
+                onFocusMessageChange={setFocusMessageId}
+                onFocusHopsChange={setFocusHops}
+                onFocusExit={() => setFocusMessageId('')}
+                onFocusExitAll={() => { setFocusMode(false); setFocusMessageId(''); }}
+                recentTextMessages={[...messages].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)}
+                recentRelations={[...relations].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)}
               />
             </div>
           )}

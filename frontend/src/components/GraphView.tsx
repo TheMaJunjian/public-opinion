@@ -464,7 +464,10 @@ export default function GraphView({
                 left: pos.x,
                 top: pos.y,
                 width: CARD_W,
+                // In text-select mode: allow card to grow up to 3× normal height
+                // with internal scroll, keeping the graph canvas stable.
                 height: isTextSelect ? 'auto' : CARD_H,
+                maxHeight: isTextSelect ? CARD_H * 3 : CARD_H,
                 minHeight: CARD_H,
                 borderColor: isTextSelect
                   ? '#2563eb'
@@ -477,7 +480,7 @@ export default function GraphView({
                   ? '0 0 0 3px #6366f133, 0 1px 3px rgba(0,0,0,0.1)'
                   : '0 1px 2px rgba(0,0,0,0.06)',
                 zIndex: isTextSelect ? 20 : 5,
-                overflow: isTextSelect ? 'visible' : 'hidden',
+                overflow: isTextSelect ? 'auto' : 'hidden',
               }}
             >
               {/* Card body */}

@@ -121,8 +121,8 @@ function itemLabel(item: DraftItem, messages: Message[], relations: Relation[]):
   return `[${src?.createdBy.username ?? '?'}的${spec.label}关系${partSuffix}]`;
 }
 
-/** Returns true if this draft item can be placed in the Sources collection (whole text messages only) */
-function isValidForSources(item: DraftItem): boolean {
+/** Returns true if this draft item is a whole text message (valid for Sources collection) */
+function isWholeTextMessage(item: DraftItem): boolean {
   return item.type === 'message';
 }
 
@@ -377,7 +377,7 @@ export default function DraftPanel({
                     {itemLabel(item, messages, relations)}
                   </span>
                   <div className="flex gap-0.5 shrink-0">
-                    {isValidForSources(item) && (
+                    {isWholeTextMessage(item) && (
                       <button
                         onClick={() => onDraftToSources(idx)}
                         className="px-1 py-0.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-xs font-medium"

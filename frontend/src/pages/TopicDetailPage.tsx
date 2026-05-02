@@ -219,14 +219,15 @@ export default function TopicDetailPage() {
   }
 
   function handleSelectTextFragment(messageId: string, text: string) {
-    // Simple deterministic hash for the fragment text
+    // Simple deterministic hash for fragment identification (not cryptographic —
+    // used only as a stable content-fingerprint for the TargetRef hash field).
     let h = 5381;
     for (let i = 0; i < text.length; i++) {
       h = ((h << 5) + h + text.charCodeAt(i)) | 0;
     }
-    const hash = (h >>> 0).toString(16).padStart(8, '0');
+    const hash = (h >>> 0).toString(16).padStart(8, '0') + `-${text.length}`;
     const item: DraftItem = { type: 'text-fragment', id: messageId, fragmentText: text, fragmentHash: hash };
-    // Avoid duplicate fragments with same text
+    // Avoid duplicate fragments with identical text from the same message
     const exists = draft.some(d => d.type === 'text-fragment' && d.id === messageId && d.fragmentText === text);
     if (!exists) {
       setDraft(prev => [...prev, item]);

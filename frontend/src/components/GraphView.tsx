@@ -23,7 +23,7 @@
  *   - replace-overlay / frame-group: fallback to edge-label for now
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import type { Message, Relation, StanceStats } from '../types';
 import { getPresentationSpec } from '../types';
 
@@ -230,6 +230,18 @@ interface Props {
   focusVisibleRelations: Set<string> | null;
   onClickMessage: (id: string) => void;
   onClickRelation: (id: string) => void;
+  /** Called when user drag-selects text in a message card (double-click → text selection mode) */
+  onSelectFragment?: (messageId: string, text: string, hash: string) => void;
+}
+
+// ─── Simple hash for text fragment identification ────────────────────────────
+
+function hashText(text: string): string {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = Math.imul(31, h) + text.charCodeAt(i) | 0;
+  }
+  return Math.abs(h).toString(36);
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -244,6 +256,7 @@ export default function GraphView({
   focusVisibleRelations,
   onClickMessage,
   onClickRelation,
+  onSelectFragment,
 }: Props) {
   const visibleMessages = focusVisibleMessages
     ? messages.filter(m => focusVisibleMessages.has(m.id))
@@ -252,6 +265,26 @@ export default function GraphView({
   const visibleRelations = focusVisibleRelations
     ? relations.filter(r => focusVisibleRelations.has(r.id))
     : relations;
+
+  // ── Text selection mode state ─────────────────────────────────────────────
+  // textSelectionModeId: which message card is currently in text-selection mode
+  const [textSelectionModeId, setTextSelectionModeId] = useState<string | null>(null);
+
+  const handleCardDoubleClick = useCallback((msgId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTextSelectionModeId(prev => prev === msgId ? null : msgId);
+  }, []);
+
+  const handleCardMouseUp = useCallback((msgId: string) => {
+    if (textSelectionModeId !== msgId) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const text = sel.toString().trim();
+    if (text.length > 0 && onSelectFragment) {
+      onSelectFragment(msgId, text, hashText(msgId + ':' + text));
+      sel.removeAllRanges();
+    }
+  }, [textSelectionModeId, onSelectFragment]);
 
   // ── Layout ───────────────────────────────────────────────────────────────
   const { posMap, canvasWidth, canvasHeight } = useMemo(
@@ -421,24 +454,33 @@ export default function GraphView({
           const isSelected = selectedMessageIds.has(msg.id);
           const stats = stanceStatsMap.get(msg.id);
           const decos = decorationMap.get(msg.id) ?? [];
+          const isTextSelectMode = textSelectionModeId === msg.id;
 
           return (
             <div
               key={msg.id}
-              onClick={() => onClickMessage(msg.id)}
-              title={`${msg.createdBy.username}: ${msg.content}\n\n点击选中/取消选中消息`}
-              className="absolute cursor-pointer select-none rounded-lg border-2 bg-white transition-all"
+              onClick={isTextSelectMode ? undefined : () => onClickMessage(msg.id)}
+              onDoubleClick={e => handleCardDoubleClick(msg.id, e)}
+              onMouseUp={() => handleCardMouseUp(msg.id)}
+              title={isTextSelectMode
+                ? `文本选择模式：拖选文字创建片段，双击退出`
+                : `${msg.createdBy.username}: ${msg.content}\n\n单击选中/取消选中，双击进入文本选择模式`}
+              className="absolute rounded-lg border-2 bg-white transition-all"
               style={{
                 left: pos.x,
                 top: pos.y,
                 width: CARD_W,
                 height: CARD_H,
-                borderColor: isSelected ? '#6366f1' : '#e5e7eb',
-                boxShadow: isSelected
-                  ? '0 0 0 3px #6366f133, 0 1px 3px rgba(0,0,0,0.1)'
-                  : '0 1px 2px rgba(0,0,0,0.06)',
-                zIndex: 5,
+                borderColor: isTextSelectMode ? '#f59e0b' : isSelected ? '#6366f1' : '#e5e7eb',
+                boxShadow: isTextSelectMode
+                  ? '0 0 0 3px #f59e0b33, 0 1px 3px rgba(0,0,0,0.1)'
+                  : isSelected
+                    ? '0 0 0 3px #6366f133, 0 1px 3px rgba(0,0,0,0.1)'
+                    : '0 1px 2px rgba(0,0,0,0.06)',
+                cursor: isTextSelectMode ? 'text' : 'pointer',
+                zIndex: isTextSelectMode ? 15 : 5,
                 overflow: 'hidden',
+                userSelect: isTextSelectMode ? 'text' : 'none',
               }}
             >
               {/* Card body */}
@@ -447,17 +489,21 @@ export default function GraphView({
                 <div className="flex items-center justify-between mb-1.5 gap-1">
                   <span
                     className="text-xs font-semibold truncate"
-                    style={{ color: isSelected ? '#4f46e5' : '#374151' }}
+                    style={{ color: isTextSelectMode ? '#92400e' : isSelected ? '#4f46e5' : '#374151' }}
                   >
                     {msg.createdBy.username}
+                    {isTextSelectMode && <span className="ml-1 text-[10px] text-amber-500 font-normal">文本选择中</span>}
                   </span>
                   <span className="text-xs text-gray-400 shrink-0">
                     {new Date(msg.createdAt).toLocaleDateString('zh-CN')}
                   </span>
                 </div>
 
-                {/* Content (truncated to fit card height) */}
-                <p className="text-xs text-gray-700 leading-relaxed flex-1 overflow-hidden line-clamp-3">
+                {/* Content */}
+                <p
+                  className="text-xs text-gray-700 leading-relaxed flex-1 overflow-hidden line-clamp-3"
+                  style={{ userSelect: isTextSelectMode ? 'text' : 'none' }}
+                >
                   {msg.content}
                 </p>
 
@@ -495,8 +541,16 @@ export default function GraphView({
                 </div>
               </div>
 
-              {/* Selected indicator */}
-              {isSelected && (
+              {/* Mode indicator badge */}
+              {isTextSelectMode && (
+                <div
+                  className="absolute top-1 right-1 text-amber-600 text-xs font-bold bg-amber-50 px-1 rounded"
+                  title="文本选择模式（双击退出）"
+                >
+                  T
+                </div>
+              )}
+              {!isTextSelectMode && isSelected && (
                 <div
                   className="absolute top-1 right-1 text-indigo-600 text-xs font-bold"
                   title="已选中"

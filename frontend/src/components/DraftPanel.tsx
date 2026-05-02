@@ -7,28 +7,29 @@
  *   3. Constraints:
  *      - Sources: only text messages (never relation messages or fragments of relations).
  *      - Targets: text messages, text fragments, OR relation messages / relation parts.
- *   4. User picks a relation type and submits to create the relation.
+ *   4. User picks a relation type and one of 4 action buttons.
  *
- * Additional features:
- *   - "New message + immediate relation" flow: input new message content alongside sources/targets.
- *   - Import / Export buttons (JSON format using the app's data model).
- *   - Visual display of each draft item with remove button.
+ * Four action buttons:
+ *   A. 仅发送消息                       — send new message only (no relation)
+ *   B. 发送消息并建立关系（用候选作目标）— send new message, use Draft as relation targets
+ *   C. 发送新消息并建立关系（Targets集合）— send new message, use committed Targets as relation targets
+ *   D. 仅用已有消息建立关系（Sources/Targets集合）— create relation using existing Sources/Targets only
  */
 
 import { useState } from 'react';
 import type { Message, Relation, TargetRef } from '../types';
 import { PRESENTATION_SPECS, getPresentationSpec } from '../types';
-import RelationBadge from './RelationBadge';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-/** A selectable unit in the draft/sources/targets system */
-export interface DraftItem {
-  type: 'message' | 'relation';
-  id: string;
-  /** Only for relation items: which part of the relation is selected */
-  part?: 'label' | 'decoration' | 'frame' | 'whole';
-}
+/**
+ * A selectable unit in the draft/sources/targets system.
+ * Discriminated union to support text messages, text fragments, and relation messages.
+ */
+export type DraftItem =
+  | { type: 'message'; id: string }
+  | { type: 'text-fragment'; messageId: string; text: string; hash: string }
+  | { type: 'relation'; id: string; part?: 'label' | 'decoration' | 'frame' | 'whole' };
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -41,14 +42,23 @@ interface Props {
   onDraftRemove: (idx: number) => void;
   onDraftToSources: (idx: number) => void;
   onDraftToTargets: (idx: number) => void;
+  onDraftToTargetsAll: () => void;
   onSourcesRemove: (idx: number) => void;
   onTargetsRemove: (idx: number) => void;
   onClearAll: () => void;
-  onCreateRelation: (data: {
+  /** Send new message only (action A) */
+  onSendMessage: (content: string) => Promise<void>;
+  /** Send new message + create relation (action B: draft as targets, action C: targets collection) */
+  onSendAndRelate: (data: {
+    relationType: string;
+    newMessageContent: string;
+    targetRefs: TargetRef[];
+  }) => Promise<void>;
+  /** Create relation with existing sources and targets (action D) */
+  onRelateOnly: (data: {
     relationType: string;
     sourceMessageId: string;
     targetRefs: TargetRef[];
-    newMessageContent?: string;
   }) => Promise<void>;
   onImport: (json: string) => void;
   onExport: () => string;
@@ -62,6 +72,10 @@ function itemLabel(item: DraftItem, messages: Message[], relations: Relation[]):
     if (!msg) return `消息 ${item.id.slice(0, 8)}…`;
     return `[${msg.createdBy.username}] ${msg.content.slice(0, 30)}${msg.content.length > 30 ? '…' : ''}`;
   }
+  if (item.type === 'text-fragment') {
+    const msg = messages.find(m => m.id === item.messageId);
+    return `[${msg?.createdBy.username ?? '?'}的片段] "${item.text.slice(0, 20)}${item.text.length > 20 ? '…' : ''}"`;
+  }
   const rel = relations.find(r => r.id === item.id);
   if (!rel) return `关系 ${item.id.slice(0, 8)}…`;
   const spec = getPresentationSpec(rel.relationType);
@@ -70,8 +84,22 @@ function itemLabel(item: DraftItem, messages: Message[], relations: Relation[]):
   return `[${src?.createdBy.username ?? '?'}的${spec.label}关系${partSuffix}]`;
 }
 
-function isTextMessage(item: DraftItem): boolean {
-  return item.type === 'message';
+function isTextItem(item: DraftItem): boolean {
+  return item.type === 'message' || item.type === 'text-fragment';
+}
+
+function draftItemToTargetRef(item: DraftItem): TargetRef {
+  if (item.type === 'message') {
+    return { kind: 'message', messageId: item.id };
+  }
+  if (item.type === 'text-fragment') {
+    return { kind: 'text-fragment', messageId: item.messageId, text: item.text, hash: item.hash };
+  }
+  return {
+    kind: 'relation',
+    relationId: item.id,
+    part: item.part && item.part !== 'whole' ? item.part : undefined,
+  };
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -85,16 +113,18 @@ export default function DraftPanel({
   onDraftRemove,
   onDraftToSources,
   onDraftToTargets,
+  onDraftToTargetsAll,
   onSourcesRemove,
   onTargetsRemove,
   onClearAll,
-  onCreateRelation,
+  onSendMessage,
+  onSendAndRelate,
+  onRelateOnly,
   onImport,
   onExport,
 }: Props) {
   const [relationType, setRelationType] = useState('REPLY');
   const [newMsgContent, setNewMsgContent] = useState('');
-  const [useNewMsg, setUseNewMsg] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [importText, setImportText] = useState('');
@@ -102,64 +132,86 @@ export default function DraftPanel({
 
   const spec = getPresentationSpec(relationType);
 
-  /** Build TargetRefs from the targets collection */
-  function buildTargetRefs(): TargetRef[] {
-    return targets.map(item => {
-      if (item.type === 'message') {
-        return { kind: 'message', messageId: item.id } as TargetRef;
-      }
-      return {
-        kind: 'relation',
-        relationId: item.id,
-        part: item.part && item.part !== 'whole' ? item.part : undefined,
-      } as TargetRef;
-    });
-  }
+  function clearError() { setError(''); }
 
-  async function handleCreate(e: React.FormEvent) {
+  // ── Action A: 仅发送消息 ────────────────────────────────────────────────
+  async function handleSendOnly(e: React.FormEvent) {
     e.preventDefault();
-    setError('');
-
-    // Validate sources
-    if (sources.length === 0 && !useNewMsg) {
-      setError('请先选择来源消息（在图中点击文本消息，再点击"→来源"）');
-      return;
-    }
-    if (targets.length === 0) {
-      setError('请先选择目标（在图中点击消息或关系标签，再点击"→目标"）');
-      return;
-    }
-
-    const sourceId = useNewMsg ? '' : sources[0]?.id;
-    if (!useNewMsg && !sourceId) {
-      setError('来源集合为空');
-      return;
-    }
-    if (useNewMsg && !newMsgContent.trim()) {
-      setError('新消息内容不能为空');
-      return;
-    }
-
-    const targetRefs = buildTargetRefs();
-    if (targetRefs.length === 0) {
-      setError('目标集合为空');
-      return;
-    }
-
+    clearError();
+    if (!newMsgContent.trim()) { setError('请输入消息内容'); return; }
     setSubmitting(true);
     try {
-      await onCreateRelation({
+      await onSendMessage(newMsgContent.trim());
+      setNewMsgContent('');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '发送失败');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ── Action B: 发送消息并建立关系（用候选作目标）─────────────────────────
+  async function handleSendWithDraft(e: React.FormEvent) {
+    e.preventDefault();
+    clearError();
+    if (!newMsgContent.trim()) { setError('请输入消息内容'); return; }
+    if (draft.length === 0) { setError('候选区为空，请先选择目标（单击消息卡片）'); return; }
+    setSubmitting(true);
+    try {
+      await onSendAndRelate({
+        relationType,
+        newMessageContent: newMsgContent.trim(),
+        targetRefs: draft.map(draftItemToTargetRef),
+      });
+      setNewMsgContent('');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '操作失败');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ── Action C: 发送新消息并建立关系（Targets集合）───────────────────────
+  async function handleSendWithTargets(e: React.FormEvent) {
+    e.preventDefault();
+    clearError();
+    if (!newMsgContent.trim()) { setError('请输入消息内容'); return; }
+    if (targets.length === 0) { setError('目标集合为空，请先将候选区内容移入目标集合'); return; }
+    setSubmitting(true);
+    try {
+      await onSendAndRelate({
+        relationType,
+        newMessageContent: newMsgContent.trim(),
+        targetRefs: targets.map(draftItemToTargetRef),
+      });
+      setNewMsgContent('');
+      onClearAll();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '操作失败');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ── Action D: 仅用已有消息建立关系（Sources/Targets集合）──────────────
+  async function handleRelateOnly(e: React.FormEvent) {
+    e.preventDefault();
+    clearError();
+    if (sources.length === 0) { setError('来源集合为空，请先从候选区移入文本消息'); return; }
+    if (targets.length === 0) { setError('目标集合为空，请先从候选区移入消息或关系'); return; }
+    const firstSource = sources[0];
+    if (firstSource.type !== 'message') { setError('来源必须是文本消息'); return; }
+    const sourceId = firstSource.id;
+    setSubmitting(true);
+    try {
+      await onRelateOnly({
         relationType,
         sourceMessageId: sourceId,
-        targetRefs,
-        newMessageContent: useNewMsg ? newMsgContent.trim() : undefined,
+        targetRefs: targets.map(draftItemToTargetRef),
       });
-      // Clear after success
       onClearAll();
-      setNewMsgContent('');
-      setUseNewMsg(false);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '创建关系失败');
+      setError(err instanceof Error ? err.message : '操作失败');
     } finally {
       setSubmitting(false);
     }
@@ -186,22 +238,67 @@ export default function DraftPanel({
     }
   }
 
+  function DraftItemRow({
+    item,
+    showSources,
+    onRemove,
+    onToSources,
+    onToTargets,
+  }: {
+    item: DraftItem;
+    showSources: boolean;
+    onRemove: () => void;
+    onToSources?: () => void;
+    onToTargets?: () => void;
+  }) {
+    const isText = isTextItem(item);
+    const typeLabel = item.type === 'message' ? '消' : item.type === 'text-fragment' ? '片' : '关';
+    const typeBg = item.type === 'message'
+      ? 'bg-blue-100 text-blue-700'
+      : item.type === 'text-fragment'
+        ? 'bg-yellow-100 text-yellow-700'
+        : 'bg-purple-100 text-purple-700';
+    return (
+      <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded px-1.5 py-1 text-xs">
+        <span className={`shrink-0 px-1 py-0.5 rounded text-xs font-medium ${typeBg}`}>{typeLabel}</span>
+        <span className="flex-1 truncate text-gray-700">{itemLabel(item, messages, relations)}</span>
+        <div className="flex gap-0.5 shrink-0">
+          {showSources && isText && onToSources && (
+            <button
+              onClick={onToSources}
+              className="px-1 py-0.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-xs font-medium"
+              title="加入来源集合"
+            >→来源</button>
+          )}
+          {onToTargets && (
+            <button
+              onClick={onToTargets}
+              className="px-1 py-0.5 bg-green-50 text-green-600 hover:bg-green-100 rounded text-xs font-medium"
+              title="加入目标集合"
+            >→目标</button>
+          )}
+          <button
+            onClick={onRemove}
+            className="px-1 py-0.5 text-gray-400 hover:text-red-500 rounded"
+            title="移除"
+          >×</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-4 text-sm">
+    <div className="flex flex-col gap-3 text-sm">
       {/* ── Import / Export ─────────────────────────────────────────────── */}
       <div className="flex gap-2">
         <button
           onClick={() => setShowImport(v => !v)}
           className="flex-1 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-50 text-xs font-medium"
-        >
-          导入
-        </button>
+        >导入</button>
         <button
           onClick={handleExportClick}
           className="flex-1 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-50 text-xs font-medium"
-        >
-          导出
-        </button>
+        >导出</button>
       </div>
 
       {showImport && (
@@ -217,83 +314,55 @@ export default function DraftPanel({
             <button
               onClick={handleImportSubmit}
               className="flex-1 bg-indigo-600 text-white rounded py-1 text-xs hover:bg-indigo-700"
-            >
-              确认导入
-            </button>
+            >确认导入</button>
             <button
               onClick={() => setShowImport(false)}
               className="flex-1 border border-gray-300 rounded py-1 text-xs text-gray-500 hover:bg-gray-50"
-            >
-              取消
-            </button>
+            >取消</button>
           </div>
         </div>
       )}
 
       {/* ── Draft (候选区) ─────────────────────────────────────────────── */}
       <div>
-        <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center justify-between mb-1">
           <h4 className="font-semibold text-gray-700 text-xs uppercase tracking-wide">
             候选区 ({draft.length})
           </h4>
-          {draft.length > 0 && (
-            <button
-              onClick={onClearAll}
-              className="text-xs text-red-400 hover:text-red-600"
-            >
-              清空
-            </button>
-          )}
+          <div className="flex gap-1">
+            {draft.length > 0 && (
+              <>
+                <button
+                  onClick={onDraftToTargetsAll}
+                  className="text-xs text-green-600 hover:text-green-800 font-medium"
+                  title="全部加入目标集合"
+                >全部→目标</button>
+                <span className="text-gray-300">|</span>
+                <button
+                  onClick={onClearAll}
+                  className="text-xs text-red-400 hover:text-red-600"
+                >清空</button>
+              </>
+            )}
+          </div>
         </div>
         {draft.length === 0 ? (
           <p className="text-xs text-gray-400 py-2 text-center border border-dashed border-gray-200 rounded">
-            在图中点击消息或关系标签，将其加入候选区
+            单击消息卡片或关系标签加入候选区
+            <br />
+            <span className="text-gray-300">双击消息卡片进入文本选择模式</span>
           </p>
         ) : (
           <div className="space-y-1 max-h-36 overflow-y-auto">
             {draft.map((item, idx) => (
-              <div
-                key={`${item.type}-${item.id}-${idx}`}
-                className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded px-1.5 py-1 text-xs"
-              >
-                <span
-                  className={`shrink-0 px-1 py-0.5 rounded text-xs font-medium ${
-                    item.type === 'message'
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'bg-purple-100 text-purple-700'
-                  }`}
-                >
-                  {item.type === 'message' ? '消' : '关'}
-                </span>
-                <span className="flex-1 truncate text-gray-700">
-                  {itemLabel(item, messages, relations)}
-                </span>
-                <div className="flex gap-0.5 shrink-0">
-                  {isTextMessage(item) && (
-                    <button
-                      onClick={() => onDraftToSources(idx)}
-                      className="px-1 py-0.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-xs font-medium"
-                      title="加入来源集合"
-                    >
-                      →来源
-                    </button>
-                  )}
-                  <button
-                    onClick={() => onDraftToTargets(idx)}
-                    className="px-1 py-0.5 bg-green-50 text-green-600 hover:bg-green-100 rounded text-xs font-medium"
-                    title="加入目标集合"
-                  >
-                    →目标
-                  </button>
-                  <button
-                    onClick={() => onDraftRemove(idx)}
-                    className="px-1 py-0.5 text-gray-400 hover:text-red-500 rounded"
-                    title="移除"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
+              <DraftItemRow
+                key={`draft-${idx}`}
+                item={item}
+                showSources
+                onRemove={() => onDraftRemove(idx)}
+                onToSources={() => onDraftToSources(idx)}
+                onToTargets={() => onDraftToTargets(idx)}
+              />
             ))}
           </div>
         )}
@@ -301,31 +370,24 @@ export default function DraftPanel({
 
       {/* ── Sources (来源集合) ────────────────────────────────────────────── */}
       <div>
-        <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center justify-between mb-1">
           <h4 className="font-semibold text-blue-700 text-xs uppercase tracking-wide">
             来源集合 <span className="text-gray-400 font-normal normal-case">(仅文本消息)</span>
           </h4>
         </div>
         {sources.length === 0 ? (
-          <p className="text-xs text-gray-400 py-2 text-center border border-dashed border-blue-200 rounded">
+          <p className="text-xs text-gray-400 py-1.5 text-center border border-dashed border-blue-200 rounded">
             从候选区移入文本消息
           </p>
         ) : (
-          <div className="space-y-1 max-h-28 overflow-y-auto">
+          <div className="space-y-1 max-h-24 overflow-y-auto">
             {sources.map((item, idx) => (
               <div
-                key={`src-${item.id}-${idx}`}
+                key={`src-${idx}`}
                 className="flex items-center gap-1 bg-blue-50 border border-blue-200 rounded px-1.5 py-1 text-xs"
               >
-                <span className="flex-1 truncate text-blue-800">
-                  {itemLabel(item, messages, relations)}
-                </span>
-                <button
-                  onClick={() => onSourcesRemove(idx)}
-                  className="text-blue-400 hover:text-red-500 px-0.5"
-                >
-                  ×
-                </button>
+                <span className="flex-1 truncate text-blue-800">{itemLabel(item, messages, relations)}</span>
+                <button onClick={() => onSourcesRemove(idx)} className="text-blue-400 hover:text-red-500 px-0.5">×</button>
               </div>
             ))}
           </div>
@@ -334,151 +396,140 @@ export default function DraftPanel({
 
       {/* ── Targets (目标集合) ────────────────────────────────────────────── */}
       <div>
-        <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center justify-between mb-1">
           <h4 className="font-semibold text-green-700 text-xs uppercase tracking-wide">
             目标集合 <span className="text-gray-400 font-normal normal-case">(消息或关系)</span>
           </h4>
         </div>
         {targets.length === 0 ? (
-          <p className="text-xs text-gray-400 py-2 text-center border border-dashed border-green-200 rounded">
+          <p className="text-xs text-gray-400 py-1.5 text-center border border-dashed border-green-200 rounded">
             从候选区移入消息或关系
           </p>
         ) : (
-          <div className="space-y-1 max-h-28 overflow-y-auto">
+          <div className="space-y-1 max-h-24 overflow-y-auto">
             {targets.map((item, idx) => (
               <div
-                key={`tgt-${item.id}-${idx}`}
+                key={`tgt-${idx}`}
                 className="flex items-center gap-1 bg-green-50 border border-green-200 rounded px-1.5 py-1 text-xs"
               >
                 <span
                   className={`shrink-0 px-1 py-0.5 rounded text-xs font-medium ${
                     item.type === 'message'
                       ? 'bg-green-100 text-green-700'
-                      : 'bg-purple-100 text-purple-700'
+                      : item.type === 'text-fragment'
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-purple-100 text-purple-700'
                   }`}
                 >
-                  {item.type === 'message' ? '消' : '关'}
+                  {item.type === 'message' ? '消' : item.type === 'text-fragment' ? '片' : '关'}
                 </span>
-                <span className="flex-1 truncate text-green-800">
-                  {itemLabel(item, messages, relations)}
-                </span>
-                <button
-                  onClick={() => onTargetsRemove(idx)}
-                  className="text-green-400 hover:text-red-500 px-0.5"
-                >
-                  ×
-                </button>
+                <span className="flex-1 truncate text-green-800">{itemLabel(item, messages, relations)}</span>
+                <button onClick={() => onTargetsRemove(idx)} className="text-green-400 hover:text-red-500 px-0.5">×</button>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* ── Create Relation form ──────────────────────────────────────────── */}
-      <form onSubmit={handleCreate} className="space-y-3 border-t border-gray-200 pt-3">
-        <h4 className="font-semibold text-gray-700 text-xs uppercase tracking-wide">建立关系</h4>
-
-        {error && (
-          <p className="text-red-500 text-xs bg-red-50 border border-red-200 rounded px-2 py-1">
-            {error}
-          </p>
-        )}
-
-        {/* Relation type */}
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">关系类型</label>
-          <div className="flex flex-wrap gap-1">
-            {Object.entries(PRESENTATION_SPECS)
-              .filter(([, s]) =>
-                s.kind === 'edge-label' ||
-                s.kind === 'edge-decoration' ||
-                s.kind === 'decoration',
-              )
-              .map(([key, s]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setRelationType(key)}
-                  className={`text-xs px-2 py-0.5 rounded border font-medium transition-all ${
-                    relationType === key
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'border-gray-200 text-gray-600 hover:border-gray-400'
-                  }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-          </div>
-          <p className="text-xs text-gray-400 mt-1">
-            形式：{spec.kind === 'edge-label' ? '连接线+标签' :
-              spec.kind === 'edge-decoration' ? '连接线+装饰' :
-              spec.kind === 'decoration' ? '消息装饰' : spec.kind}
-            {spec.stanceEffect ? ` · ${spec.stanceEffect === 'support' ? '✓支持' : '✗反对'}` : ''}
-          </p>
+      {/* ── Relation type selector ────────────────────────────────────────── */}
+      <div className="border-t border-gray-200 pt-3">
+        <label className="block text-xs font-medium text-gray-600 mb-1">关系类型</label>
+        <div className="flex flex-wrap gap-1">
+          {Object.entries(PRESENTATION_SPECS)
+            .filter(([, s]) =>
+              s.kind === 'edge-label' ||
+              s.kind === 'edge-decoration' ||
+              s.kind === 'decoration',
+            )
+            .map(([key, s]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setRelationType(key)}
+                className={`text-xs px-2 py-0.5 rounded border font-medium transition-all ${
+                  relationType === key
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-400'
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
         </div>
+        <p className="text-xs text-gray-400 mt-0.5">
+          形式：{spec.kind === 'edge-label' ? '连接线+标签' :
+            spec.kind === 'edge-decoration' ? '连接线+装饰' :
+            spec.kind === 'decoration' ? '消息装饰' : spec.kind}
+          {spec.stanceEffect ? ` · ${spec.stanceEffect === 'support' ? '✓支持' : '✗反对'}` : ''}
+        </p>
+      </div>
 
-        {/* New message option */}
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={useNewMsg}
-            onChange={e => setUseNewMsg(e.target.checked)}
-            className="rounded"
-          />
-          <span className="text-xs text-gray-600">新建消息作为来源</span>
-        </label>
+      {/* ── Error display ─────────────────────────────────────────────────── */}
+      {error && (
+        <p className="text-red-500 text-xs bg-red-50 border border-red-200 rounded px-2 py-1">
+          {error}
+        </p>
+      )}
 
-        {useNewMsg ? (
-          <textarea
-            value={newMsgContent}
-            onChange={e => setNewMsgContent(e.target.value)}
-            placeholder="输入新消息内容…"
-            rows={3}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-        ) : (
-          sources.length === 0 && (
-            <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-              请先在来源集合中添加一条文本消息
-            </p>
-          )
-        )}
+      {/* ── Message input ─────────────────────────────────────────────────── */}
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">消息内容（用于操作 A/B/C）</label>
+        <textarea
+          value={newMsgContent}
+          onChange={e => setNewMsgContent(e.target.value)}
+          placeholder="输入消息内容…"
+          rows={3}
+          className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        />
+      </div>
 
-        {/* Summary */}
-        {(sources.length > 0 || useNewMsg) && targets.length > 0 && (
-          <div className="text-xs text-gray-500 space-y-0.5">
-            <p>
-              <span className="font-medium text-blue-600">来源：</span>
-              {useNewMsg
-                ? `新消息「${newMsgContent.slice(0, 20)}…」`
-                : itemLabel(sources[0], messages, relations)}
-            </p>
-            <p>
-              <span className="font-medium text-green-600">目标：</span>
-              {targets.map((t, i) => (
-                <span key={i}>{i > 0 ? '、' : ''}{itemLabel(t, messages, relations)}</span>
-              ))}
-            </p>
-            <p>
-              <span className="font-medium">关系：</span>
-              <RelationBadge type={relationType} />
-            </p>
-          </div>
-        )}
-
+      {/* ── Action buttons ────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 gap-2">
+        {/* Action A: Send message only */}
         <button
-          type="submit"
-          disabled={
-            submitting ||
-            targets.length === 0 ||
-            (!useNewMsg && sources.length === 0) ||
-            (useNewMsg && !newMsgContent.trim())
-          }
-          className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded py-2 text-sm font-medium transition-colors"
+          onClick={handleSendOnly}
+          disabled={submitting || !newMsgContent.trim()}
+          className="w-full bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-700 rounded py-2 text-xs font-medium transition-colors border border-gray-300 text-left px-3"
         >
-          {submitting ? '建立中…' : '建立关系'}
+          <span className="text-gray-400 mr-1">A</span>
+          仅发送消息
         </button>
-      </form>
+
+        {/* Action B: Send + use draft as targets */}
+        <button
+          onClick={handleSendWithDraft}
+          disabled={submitting || !newMsgContent.trim() || draft.length === 0}
+          className="w-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-700 rounded py-2 text-xs font-medium transition-colors border border-indigo-200 text-left px-3"
+        >
+          <span className="text-indigo-300 mr-1">B</span>
+          发送消息并建立关系（用候选作目标）
+          {draft.length > 0 && <span className="ml-1 text-indigo-400">·候选{draft.length}项</span>}
+        </button>
+
+        {/* Action C: Send + use targets collection */}
+        <button
+          onClick={handleSendWithTargets}
+          disabled={submitting || !newMsgContent.trim() || targets.length === 0}
+          className="w-full bg-blue-50 hover:bg-blue-100 disabled:opacity-40 text-blue-700 rounded py-2 text-xs font-medium transition-colors border border-blue-200 text-left px-3"
+        >
+          <span className="text-blue-300 mr-1">C</span>
+          发送新消息并建立关系（Targets集合）
+          {targets.length > 0 && <span className="ml-1 text-blue-400">·目标{targets.length}项</span>}
+        </button>
+
+        {/* Action D: Relate only with sources/targets */}
+        <button
+          onClick={handleRelateOnly}
+          disabled={submitting || sources.length === 0 || targets.length === 0}
+          className="w-full bg-green-50 hover:bg-green-100 disabled:opacity-40 text-green-700 rounded py-2 text-xs font-medium transition-colors border border-green-200 text-left px-3"
+        >
+          <span className="text-green-300 mr-1">D</span>
+          仅用已有消息建立关系（Sources/Targets集合）
+          {(sources.length > 0 || targets.length > 0) && (
+            <span className="ml-1 text-green-400">·来源{sources.length}·目标{targets.length}</span>
+          )}
+        </button>
+      </div>
     </div>
   );
 }

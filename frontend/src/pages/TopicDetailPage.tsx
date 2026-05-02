@@ -31,7 +31,6 @@ import { useAuth } from '../context/AuthContext';
 import GraphView from '../components/GraphView';
 import MessageThread from '../components/MessageThread';
 import MessageCard from '../components/MessageCard';
-import MessageForm from '../components/MessageForm';
 import RelationBadge from '../components/RelationBadge';
 import DraftPanel, { type DraftItem } from '../components/DraftPanel';
 import { buildMessageTree, computeStanceStats, buildFocusSubgraph } from '../utils/graph';
@@ -169,11 +168,6 @@ export default function TopicDetailPage() {
 
   // ── Topic actions ───────────────────────────────────────────────────────────
 
-  async function handleCreateMessage(data: Parameters<typeof api.createMessage>[1]) {
-    await api.createMessage(topicId!, data);
-    await load();
-  }
-
   async function handleArchive() {
     if (!topic) return;
     await api.updateTopic(topicId!, { status: topic.status === 'OPEN' ? 'ARCHIVED' : 'OPEN' });
@@ -206,22 +200,54 @@ export default function TopicDetailPage() {
     }
   }
 
+  function handleSelectFragment(messageId: string, text: string, hash: string) {
+    // Toggle: if this exact fragment is already in draft, remove it; otherwise add
+    const existsIdx = draft.findIndex(
+      d => d.type === 'text-fragment' && d.messageId === messageId && d.text === text,
+    );
+    if (existsIdx >= 0) {
+      setDraft(prev => prev.filter((_, i) => i !== existsIdx));
+    } else {
+      setDraft(prev => [...prev, { type: 'text-fragment', messageId, text, hash }]);
+    }
+  }
+
   function handleDraftRemove(idx: number) {
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
 
   function handleDraftToSources(idx: number) {
     const item = draft[idx];
-    if (item.type !== 'message') return; // sources: text messages only
+    // Sources: only text messages (not relation messages, not text-fragments per design)
+    if (item.type !== 'message') return;
     setSources([item]); // one source at a time
     setDraft(prev => prev.filter((_, i) => i !== idx));
   }
 
   function handleDraftToTargets(idx: number) {
     const item = draft[idx];
-    const exists = targets.some(t => t.type === item.type && t.id === item.id);
-    if (!exists) setTargets(prev => [...prev, item]);
+    // Check for duplicates by comparing type and id/messageId
+    const isDuplicate = targets.some(t => {
+      if (t.type !== item.type) return false;
+      if (t.type === 'message' && item.type === 'message') return t.id === item.id;
+      if (t.type === 'text-fragment' && item.type === 'text-fragment') return t.messageId === item.messageId && t.text === item.text;
+      if (t.type === 'relation' && item.type === 'relation') return t.id === item.id;
+      return false;
+    });
+    if (!isDuplicate) setTargets(prev => [...prev, item]);
     setDraft(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleDraftToTargetsAll() {
+    const nonDuplicates = draft.filter(item => !targets.some(t => {
+      if (t.type !== item.type) return false;
+      if (t.type === 'message' && item.type === 'message') return t.id === item.id;
+      if (t.type === 'text-fragment' && item.type === 'text-fragment') return t.messageId === item.messageId && t.text === item.text;
+      if (t.type === 'relation' && item.type === 'relation') return t.id === item.id;
+      return false;
+    }));
+    setTargets(prev => [...prev, ...nonDuplicates]);
+    setDraft([]);
   }
 
   function handleSourcesRemove(idx: number) {
@@ -238,29 +264,40 @@ export default function TopicDetailPage() {
     setTargets([]);
   }
 
-  // ── Create relation ─────────────────────────────────────────────────────────
+  // ── Actions ──────────────────────────────────────────────────────────────────
 
-  async function handleCreateRelation(data: {
+  async function handleSendMessage(content: string) {
+    if (!topicId) return;
+    await api.createMessage(topicId, { content });
+    await load();
+  }
+
+  async function handleSendAndRelate(data: {
+    relationType: string;
+    newMessageContent: string;
+    targetRefs: TargetRef[];
+  }) {
+    if (!topicId) return;
+    const newMsg = await api.createMessage(topicId, { content: data.newMessageContent });
+    await api.createRelation(topicId, {
+      relationType: data.relationType,
+      sourceMessageId: newMsg.id,
+      targetRefs: data.targetRefs,
+    });
+    await load();
+  }
+
+  async function handleRelateOnly(data: {
     relationType: string;
     sourceMessageId: string;
     targetRefs: TargetRef[];
-    newMessageContent?: string;
   }) {
     if (!topicId) return;
-
-    let sourceId = data.sourceMessageId;
-    if (data.newMessageContent) {
-      const newMsg = await api.createMessage(topicId, { content: data.newMessageContent });
-      sourceId = newMsg.id;
-    }
-    if (!sourceId) throw new Error('来源消息 ID 为空');
-
     await api.createRelation(topicId, {
       relationType: data.relationType,
-      sourceMessageId: sourceId,
+      sourceMessageId: data.sourceMessageId,
       targetRefs: data.targetRefs,
     });
-
     await load();
   }
 
@@ -308,13 +345,13 @@ export default function TopicDetailPage() {
 
   // ── Selection sets for graph highlighting ────────────────────────────────────
   const selectedMessageIds = new Set<string>([
-    ...draft.filter(d => d.type === 'message').map(d => d.id),
-    ...sources.map(d => d.id),
-    ...targets.filter(d => d.type === 'message').map(d => d.id),
+    ...draft.filter((d): d is Extract<DraftItem, { type: 'message' }> => d.type === 'message').map(d => d.id),
+    ...sources.filter((d): d is Extract<DraftItem, { type: 'message' }> => d.type === 'message').map(d => d.id),
+    ...targets.filter((d): d is Extract<DraftItem, { type: 'message' }> => d.type === 'message').map(d => d.id),
   ]);
   const selectedRelationIds = new Set<string>([
-    ...draft.filter(d => d.type === 'relation').map(d => d.id),
-    ...targets.filter(d => d.type === 'relation').map(d => d.id),
+    ...draft.filter((d): d is Extract<DraftItem, { type: 'relation' }> => d.type === 'relation').map(d => d.id),
+    ...targets.filter((d): d is Extract<DraftItem, { type: 'relation' }> => d.type === 'relation').map(d => d.id),
   ]);
 
   // ── Tree building ───────────────────────────────────────────────────────────
@@ -436,6 +473,16 @@ export default function TopicDetailPage() {
             >
               {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
+            <button
+              onClick={() => setFocusMessageId('')}
+              className="text-xs px-2 py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-100"
+              title="退出当前焦点（保持焦点模式）"
+            >退出焦点</button>
+            <button
+              onClick={() => { setFocusMode(false); setFocusMessageId(''); }}
+              className="text-xs px-2 py-1 border border-red-300 rounded text-red-600 hover:bg-red-50"
+              title="关闭焦点模式"
+            >退出全部</button>
           </div>
           <p className="text-xs text-amber-600">
             hop = 文本消息之间经过的关系消息数；仅显示焦点消息 {focusHops} 跳以内的消息与关系。
@@ -456,7 +503,7 @@ export default function TopicDetailPage() {
           ) : viewMode === 'graph' ? (
             <div>
               <p className="text-xs text-gray-400 mb-2">
-                点击消息卡片或关系标签将其加入候选区，然后在右侧建立关系。
+                单击消息卡片将其加入候选区；双击消息卡片进入文本选择模式（拖选文字创建片段）；点击关系标签将关系加入候选区。
               </p>
               <GraphView
                 messages={visibleMessages}
@@ -468,6 +515,7 @@ export default function TopicDetailPage() {
                 focusVisibleRelations={focusSubgraph?.visibleRelations ?? null}
                 onClickMessage={handleClickMessage}
                 onClickRelation={handleClickRelation}
+                onSelectFragment={handleSelectFragment}
               />
             </div>
           ) : viewMode === 'tree' ? (
@@ -525,12 +573,7 @@ export default function TopicDetailPage() {
             </div>
           )}
 
-          {/* New message form */}
-          {user && topic.status === 'OPEN' && (
-            <div className="mt-2">
-              <MessageForm onSubmit={handleCreateMessage} />
-            </div>
-          )}
+          {/* New message form - moved to right panel */}
           {!user && (
             <p className="text-center text-sm text-gray-400 py-4">
               <a href="/login" className="text-indigo-600 hover:underline">登录</a> 后参与讨论
@@ -541,11 +584,11 @@ export default function TopicDetailPage() {
         {/* Right panel */}
         <div className="shrink-0 space-y-4" style={{ width: 300 }}>
 
-          {/* Draft + Create relation panel */}
+          {/* Draft + Action panel */}
           {user && topic.status === 'OPEN' && (
             <div className="bg-white border border-gray-200 rounded-lg p-4">
               <h3 className="text-sm font-bold text-gray-800 mb-3 flex items-center gap-2">
-                <span className="text-indigo-600">⊕</span> 关系操作
+                <span className="text-indigo-600">⊕</span> 消息与关系操作
               </h3>
               <DraftPanel
                 messages={messages}
@@ -556,10 +599,13 @@ export default function TopicDetailPage() {
                 onDraftRemove={handleDraftRemove}
                 onDraftToSources={handleDraftToSources}
                 onDraftToTargets={handleDraftToTargets}
+                onDraftToTargetsAll={handleDraftToTargetsAll}
                 onSourcesRemove={handleSourcesRemove}
                 onTargetsRemove={handleTargetsRemove}
                 onClearAll={handleClearAll}
-                onCreateRelation={handleCreateRelation}
+                onSendMessage={handleSendMessage}
+                onSendAndRelate={handleSendAndRelate}
+                onRelateOnly={handleRelateOnly}
                 onImport={handleImport}
                 onExport={handleExport}
               />

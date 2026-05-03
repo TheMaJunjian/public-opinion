@@ -1,751 +1,772 @@
-/**
- * GraphView.tsx — SVG-based non-linear graph view
- *
- * Renders text messages as absolutely-positioned cards in a column layout,
- * with SVG bezier edges representing relation messages.
- *
- * Layout algorithm:
- *   - col(target) >= col(source) + 1  (source LEFT, target RIGHT, edges flow left→right)
- *   - Messages with no outgoing edges start in column 0
- *   - Within each column, cards are ordered by creation time
- *
- * Interactivity:
- *   - Click a message card → calls onClickMessage(messageId)
- *   - Click an edge label → calls onClickRelation(relationId)
- *   - Selected items show a highlight border/color
- *   - Decoration badges (AGREE/DISAGREE/SUPPORT/REBUT) shown on cards
- *
- * Presentation:
- *   - edge-label:      curved bezier arrow + clickable label
- *   - edge-decoration: curved bezier arrow + clickable label + decoration badge on target
- *   - decoration:      decoration badge only on target (no edge)
- *   - inline-badge:    small badge on card (RECOMMEND/ARCHIVE)
- *   - frame-group:     dashed bounding box around target message cards (CLASSIFY/MERGE)
- *   - replace-overlay: fallback to edge-label
- */
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 
-import { useMemo, useState, useCallback } from 'react';
-import type { Message, Relation, StanceStats } from '../types';
-import { getPresentationSpec } from '../types';
+// ========================= Layout types =========================
 
-// ─── Layout constants ────────────────────────────────────────────────────────
-
-const CARD_W = 220;
-const CARD_H = 110;
-const COL_GAP = 80;
-const ROW_GAP = 28;
-const PAD = 40;
-
-// Hex opacity suffixes for color string composition
-const HEX_ALPHA_SEMI = '88';   // ~53% opacity  — frame stroke (unselected)
-const HEX_ALPHA_LIGHT = '55';  // ~33% opacity  — frame fill background
-const HEX_ALPHA_BORDER = '66'; // ~40% opacity  — edge/frame label border (unselected)
-
-// ─── Color palette ───────────────────────────────────────────────────────────
-
-const COLOR_STROKE: Record<string, string> = {
-  blue: '#3b82f6',
-  indigo: '#6366f1',
-  green: '#22c55e',
-  red: '#ef4444',
-  yellow: '#ca8a04',
-  purple: '#a855f7',
-  orange: '#f97316',
-  amber: '#d97706',
-  gray: '#9ca3af',
-  slate: '#94a3b8',
+type LayoutBox = { x: number; y: number; width: number; height: number };
+type Point = { x: number; y: number };
+type Rect = { x: number; y: number; width: number; height: number };
+type LabelBbox = { x: number; y: number; width: number; height: number };
+type LabelSeed = { drawId: string; text: string; p0: Point; p1: Point; p2: Point };
+type PositionedEdge = {
+  drawId: string;
+  edge: DemoEdge;
+  fromAuthor: string;
+  fromBox: LayoutBox;
+  toBox: LayoutBox;
+  fromCol: number;
+  toCol: number;
+  fragRectCanvas: DOMRect | null;
+  edgeLabelText: string;
+  expandedToEdgeId: string | null;
+  labelX: number;
+  labelY: number;
+  start: Point;
+  ctrl: Point;
+  end: Point;
 };
 
-const COLOR_BG: Record<string, string> = {
-  blue: '#dbeafe',
-  indigo: '#e0e7ff',
-  green: '#dcfce7',
-  red: '#fee2e2',
-  yellow: '#fef9c3',
-  purple: '#f3e8ff',
-  orange: '#ffedd5',
-  amber: '#fef3c7',
-  gray: '#f3f4f6',
-  slate: '#f1f5f9',
-};
+const CARD_W = 320;
+const MIN_CARD_H = 86;
+const GRID_LEFT = 18;
+const GRID_TOP = 18;
+const COL_GAP = 28;
+const ROW_GAP = 12;
+const CANVAS_BOTTOM_PAD = 120;
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-/**
- * Maximum iterations for the column-assignment propagation loop.
- * In a DAG (directed acyclic graph) with N messages, N iterations are sufficient
- * to stabilize column assignments. 200 provides a comfortable bound for any
- * realistic discussion graph while preventing infinite loops if circular
- * dependencies exist in the data.
- */
-const MAX_LAYOUT_ITERATIONS = 200;
-
-/**
- * Number of distinct vertical offsets to cycle through for edge labels.
- * Labels at the same bezier midpoint are staggered in LABEL_OFFSET_INCREMENT steps.
- */
-const LABEL_OFFSET_POSITIONS = 5;
-
-/**
- * Vertical pixel increment per label offset position.
- * Together with LABEL_OFFSET_POSITIONS, this ensures labels stagger over a
- * LABEL_OFFSET_POSITIONS * LABEL_OFFSET_INCREMENT px range before repeating.
- */
-const LABEL_OFFSET_INCREMENT = 14;
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface CardPos {
-  x: number;
-  y: number;
+function colX(col: number) {
+  return GRID_LEFT + col * (CARD_W + COL_GAP);
 }
 
-interface EdgeLabelPos {
-  cx: number; // center X
-  cy: number; // center Y
+function selKey(u: UnitSelection): string {
+  const s = u.selection;
+  if (s.kind === "whole") return `${u.messageId}::whole`;
+  if (s.kind === "edge") return `${u.messageId}::edge:${s.edgeId}`;
+  return `${u.messageId}::text:${s.start}:${s.len}:${s.text}`;
 }
 
-interface EdgeRender {
-  id: string;
-  relationType: string;
-  label: string;
-  color: string;
-  path: string;
-  labelPos: EdgeLabelPos;
-  arrowEnd: { x: number; y: number };
-  /** For edge-decoration: the position to draw the decoration badge on the target card */
-  targetCardPos?: CardPos;
-  /** Sequential index used to offset label position slightly to reduce overlap */
-  edgeIndex: number;
+function unitEquals(a: UnitSelection, b: UnitSelection) {
+  return selKey(a) === selKey(b);
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Cubic bezier midpoint at t=0.5 */
-function bezierMid(
-  x1: number, y1: number,
-  cpx1: number, cpy1: number,
-  cpx2: number, cpy2: number,
-  x2: number, y2: number,
-): { cx: number; cy: number } {
-  const t = 0.5;
-  const mt = 1 - t;
-  const cx = mt * mt * mt * x1 + 3 * mt * mt * t * cpx1 + 3 * mt * t * t * cpx2 + t * t * t * x2;
-  const cy = mt * mt * mt * y1 + 3 * mt * mt * t * cpy1 + 3 * mt * t * t * cpy2 + t * t * t * y2;
-  return { cx, cy };
+export function selectionIsText(
+  s: Selection
+): s is { kind: "text"; start: number; len: number; text: string } {
+  return s.kind === "text";
 }
 
-/** Build a cubic bezier SVG path from right edge of 'from' to left edge of 'to' */
-function buildEdgePath(
-  from: CardPos, to: CardPos,
-): { path: string; labelPos: EdgeLabelPos; arrowEnd: { x: number; y: number } } {
-  // From: right center of source card
-  const x1 = from.x + CARD_W;
-  const y1 = from.y + CARD_H / 2;
-  // To: left center of target card
-  const x2 = to.x;
-  const y2 = to.y + CARD_H / 2;
-
-  const dx = Math.abs(x2 - x1);
-  const cpx1 = x1 + dx * 0.45;
-  const cpy1 = y1;
-  const cpx2 = x2 - dx * 0.45;
-  const cpy2 = y2;
-
-  const path = `M ${x1} ${y1} C ${cpx1} ${cpy1} ${cpx2} ${cpy2} ${x2} ${y2}`;
-  const labelPos = bezierMid(x1, y1, cpx1, cpy1, cpx2, cpy2, x2, y2);
-  return { path, labelPos, arrowEnd: { x: x2, y: y2 } };
+export function clearBrowserSelection() {
+  const sel = window.getSelection();
+  if (sel) sel.removeAllRanges();
 }
 
-// ─── Layout algorithm ─────────────────────────────────────────────────────────
+export function getRangeStartOffsetUTF16(container: HTMLElement, range: Range): number {
+  const pre = range.cloneRange();
+  pre.selectNodeContents(container);
+  pre.setEnd(range.startContainer, range.startOffset);
+  return pre.toString().length;
+}
 
-function computeLayout(
-  messages: Message[],
-  relations: Relation[],
-  visibleMessageIds: Set<string> | null,
-): {
-  posMap: Map<string, CardPos>;
-  canvasWidth: number;
-  canvasHeight: number;
-} {
-  const filtered = visibleMessageIds
-    ? messages.filter(m => visibleMessageIds.has(m.id))
-    : messages;
+export function getSelectionFragment(
+  container: HTMLElement
+): { start: number; len: number; text: string } | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  if (range.collapsed) return null;
+  const common = range.commonAncestorContainer;
+  if (!(common instanceof Node)) return null;
+  if (!container.contains(common)) return null;
+  const raw = sel.toString();
+  if (raw.trim().length === 0) return null;
+  const rawStart = getRangeStartOffsetUTF16(container, range);
+  return { start: rawStart, len: raw.length, text: raw };
+}
 
-  const colMap = new Map<string, number>();
-  filtered.forEach(m => colMap.set(m.id, 0));
+export function extractTextTargetsForMessage(messageId: string, edges: DemoEdge[]) {
+  const res: { start: number; len: number; relationType: RelationType; edgeId: string }[] = [];
+  for (const e of edges) {
+    if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
+    if (e.to.messageId !== messageId) continue;
+    if (!selectionIsText(e.to.selection)) continue;
+    res.push({ start: e.to.selection.start, len: e.to.selection.len, relationType: e.relationType, edgeId: e.id });
+  }
+  res.sort((a, b) => a.start - b.start || a.len - b.len || a.edgeId.localeCompare(b.edgeId));
+  return res;
+}
 
-  // Only edge-label and edge-decoration affect column layout
-  const edgeRels = relations.filter(r => {
-    if (visibleMessageIds && !visibleMessageIds.has(r.sourceMessageId)) return false;
-    const spec = getPresentationSpec(r.relationType);
-    return spec.kind === 'edge-label' || spec.kind === 'edge-decoration';
+export function relationTypeName(t: RelationType | string): string {
+  const names: Record<string, string> = {
+    annotation: "注释", reference: "引用", reply: "回复",
+    agree: "赞同", disagree: "反对", support: "支持", rebut: "反驳",
+  };
+  return names[t] ?? t;
+}
+
+function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[]) {
+  const normalSet = new Set(normalIds);
+  const relevant = edges.filter(
+    (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
+      normalSet.has(e.from.messageId) && normalSet.has(e.to.messageId)
+  );
+  const col: Record<string, number> = {};
+  for (const id of normalIds) col[id] = 0;
+  let changed = true, iter = 0;
+  while (changed && iter < 5000) {
+    iter++; changed = false;
+    for (const e of relevant) {
+      const need = (col[e.to.messageId] ?? 0) + 1;
+      if ((col[e.from.messageId] ?? 0) < need) { col[e.from.messageId] = need; changed = true; }
+    }
+  }
+  if (iter >= 5000) { console.warn("Anno/Ref cycle; fallback."); for (const id of normalIds) col[id] = 0; }
+  const targetsByFrom = new Map<string, string[]>();
+  for (const e of relevant) {
+    const arr = targetsByFrom.get(e.from.messageId) ?? [];
+    arr.push(e.to.messageId);
+    targetsByFrom.set(e.from.messageId, arr);
+  }
+  for (const [fromId, toArr] of targetsByFrom) {
+    let maxTarget = -Infinity;
+    for (const t of toArr) maxTarget = Math.max(maxTarget, col[t] ?? 0);
+    const need = maxTarget === -Infinity ? 0 : maxTarget + 1;
+    if ((col[fromId] ?? 0) < need) col[fromId] = need;
+  }
+  const minCol = Math.min(...Object.values(col));
+  if (minCol !== 0) for (const id of normalIds) col[id] -= minCol;
+  return { col, maxCol: Math.max(...Object.values(col)) };
+}
+
+function applyReplyLayoutAdjustmentsWithConstraints(params: {
+  normals: DemoMessage[]; edges: DemoEdge[]; baseCol: Record<string, number>; baseMaxCol: number;
+}) {
+  const { normals, edges, baseCol, baseMaxCol } = params;
+  const col: Record<string, number> = { ...baseCol };
+  let maxCol = baseMaxCol;
+  const normalSet = new Set(normals.map(m => m.id));
+  const msgById = new Map(normals.map(m => [m.id, m]));
+  const minAllowed: Record<string, number> = {};
+  for (const m of normals) minAllowed[m.id] = baseCol[m.id] ?? 0;
+  for (const e of edges) {
+    if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    const need = (col[e.to.messageId] ?? 0) + 1;
+    minAllowed[e.from.messageId] = Math.max(minAllowed[e.from.messageId] ?? 0, need);
+  }
+  const replyTargetsByFrom = new Map<string, string[]>();
+  for (const e of edges.filter(e => e.relationType === "reply")) {
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    if (!replyTargetsByFrom.has(e.from.messageId)) replyTargetsByFrom.set(e.from.messageId, []);
+    replyTargetsByFrom.get(e.from.messageId)!.push(e.to.messageId);
+  }
+  function mode(nums: number[]) {
+    const cnt = new Map<number, number>();
+    for (const n of nums) cnt.set(n, (cnt.get(n) ?? 0) + 1);
+    let best = nums[0] ?? 0, bestC = -1;
+    for (const [k, c] of cnt) if (c > bestC || (c === bestC && k < best)) { best = k; bestC = c; }
+    return best;
+  }
+  const byAuthor = new Map<string, number[]>();
+  for (const m of normals) {
+    const arr = byAuthor.get(m.author) ?? [];
+    arr.push(baseCol[m.id] ?? 0);
+    byAuthor.set(m.author, arr);
+  }
+  const authorAnchor: Record<string, number> = {};
+  for (const [author, colsArr] of byAuthor) authorAnchor[author] = mode(colsArr);
+  const authorPrevLane: Record<string, number | null> = {};
+  for (const a of Object.keys(authorAnchor)) authorPrevLane[a] = null;
+  const replyFromIds = Array.from(replyTargetsByFrom.keys());
+  replyFromIds.sort((a, b) => {
+    const ta = new Date(msgById.get(a)?.createdAt ?? 0).getTime();
+    const tb = new Date(msgById.get(b)?.createdAt ?? 0).getTime();
+    return ta !== tb ? ta - tb : a.localeCompare(b);
   });
-
-  // Propagate: target should be at col(source) + 1 (source is left, target is right).
-  // This ensures edges flow left→right: source right-border → target left-border,
-  // with the arrow pointing toward the target (rightward).
-  let changed = true;
-  let guard = 0;
-  while (changed && guard++ < MAX_LAYOUT_ITERATIONS) {
-    changed = false;
-    for (const rel of edgeRels) {
-      const srcId = rel.sourceMessageId;
-      if (!colMap.has(srcId)) continue;
-      for (const ref of rel.targetRefs) {
-        if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
-        if (!colMap.has(ref.messageId)) continue;
-        const curSrcCol = colMap.get(srcId)!;
-        const curTgtCol = colMap.get(ref.messageId)!;
-        if (curTgtCol < curSrcCol + 1) {
-          colMap.set(ref.messageId, curSrcCol + 1);
-          changed = true;
-        }
-      }
+  function better(a: any, b: any) {
+    if (!b) return true; if (!a) return false;
+    for (const k of ["incMax","maxDist","sumDist","inLane","stable","c"]) {
+      if (a[k] < b[k]) return true; if (a[k] > b[k]) return false;
     }
+    return false;
   }
-
-  // Sort by creation time for stable row assignment
-  const sorted = [...filtered].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-  );
-
-  const colRows = new Map<number, number>();
-  const posMap = new Map<string, CardPos>();
-  const maxCol = Math.max(0, ...Array.from(colMap.values()));
-  for (let c = 0; c <= maxCol; c++) colRows.set(c, 0);
-
-  for (const msg of sorted) {
-    const col = colMap.get(msg.id) ?? 0;
-    const row = colRows.get(col) ?? 0;
-    colRows.set(col, row + 1);
-    posMap.set(msg.id, {
-      x: PAD + col * (CARD_W + COL_GAP),
-      y: PAD + row * (CARD_H + ROW_GAP),
-    });
+  for (const fromId of replyFromIds) {
+    const fromMsg = msgById.get(fromId); if (!fromMsg) continue;
+    const targets = replyTargetsByFrom.get(fromId) ?? [];
+    const targetCols = targets.filter(t => normalSet.has(t)).map(t => col[t] ?? baseCol[t] ?? 0);
+    const forbidden = new Set<number>(targetCols);
+    const baseMin = minAllowed[fromId] ?? baseCol[fromId] ?? 0;
+    const anchor = authorAnchor[fromMsg.author] ?? baseMin;
+    const prevLane = authorPrevLane[fromMsg.author] ?? null;
+    const candidates: number[] = [];
+    if (prevLane !== null) candidates.push(Math.max(baseMin, prevLane));
+    candidates.push(Math.max(baseMin, anchor), Math.max(baseMin, anchor + 1));
+    if (targetCols.length > 0) {
+      const med = [...targetCols].sort((a,b)=>a-b)[Math.floor(targetCols.length/2)];
+      candidates.push(Math.max(baseMin,med), Math.max(baseMin,med+1), Math.max(baseMin,med-1));
+    }
+    for (let d = 0; d <= 6; d++) candidates.push(Math.max(baseMin,anchor-d), Math.max(baseMin,anchor+d), baseMin+d);
+    const uniq: number[] = [];
+    const seen = new Set<number>();
+    for (const c0 of candidates) { const c = Math.max(baseMin,c0); if (!seen.has(c)) { seen.add(c); uniq.push(c); } }
+    const scoreCandidate = (c: number) => {
+      if (c < baseMin || forbidden.has(c)) return null;
+      const maxDist = targetCols.length === 0 ? 0 : Math.max(...targetCols.map(a => Math.abs(c-a)));
+      const sumDist = targetCols.reduce((s,t) => s+Math.abs(c-t), 0);
+      const inLane = (c===anchor||c===anchor+1) ? 0 : 1;
+      const stable = (prevLane!==null && c===prevLane) ? 0 : 1;
+      const incMax = c > maxCol ? c-maxCol : 0;
+      return { incMax, maxDist, sumDist, inLane, stable, c };
+    };
+    let bestScore: any = null, bestC: number | null = null;
+    for (const c of uniq) { const sc = scoreCandidate(c); if (sc && better(sc, bestScore)) { bestScore = sc; bestC = c; } }
+    if (bestC === null) { let c = Math.max(baseMin, maxCol+1); while (forbidden.has(c)) c++; bestC = c; }
+    col[fromId] = bestC; maxCol = Math.max(maxCol, bestC); authorPrevLane[fromMsg.author] = bestC;
   }
-
-  const totalCols = maxCol + 1;
-  const maxRows = Math.max(1, ...Array.from(colRows.values()));
-  const canvasWidth = PAD * 2 + totalCols * CARD_W + (totalCols - 1) * COL_GAP;
-  const canvasHeight = PAD * 2 + maxRows * CARD_H + (maxRows - 1) * ROW_GAP;
-
-  return { posMap, canvasWidth, canvasHeight };
+  return { col, maxCol };
 }
 
-// ─── Props ───────────────────────────────────────────────────────────────────
-
-interface Props {
-  messages: Message[];
-  relations: Relation[];
-  stanceStatsMap: Map<string, StanceStats>;
-  selectedMessageIds: Set<string>;
-  selectedRelationIds: Set<string>;
-  focusVisibleMessages: Set<string> | null;
-  focusVisibleRelations: Set<string> | null;
-  onClickMessage: (id: string) => void;
-  onClickRelation: (id: string) => void;
-  /** Called when user drag-selects text in a message card (double-click → text selection mode) */
-  onSelectFragment?: (messageId: string, text: string, hash: string) => void;
-  /**
-   * Called when user clicks on blank area (not on a card or relation label).
-   * Parent should use this to clear the draft/candidates.
-   */
-  onBlankClick?: () => void;
-  /**
-   * Controlled text-selection mode: which message ID is in text-selection mode.
-   * If provided, parent manages this state (enabling cross-component sync on clear).
-   */
-  textSelectionModeId?: string | null;
-  /**
-   * Callback when text-selection mode changes (if using controlled mode).
-   */
-  onTextModeChange?: (id: string | null) => void;
-}
-
-// ─── Simple hash for text fragment identification ────────────────────────────
-
-function hashText(text: string): string {
-  let h = 0;
-  for (let i = 0; i < text.length; i++) {
-    h = Math.imul(31, h) + text.charCodeAt(i) | 0;
+function computeNoOverlapLayout(params: {
+  normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
+}) {
+  const { normals, colOf, measuredHeights, maxCol } = params;
+  const byCol = new Map<number, DemoMessage[]>();
+  for (const m of normals) {
+    const c = colOf[m.id] ?? 0;
+    const arr = byCol.get(c) ?? [];
+    arr.push(m);
+    byCol.set(c, arr);
   }
-  return Math.abs(h).toString(36);
+  for (const [, arr] of byCol) arr.sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const colCursor: Record<number, number> = {};
+  for (let c = 0; c <= maxCol; c++) colCursor[c] = GRID_TOP;
+  const layout: Record<string, LayoutBox> = {};
+  let maxBottom = GRID_TOP;
+  for (let c = 0; c <= maxCol; c++) {
+    for (const m of byCol.get(c) ?? []) {
+      const h = Math.max(MIN_CARD_H, measuredHeights[m.id] ?? MIN_CARD_H);
+      layout[m.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
+      maxBottom = Math.max(maxBottom, colCursor[c] + h);
+      colCursor[c] += h + ROW_GAP;
+    }
+  }
+  return { layout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+function quadAt(p0: Point, p1: Point, p2: Point, t: number): Point {
+  const u = 1-t;
+  return { x: u*u*p0.x+2*u*t*p1.x+t*t*p2.x, y: u*u*p0.y+2*u*t*p1.y+t*t*p2.y };
+}
 
-export default function GraphView({
-  messages,
-  relations,
-  stanceStatsMap,
-  selectedMessageIds,
-  selectedRelationIds,
-  focusVisibleMessages,
-  focusVisibleRelations,
-  onClickMessage,
-  onClickRelation,
-  onSelectFragment,
-  onBlankClick,
-  textSelectionModeId: controlledTextModeId,
-  onTextModeChange,
-}: Props) {
-  const visibleMessages = focusVisibleMessages
-    ? messages.filter(m => focusVisibleMessages.has(m.id))
-    : messages;
+function rayRectIntersectionFirst(ox: number, oy: number, dx: number, dy: number, box: Rect, eps=1e-9): Point | null {
+  const cands: {t:number;x:number;y:number}[] = [];
+  if (Math.abs(dx) > eps) {
+    const tx1=(box.x-ox)/dx, yx1=oy+tx1*dy;
+    if (tx1>eps && yx1>=box.y-1e-6 && yx1<=box.y+box.height+1e-6) cands.push({t:tx1,x:box.x,y:yx1});
+    const tx2=(box.x+box.width-ox)/dx, yx2=oy+tx2*dy;
+    if (tx2>eps && yx2>=box.y-1e-6 && yx2<=box.y+box.height+1e-6) cands.push({t:tx2,x:box.x+box.width,y:yx2});
+  }
+  if (Math.abs(dy) > eps) {
+    const ty1=(box.y-oy)/dy, xt1=ox+ty1*dx;
+    if (ty1>eps && xt1>=box.x-1e-6 && xt1<=box.x+box.width+1e-6) cands.push({t:ty1,x:xt1,y:box.y});
+    const ty2=(box.y+box.height-oy)/dy, xt2=ox+ty2*dx;
+    if (ty2>eps && xt2>=box.x-1e-6 && xt2<=box.x+box.width+1e-6) cands.push({t:ty2,x:xt2,y:box.y+box.height});
+  }
+  if (!cands.length) return null;
+  cands.sort((a,b)=>a.t-b.t);
+  return {x:cands[0].x, y:cands[0].y};
+}
 
-  const visibleRelations = focusVisibleRelations
-    ? relations.filter(r => focusVisibleRelations.has(r.id))
-    : relations;
+function samplePerimeterCandidates(box: Rect): Point[] {
+  const res: Point[] = [];
+  const n = 8;
+  for (let i = 0; i <= n; i++) {
+    const t = i/n;
+    res.push({x:box.x+box.width*t,y:box.y},{x:box.x+box.width,y:box.y+box.height*t},
+      {x:box.x+box.width*(1-t),y:box.y+box.height},{x:box.x,y:box.y+box.height*(1-t)});
+  }
+  res.push({x:box.x,y:box.y},{x:box.x+box.width,y:box.y},{x:box.x+box.width,y:box.y+box.height},{x:box.x,y:box.y+box.height});
+  return res;
+}
 
-  // ── Text selection mode state ─────────────────────────────────────────────
-  // Supports both internal (default) and controlled (from parent) mode.
-  // Controlled mode is used when parent needs to reset this on draft clear.
-  const [internalTextModeId, setInternalTextModeId] = useState<string | null>(null);
+function rectsIntersect(a: Rect, b: Rect) {
+  return !(a.x+a.width<=b.x || b.x+b.width<=a.x || a.y+a.height<=b.y || b.y+b.height<=a.y);
+}
 
-  const textSelectionModeId = controlledTextModeId !== undefined ? controlledTextModeId : internalTextModeId;
+function labelRectApprox(x: number, y: number, text: string) {
+  const w = Math.max(30, text.length * 6.2) + 10, h = 14;
+  return { x:x-w/2, y:y-h/2, width:w, height:h };
+}
 
-  const setTextSelectionModeId = useCallback((id: string | null) => {
-    if (controlledTextModeId !== undefined && onTextModeChange) {
-      onTextModeChange(id);
-    } else {
-      setInternalTextModeId(id);
+function computeLabelPlacementsAlongCurve(params: { seeds: LabelSeed[]; forbiddenRects: Rect[] }) {
+  const { seeds, forbiddenRects } = params;
+  const sorted = [...seeds].sort((a,b) => {
+    const pa=quadAt(a.p0,a.p1,a.p2,0.5), pb=quadAt(b.p0,b.p1,b.p2,0.5);
+    return pa.y-pb.y || pa.x-pb.x || a.drawId.localeCompare(b.drawId);
+  });
+  const placements: Record<string, {x:number;y:number}> = {};
+  const placed: Rect[] = [];
+  const ts = [0.35,0.42,0.5,0.58,0.65,0.28,0.72,0.2,0.8];
+  for (const s of sorted) {
+    let chosen: {x:number;y:number}|null = null;
+    for (const t of ts) {
+      const p=quadAt(s.p0,s.p1,s.p2,t), r=labelRectApprox(p.x,p.y,s.text);
+      let ok=true;
+      for (const tr of [...forbiddenRects,...placed]) if (rectsIntersect(r,tr)) { ok=false; break; }
+      if (ok) { chosen={x:p.x,y:p.y}; placed.push(r); break; }
     }
-  }, [controlledTextModeId, onTextModeChange]);
-
-  const handleCardDoubleClick = useCallback((msgId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setTextSelectionModeId(textSelectionModeId === msgId ? null : msgId);
-  }, [textSelectionModeId, setTextSelectionModeId]);
-
-  const handleCardMouseUp = useCallback((msgId: string) => {
-    if (textSelectionModeId !== msgId) return;
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) return;
-    const text = sel.toString().trim();
-    if (text.length > 0 && onSelectFragment) {
-      onSelectFragment(msgId, text, hashText(msgId + ':' + text));
-      sel.removeAllRanges();
-    }
-  }, [textSelectionModeId, onSelectFragment]);
-
-  // ── Layout ───────────────────────────────────────────────────────────────
-  const { posMap, canvasWidth, canvasHeight } = useMemo(
-    () => computeLayout(messages, relations, focusVisibleMessages),
-    [messages, relations, focusVisibleMessages],
-  );
-
-  // ── Build edge renders ────────────────────────────────────────────────────
-  // Two-pass approach to correctly target relation-message labels:
-  //   Pass 1: build edges that target TEXT messages (record each edge's label position)
-  //   Pass 2: build edges that target RELATION messages (point to the label position
-  //           recorded in Pass 1, not the relation's source card position)
-  const edges = useMemo<EdgeRender[]>(() => {
-    const result: EdgeRender[] = [];
-    // Map from relationId → label center (populated during Pass 1)
-    const relLabelPositions = new Map<string, EdgeLabelPos>();
-    let edgeIndex = 0;
-
-    // Pass 1: relations whose primary target is a TEXT message
-    for (const rel of visibleRelations) {
-      const spec = getPresentationSpec(rel.relationType);
-      if (spec.kind !== 'edge-label' && spec.kind !== 'edge-decoration') continue;
-
-      const fromPos = posMap.get(rel.sourceMessageId);
-      if (!fromPos) continue;
-
-      let toPos: CardPos | undefined;
-      for (const ref of rel.targetRefs) {
-        if (ref.kind === 'message' || ref.kind === 'text-fragment') {
-          const p = posMap.get(ref.messageId);
-          if (p) { toPos = p; break; }
-        }
+    if (!chosen) {
+      const p=quadAt(s.p0,s.p1,s.p2,0.5); let x=p.x,y=p.y, r=labelRectApprox(x,y,s.text);
+      for (let iter=0;iter<200;iter++) {
+        let collision=false;
+        for (const tr of [...forbiddenRects,...placed]) if (rectsIntersect(r,tr)) { collision=true; break; }
+        if (!collision) break;
+        y=p.y+Math.ceil(iter/2)*16*(iter%2===0?1:-1); r=labelRectApprox(x,y,s.text);
       }
-      if (!toPos) continue; // no text-message target — will be handled in Pass 2
-
-      const { path, labelPos, arrowEnd } = buildEdgePath(fromPos, toPos);
-      relLabelPositions.set(rel.id, labelPos);
-      result.push({
-        id: rel.id,
-        relationType: rel.relationType,
-        label: `${rel.createdBy.username} · ${spec.label}`,
-        color: spec.color,
-        path,
-        labelPos,
-        arrowEnd,
-        targetCardPos: spec.kind === 'edge-decoration' ? toPos : undefined,
-        edgeIndex: edgeIndex++,
-      });
+      chosen={x,y}; placed.push(r);
     }
+    placements[s.drawId]=chosen;
+  }
+  return placements;
+}
 
-    // Pass 2: relations that target RELATION MESSAGES
-    // Arrow points to the target relation's label position (its clickable badge),
-    // NOT to the source text message of that relation.
-    for (const rel of visibleRelations) {
-      if (relLabelPositions.has(rel.id)) continue; // already handled in Pass 1
+export interface GraphViewProps {
+  messages: DemoMessage[];
+  edges: DemoEdge[];
+  draftUnits: UnitSelection[];
+  activeTextSelectId: string | null;
+  lastClickedMessageId: string | null;
+  voteStats: Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>;
+  onMessageClick: (e: React.MouseEvent, messageId: string) => void;
+  onMessageDoubleClick: (e: React.MouseEvent, messageId: string) => void;
+  onTextMouseUp: (e: React.MouseEvent, messageId: string) => void;
+  onEdgeLabelSingleClick: (e: React.MouseEvent, relationMessageId: string, edgeId: string) => void;
+  onEdgeLabelDoubleClick: (e: React.MouseEvent, relationMessageId: string) => void;
+  onFragmentAnchorClick: (messageId: string, start: number, len: number, text: string) => void;
+  isFragmentSelected: (messageId: string, start: number, len: number, text: string) => boolean;
+  onCanvasBlankClick?: () => void;
+  onMessageMouseDown?: (e: React.MouseEvent, messageId: string) => void;
+  onMessageMouseUp?: (e: React.MouseEvent, messageId: string) => void;
+  onDecorationClick?: (messageId: string, kind: "agree" | "disagree") => void;
+}
 
-      const spec = getPresentationSpec(rel.relationType);
-      if (spec.kind !== 'edge-label' && spec.kind !== 'edge-decoration') continue;
+export default function GraphView(props: GraphViewProps) {
+  const {
+    messages, edges, draftUnits, activeTextSelectId, lastClickedMessageId,
+    onMessageClick, onMessageDoubleClick, onTextMouseUp,
+    onEdgeLabelSingleClick, onEdgeLabelDoubleClick,
+    onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
+    onMessageMouseDown, onMessageMouseUp, onDecorationClick,
+    // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
+  } = props;
 
-      const fromPos = posMap.get(rel.sourceMessageId);
-      if (!fromPos) continue;
+  const canvasRef = useRef<HTMLDivElement|null>(null);
+  const cardRefs = useRef<Record<string,HTMLDivElement|null>>({});
+  const contentRefs = useRef<Record<string,HTMLDivElement|null>>({});
+  const headerRefs = useRef<Record<string,HTMLDivElement|null>>({});
+  const textRefs = useRef<Record<string,SVGTextElement|null>>({});
 
-      let targetPoint: { x: number; y: number } | undefined;
-      for (const ref of rel.targetRefs) {
-        if (ref.kind === 'relation') {
-          const lp = relLabelPositions.get(ref.relationId);
-          if (lp) { targetPoint = { x: lp.cx, y: lp.cy }; break; }
-        }
-      }
-      if (!targetPoint) continue;
+  const msgMap = useMemo(() => new Map(messages.map(m => [m.id,m])), [messages]);
+  const normals = useMemo(() => messages.filter(m => m.kind === "normal"), [messages]);
+  const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
 
-      // Build bezier from source-message right-center to the target label point
-      const x1 = fromPos.x + CARD_W;
-      const y1 = fromPos.y + CARD_H / 2;
-      const dx = Math.abs(targetPoint.x - x1);
-      const cpx1 = x1 + dx * 0.45;
-      const cpy1 = y1;
-      const cpx2 = targetPoint.x - dx * 0.45;
-      const cpy2 = targetPoint.y;
-      const path = `M ${x1} ${y1} C ${cpx1} ${cpy1} ${cpx2} ${cpy2} ${targetPoint.x} ${targetPoint.y}`;
-      const labelPos = bezierMid(x1, y1, cpx1, cpy1, cpx2, cpy2, targetPoint.x, targetPoint.y);
+  const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges), [normalIds, edges]);
+  const { col: colOf, maxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol }), [normals, edges, baseCol, baseMaxCol]);
 
-      relLabelPositions.set(rel.id, labelPos);
-      result.push({
-        id: rel.id,
-        relationType: rel.relationType,
-        label: `${rel.createdBy.username} · ${spec.label}`,
-        color: spec.color,
-        path,
-        labelPos,
-        arrowEnd: { x: targetPoint.x, y: targetPoint.y },
-        edgeIndex: edgeIndex++,
-      });
-    }
+  const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
+  const [layout, setLayout] = useState<Record<string,LayoutBox>>({});
+  const [canvasHeight, setCanvasHeight] = useState<number>(900);
+  const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
+  const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
+  const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;key:string;messageId:string}>|null>(null);
+  const [decorationsByMsgState, setDecorationsByMsgState] = useState<Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>|null>(null);
 
-    return result;
-  }, [visibleRelations, posMap]);
-
-  // ── Decoration map: messageId → list of relation decorations ─────────────
-  const decorationMap = useMemo(() => {
-    const map = new Map<string, { rel: Relation; spec: ReturnType<typeof getPresentationSpec> }[]>();
-    for (const rel of visibleRelations) {
-      const spec = getPresentationSpec(rel.relationType);
-      if (spec.kind !== 'decoration' && spec.kind !== 'edge-decoration' && spec.kind !== 'inline-badge') continue;
-      for (const ref of rel.targetRefs) {
-        if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
-        const list = map.get(ref.messageId) ?? [];
-        list.push({ rel, spec });
-        map.set(ref.messageId, list);
-      }
-    }
+  const canvasWidth = GRID_LEFT*2 + (maxCol+1)*CARD_W + maxCol*COL_GAP;
+  const edgesByRelMsg = useMemo(() => {
+    const map = new Map<string,DemoEdge[]>();
+    for (const e of edges) { const arr=map.get(e.relationMessageId)??[]; arr.push(e); map.set(e.relationMessageId,arr); }
     return map;
-  }, [visibleRelations]);
+  }, [edges]);
 
-  // ── Frame-group bounding boxes (CLASSIFY / MERGE) ─────────────────────────
-  // For each frame-group relation, compute a bounding rect around all target cards.
-  const frameGroups = useMemo(() => {
-    const FRAME_PAD = 8; // extra padding around the grouped cards
-    const result: Array<{
-      id: string;
-      relationType: string;
-      color: string;
-      label: string;
-      x: number; y: number; w: number; h: number;
-    }> = [];
-    for (const rel of visibleRelations) {
-      const spec = getPresentationSpec(rel.relationType);
-      if (spec.kind !== 'frame-group') continue;
-      const targetPositions: CardPos[] = [];
-      for (const ref of rel.targetRefs) {
-        if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
-        const p = posMap.get(ref.messageId);
-        if (p) targetPositions.push(p);
+  useEffect(() => {
+    const ro = new ResizeObserver(entries => {
+      const next: Record<string,number> = {};
+      for (const ent of entries) {
+        const el = ent.target as HTMLElement;
+        const id = el.getAttribute("data-msgid");
+        if (!id) continue;
+        next[id] = Math.ceil(el.getBoundingClientRect().height);
       }
-      if (targetPositions.length === 0) continue;
-      const minX = Math.min(...targetPositions.map(p => p.x)) - FRAME_PAD;
-      const minY = Math.min(...targetPositions.map(p => p.y)) - FRAME_PAD;
-      const maxX = Math.max(...targetPositions.map(p => p.x + CARD_W)) + FRAME_PAD;
-      const maxY = Math.max(...targetPositions.map(p => p.y + CARD_H)) + FRAME_PAD;
-      result.push({
-        id: rel.id,
-        relationType: rel.relationType,
-        color: spec.color,
-        label: `${rel.createdBy.username} · ${spec.label}`,
-        x: minX, y: minY, w: maxX - minX, h: maxY - minY,
+      if (!Object.keys(next).length) return;
+      setMeasuredHeights(prev => {
+        let changed=false; const merged={...prev};
+        for (const [k,v] of Object.entries(next)) if (!merged[k]||Math.abs(merged[k]-v)>1) { merged[k]=v; changed=true; }
+        return changed ? merged : prev;
+      });
+    });
+    for (const m of normals) { const el=cardRefs.current[m.id]; if (el) ro.observe(el); }
+    return () => ro.disconnect();
+  }, [normals]);
+
+  useEffect(() => {
+    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol });
+    setLayout(nl); setCanvasHeight(h);
+  }, [normals, colOf, maxCol, measuredHeights]);
+
+  useEffect(() => {
+    const canvasEl = canvasRef.current; if (!canvasEl) return;
+    const canvasRect = canvasEl.getBoundingClientRect();
+    const normalSet = new Set(normalIds);
+
+    function endpointBoxForNormal(id: string): {box:LayoutBox;col:number}|null {
+      const m = msgMap.get(id); if (!m||m.kind!=="normal") return null;
+      const cardEl = cardRefs.current[id];
+      if (cardEl) {
+        const r = cardEl.getBoundingClientRect();
+        return { box:{x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height}, col:colOf[id]??0 };
+      }
+      const box = layout[id]; if (!box) return null;
+      return { box, col:colOf[id]??0 };
+    }
+
+    const globalForbiddenRects: Rect[] = [];
+    for (const m of normals) {
+      const header=headerRefs.current[m.id], content=contentRefs.current[m.id];
+      if (!header||!content) {
+        const el=cardRefs.current[m.id];
+        if (el) for (const r of Array.from(el.getClientRects())) globalForbiddenRects.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+        continue;
+      }
+      for (const ref of [...Array.from(header.getClientRects()),...Array.from(content.getClientRects())])
+        globalForbiddenRects.push({x:ref.left-canvasRect.left,y:ref.top-canvasRect.top,width:ref.width,height:ref.height});
+    }
+
+    function getMessageRects(messageId: string): Rect[] {
+      const res: Rect[] = [];
+      const header=headerRefs.current[messageId], content=contentRefs.current[messageId];
+      for (const el of [header,content].filter(Boolean) as HTMLElement[])
+        for (const r of Array.from(el.getClientRects())) res.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+      const cardEl=cardRefs.current[messageId];
+      if (cardEl) for (const r of Array.from(cardEl.getClientRects())) res.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+      else { const l=layout[messageId]; if (l) res.push({x:l.x,y:l.y,width:l.width,height:l.height}); }
+      return res;
+    }
+
+    function pointInside(p: Point, r: Rect) {
+      const e=1e-6; return p.x>r.x+e && p.x<r.x+r.width-e && p.y>r.y+e && p.y<r.y+r.height-e;
+    }
+
+    function sampleQuad(p0:Point,p1:Point,p2:Point,n=40): Point[] {
+      const pts: Point[]=[];
+      for (let i=0;i<=n;i++) pts.push(quadAt(p0,p1,p2,i/n));
+      return pts;
+    }
+
+    function penScore(samples: Point[], rects: Rect[]) {
+      let cnt=0;
+      for (const p of samples) for (const r of rects) if (pointInside(p,r)) { cnt++; break; }
+      return cnt;
+    }
+
+    const decorationsByMsg: Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}> = {};
+    for (const e of edges) {
+      if (e.to.selection.kind==="edge") {
+        const eid=e.to.selection.edgeId||"";
+        if (eid.startsWith("dec:")) {
+          const parts=eid.split(":");
+          if (parts.length>=3) {
+            const mid=parts.slice(2).join(":");
+            if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
+            if (e.relationType==="support"||e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
+            else if (e.relationType==="rebut"||e.relationType==="disagree") decorationsByMsg[mid].disagreeCount++;
+          }
+        }
+      } else if (e.to.selection.kind==="whole") {
+        const mid=e.to.messageId;
+        if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
+        if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
+        else if (e.relationType==="disagree") decorationsByMsg[mid].disagreeCount++;
+      }
+    }
+
+    const decorationRects: Record<string,{kind:"agree"|"disagree";rect:Rect;key:string;messageId:string}> = {};
+    for (const [mid,data] of Object.entries(decorationsByMsg)) {
+      const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
+      const decW=64,decH=28,gap=6; let offsetY=box.y+box.height+gap;
+      if (data.agreeCount>0) {
+        decorationRects[`${mid}::agree`]={kind:"agree",key:data.agreeKey,messageId:mid,rect:{x:box.x+(box.width-decW)/2,y:offsetY,width:decW,height:decH}};
+        offsetY+=decH+4;
+      }
+      if (data.disagreeCount>0) {
+        decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect:{x:box.x+(box.width-decW)/2,y:offsetY,width:decW,height:decH}};
+      }
+    }
+    for (const v of Object.values(decorationRects)) globalForbiddenRects.push(v.rect);
+
+    const rawEdges: Omit<PositionedEdge,"labelX"|"labelY">[] = [];
+    const labelSeeds: LabelSeed[] = [];
+    const labelText = (e:DemoEdge,author:string) => `${author} · ${relationTypeName(e.relationType)}`;
+
+    for (const e of edges) {
+      const fromMsg=msgMap.get(e.from.messageId); if (!fromMsg||fromMsg.kind!=="normal") continue;
+      const fromEp=endpointBoxForNormal(fromMsg.id); if (!fromEp) continue;
+      const fromAuthor=fromMsg.author;
+      const toMsg=msgMap.get(e.to.messageId);
+
+      if (toMsg?.kind==="relation") {
+        const relId=e.to.messageId;
+        const expand=(te:DemoEdge) => {
+          const teToMsg=msgMap.get(te.to.messageId);
+          const epTarget=teToMsg?.kind==="normal" ? endpointBoxForNormal(te.to.messageId) : null;
+          rawEdges.push({
+            drawId:`${e.id}__toRel__${te.id}`,edge:e,fromAuthor,
+            fromBox:fromEp.box,toBox:epTarget?.box??fromEp.box,
+            fromCol:fromEp.col,toCol:epTarget?.col??fromEp.col,
+            fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:te.id,
+            start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
+          });
+        };
+        const toSel = e.to.selection;
+        if (toSel.kind==="edge") (edgesByRelMsg.get(relId)??[]).filter(x=>x.id===(toSel as {kind:"edge";edgeId:string}).edgeId).forEach(expand);
+        else if (toSel.kind==="whole") (edgesByRelMsg.get(relId)??[]).forEach(expand);
+        continue;
+      }
+
+      const toId=e.to.messageId; if (!normalSet.has(toId)) continue;
+      const toEp=endpointBoxForNormal(toId); if (!toEp) continue;
+      let fragRectCanvas: DOMRect|null=null;
+
+      if (e.to.selection.kind==="edge") {
+        const eid=e.to.selection.edgeId||"";
+        if (eid.startsWith("dec:")) {
+          const parts=eid.split(":");
+          if (parts.length>=3) {
+            const mid=parts.slice(2).join(":");
+            const dec=decorationRects[`${mid}::${parts[1]}`];
+            if (dec) fragRectCanvas=new DOMRect(dec.rect.x,dec.rect.y,dec.rect.width,dec.rect.height);
+          }
+        }
+      }
+      if ((e.relationType==="annotation"||e.relationType==="reference") && selectionIsText(e.to.selection) && contentRefs.current[toId]) {
+        const container=contentRefs.current[toId]!;
+        const start=e.to.selection.start, end=start+e.to.selection.len;
+        const span=container.querySelector(`[data-rel-anchor="${e.relationType}::${start}:${end}"]`) as HTMLSpanElement|null;
+        if (span) { const r=span.getBoundingClientRect(); fragRectCanvas=new DOMRect(r.left-canvasRect.left,r.top-canvasRect.top,r.width,r.height); }
+      }
+
+      rawEdges.push({
+        drawId:e.id,edge:e,fromAuthor,fromBox:fromEp.box,toBox:toEp.box,fromCol:fromEp.col,toCol:toEp.col,
+        fragRectCanvas,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+        start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
       });
     }
-    return result;
-  }, [visibleRelations, posMap]);
 
-  // ── Stance decorations per message ────────────────────────────────────────
-  // (support/oppose counts already computed externally via stanceStatsMap)
+    for (let idx=0;idx<rawEdges.length;idx++) {
+      const pe=rawEdges[idx];
+      const { fromBox, toBox, fromCol, toCol, fragRectCanvas, edge } = pe;
+      const fromCenter={x:fromBox.x+fromBox.width/2,y:fromBox.y+fromBox.height/2};
+      const toRect: Rect=fragRectCanvas ? {x:fragRectCanvas.x,y:fragRectCanvas.y,width:fragRectCanvas.width,height:fragRectCanvas.height} : {x:toBox.x,y:toBox.y,width:toBox.width,height:toBox.height};
+      const toCenter={x:toRect.x+toRect.width/2,y:toRect.y+toRect.height/2};
+      const vTo={x:toCenter.x-fromCenter.x,y:toCenter.y-fromCenter.y};
+      const vFrom={x:fromCenter.x-toCenter.x,y:fromCenter.y-toCenter.y};
 
-  if (visibleMessages.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-64 text-gray-400 text-sm">
-        暂无消息
-      </div>
-    );
+      let startP=rayRectIntersectionFirst(fromCenter.x,fromCenter.y,vTo.x,vTo.y,fromBox)??null;
+      let endP=rayRectIntersectionFirst(toCenter.x,toCenter.y,vFrom.x,vFrom.y,toRect)??null;
+
+      function chooseBest(box:Rect,dir:Point): Point|null {
+        const cands=samplePerimeterCandidates(box); let best:{p:Point;score:number}|null=null;
+        const cx=box.x+box.width/2,cy=box.y+box.height/2;
+        for (const c of cands) {
+          const dv={x:c.x-cx,y:c.y-cy};
+          let diff=Math.abs(Math.atan2(dv.y,dv.x)-Math.atan2(dir.y,dir.x));
+          if (diff>Math.PI) diff=2*Math.PI-diff;
+          if (!best||diff<best.score) best={p:c,score:diff};
+        }
+        return best?.p??null;
+      }
+
+      if (!startP) {
+        startP=chooseBest(fromBox,vTo);
+        if (!startP) startP={x:Math.abs(vTo.x)>Math.abs(vTo.y)?(vTo.x>0?fromBox.x+fromBox.width:fromBox.x):fromCenter.x,y:Math.abs(vTo.y)>=Math.abs(vTo.x)?(vTo.y>0?fromBox.y+fromBox.height:fromBox.y):fromCenter.y};
+      }
+      if (!endP) {
+        endP=chooseBest(toRect,vFrom);
+        if (!endP) endP={x:Math.abs(vFrom.x)>Math.abs(vFrom.y)?(vFrom.x>0?toRect.x+toRect.width:toRect.x):toCenter.x,y:Math.abs(vFrom.y)>=Math.abs(vFrom.x)?(vFrom.y>0?toRect.y+toRect.height:toRect.y):toCenter.y};
+      }
+
+      const sCands=[startP,...samplePerimeterCandidates(fromBox).slice(0,12)];
+      const eCands=[endP,...samplePerimeterCandidates(toRect).slice(0,12)];
+      function uniq(arr:Point[]): Point[] {
+        const s=new Set<string>(), r:Point[]=[];
+        for (const p of arr) { const k=`${Math.round(p.x)},${Math.round(p.y)}`; if (!s.has(k)) { s.add(k); r.push(p); } }
+        return r;
+      }
+      const sC=uniq(sCands).slice(0,24), eC=uniq(eCands).slice(0,24);
+
+      const lC=Math.min(fromCol,toCol), rC=Math.max(fromCol,toCol);
+      const gapMidX=(colX(lC)+CARD_W+colX(rC))/2;
+      const fanBase=(idx-(rawEdges.length-1)/2)*6;
+      const ctrlBase={x:gapMidX,y:(fromCenter.y+toCenter.y)/2+fanBase};
+      const ctrlCands=[ctrlBase,...[-120,-80,-40,0,40,80,120].map(o=>({x:gapMidX+o*0.5,y:ctrlBase.y+o})),...[-120,-60,-30,30,60,120].map(ox=>({x:gapMidX+ox,y:ctrlBase.y}))];
+
+      const connFR=[...getMessageRects(edge.from.messageId),...getMessageRects(edge.to.messageId)];
+      if (fragRectCanvas) connFR.push({x:fragRectCanvas.x,y:fragRectCanvas.y,width:fragRectCanvas.width,height:fragRectCanvas.height});
+
+      let chosenCurve:{s:Point;c:Point;e:Point}|null=null, chosenScore=Infinity, tries=0;
+      outer: for (const s of sC) for (const ep of eC) for (const c of ctrlCands) {
+        if (++tries>5000) break outer;
+        const samps=sampleQuad(s,c,ep,36), pen=penScore(samps,connFR);
+        let len=0; for (let i=1;i<samps.length;i++) len+=Math.hypot(samps[i].x-samps[i-1].x,samps[i].y-samps[i-1].y);
+        const score=pen*20000+len;
+        if (pen===0) { chosenCurve={s,c,e:ep}; chosenScore=score; break outer; }
+        if (score<chosenScore) { chosenScore=score; chosenCurve={s,c,e:ep}; }
+      }
+      if (!chosenCurve) chosenCurve={s:startP,c:ctrlBase,e:endP};
+
+      function snapBound(box:Rect,p:Point): Point {
+        const e=1e-6; let x=p.x,y=p.y;
+        if (Math.abs(x-box.x)<1e-5) x=box.x;
+        if (Math.abs(x-(box.x+box.width))<1e-5) x=box.x+box.width;
+        if (Math.abs(y-box.y)<1e-5) y=box.y;
+        if (Math.abs(y-(box.y+box.height))<1e-5) y=box.y+box.height;
+        const inside=x>box.x+e&&x<box.x+box.width-e&&y>box.y+e&&y<box.y+box.height-e;
+        if (inside||x<box.x||x>box.x+box.width||y<box.y||y>box.y+box.height) {
+          x=Math.min(Math.max(x,box.x),box.x+box.width); y=Math.min(Math.max(y,box.y),box.y+box.height);
+          const dL=Math.abs(p.x-box.x),dR=Math.abs(p.x-(box.x+box.width)),dT=Math.abs(p.y-box.y),dB=Math.abs(p.y-(box.y+box.height));
+          const m=Math.min(dL,dR,dT,dB);
+          if (m===dL) { x=box.x; y=Math.min(Math.max(p.y,box.y),box.y+box.height); }
+          else if (m===dR) { x=box.x+box.width; y=Math.min(Math.max(p.y,box.y),box.y+box.height); }
+          else if (m===dT) { y=box.y; x=Math.min(Math.max(p.x,box.x),box.x+box.width); }
+          else { y=box.y+box.height; x=Math.min(Math.max(p.x,box.x),box.x+box.width); }
+        }
+        return {x,y};
+      }
+
+      pe.start=snapBound(fromBox,chosenCurve.s); pe.ctrl=chosenCurve.c; pe.end=snapBound(toRect,chosenCurve.e);
+      labelSeeds.push({drawId:pe.drawId,text:pe.edgeLabelText,p0:pe.start,p1:pe.ctrl,p2:pe.end});
+    }
+
+    const placements=computeLabelPlacementsAlongCurve({seeds:labelSeeds,forbiddenRects:globalForbiddenRects});
+    setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
+    setDecorationRectsState(decorationRects);
+    setDecorationsByMsgState(decorationsByMsg);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals]);
+
+  useEffect(() => {
+    const canvasEl=canvasRef.current; if (!canvasEl) return;
+    const canvasRect=canvasEl.getBoundingClientRect();
+    const next: Record<string,LabelBbox>={};
+    for (const pe of positionedEdges) {
+      const t=textRefs.current[pe.drawId]; if (!t) continue;
+      const r=t.getBoundingClientRect();
+      next[pe.drawId]={x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height};
+    }
+    setLabelBboxes(next);
+  }, [positionedEdges, canvasWidth, canvasHeight]);
+
+  function isEdgeLabelFragSel(relId:string,edgeId:string) {
+    return draftUnits.some(x=>unitEquals(x,{messageId:relId,selection:{kind:"edge",edgeId}}));
+  }
+  function isRelWholeSel(relId:string) {
+    return draftUnits.some(x=>unitEquals(x,{messageId:relId,selection:{kind:"whole"}}));
+  }
+
+  function renderContent(message: DemoMessage) {
+    const targets=extractTextTargetsForMessage(message.id,edges);
+    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{message.content}</pre>;
+    const text=message.content;
+    const segs:{start:number;end:number;relationType:RelationType}[]=[]; let lastEnd=-1;
+    for (const t of targets) {
+      if (t.start<0||t.start+t.len>text.length||t.len<=0||t.start<lastEnd) continue;
+      segs.push({start:t.start,end:t.start+t.len,relationType:t.relationType}); lastEnd=t.start+t.len;
+    }
+    const nodes: React.ReactNode[]=[]; let cursor=0;
+    for (const s of segs) {
+      if (cursor<s.start) nodes.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor,s.start)}</span>);
+      const frag=text.slice(s.start,s.end), len=s.end-s.start, isAnno=s.relationType==="annotation";
+      const selected=isFragmentSelected(message.id,s.start,len,frag);
+      nodes.push(
+        <span key={`h-${s.start}-${s.end}`} data-rel-anchor={`${s.relationType}::${s.start}:${s.end}`}
+          onClick={e=>{e.stopPropagation();onFragmentAnchorClick(message.id,s.start,len,frag);}}
+          title="点击：进入文本选择状态并切换选中该片段"
+          style={{whiteSpace:"pre-wrap",cursor:"pointer",backgroundColor:selected?"rgba(11,132,255,0.18)":isAnno?"rgba(255,255,0,0.12)":"rgba(80,180,255,0.08)",outline:selected?"2px solid rgba(11,132,255,0.95)":isAnno?"1px solid rgba(255,255,0,0.8)":"1px solid rgba(80,180,255,0.45)",borderRadius:2}}
+        >{frag}</span>
+      );
+      cursor=s.end;
+    }
+    if (cursor<text.length) nodes.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor)}</span>);
+    return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
   }
 
   return (
-    <div
-      className="overflow-auto border border-gray-200 rounded-lg bg-gray-50"
-      onClick={e => {
-        // Blank area click: clear candidates if clicking directly on this container
-        if (e.target === e.currentTarget && onBlankClick) onBlankClick();
-      }}
-    >
-      {/* SVG + cards in a relative container */}
-      <div
-        className="relative"
-        style={{ width: canvasWidth, height: canvasHeight, minWidth: '100%' }}
-        onClick={e => {
-          // Also handle clicks on the relative container background
-          if (e.target === e.currentTarget && onBlankClick) onBlankClick();
-        }}
-      >
-        {/* ── SVG edges layer (behind cards) ──────────────────────────────── */}
-        <svg
-          className="absolute inset-0 pointer-events-none"
-          width={canvasWidth}
-          height={canvasHeight}
-          style={{ zIndex: 0 }}
-        >
-          <defs>
-            {/* Arrow markers per color */}
-            {Object.entries(COLOR_STROKE).map(([colorName, hex]) => (
-              <marker
-                key={colorName}
-                id={`arrow-${colorName}`}
-                markerWidth="8"
-                markerHeight="8"
-                refX="6"
-                refY="4"
-                orient="auto"
-              >
-                <path d="M0,0 L8,4 L0,8 Z" fill={hex} />
-              </marker>
-            ))}
-            {/* Dimmed variant for filtered-out edges */}
-            <marker id="arrow-gray-dim" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 Z" fill="#d1d5db" />
-            </marker>
-          </defs>
-
-          {edges.map(edge => {
-            const isSelected = selectedRelationIds.has(edge.id);
-            const stroke = COLOR_STROKE[edge.color] ?? '#9ca3af';
-            return (
-              <g key={edge.id}>
-                <path
-                  d={edge.path}
-                  fill="none"
-                  stroke={isSelected ? stroke : stroke + '99'}
-                  strokeWidth={isSelected ? 2.5 : 1.5}
-                  markerEnd={`url(#arrow-${edge.color})`}
-                />
-              </g>
-            );
-          })}
-
-          {/* Frame-group dashed bounding boxes (CLASSIFY / MERGE) */}
-          {frameGroups.map(frame => {
-            const isSelected = selectedRelationIds.has(frame.id);
-            const stroke = COLOR_STROKE[frame.color] ?? '#9ca3af';
-            const fill = COLOR_BG[frame.color] ?? '#f3f4f6';
-            return (
-              <rect
-                key={`frame-${frame.id}`}
-                x={frame.x}
-                y={frame.y}
-                width={frame.w}
-                height={frame.h}
-                fill={fill + HEX_ALPHA_LIGHT}
-                stroke={isSelected ? stroke : stroke + HEX_ALPHA_SEMI}
-                strokeWidth={isSelected ? 2 : 1.5}
-                strokeDasharray="6 3"
-                rx={6}
-              />
-            );
-          })}
-        </svg>
-
-        {/* ── Edge labels layer (interactive, above SVG) ──────────────────── */}
-        {edges.map(edge => {
-          const isSelected = selectedRelationIds.has(edge.id);
-          const bgColor = COLOR_BG[edge.color] ?? '#f3f4f6';
-          const textColor = COLOR_STROKE[edge.color] ?? '#6b7280';
-          // Apply a small vertical offset per edge index to reduce label overlap
-          const labelYOffset = (edge.edgeIndex % LABEL_OFFSET_POSITIONS) * LABEL_OFFSET_INCREMENT;
+    <div ref={canvasRef} style={{position:"relative",width:"100%",height:"100%"}}
+      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')))return;onCanvasBlankClick?.();}}>
+      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
+        {normals.map(msg=>{
+          const box=layout[msg.id]; if(!box) return null;
+          const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
+          const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
           return (
-            <button
-              key={`label-${edge.id}`}
-              onClick={() => onClickRelation(edge.id)}
-              title={`点击选中关系消息: ${edge.label}`}
-              className="absolute text-xs font-medium px-1.5 py-0.5 rounded border transition-all cursor-pointer select-none"
-              style={{
-                left: edge.labelPos.cx - 50,
-                top: edge.labelPos.cy - 10 + labelYOffset,
-                width: 100,
-                textAlign: 'center',
-                backgroundColor: isSelected ? textColor : bgColor,
-                color: isSelected ? 'white' : textColor,
-                borderColor: isSelected ? textColor : textColor + HEX_ALPHA_BORDER,
-                zIndex: 10,
-                boxShadow: isSelected ? `0 0 0 2px ${textColor}44` : undefined,
-              }}
-            >
-              {edge.label}
-            </button>
-          );
-        })}
-
-        {/* ── Frame-group labels (CLASSIFY / MERGE) ────────────────────────── */}
-        {frameGroups.map(frame => {
-          const isSelected = selectedRelationIds.has(frame.id);
-          const bgColor = COLOR_BG[frame.color] ?? '#f3f4f6';
-          const textColor = COLOR_STROKE[frame.color] ?? '#6b7280';
-          return (
-            <button
-              key={`frame-label-${frame.id}`}
-              onClick={() => onClickRelation(frame.id)}
-              title={`点击选中关系消息: ${frame.label}`}
-              className="absolute text-xs font-medium px-1.5 py-0.5 rounded border transition-all cursor-pointer select-none"
-              style={{
-                left: frame.x + 4,
-                top: frame.y - 12,
-                maxWidth: frame.w - 8,
-                textAlign: 'left',
-                backgroundColor: isSelected ? textColor : bgColor,
-                color: isSelected ? 'white' : textColor,
-                borderColor: isSelected ? textColor : textColor + HEX_ALPHA_BORDER,
-                borderStyle: 'dashed',
-                zIndex: 10,
-              }}
-            >
-              {frame.label}
-            </button>
-          );
-        })}
-
-        {/* ── Message cards ────────────────────────────────────────────────── */}
-        {visibleMessages.map(msg => {
-          const pos = posMap.get(msg.id);
-          if (!pos) return null;
-
-          const isSelected = selectedMessageIds.has(msg.id);
-          const stats = stanceStatsMap.get(msg.id);
-          const decos = decorationMap.get(msg.id) ?? [];
-          const isTextSelectMode = textSelectionModeId === msg.id;
-
-          return (
-            <div
-              key={msg.id}
-              onClick={isTextSelectMode ? undefined : () => onClickMessage(msg.id)}
-              onDoubleClick={e => handleCardDoubleClick(msg.id, e)}
-              onMouseUp={() => handleCardMouseUp(msg.id)}
-              title={isTextSelectMode
-                ? `文本选择模式：拖选文字创建片段，双击退出`
-                : `${msg.createdBy.username}: ${msg.content}\n\n单击选中/取消选中，双击进入文本选择模式`}
-              className="absolute rounded-lg border-2 bg-white transition-all"
-              style={{
-                left: pos.x,
-                top: pos.y,
-                width: CARD_W,
-                height: CARD_H,
-                borderColor: isTextSelectMode ? '#f59e0b' : isSelected ? '#6366f1' : '#e5e7eb',
-                boxShadow: isTextSelectMode
-                  ? '0 0 0 3px #f59e0b33, 0 1px 3px rgba(0,0,0,0.1)'
-                  : isSelected
-                    ? '0 0 0 3px #6366f133, 0 1px 3px rgba(0,0,0,0.1)'
-                    : '0 1px 2px rgba(0,0,0,0.06)',
-                cursor: isTextSelectMode ? 'text' : 'pointer',
-                zIndex: isTextSelectMode ? 15 : 5,
-                overflow: 'hidden',
-                userSelect: isTextSelectMode ? 'text' : 'none',
-              }}
-            >
-              {/* Card body */}
-              <div className="p-2.5 flex flex-col h-full">
-                {/* Author + timestamp */}
-                <div className="flex items-center justify-between mb-1.5 gap-1">
-                  <span
-                    className="text-xs font-semibold truncate"
-                    style={{ color: isTextSelectMode ? '#92400e' : isSelected ? '#4f46e5' : '#374151' }}
-                  >
-                    {msg.createdBy.username}
-                    {isTextSelectMode && <span className="ml-1 text-[10px] text-amber-500 font-normal">文本选择中</span>}
-                  </span>
-                  <span className="text-xs text-gray-400 shrink-0">
-                    {new Date(msg.createdAt).toLocaleDateString('zh-CN')}
-                  </span>
-                </div>
-
-                {/* Content */}
-                <p
-                  className="text-xs text-gray-700 leading-relaxed flex-1 overflow-hidden line-clamp-3"
-                  style={{ userSelect: isTextSelectMode ? 'text' : 'none' }}
-                >
-                  {msg.content}
-                </p>
-
-                {/* Footer: stance stats + decorations */}
-                <div className="flex items-center gap-1 mt-1.5 flex-wrap">
-                  {stats && (stats.support > 0 || stats.oppose > 0) && (
-                    <>
-                      {stats.support > 0 && (
-                        <span className="text-xs text-green-600 font-medium">▲{stats.support}</span>
-                      )}
-                      {stats.oppose > 0 && (
-                        <span className="text-xs text-red-500 font-medium">▼{stats.oppose}</span>
-                      )}
-                    </>
-                  )}
-                  {decos.map(({ rel, spec }) => (
-                    <button
-                      key={rel.id}
-                      onClick={e => { e.stopPropagation(); onClickRelation(rel.id); }}
-                      title={`关系消息: ${spec.label} by ${rel.createdBy.username}`}
-                      className="text-xs px-1 py-0.5 rounded border font-medium leading-none"
-                      style={{
-                        backgroundColor: selectedRelationIds.has(rel.id)
-                          ? (COLOR_STROKE[spec.color] ?? '#9ca3af')
-                          : (COLOR_BG[spec.color] ?? '#f3f4f6'),
-                        color: selectedRelationIds.has(rel.id)
-                          ? 'white'
-                          : (COLOR_STROKE[spec.color] ?? '#6b7280'),
-                        borderColor: (COLOR_STROKE[spec.color] ?? '#9ca3af') + HEX_ALPHA_BORDER,
-                      }}
-                    >
-                      {spec.label}
-                    </button>
-                  ))}
-                </div>
+            <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
+              onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
+              onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"8px 10px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:6,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
+                <span>{msg.author}</span><span style={{opacity:0.7}}>{msg.id}</span>
               </div>
-
-              {/* Mode indicator badge */}
-              {isTextSelectMode && (
-                <div
-                  className="absolute top-1 right-1 text-amber-600 text-xs font-bold bg-amber-50 px-1 rounded"
-                  title="文本选择模式（双击退出）"
-                >
-                  T
-                </div>
-              )}
-              {!isTextSelectMode && isSelected && (
-                <div
-                  className="absolute top-1 right-1 text-indigo-600 text-xs font-bold"
-                  title="已选中"
-                >
-                  ✓
-                </div>
-              )}
+              {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
+              <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
+                {renderContent(msg)}
+              </div>
             </div>
           );
         })}
       </div>
+
+      {positionedEdges.length>0&&<>
+        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:3,pointerEvents:"none"}}>
+          {positionedEdges.map(pe=>{
+            const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
+            const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
+            const angle=Math.atan2(end.y-ctrl.y,end.x-ctrl.x),al=7,aa=Math.PI/7;
+            const ax1=end.x-al*Math.cos(angle-aa),ay1=end.y-al*Math.sin(angle-aa),ax2=end.x-al*Math.cos(angle+aa),ay2=end.y-al*Math.sin(angle+aa);
+            const color=edge.relationType==="annotation"?"rgba(255,215,0,0.92)":edge.relationType==="reference"?"rgba(80,180,255,0.92)":edge.relationType==="reply"?"rgba(160,255,140,0.72)":edge.relationType==="agree"?"rgba(2,150,80,0.92)":edge.relationType==="disagree"?"rgba(200,40,40,0.92)":edge.relationType==="support"?"rgba(2,150,80,0.92)":"rgba(200,40,40,0.92)";
+            const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
+            const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
+            const labelStroke=isWhole||isFrag?"rgba(11,132,255,0.95)":"rgba(0,0,0,0.85)";
+            return (
+              <g key={pe.drawId}>
+                <path d={path} stroke={color} strokeWidth={edge.relationType==="reply"?1.0:1.2} fill="none"/>
+                <path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>
+                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:isWhole||isFrag?3:2} as any}>
+                  {edgeLabelText}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+        {positionedEdges.map(pe=>{
+          const bb=labelBboxes[pe.drawId]; if (!bb) return null;
+          const padX=8,padY=6,box:LayoutBox={x:bb.x-padX,y:bb.y-padY,width:bb.width+padX*2,height:bb.height+padY*2};
+          const relId=pe.edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
+          return (
+            <div key={`hit-${pe.drawId}`} onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
+              title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}/>
+          );
+        })}
+      </>}
+
+      {decorationRectsState&&decorationsByMsgState&&Object.entries(decorationRectsState).map(([,v])=>{
+        const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
+        const cnt=v.kind==="agree"?counts.agreeCount:counts.disagreeCount;
+        return (
+          <div key={`dec-${v.key}`} onClick={ev=>{ev.stopPropagation();onDecorationClick?.(v.messageId,v.kind);}}
+            title={`${relationTypeName(v.kind)}：点击查看记录`}
+            style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:5,background:v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)",color:"#fff",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,pointerEvents:"auto",cursor:"pointer",boxShadow:"0 4px 10px rgba(0,0,0,0.6)",border:"1px solid rgba(255,255,255,0.06)"}}>
+            <span style={{fontWeight:700}}>{cnt}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

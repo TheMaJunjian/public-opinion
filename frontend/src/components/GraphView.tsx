@@ -36,6 +36,11 @@ const COL_GAP = 80;
 const ROW_GAP = 28;
 const PAD = 40;
 
+// Hex opacity suffixes for color string composition
+const HEX_ALPHA_SEMI = '88';   // ~53% opacity  — frame stroke (unselected)
+const HEX_ALPHA_LIGHT = '55';  // ~33% opacity  — frame fill background
+const HEX_ALPHA_BORDER = '66'; // ~40% opacity  — edge/frame label border (unselected)
+
 // ─── Color palette ───────────────────────────────────────────────────────────
 
 const COLOR_STROKE: Record<string, string> = {
@@ -557,8 +562,8 @@ export default function GraphView({
                 y={frame.y}
                 width={frame.w}
                 height={frame.h}
-                fill={fill + '55'}
-                stroke={isSelected ? stroke : stroke + '88'}
+                fill={fill + HEX_ALPHA_LIGHT}
+                stroke={isSelected ? stroke : stroke + HEX_ALPHA_SEMI}
                 strokeWidth={isSelected ? 2 : 1.5}
                 strokeDasharray="6 3"
                 rx={6}
@@ -587,7 +592,7 @@ export default function GraphView({
                 textAlign: 'center',
                 backgroundColor: isSelected ? textColor : bgColor,
                 color: isSelected ? 'white' : textColor,
-                borderColor: isSelected ? textColor : textColor + '66',
+                borderColor: isSelected ? textColor : textColor + HEX_ALPHA_BORDER,
                 zIndex: 10,
                 boxShadow: isSelected ? `0 0 0 2px ${textColor}44` : undefined,
               }}
@@ -615,7 +620,7 @@ export default function GraphView({
                 textAlign: 'left',
                 backgroundColor: isSelected ? textColor : bgColor,
                 color: isSelected ? 'white' : textColor,
-                borderColor: isSelected ? textColor : textColor + '66',
+                borderColor: isSelected ? textColor : textColor + HEX_ALPHA_BORDER,
                 borderStyle: 'dashed',
                 zIndex: 10,
               }}
@@ -711,7 +716,7 @@ export default function GraphView({
                         color: selectedRelationIds.has(rel.id)
                           ? 'white'
                           : (COLOR_STROKE[spec.color] ?? '#6b7280'),
-                        borderColor: (COLOR_STROKE[spec.color] ?? '#9ca3af') + '66',
+                        borderColor: (COLOR_STROKE[spec.color] ?? '#9ca3af') + HEX_ALPHA_BORDER,
                       }}
                     >
                       {spec.label}

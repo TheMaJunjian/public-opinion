@@ -230,12 +230,10 @@ export default function TopicDetailPage() {
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
-  const doubleClickToggleRef = useRef<{ messageId: string; time: number; wasExit: boolean } | null>(null);
   const lastAddedFragmentRef = useRef<{ messageId: string; unit: UnitSelection; time: number } | null>(null);
   const mouseDownRef = useRef<{ x: number; y: number; messageId: string | null } | null>(null);
   const lastDragOrSelectTimeRef = useRef<number>(0);
   const lastClickActionsRef = useRef<{ type: "toggleWhole"; messageId: string; prevExisted: boolean; time: number }[]>([]);
-  void doubleClickToggleRef;
 
   function captureSnapshot(): FocusSnapshot {
     return {
@@ -513,10 +511,10 @@ export default function TopicDetailPage() {
   }
 
   async function handleCreateRelationWithSourcesAndTargets(params: {
-    sources: UnitSelection[]; targets: UnitSelection[]; label: string; now: string;
+    sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }) {
     if (!topicId) return;
-    const { sources, targets, label, now } = params;
+    const { sources, targets, label } = params;
     const newEdgesList: DemoEdge[] = [];
 
     const buildEdges = (src: UnitSelection, tgt: UnitSelection, type: RelationType, lbl: string, relId: string) => {
@@ -590,7 +588,6 @@ export default function TopicDetailPage() {
         }
       }
     }
-    void now; void label;
     setEdges(prev => [...prev, ...newEdgesList]);
   }
 
@@ -598,7 +595,6 @@ export default function TopicDetailPage() {
     if (targetUnits.length === 0) return;
     if (!useNewMessageAsSource && sourceUnits.length === 0) return;
     if (useNewMessageAsSource && newMessageContent.trim().length === 0) return;
-    const now = new Date().toISOString();
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
     let sources: UnitSelection[] = [];
@@ -610,20 +606,19 @@ export default function TopicDetailPage() {
       sources = [...sourceUnits];
     }
     const targets = [...targetUnits];
-    await handleCreateRelationWithSourcesAndTargets({ sources, targets, label, now });
+    await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
   }
 
   async function handleQuickSendAndRelateFromDraftTargets() {
     if (newMessageContent.trim().length === 0 || draftUnits.length === 0) return;
-    const now = new Date().toISOString();
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
     const msg = await handleSendMessageOnly();
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
     const targets: UnitSelection[] = [...draftUnits];
-    await handleCreateRelationWithSourcesAndTargets({ sources, targets, label, now });
+    await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
   }
 

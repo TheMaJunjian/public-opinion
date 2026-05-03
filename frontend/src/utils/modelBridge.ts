@@ -108,7 +108,7 @@ export function convertMessagesToDemoModel(
           ? { messageId: ref.messageId, selection: { kind: "text", start: pos.start, len: pos.len, text: ref.text } }
           : { messageId: ref.messageId, selection: { kind: "whole" } };
       } else {
-        toUnit = { messageId: `rel:${ref.relationId}`, selection: { kind: "edge", edgeId: `${rel.id}::${index}` } };
+        toUnit = { messageId: `rel:${ref.relationId}`, selection: { kind: "whole" } };
       }
 
       demoEdges.push({

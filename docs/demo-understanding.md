@@ -648,6 +648,11 @@ export const RELATION_TYPES = [
 | 清空候选区后状态同步（textSelectionModeId）| **已完成** |
 | 候选区有消息时开启焦点 → 自动设焦点消息 | **已完成** |
 | edge-label + edge-decoration 关系在线性视图中显示为关系行 | **已完成** |
+| 发消息/建关系触发全页刷新（`await load()` 导致闪烁）| **已完成**（乐观更新：setMessages/setRelations，不再调 load()）|
+| frame-group（CLASSIFY/MERGE）在图视图中不可见 | **已完成**（SVG 虚线边框 + 可点击标签）|
+| DraftPanel 焦点控制在顶部、布局混乱 | **已完成**（焦点控制移至底部折叠面板，导出/导入同样折叠）|
+| 右侧面板输入区在中间（应在底部）| **已完成**（输入+操作按钮移至来源/目标集合之后，焦点/导出折叠至最底部）|
+| DraftItem 类型定义散落在 DraftPanel.tsx | **已完成**（已移入 frontend/src/types/index.ts 统一导出）|
 | 完整 E2E 测试（Playwright）| 后续 |
 | 边标签双击进入关系文本模式 | 后续 |
 | 多焦点消息并行支持（UI 层）| 后续 |

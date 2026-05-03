@@ -24,7 +24,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Topic, Message, Relation, TargetRef } from '../types';
+import type { Topic, Message, Relation, TargetRef, DraftItem } from '../types';
 import { getPresentationSpec, PRESENTATION_SPECS } from '../types';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -32,7 +32,7 @@ import GraphView from '../components/GraphView';
 import MessageThread from '../components/MessageThread';
 import InteractiveMessageList from '../components/InteractiveMessageList';
 import RelationBadge from '../components/RelationBadge';
-import DraftPanel, { type DraftItem } from '../components/DraftPanel';
+import DraftPanel from '../components/DraftPanel';
 import { buildMessageTree, computeStanceStats, buildFocusSubgraph } from '../utils/graph';
 
 // ─── RelationItem sub-component ──────────────────────────────────────────────
@@ -303,8 +303,8 @@ export default function TopicDetailPage() {
 
   async function handleSendMessage(content: string) {
     if (!topicId) return;
-    await api.createMessage(topicId, { content });
-    await load();
+    const newMsg = await api.createMessage(topicId, { content });
+    setMessages(prev => [...prev, newMsg]);
   }
 
   async function handleSendAndRelate(data: {
@@ -314,12 +314,13 @@ export default function TopicDetailPage() {
   }) {
     if (!topicId) return;
     const newMsg = await api.createMessage(topicId, { content: data.newMessageContent });
-    await api.createRelation(topicId, {
+    const newRel = await api.createRelation(topicId, {
       relationType: data.relationType,
       sourceMessageId: newMsg.id,
       targetRefs: data.targetRefs,
     });
-    await load();
+    setMessages(prev => [...prev, newMsg]);
+    setRelations(prev => [...prev, newRel]);
   }
 
   async function handleRelateOnly(data: {
@@ -328,12 +329,12 @@ export default function TopicDetailPage() {
     targetRefs: TargetRef[];
   }) {
     if (!topicId) return;
-    await api.createRelation(topicId, {
+    const newRel = await api.createRelation(topicId, {
       relationType: data.relationType,
       sourceMessageId: data.sourceMessageId,
       targetRefs: data.targetRefs,
     });
-    await load();
+    setRelations(prev => [...prev, newRel]);
   }
 
   // ── Import / Export ─────────────────────────────────────────────────────────

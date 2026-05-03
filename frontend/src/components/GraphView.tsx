@@ -5,8 +5,8 @@
  * with SVG bezier edges representing relation messages.
  *
  * Layout algorithm:
- *   - col(source) = col(target) + 1 for edge-label/edge-decoration relation types
- *   - Messages with no incoming edges start in column 0
+ *   - col(target) >= col(source) + 1  (source LEFT, target RIGHT, edges flow left→right)
+ *   - Messages with no outgoing edges start in column 0
  *   - Within each column, cards are ordered by creation time
  *
  * Interactivity:
@@ -20,7 +20,8 @@
  *   - edge-decoration: curved bezier arrow + clickable label + decoration badge on target
  *   - decoration:      decoration badge only on target (no edge)
  *   - inline-badge:    small badge on card (RECOMMEND/ARCHIVE)
- *   - replace-overlay / frame-group: fallback to edge-label for now
+ *   - frame-group:     dashed bounding box around target message cards (CLASSIFY/MERGE)
+ *   - replace-overlay: fallback to edge-label
  */
 
 import { useMemo, useState, useCallback } from 'react';
@@ -34,6 +35,11 @@ const CARD_H = 110;
 const COL_GAP = 80;
 const ROW_GAP = 28;
 const PAD = 40;
+
+// Hex opacity suffixes for color string composition
+const HEX_ALPHA_SEMI = '88';   // ~53% opacity  — frame stroke (unselected)
+const HEX_ALPHA_LIGHT = '55';  // ~33% opacity  — frame fill background
+const HEX_ALPHA_BORDER = '66'; // ~40% opacity  — edge/frame label border (unselected)
 
 // ─── Color palette ───────────────────────────────────────────────────────────
 
@@ -436,6 +442,42 @@ export default function GraphView({
     return map;
   }, [visibleRelations]);
 
+  // ── Frame-group bounding boxes (CLASSIFY / MERGE) ─────────────────────────
+  // For each frame-group relation, compute a bounding rect around all target cards.
+  const frameGroups = useMemo(() => {
+    const FRAME_PAD = 8; // extra padding around the grouped cards
+    const result: Array<{
+      id: string;
+      relationType: string;
+      color: string;
+      label: string;
+      x: number; y: number; w: number; h: number;
+    }> = [];
+    for (const rel of visibleRelations) {
+      const spec = getPresentationSpec(rel.relationType);
+      if (spec.kind !== 'frame-group') continue;
+      const targetPositions: CardPos[] = [];
+      for (const ref of rel.targetRefs) {
+        if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
+        const p = posMap.get(ref.messageId);
+        if (p) targetPositions.push(p);
+      }
+      if (targetPositions.length === 0) continue;
+      const minX = Math.min(...targetPositions.map(p => p.x)) - FRAME_PAD;
+      const minY = Math.min(...targetPositions.map(p => p.y)) - FRAME_PAD;
+      const maxX = Math.max(...targetPositions.map(p => p.x + CARD_W)) + FRAME_PAD;
+      const maxY = Math.max(...targetPositions.map(p => p.y + CARD_H)) + FRAME_PAD;
+      result.push({
+        id: rel.id,
+        relationType: rel.relationType,
+        color: spec.color,
+        label: `${rel.createdBy.username} · ${spec.label}`,
+        x: minX, y: minY, w: maxX - minX, h: maxY - minY,
+      });
+    }
+    return result;
+  }, [visibleRelations, posMap]);
+
   // ── Stance decorations per message ────────────────────────────────────────
   // (support/oppose counts already computed externally via stanceStatsMap)
 
@@ -507,6 +549,27 @@ export default function GraphView({
               </g>
             );
           })}
+
+          {/* Frame-group dashed bounding boxes (CLASSIFY / MERGE) */}
+          {frameGroups.map(frame => {
+            const isSelected = selectedRelationIds.has(frame.id);
+            const stroke = COLOR_STROKE[frame.color] ?? '#9ca3af';
+            const fill = COLOR_BG[frame.color] ?? '#f3f4f6';
+            return (
+              <rect
+                key={`frame-${frame.id}`}
+                x={frame.x}
+                y={frame.y}
+                width={frame.w}
+                height={frame.h}
+                fill={fill + HEX_ALPHA_LIGHT}
+                stroke={isSelected ? stroke : stroke + HEX_ALPHA_SEMI}
+                strokeWidth={isSelected ? 2 : 1.5}
+                strokeDasharray="6 3"
+                rx={6}
+              />
+            );
+          })}
         </svg>
 
         {/* ── Edge labels layer (interactive, above SVG) ──────────────────── */}
@@ -529,12 +592,40 @@ export default function GraphView({
                 textAlign: 'center',
                 backgroundColor: isSelected ? textColor : bgColor,
                 color: isSelected ? 'white' : textColor,
-                borderColor: isSelected ? textColor : textColor + '66',
+                borderColor: isSelected ? textColor : textColor + HEX_ALPHA_BORDER,
                 zIndex: 10,
                 boxShadow: isSelected ? `0 0 0 2px ${textColor}44` : undefined,
               }}
             >
               {edge.label}
+            </button>
+          );
+        })}
+
+        {/* ── Frame-group labels (CLASSIFY / MERGE) ────────────────────────── */}
+        {frameGroups.map(frame => {
+          const isSelected = selectedRelationIds.has(frame.id);
+          const bgColor = COLOR_BG[frame.color] ?? '#f3f4f6';
+          const textColor = COLOR_STROKE[frame.color] ?? '#6b7280';
+          return (
+            <button
+              key={`frame-label-${frame.id}`}
+              onClick={() => onClickRelation(frame.id)}
+              title={`点击选中关系消息: ${frame.label}`}
+              className="absolute text-xs font-medium px-1.5 py-0.5 rounded border transition-all cursor-pointer select-none"
+              style={{
+                left: frame.x + 4,
+                top: frame.y - 12,
+                maxWidth: frame.w - 8,
+                textAlign: 'left',
+                backgroundColor: isSelected ? textColor : bgColor,
+                color: isSelected ? 'white' : textColor,
+                borderColor: isSelected ? textColor : textColor + HEX_ALPHA_BORDER,
+                borderStyle: 'dashed',
+                zIndex: 10,
+              }}
+            >
+              {frame.label}
             </button>
           );
         })}
@@ -625,7 +716,7 @@ export default function GraphView({
                         color: selectedRelationIds.has(rel.id)
                           ? 'white'
                           : (COLOR_STROKE[spec.color] ?? '#6b7280'),
-                        borderColor: (COLOR_STROKE[spec.color] ?? '#9ca3af') + '66',
+                        borderColor: (COLOR_STROKE[spec.color] ?? '#9ca3af') + HEX_ALPHA_BORDER,
                       }}
                     >
                       {spec.label}

@@ -221,6 +221,19 @@ export function getTargetRelationIds(targetRefs: TargetRef[]): string[] {
 }
 
 // ============================================================
+// Draft / Selection Types
+// ============================================================
+
+/**
+ * A selectable unit in the draft/sources/targets system.
+ * Discriminated union to support text messages, text fragments, and relation messages.
+ */
+export type DraftItem =
+  | { type: 'message'; id: string }
+  | { type: 'text-fragment'; messageId: string; text: string; hash: string }
+  | { type: 'relation'; id: string; part?: 'label' | 'decoration' | 'frame' | 'whole' };
+
+// ============================================================
 // Pagination
 // ============================================================
 

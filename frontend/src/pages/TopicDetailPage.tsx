@@ -145,6 +145,9 @@ export default function TopicDetailPage() {
   const [sources, setSources] = useState<DraftItem[]>([]);
   const [targets, setTargets] = useState<DraftItem[]>([]);
 
+  // Text selection mode — lifted to this level so blank-click can reset it across views
+  const [textSelectionModeId, setTextSelectionModeId] = useState<string | null>(null);
+
   // ── Load ────────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     if (!topicId) return;
@@ -293,6 +296,7 @@ export default function TopicDetailPage() {
     setDraft([]);
     setSources([]);
     setTargets([]);
+    setTextSelectionModeId(null); // exit text selection mode on clear
   }
 
   // ── Actions ──────────────────────────────────────────────────────────────────
@@ -532,6 +536,9 @@ export default function TopicDetailPage() {
               onClickMessage={handleClickMessage}
               onClickRelation={handleClickRelation}
               onSelectFragment={handleSelectFragment}
+              onBlankClick={handleClearAll}
+              textSelectionModeId={textSelectionModeId}
+              onTextModeChange={setTextSelectionModeId}
             />
           ) : viewMode === 'tree' ? (
             <div className="space-y-3">
@@ -555,6 +562,9 @@ export default function TopicDetailPage() {
                     onClickMessage={handleClickMessage}
                     onClickRelation={handleClickRelation}
                     onSelectFragment={handleSelectFragment}
+                    onBlankClick={handleClearAll}
+                    textSelectionModeId={textSelectionModeId}
+                    onTextModeChange={setTextSelectionModeId}
                   />
                 )}
             </div>
@@ -569,6 +579,9 @@ export default function TopicDetailPage() {
               onClickMessage={handleClickMessage}
               onClickRelation={handleClickRelation}
               onSelectFragment={handleSelectFragment}
+              onBlankClick={handleClearAll}
+              textSelectionModeId={textSelectionModeId}
+              onTextModeChange={setTextSelectionModeId}
             />
           )}
 
@@ -636,7 +649,20 @@ export default function TopicDetailPage() {
                 focusMode={focusMode}
                 focusMessageId={focusMessageId}
                 focusHops={focusHops}
-                onFocusToggle={() => { setFocusMode(f => !f); if (focusMode) setFocusMessageId(''); }}
+                onFocusToggle={() => {
+                    if (!focusMode) {
+                      // Turning focus mode ON: use first whole-message draft item as focus target
+                      setFocusMode(true);
+                      const firstWhole = draft.find(d => d.type === 'message');
+                      if (firstWhole && firstWhole.type === 'message') {
+                        setFocusMessageId(firstWhole.id);
+                      }
+                    } else {
+                      // Turning focus mode OFF
+                      setFocusMode(false);
+                      setFocusMessageId('');
+                    }
+                  }}
                 onFocusMessageChange={setFocusMessageId}
                 onFocusHopsChange={setFocusHops}
                 onFocusExit={() => setFocusMessageId('')}

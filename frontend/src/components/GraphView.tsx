@@ -241,6 +241,20 @@ interface Props {
   onClickRelation: (id: string) => void;
   /** Called when user drag-selects text in a message card (double-click → text selection mode) */
   onSelectFragment?: (messageId: string, text: string, hash: string) => void;
+  /**
+   * Called when user clicks on blank area (not on a card or relation label).
+   * Parent should use this to clear the draft/candidates.
+   */
+  onBlankClick?: () => void;
+  /**
+   * Controlled text-selection mode: which message ID is in text-selection mode.
+   * If provided, parent manages this state (enabling cross-component sync on clear).
+   */
+  textSelectionModeId?: string | null;
+  /**
+   * Callback when text-selection mode changes (if using controlled mode).
+   */
+  onTextModeChange?: (id: string | null) => void;
 }
 
 // ─── Simple hash for text fragment identification ────────────────────────────
@@ -266,6 +280,9 @@ export default function GraphView({
   onClickMessage,
   onClickRelation,
   onSelectFragment,
+  onBlankClick,
+  textSelectionModeId: controlledTextModeId,
+  onTextModeChange,
 }: Props) {
   const visibleMessages = focusVisibleMessages
     ? messages.filter(m => focusVisibleMessages.has(m.id))
@@ -276,13 +293,24 @@ export default function GraphView({
     : relations;
 
   // ── Text selection mode state ─────────────────────────────────────────────
-  // textSelectionModeId: which message card is currently in text-selection mode
-  const [textSelectionModeId, setTextSelectionModeId] = useState<string | null>(null);
+  // Supports both internal (default) and controlled (from parent) mode.
+  // Controlled mode is used when parent needs to reset this on draft clear.
+  const [internalTextModeId, setInternalTextModeId] = useState<string | null>(null);
+
+  const textSelectionModeId = controlledTextModeId !== undefined ? controlledTextModeId : internalTextModeId;
+
+  const setTextSelectionModeId = useCallback((id: string | null) => {
+    if (controlledTextModeId !== undefined && onTextModeChange) {
+      onTextModeChange(id);
+    } else {
+      setInternalTextModeId(id);
+    }
+  }, [controlledTextModeId, onTextModeChange]);
 
   const handleCardDoubleClick = useCallback((msgId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setTextSelectionModeId(prev => prev === msgId ? null : msgId);
-  }, []);
+    setTextSelectionModeId(textSelectionModeId === msgId ? null : msgId);
+  }, [textSelectionModeId, setTextSelectionModeId]);
 
   const handleCardMouseUp = useCallback((msgId: string) => {
     if (textSelectionModeId !== msgId) return;
@@ -420,11 +448,21 @@ export default function GraphView({
   }
 
   return (
-    <div className="overflow-auto border border-gray-200 rounded-lg bg-gray-50">
+    <div
+      className="overflow-auto border border-gray-200 rounded-lg bg-gray-50"
+      onClick={e => {
+        // Blank area click: clear candidates if clicking directly on this container
+        if (e.target === e.currentTarget && onBlankClick) onBlankClick();
+      }}
+    >
       {/* SVG + cards in a relative container */}
       <div
         className="relative"
         style={{ width: canvasWidth, height: canvasHeight, minWidth: '100%' }}
+        onClick={e => {
+          // Also handle clicks on the relative container background
+          if (e.target === e.currentTarget && onBlankClick) onBlankClick();
+        }}
       >
         {/* ── SVG edges layer (behind cards) ──────────────────────────────── */}
         <svg

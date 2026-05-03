@@ -365,6 +365,13 @@ export default function DraftPanel({
           </button>
         </div>
 
+        {/* Hint: show when not in focus mode and draft has whole-message candidates */}
+        {!focusMode && draft.some(d => d.type === 'message') && (
+          <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
+            💡 候选区有消息，点击"开启"将自动以候选消息为焦点
+          </p>
+        )}
+
         {focusMode && (
           <div className="space-y-2">
             {/* Current focus display */}

@@ -518,7 +518,11 @@ export default function TopicDetailPage() {
       <div className="flex gap-5 items-start">
 
         {/* Message view (left) — min-height matches viewport so content doesn't look cramped */}
-        <div className="flex-1 min-w-0 space-y-4" style={{ minHeight: 'calc(100vh - 220px)' }}>
+        <div
+          className="flex-1 min-w-0 space-y-4"
+          style={{ minHeight: 'calc(100vh - 220px)' }}
+          onClick={(e) => { if (e.target === e.currentTarget) handleClearAll(); }}
+        >
 
           {visibleMessages.length === 0 ? (
             <div className="text-center py-10 text-gray-400 bg-white border border-gray-200 rounded-lg">

@@ -337,20 +337,23 @@ type TargetRef =
 | 渲染方式 | 普通列表，每条消息为一张卡片 |
 | 排序 | 按 API 返回顺序（通常为创建时间升序） |
 | 关系展示 | `decoration` / `edge-decoration` → 卡片内 badge（与图视图一致）|
-| **关系消息展示** | **`edge-label` 关系（ANNOTATION/REFERENCE/REPLY/SUPPLEMENT）在其源消息卡片下方显示为可点击的"关系行"** |
+| **关系消息展示** | **`edge-label` 和 `edge-decoration` 关系在其源消息卡片下方显示为可点击的"关系行"** |
 | 关系行格式 | `[关系类型标签] → [目标消息摘要]`，可点击加入候选区 |
-| 空白点击 | 点击列表容器空白 → 清空候选区 |
+| 空白点击 | 点击列表容器任意空白处 → 清空候选区（消息卡片和关系行均 stopPropagation）|
 
 ### 4.3 关系消息在线性视图中的显示规则（详细）
 
 ```
 对每条消息 msg:
   1. 渲染消息卡片（含 decoration/edge-decoration/inline-badge badge）
-  2. 查找 outgoingEdgeLabels = relations.filter(
+  2. 查找 outgoingRelationRows = relations.filter(
        r => r.sourceMessageId === msg.id &&
-       getPresentationSpec(r.relationType).kind === 'edge-label'
+       (getPresentationSpec(r.relationType).kind === 'edge-label' ||
+        getPresentationSpec(r.relationType).kind === 'edge-decoration')
      )
-  3. 对每条 outgoingEdgeLabel 关系 rel:
+     注：edge-decoration（SUPPORT/REBUT）有有向边组件，因此也在源消息下方显示关系行；
+         其装饰 badge 仍然显示在目标消息卡片上（两者并不冲突）。
+  3. 对每条关系行 rel:
      渲染"关系行"：
        - 背景：该关系类型的 COLOR_BG 色
        - 边框：该关系类型的 COLOR_STROKE 色（半透明）
@@ -605,9 +608,9 @@ export const RELATION_TYPES = [
 | 双击文本模式 | amber 边框 + "T" 标志 | ✅ |
 | 文本片段选择 | 拖选 → 候选区片段 | ✅ |
 | 关系标签点击 | 关系加入候选区 | ✅ |
-| **空白点击清空** | **点击空白 → 清空候选区** | ✅（本PR） |
-| **文本模式状态同步** | **清空候选区时退出文本模式** | ✅（本PR） |
-| **线性视图关系行** | **edge-label 关系显示在源消息下方** | ✅（本PR） |
+| **空白点击清空** | **点击空白 → 清空候选区** | ✅（已实现：InteractiveMessageList + TopicDetailPage 左侧面板）|
+| **文本模式状态同步** | **清空候选区时退出文本模式** | ✅（已实现）|
+| **线性视图关系行** | **edge-label + edge-decoration 关系显示在源消息下方** | ✅（已实现）|
 | 默认高度 = 视口 | `min-height: calc(100vh - 220px)` | ✅ |
 | 分页（列表/树）| 上/下页按钮 | ✅ |
 
@@ -616,13 +619,13 @@ export const RELATION_TYPES = [
 | 功能 | 描述 | 状态 |
 |------|------|------|
 | 候选区分组展示 | 消息组 + 关系条目 | ✅ |
-| **候选区底部批量按钮** | "加入来源集合"/"加入目标集合" | ✅ |
+| **候选区底部批量按钮** | "加入来源集合"/"加入目标集合" | ✅（已实现）|
 | 来源集合 | 仅消息，蓝色 | ✅ |
 | 目标集合 | 任意类型，绿色 | ✅ |
 | 消息输入框 | 新消息内容 textarea | ✅ |
 | A/B/C/D 操作按钮 | 四类发送/建关系流程 | ✅ |
 | 焦点控制 | 开/关焦点、选消息、设跳数 | ✅ |
-| **焦点模式用候选消息** | **开启时自动用候选第一条** | ✅（本PR） |
+| **焦点模式用候选消息** | **开启时自动用候选第一条** | ✅（已实现）|
 | 面板宽度 ≥ 380px | `width: 400px` | ✅ |
 | 导出/导入 | JSON 下载、复制、导入 | ✅ |
 | 关系列表/图例 | 底部展示 | ✅ |
@@ -634,17 +637,17 @@ export const RELATION_TYPES = [
 
 | 差异项 | 状态 |
 |--------|------|
-| 右侧面板宽度（320px → 400px）| **已完成（PR#18）** |
-| 左侧视图高度（min-height = 100vh-offset）| **已完成（PR#18）** |
-| 非线性图视图列布局方向（source 左 target 右）| **已完成（PR#18）** |
-| 边锚点（source 右边界 → target 左边界）| **已完成（PR#18）** |
-| 候选区主交互改为底部批量按钮 | **已完成（PR#18）** |
-| 后端 relationTypes 集中化 | **已完成（PR#18）** |
-| 边标签小幅错位避让 | **已完成（PR#18）** |
-| **点击空白清空候选区** | **本PR完成** |
-| **清空候选区后状态同步（textSelectionModeId）** | **本PR完成** |
-| **候选区有消息时开启焦点 → 自动设焦点消息** | **本PR完成** |
-| **edge-label 关系在线性视图中显示为关系行** | **本PR完成** |
+| 右侧面板宽度（320px → 400px）| **已完成** |
+| 左侧视图高度（min-height = 100vh-offset）| **已完成** |
+| 非线性图视图列布局方向（source 左 target 右）| **已完成** |
+| 边锚点（source 右边界 → target 左边界）| **已完成** |
+| 候选区主交互改为底部批量按钮 | **已完成** |
+| 后端 relationTypes 集中化 | **已完成** |
+| 边标签小幅错位避让 | **已完成** |
+| 点击空白清空候选区（InteractiveMessageList + 左侧面板兜底）| **已完成** |
+| 清空候选区后状态同步（textSelectionModeId）| **已完成** |
+| 候选区有消息时开启焦点 → 自动设焦点消息 | **已完成** |
+| edge-label + edge-decoration 关系在线性视图中显示为关系行 | **已完成** |
 | 完整 E2E 测试（Playwright）| 后续 |
 | 边标签双击进入关系文本模式 | 后续 |
 | 多焦点消息并行支持（UI 层）| 后续 |
@@ -664,6 +667,7 @@ export const RELATION_TYPES = [
 - [ ] 箭头出现在右侧卡片左边界处（指向目标）
 - [ ] 多条边的标签在 Y 方向错位，不完全重叠
 - [ ] 列表视图中，每条消息卡片下方可见 edge-label 类型的关系行（如 REPLY、ANNOTATION）
+- [ ] 列表视图中，每条消息卡片下方可见 edge-decoration 类型的关系行（如 SUPPORT、REBUT）
 
 ### B. 候选区交互检查
 
@@ -704,4 +708,4 @@ export const RELATION_TYPES = [
 
 ---
 
-*本文档由 Copilot Agent 根据 demo 代码深度分析与用户需求生成，版本: 2026-05-03（深度修订版）*
+*本文档由 Copilot Agent 根据 demo 代码深度分析与用户需求生成，版本: 2026-05-03（第三次修订：edge-decoration 线性视图修复 + 空白点击修复）*

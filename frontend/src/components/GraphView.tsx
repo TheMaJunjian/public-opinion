@@ -355,9 +355,9 @@ export default function GraphView(props: GraphViewProps) {
     onMessageClick, onMessageDoubleClick, onTextMouseUp,
     onEdgeLabelSingleClick, onEdgeLabelDoubleClick,
     onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
-    onMessageMouseDown, onMessageMouseUp, onDecorationClick, voteStats,
+    onMessageMouseDown, onMessageMouseUp, onDecorationClick,
+    // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
-  void voteStats;
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
   const cardRefs = useRef<Record<string,HTMLDivElement|null>>({});

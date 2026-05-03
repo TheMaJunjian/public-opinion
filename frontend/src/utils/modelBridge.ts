@@ -90,7 +90,7 @@ export function convertMessagesToDemoModel(
         id: relMsgId,
         author: rel.createdBy.username,
         createdAt: rel.createdAt,
-        content: `建立${typeName}关系：来自 ${rel.sourceMessageId}；标签：${relType}`,
+        content: `建立${typeName}关系：来自 ${rel.sourceMessageId}；类型：${typeName}`,
         kind: "relation",
       });
     }

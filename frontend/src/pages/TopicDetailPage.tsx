@@ -537,7 +537,7 @@ export default function TopicDetailPage() {
         try {
           const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
           const relId = `rel:${backendRel.id}`;
-          const relMsg: DemoMessage = { id: relId, author: "System", createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${toReply.map(t => t.messageId).join(",")}` };
+          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${toReply.map(t => t.messageId).join(",")}` };
           setMessages(prev => [...prev, relMsg]);
           for (const s of fromReply) {
             for (const t of toReply) {
@@ -560,7 +560,7 @@ export default function TopicDetailPage() {
         try {
           const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
           const relId = `rel:${backendRel.id}`;
-          const relMsg: DemoMessage = { id: relId, author: "System", createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
+          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
           setMessages(prev => [...prev, relMsg]);
           for (const s of sources) {
             for (const t of targets) {
@@ -579,7 +579,7 @@ export default function TopicDetailPage() {
           try {
             const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
             const relId = `rel:${backendRel.id}`;
-            const relMsg: DemoMessage = { id: relId, author: "System", createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
+            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
             setMessages(prev => [...prev, relMsg]);
             for (const t of targets) {
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, relationType, label, relId));
@@ -734,9 +734,10 @@ export default function TopicDetailPage() {
 
   function handleDecorationClick(messageId: string, kind: "agree" | "disagree") {
     const now = new Date().toISOString();
-    const msg: DemoMessage = { id: nextId("msg"), author: user?.username ?? "You", createdAt: now, content: kind === "agree" ? "赞同" : "反对", kind: "normal" };
+    const author = user?.username ?? "Anonymous";
+    const msg: DemoMessage = { id: nextId("msg"), author, createdAt: now, content: kind === "agree" ? "赞同" : "反对", kind: "normal" };
     const relMsgId = nextId("rel");
-    const relMsg: DemoMessage = { id: relMsgId, author: "System", createdAt: now, kind: "relation", content: `${msg.id} ${relationTypeName(kind)} ${messageId}` };
+    const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${msg.id} ${relationTypeName(kind)} ${messageId}` };
     const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relMsg.id, relationType: kind, from: { messageId: msg.id, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "edge", edgeId: `dec:${kind}:${messageId}` } }, relationLabel: relationTypeName(kind) };
     setMessages(prev => [...prev, msg, relMsg]);
     setEdges(prev => [...prev, edge]);

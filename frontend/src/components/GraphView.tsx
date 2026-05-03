@@ -96,6 +96,8 @@ interface EdgeRender {
   arrowEnd: { x: number; y: number };
   /** For edge-decoration: the position to draw the decoration badge on the target card */
   targetCardPos?: CardPos;
+  /** Sequential index used to offset label position slightly to reduce overlap */
+  edgeIndex: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -161,7 +163,9 @@ function computeLayout(
     return spec.kind === 'edge-label' || spec.kind === 'edge-decoration';
   });
 
-  // Propagate: source should be at col(target) + 1
+  // Propagate: target should be at col(source) + 1 (source is left, target is right).
+  // This ensures edges flow left→right: source right-border → target left-border,
+  // with the arrow pointing toward the target (rightward).
   let changed = true;
   let guard = 0;
   while (changed && guard++ < MAX_LAYOUT_ITERATIONS) {
@@ -172,10 +176,10 @@ function computeLayout(
       for (const ref of rel.targetRefs) {
         if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
         if (!colMap.has(ref.messageId)) continue;
-        const tgtCol = colMap.get(ref.messageId)!;
         const curSrcCol = colMap.get(srcId)!;
-        if (curSrcCol < tgtCol + 1) {
-          colMap.set(srcId, tgtCol + 1);
+        const curTgtCol = colMap.get(ref.messageId)!;
+        if (curTgtCol < curSrcCol + 1) {
+          colMap.set(ref.messageId, curSrcCol + 1);
           changed = true;
         }
       }
@@ -293,6 +297,7 @@ export default function GraphView({
     const result: EdgeRender[] = [];
     // Map from relationId → label center (populated during Pass 1)
     const relLabelPositions = new Map<string, EdgeLabelPos>();
+    let edgeIndex = 0;
 
     // Pass 1: relations whose primary target is a TEXT message
     for (const rel of visibleRelations) {
@@ -322,6 +327,7 @@ export default function GraphView({
         labelPos,
         arrowEnd,
         targetCardPos: spec.kind === 'edge-decoration' ? toPos : undefined,
+        edgeIndex: edgeIndex++,
       });
     }
 
@@ -366,6 +372,7 @@ export default function GraphView({
         path,
         labelPos,
         arrowEnd: { x: targetPoint.x, y: targetPoint.y },
+        edgeIndex: edgeIndex++,
       });
     }
 
@@ -456,6 +463,8 @@ export default function GraphView({
           const isSelected = selectedRelationIds.has(edge.id);
           const bgColor = COLOR_BG[edge.color] ?? '#f3f4f6';
           const textColor = COLOR_STROKE[edge.color] ?? '#6b7280';
+          // Apply a small vertical offset per edge index to reduce label overlap
+          const labelYOffset = (edge.edgeIndex % 5) * 14;
           return (
             <button
               key={`label-${edge.id}`}
@@ -464,7 +473,7 @@ export default function GraphView({
               className="absolute text-xs font-medium px-1.5 py-0.5 rounded border transition-all cursor-pointer select-none"
               style={{
                 left: edge.labelPos.cx - 50,
-                top: edge.labelPos.cy - 10,
+                top: edge.labelPos.cy - 10 + labelYOffset,
                 width: 100,
                 textAlign: 'center',
                 backgroundColor: isSelected ? textColor : bgColor,

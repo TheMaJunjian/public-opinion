@@ -592,10 +592,10 @@ export default function DraftPanel({
           className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
 
-        {/* Relation type selector (inline, for B/C/D operations) */}
-        <div className="flex items-start gap-2">
-          <span className="text-xs font-medium text-gray-500 shrink-0 pt-1">关系类型</span>
-          <div className="flex flex-wrap gap-1">
+        {/* Relation type selector (inline, for creating relations — operations B/C/D) */}
+        <div className="flex items-start gap-2" role="group" aria-label="关系类型选择">
+          <span id="relation-type-label" className="text-xs font-medium text-gray-500 shrink-0 pt-1">关系类型</span>
+          <div className="flex flex-wrap gap-1" aria-labelledby="relation-type-label">
             {Object.entries(PRESENTATION_SPECS)
               .filter(([, s]) =>
                 s.kind === 'edge-label' ||

@@ -22,19 +22,10 @@
  */
 
 import { useState } from 'react';
-import type { Message, Relation, TargetRef } from '../types';
+import type { Message, Relation, TargetRef, DraftItem } from '../types';
 import { getPresentationSpec } from '../types';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-/**
- * A selectable unit in the draft/sources/targets system.
- * Discriminated union to support text messages, text fragments, and relation messages.
- */
-export type DraftItem =
-  | { type: 'message'; id: string }
-  | { type: 'text-fragment'; messageId: string; text: string; hash: string }
-  | { type: 'relation'; id: string; part?: 'label' | 'decoration' | 'frame' | 'whole' };
+export type { DraftItem };
 
 /** A group of draft items belonging to the same message */
 interface DraftMessageGroup {
@@ -211,6 +202,8 @@ export default function DraftPanel({
   const [importText, setImportText] = useState('');
   const [showImport, setShowImport] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
+  const [showFocus, setShowFocus] = useState(false);
+  const [showExportSection, setShowExportSection] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
 
   function clearError() { setError(''); }
@@ -347,99 +340,6 @@ export default function DraftPanel({
   return (
     <div className="flex flex-col gap-3 text-sm">
 
-      {/* ── Focus Controls ──────────────────────────────────────────────── */}
-      <div className={`rounded-lg border p-3 ${focusMode ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
-        <div className="flex items-center justify-between mb-2">
-          <h4 className={`font-semibold text-xs uppercase tracking-wide ${focusMode ? 'text-amber-800' : 'text-gray-600'}`}>
-            {focusMode ? '◎ 焦点模式（开启）' : '○ 焦点模式'}
-          </h4>
-          <button
-            onClick={onFocusToggle}
-            className={`text-xs px-2 py-0.5 rounded border font-medium transition-colors ${
-              focusMode
-                ? 'bg-amber-200 text-amber-800 border-amber-300 hover:bg-amber-300'
-                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'
-            }`}
-          >
-            {focusMode ? '关闭' : '开启'}
-          </button>
-        </div>
-
-        {/* Hint: show when not in focus mode and draft has whole-message candidates */}
-        {!focusMode && draft.some(d => d.type === 'message') && (
-          <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
-            💡 候选区有消息，点击"开启"将自动以候选消息为焦点
-          </p>
-        )}
-
-        {focusMode && (
-          <div className="space-y-2">
-            {/* Current focus display */}
-            {focusMessageId && focusMsg ? (
-              <div className="bg-amber-100 border border-amber-300 rounded px-2 py-1.5">
-                <p className="text-xs font-medium text-amber-800 mb-0.5">当前焦点</p>
-                <p className="text-xs text-amber-700 truncate">
-                  [{focusMsg.createdBy.username}] {focusMsg.content.slice(0, 40)}{focusMsg.content.length > 40 ? '…' : ''}
-                </p>
-                <p className="text-[10px] text-amber-500 font-mono mt-0.5">{focusMessageId.slice(0, 8)}…</p>
-              </div>
-            ) : (
-              <p className="text-xs text-amber-600 italic">未设置焦点消息</p>
-            )}
-
-            {/* Focus message selector */}
-            <select
-              value={focusMessageId}
-              onChange={e => onFocusMessageChange(e.target.value)}
-              className="w-full border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-            >
-              <option value="">选择焦点消息…</option>
-              {messages.map(m => (
-                <option key={m.id} value={m.id}>
-                  [{m.createdBy.username}] {m.content.slice(0, 35)}{m.content.length > 35 ? '…' : ''}
-                </option>
-              ))}
-            </select>
-
-            {/* Hop count */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-amber-700 font-medium shrink-0">跳数</span>
-              <div className="flex gap-1">
-                {[1, 2, 3, 4, 5].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => onFocusHopsChange(n)}
-                    className={`w-7 h-7 text-xs rounded border font-medium transition-colors ${
-                      focusHops === n
-                        ? 'bg-amber-500 text-white border-amber-500'
-                        : 'bg-white text-amber-700 border-amber-300 hover:bg-amber-100'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Exit buttons */}
-            <div className="flex gap-1.5">
-              <button
-                onClick={onFocusExit}
-                className="flex-1 text-xs py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-100"
-              >退出焦点</button>
-              <button
-                onClick={onFocusExitAll}
-                className="flex-1 text-xs py-1 border border-red-300 rounded text-red-600 hover:bg-red-50"
-              >退出全部</button>
-            </div>
-
-            <p className="text-[10px] text-amber-500">
-              hop = 文本消息之间经过的关系数；显示 {focusHops} 跳以内的消息与关系。
-            </p>
-          </div>
-        )}
-      </div>
-
       {/* ── Draft (候选区) ─────────────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
@@ -487,7 +387,6 @@ export default function DraftPanel({
                         {msg ? `[${msg.createdBy.username}]` : '未知'}
                       </span>
                     </div>
-                    {/* Delete button only — use the bottom batch buttons to move to collections */}
                     <button
                       onClick={() => {
                         const indices: number[] = [];
@@ -572,7 +471,6 @@ export default function DraftPanel({
                         <span className="text-gray-500 truncate">by {srcMsg.createdBy.username}</span>
                       )}
                     </div>
-                    {/* Delete only — use bottom batch button to move to targets */}
                     <button
                       onClick={() => onDraftRemove(relItem.index)}
                       className="text-gray-400 hover:text-red-500 px-0.5 shrink-0"
@@ -590,7 +488,6 @@ export default function DraftPanel({
           <div className="flex gap-2 mt-2 border-t border-gray-100 pt-2">
             <button
               onClick={() => {
-                // Add all whole-message items to sources in a single batch operation
                 const indices = draftGroups
                   .filter(g => g.hasWhole && g.wholeIndex !== null)
                   .map(g => g.wholeIndex as number);
@@ -682,8 +579,8 @@ export default function DraftPanel({
         </p>
       )}
 
-      {/* ── Message input ─────────────────────────────────────────────────── */}
-      <div className="border-t border-gray-200 pt-3">
+      {/* ── Message input + Action buttons (at bottom of content area) ─────── */}
+      <div className="border-t border-gray-200 pt-3 space-y-2">
         <label className="block text-xs font-medium text-gray-600 mb-1">
           消息内容 <span className="text-gray-400 font-normal">(操作 A/B/C 需要)</span>
         </label>
@@ -694,151 +591,264 @@ export default function DraftPanel({
           rows={3}
           className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
-      </div>
 
-      {/* ── Action buttons ────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-1.5">
-        {/* Action A: Send message only */}
-        <button
-          onClick={handleSendOnly}
-          disabled={submitting || !newMsgContent.trim()}
-          className="w-full bg-gray-50 hover:bg-gray-100 disabled:opacity-40 text-gray-700 rounded py-2 text-xs font-medium transition-colors border border-gray-300 text-left px-3"
-        >
-          <span className="text-gray-400 mr-1.5 font-mono">A</span>
-          仅发送消息
-        </button>
-
-        {/* Action B: Send + use draft as targets */}
-        <button
-          onClick={handleSendWithDraft}
-          disabled={submitting || !newMsgContent.trim() || draft.length === 0}
-          className="w-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-700 rounded py-2 text-xs font-medium transition-colors border border-indigo-200 text-left px-3"
-        >
-          <span className="text-indigo-300 mr-1.5 font-mono">B</span>
-          发送并建立关系（用候选作目标）
-          {draft.length > 0 && <span className="ml-1 text-indigo-400 text-[10px]">·候选{draft.length}项</span>}
-        </button>
-
-        {/* Action C: Send + use targets collection */}
-        <button
-          onClick={handleSendWithTargets}
-          disabled={submitting || !newMsgContent.trim() || targets.length === 0}
-          className="w-full bg-blue-50 hover:bg-blue-100 disabled:opacity-40 text-blue-700 rounded py-2 text-xs font-medium transition-colors border border-blue-200 text-left px-3"
-        >
-          <span className="text-blue-300 mr-1.5 font-mono">C</span>
-          发送并建立关系（Targets集合）
-          {targets.length > 0 && <span className="ml-1 text-blue-400 text-[10px]">·目标{targets.length}项</span>}
-        </button>
-
-        {/* Action D: Relate only with sources/targets */}
-        <button
-          onClick={handleRelateOnly}
-          disabled={submitting || sources.length === 0 || targets.length === 0}
-          className="w-full bg-green-50 hover:bg-green-100 disabled:opacity-40 text-green-700 rounded py-2 text-xs font-medium transition-colors border border-green-200 text-left px-3"
-        >
-          <span className="text-green-300 mr-1.5 font-mono">D</span>
-          仅用已有消息建立关系（Sources/Targets）
-          {(sources.length > 0 || targets.length > 0) && (
-            <span className="ml-1 text-green-400 text-[10px]">·来源{sources.length}·目标{targets.length}</span>
-          )}
-        </button>
-      </div>
-
-      {/* ── Export / Import ─────────────────────────────────────────────── */}
-      <div className="border-t border-gray-200 pt-3">
-        <h4 className="font-semibold text-gray-600 text-xs uppercase tracking-wide mb-2">导出 / 导入</h4>
-        <div className="flex gap-1.5 mb-2">
+        <div className="grid grid-cols-1 gap-1.5">
+          {/* Action A: Send message only */}
           <button
-            onClick={handleExportClick}
-            className="flex-1 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-50 text-xs font-medium"
-          >↓ 下载 JSON</button>
+            onClick={handleSendOnly}
+            disabled={submitting || !newMsgContent.trim()}
+            className="w-full bg-gray-50 hover:bg-gray-100 disabled:opacity-40 text-gray-700 rounded py-2 text-xs font-medium transition-colors border border-gray-300 text-left px-3"
+          >
+            <span className="text-gray-400 mr-1.5 font-mono">A</span>
+            仅发送消息
+          </button>
+
+          {/* Action B: Send + use draft as targets */}
           <button
-            onClick={handleExportCopy}
-            className={`flex-1 py-1.5 border rounded text-xs font-medium transition-colors ${
-              exportCopied
-                ? 'bg-green-50 border-green-300 text-green-700'
-                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-            }`}
-          >{exportCopied ? '✓ 已复制' : '复制 JSON'}</button>
+            onClick={handleSendWithDraft}
+            disabled={submitting || !newMsgContent.trim() || draft.length === 0}
+            className="w-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 text-indigo-700 rounded py-2 text-xs font-medium transition-colors border border-indigo-200 text-left px-3"
+          >
+            <span className="text-indigo-300 mr-1.5 font-mono">B</span>
+            发送并建立关系（用候选作目标）
+            {draft.length > 0 && <span className="ml-1 text-indigo-400 text-[10px]">·候选{draft.length}项</span>}
+          </button>
+
+          {/* Action C: Send + use targets collection */}
           <button
-            onClick={() => setShowImport(v => !v)}
-            className="flex-1 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-50 text-xs font-medium"
-          >↑ 导入</button>
+            onClick={handleSendWithTargets}
+            disabled={submitting || !newMsgContent.trim() || targets.length === 0}
+            className="w-full bg-blue-50 hover:bg-blue-100 disabled:opacity-40 text-blue-700 rounded py-2 text-xs font-medium transition-colors border border-blue-200 text-left px-3"
+          >
+            <span className="text-blue-300 mr-1.5 font-mono">C</span>
+            发送并建立关系（Targets集合）
+            {targets.length > 0 && <span className="ml-1 text-blue-400 text-[10px]">·目标{targets.length}项</span>}
+          </button>
+
+          {/* Action D: Relate only with sources/targets */}
+          <button
+            onClick={handleRelateOnly}
+            disabled={submitting || sources.length === 0 || targets.length === 0}
+            className="w-full bg-green-50 hover:bg-green-100 disabled:opacity-40 text-green-700 rounded py-2 text-xs font-medium transition-colors border border-green-200 text-left px-3"
+          >
+            <span className="text-green-300 mr-1.5 font-mono">D</span>
+            仅用已有消息建立关系（Sources/Targets）
+            {(sources.length > 0 || targets.length > 0) && (
+              <span className="ml-1 text-green-400 text-[10px]">·来源{sources.length}·目标{targets.length}</span>
+            )}
+          </button>
         </div>
+      </div>
 
-        {showImport && (
-          <div className="space-y-1.5">
-            <textarea
-              value={importText}
-              onChange={e => setImportText(e.target.value)}
-              placeholder="粘贴 JSON 数据…"
-              rows={4}
-              className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            />
-            <div className="flex gap-2">
+      {/* ── Focus Controls（折叠）─────────────────────────────────────────── */}
+      <div className="border-t border-gray-200 pt-2">
+        <button
+          onClick={() => setShowFocus(v => !v)}
+          className={`w-full flex items-center justify-between text-xs font-semibold uppercase tracking-wide mb-1 ${focusMode ? 'text-amber-700' : 'text-gray-600'}`}
+        >
+          <span>{focusMode ? '◎ 焦点模式（开启）' : '○ 焦点模式'}</span>
+          <span className="font-normal normal-case text-gray-400">{showFocus ? '▲ 收起' : '▼ 展开'}</span>
+        </button>
+
+        {showFocus && (
+          <div className={`rounded-lg border p-3 ${focusMode ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <span className={`text-xs font-medium ${focusMode ? 'text-amber-800' : 'text-gray-600'}`}>
+                {focusMode ? '已开启' : '未开启'}
+              </span>
               <button
-                onClick={handleImportSubmit}
-                className="flex-1 bg-indigo-600 text-white rounded py-1 text-xs hover:bg-indigo-700"
-              >确认导入</button>
-              <button
-                onClick={() => setShowImport(false)}
-                className="flex-1 border border-gray-300 rounded py-1 text-xs text-gray-500 hover:bg-gray-50"
-              >取消</button>
+                onClick={onFocusToggle}
+                className={`text-xs px-2 py-0.5 rounded border font-medium transition-colors ${
+                  focusMode
+                    ? 'bg-amber-200 text-amber-800 border-amber-300 hover:bg-amber-300'
+                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                {focusMode ? '关闭' : '开启'}
+              </button>
             </div>
+
+            {/* Hint: show when not in focus mode and draft has whole-message candidates */}
+            {!focusMode && draft.some(d => d.type === 'message') && (
+              <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
+                💡 候选区有消息，点击"开启"将自动以候选消息为焦点
+              </p>
+            )}
+
+            {focusMode && (
+              <div className="space-y-2">
+                {/* Current focus display */}
+                {focusMessageId && focusMsg ? (
+                  <div className="bg-amber-100 border border-amber-300 rounded px-2 py-1.5">
+                    <p className="text-xs font-medium text-amber-800 mb-0.5">当前焦点</p>
+                    <p className="text-xs text-amber-700 truncate">
+                      [{focusMsg.createdBy.username}] {focusMsg.content.slice(0, 40)}{focusMsg.content.length > 40 ? '…' : ''}
+                    </p>
+                    <p className="text-[10px] text-amber-500 font-mono mt-0.5">{focusMessageId.slice(0, 8)}…</p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-600 italic">未设置焦点消息</p>
+                )}
+
+                {/* Focus message selector */}
+                <select
+                  value={focusMessageId}
+                  onChange={e => onFocusMessageChange(e.target.value)}
+                  className="w-full border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+                >
+                  <option value="">选择焦点消息…</option>
+                  {messages.map(m => (
+                    <option key={m.id} value={m.id}>
+                      [{m.createdBy.username}] {m.content.slice(0, 35)}{m.content.length > 35 ? '…' : ''}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Hop count */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-amber-700 font-medium shrink-0">跳数</span>
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].map(n => (
+                      <button
+                        key={n}
+                        onClick={() => onFocusHopsChange(n)}
+                        className={`w-7 h-7 text-xs rounded border font-medium transition-colors ${
+                          focusHops === n
+                            ? 'bg-amber-500 text-white border-amber-500'
+                            : 'bg-white text-amber-700 border-amber-300 hover:bg-amber-100'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Exit buttons */}
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={onFocusExit}
+                    className="flex-1 text-xs py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-100"
+                  >退出焦点</button>
+                  <button
+                    onClick={onFocusExitAll}
+                    className="flex-1 text-xs py-1 border border-red-300 rounded text-red-600 hover:bg-red-50"
+                  >退出全部</button>
+                </div>
+
+                <p className="text-[10px] text-amber-500">
+                  hop = 文本消息之间经过的关系数；显示 {focusHops} 跳以内的消息与关系。
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* ── Recent messages ─────────────────────────────────────────────── */}
-      <div className="border-t border-gray-200 pt-3">
+      {/* ── Export / Import（折叠）──────────────────────────────────────── */}
+      <div className="border-t border-gray-200 pt-2">
         <button
-          onClick={() => setShowRecent(v => !v)}
+          onClick={() => setShowExportSection(v => !v)}
           className="w-full flex items-center justify-between text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1"
         >
-          <span>最近消息</span>
-          <span className="text-gray-400 font-normal normal-case">{showRecent ? '▲ 收起' : '▼ 展开'}</span>
+          <span>导出 / 导入</span>
+          <span className="text-gray-400 font-normal normal-case">{showExportSection ? '▲ 收起' : '▼ 展开'}</span>
         </button>
 
-        {showRecent && (
-          <div className="space-y-3">
-            {/* Recent text messages */}
-            <div>
-              <p className="text-[10px] font-medium text-gray-500 mb-1">最近普通消息</p>
-              {recentTextMessages.length === 0 ? (
-                <p className="text-xs text-gray-400 text-center py-1">暂无</p>
-              ) : (
-                <div className="space-y-1">
-                  {recentTextMessages.map(msg => (
-                    <div key={msg.id} className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1">
-                      <span className="font-medium text-gray-600">{msg.createdBy.username}</span>
-                      <span className="text-gray-400 mx-1">·</span>
-                      <span className="text-gray-700 truncate">{msg.content.slice(0, 40)}{msg.content.length > 40 ? '…' : ''}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+        {showExportSection && (
+          <div className="space-y-2">
+            <div className="flex gap-1.5">
+              <button
+                onClick={handleExportClick}
+                className="flex-1 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-50 text-xs font-medium"
+              >↓ 下载 JSON</button>
+              <button
+                onClick={handleExportCopy}
+                className={`flex-1 py-1.5 border rounded text-xs font-medium transition-colors ${
+                  exportCopied
+                    ? 'bg-green-50 border-green-300 text-green-700'
+                    : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                }`}
+              >{exportCopied ? '✓ 已复制' : '复制 JSON'}</button>
+              <button
+                onClick={() => setShowImport(v => !v)}
+                className="flex-1 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-50 text-xs font-medium"
+              >↑ 导入</button>
             </div>
 
-            {/* Recent relations */}
-            <div>
-              <p className="text-[10px] font-medium text-gray-500 mb-1">最近关系消息</p>
-              {recentRelations.length === 0 ? (
-                <p className="text-xs text-gray-400 text-center py-1">暂无</p>
-              ) : (
-                <div className="space-y-1">
-                  {recentRelations.map(rel => {
-                    const rSpec = getPresentationSpec(rel.relationType);
-                    const rSrc = messages.find(m => m.id === rel.sourceMessageId);
-                    return (
-                      <div key={rel.id} className="text-xs bg-purple-50 border border-purple-100 rounded px-2 py-1 flex items-center gap-1.5">
-                        <span className="font-medium text-purple-700">{rSpec.label}</span>
-                        <span className="text-gray-400">by</span>
-                        <span className="text-gray-600">{rSrc?.createdBy.username ?? '?'}</span>
-                        <span className="text-gray-300 mx-0.5">→</span>
-                        <span className="text-gray-500 truncate">{rel.targetRefs.length}个目标</span>
+            {showImport && (
+              <div className="space-y-1.5">
+                <textarea
+                  value={importText}
+                  onChange={e => setImportText(e.target.value)}
+                  placeholder="粘贴 JSON 数据…"
+                  rows={4}
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleImportSubmit}
+                    className="flex-1 bg-indigo-600 text-white rounded py-1 text-xs hover:bg-indigo-700"
+                  >确认导入</button>
+                  <button
+                    onClick={() => setShowImport(false)}
+                    className="flex-1 border border-gray-300 rounded py-1 text-xs text-gray-500 hover:bg-gray-50"
+                  >取消</button>
+                </div>
+              </div>
+            )}
+
+            {/* Recent messages */}
+            <div className="border-t border-gray-100 pt-2">
+              <button
+                onClick={() => setShowRecent(v => !v)}
+                className="w-full flex items-center justify-between text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1"
+              >
+                <span>最近消息</span>
+                <span className="text-gray-400 font-normal normal-case">{showRecent ? '▲ 收起' : '▼ 展开'}</span>
+              </button>
+
+              {showRecent && (
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-[10px] font-medium text-gray-500 mb-1">最近普通消息</p>
+                    {recentTextMessages.length === 0 ? (
+                      <p className="text-xs text-gray-400 text-center py-1">暂无</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {recentTextMessages.map(msg => (
+                          <div key={msg.id} className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                            <span className="font-medium text-gray-600">{msg.createdBy.username}</span>
+                            <span className="text-gray-400 mx-1">·</span>
+                            <span className="text-gray-700 truncate">{msg.content.slice(0, 40)}{msg.content.length > 40 ? '…' : ''}</span>
+                          </div>
+                        ))}
                       </div>
-                    );
-                  })}
+                    )}
+                  </div>
+
+                  <div>
+                    <p className="text-[10px] font-medium text-gray-500 mb-1">最近关系消息</p>
+                    {recentRelations.length === 0 ? (
+                      <p className="text-xs text-gray-400 text-center py-1">暂无</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {recentRelations.map(rel => {
+                          const rSpec = getPresentationSpec(rel.relationType);
+                          const rSrc = messages.find(m => m.id === rel.sourceMessageId);
+                          return (
+                            <div key={rel.id} className="text-xs bg-purple-50 border border-purple-100 rounded px-2 py-1 flex items-center gap-1.5">
+                              <span className="font-medium text-purple-700">{rSpec.label}</span>
+                              <span className="text-gray-400">by</span>
+                              <span className="text-gray-600">{rSrc?.createdBy.username ?? '?'}</span>
+                              <span className="text-gray-300 mx-0.5">→</span>
+                              <span className="text-gray-500 truncate">{rel.targetRefs.length}个目标</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

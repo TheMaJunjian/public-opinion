@@ -5,8 +5,6 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import TopicListPage from './pages/TopicListPage';
 import TopicDetailPage from './pages/TopicDetailPage';
-import MessageDetailPage from './pages/MessageDetailPage';
-
 export default function App() {
   return (
     <AuthProvider>
@@ -19,7 +17,6 @@ export default function App() {
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/" element={<TopicListPage />} />
               <Route path="/topics/:topicId" element={<TopicDetailPage />} />
-              <Route path="/topics/:topicId/messages/:messageId" element={<MessageDetailPage />} />
             </Routes>
           </main>
         </div>

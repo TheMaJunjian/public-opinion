@@ -58,9 +58,11 @@ function nextId(prefix: string): string {
 // ========================= StructureView / IncomingOutgoingList =========================
 
 function fmtSel(u: UnitSelection) {
-  if (u.selection.kind === "whole") return `${u.messageId}`;
-  if (u.selection.kind === "edge") return `${u.messageId}(@edge:${u.selection.edgeId})`;
-  return `${u.messageId}(start=${u.selection.start},len=${u.selection.len})`;
+  if (u.selection.kind === "whole") return `${u.messageId}（整条消息）`;
+  if (u.selection.kind === "edge") return `${u.messageId}（关系边 ${u.selection.edgeId}）`;
+  const sel = u.selection;
+  const preview = sel.text.slice(0, 12) + (sel.text.length > 12 ? '…' : '');
+  return `${u.messageId}（文本片段 第${sel.start}位起 共${sel.len}字「${preview}」）`;
 }
 
 function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; kind: "in" | "out"; messages: DemoMessage[] }) {
@@ -234,6 +236,9 @@ export default function TopicDetailPage() {
   const mouseDownRef = useRef<{ x: number; y: number; messageId: string | null } | null>(null);
   const lastDragOrSelectTimeRef = useRef<number>(0);
   const lastClickActionsRef = useRef<{ type: "toggleWhole"; messageId: string; prevExisted: boolean; time: number }[]>([]);
+  const [leftFlex, setLeftFlex] = useState(2);
+  const panelContainerRef = useRef<HTMLDivElement | null>(null);
+  const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
 
   function captureSnapshot(): FocusSnapshot {
     return {
@@ -319,8 +324,8 @@ export default function TopicDetailPage() {
     });
   }
 
-  async function handleSendMessageOnly(): Promise<DemoMessage | null> {
-    const text = newMessageContent;
+  async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
+    const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
     if (!topicId) return null;
     try {
@@ -333,7 +338,7 @@ export default function TopicDetailPage() {
         kind: "normal",
       };
       setMessages(prev => [...prev, msg]);
-      setNewMessageContent("");
+      if (!overrideContent) setNewMessageContent("");
       return msg;
     } catch (e: any) {
       alert(`发送消息失败: ${e?.message ?? e}`);
@@ -611,15 +616,22 @@ export default function TopicDetailPage() {
   }
 
   async function handleQuickSendAndRelateFromDraftTargets() {
-    if (newMessageContent.trim().length === 0 || draftUnits.length === 0) return;
+    if (draftUnits.length === 0) return;
+    const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
+    // For agree/disagree, allow empty text by auto-filling a minimal label
+    const textToSend = newMessageContent.trim().length > 0
+      ? newMessageContent
+      : (isAgreeDisagree ? `[${relationTypeName(relationType)}]` : '');
+    if (textToSend.length === 0) return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
-    const msg = await handleSendMessageOnly();
+    const msg = await handleSendMessageOnly(textToSend);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
     const targets: UnitSelection[] = [...draftUnits];
     await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+    setNewMessageContent("");
   }
 
   type DraftGroup = { messageId: string; wholeSelected: boolean; fragments: UnitSelection[] };
@@ -648,7 +660,9 @@ export default function TopicDetailPage() {
   const recentRelations = useMemo(() => messages.filter(m => m.kind === "relation").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5), [messages]);
   const recentNormals = useMemo(() => messages.filter(m => m.kind === "normal").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
 
-  const quickButtonEnabled = newMessageContent.trim().length > 0 && draftUnits.length > 0;
+  const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
+  // For agree/disagree: candidate area non-empty is sufficient (text auto-filled); for others: text required
+  const quickButtonEnabled = draftUnits.length > 0 && (newMessageContent.trim().length > 0 || isAgreeDisagreeType);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
@@ -751,6 +765,27 @@ export default function TopicDetailPage() {
     } catch (e: any) { alert(`操作失败: ${e?.message ?? e}`); }
   }
 
+  function handleSplitterMouseDown(e: React.MouseEvent) {
+    e.preventDefault();
+    splitterDragRef.current = { startX: e.clientX, startFlex: leftFlex };
+    function onMouseMove(ev: MouseEvent) {
+      if (!splitterDragRef.current || !panelContainerRef.current) return;
+      const dx = ev.clientX - splitterDragRef.current.startX;
+      const containerW = panelContainerRef.current.clientWidth;
+      const totalFlex = 4;
+      const flexChange = containerW > 0 ? (dx / containerW) * totalFlex : 0;
+      const newLeft = Math.max(0.6, Math.min(3.4, splitterDragRef.current.startFlex + flexChange));
+      setLeftFlex(newLeft);
+    }
+    function onMouseUp() {
+      splitterDragRef.current = null;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }
+
   async function handleDeleteTopic() {
     if (!topicId || !confirm('确定要删除这个话题吗？')) return;
     try {
@@ -799,8 +834,8 @@ export default function TopicDetailPage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <div style={{ flex: 2, borderRight: "1px solid #333", display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
@@ -821,7 +856,7 @@ export default function TopicDetailPage() {
                   const isActiveText = activeTextSelectId === msg.id;
                   return (
                     <div key={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
-                      style={{ borderRadius: 6, border: msg.kind === "relation" ? "1px solid #886400" : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444", background: msg.kind === "relation" ? "#232018" : "#1f1f1f", padding: 8, cursor: "pointer", fontSize: 13, outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none", userSelect: isActiveText ? "text" : "auto" }}>
+                      style={{ borderRadius: 6, border: msg.kind === "relation" ? "1px solid #886400" : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444", background: msg.kind === "relation" ? "#232018" : "#1f1f1f", padding: "10px 14px", cursor: "pointer", fontSize: 13, outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none", userSelect: isActiveText ? "text" : "auto" }}>
                       <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
                         <span>{msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
                         <span>作者：{msg.author}</span>
@@ -851,7 +886,15 @@ export default function TopicDetailPage() {
           </div>
         </div>
 
-        <div ref={rightPanelRef} style={{ flex: 2, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
+        {/* Draggable splitter */}
+        <div
+          onMouseDown={handleSplitterMouseDown}
+          style={{ width: 6, flexShrink: 0, background: "#2a2a2a", cursor: "col-resize", borderLeft: "1px solid #383838", borderRight: "1px solid #383838", transition: "background 0.15s" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#3a3a3a"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
+        />
+
+        <div ref={rightPanelRef} style={{ flex: 4 - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
               <div style={{ fontWeight: 600 }}>候选区（Draft）</div>
@@ -963,12 +1006,17 @@ export default function TopicDetailPage() {
               <textarea style={{ width: "100%", minHeight: 90, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 13, resize: "vertical" }} placeholder="输入一条新普通消息（支持自由换行）" value={newMessageContent} onChange={e => setNewMessageContent(e.target.value)} />
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => handleSendMessageOnly()} disabled={newMessageContent.trim().length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: newMessageContent.trim().length === 0 ? "#333" : "#444", color: newMessageContent.trim().length === 0 ? "#777" : "#fff", cursor: newMessageContent.trim().length === 0 ? "default" : "pointer", fontSize: 12 }}>仅发送消息</button>
-                <button onClick={handleQuickSendAndRelateFromDraftTargets} disabled={!quickButtonEnabled} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: !quickButtonEnabled ? "#333" : "#0b84ff", color: !quickButtonEnabled ? "#777" : "#fff", cursor: !quickButtonEnabled ? "default" : "pointer", fontSize: 12 }} title="文本框作为来源（整条），候选区作为目标">发送消息并建立关系（用候选作目标）</button>
+                <button onClick={handleQuickSendAndRelateFromDraftTargets} disabled={!quickButtonEnabled} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: !quickButtonEnabled ? "#333" : "#0b84ff", color: !quickButtonEnabled ? "#777" : "#fff", cursor: !quickButtonEnabled ? "default" : "pointer", fontSize: 12 }} title={isAgreeDisagreeType ? "候选区作为目标（赞同/反对时文本框可为空，将自动填入标签）" : "文本框作为来源（整条），候选区作为目标"}>发送消息并建立关系（用候选作目标）</button>
                 <button onClick={() => handleCreateRelation(true)} disabled={newMessageContent.trim().length === 0 || targetUnits.length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "#333" : "#444", color: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "#777" : "#fff", cursor: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>发送新消息并建立关系（Targets集合）</button>
                 <button onClick={() => handleCreateRelation(false)} disabled={sourceUnits.length === 0 || targetUnits.length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: sourceUnits.length === 0 || targetUnits.length === 0 ? "#333" : "#444", color: sourceUnits.length === 0 || targetUnits.length === 0 ? "#777" : "#fff", cursor: sourceUnits.length === 0 || targetUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>仅用已有消息建立关系（Sources/Targets集合）</button>
               </div>
             </div>
           )}
+
+          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
+            <div style={{ fontWeight: 600 }}>焦点</div>
+            <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
+          </div>
 
           <StructureView focusIds={currentFocusIds ?? []} messages={messages} edges={edges} />
 
@@ -985,11 +1033,6 @@ export default function TopicDetailPage() {
                 {recentRelations.map(m => <li key={m.id}>{m.id}：{m.content.slice(0, 60)}{m.content.length > 60 ? "…" : ""}</li>)}
               </ul>
             </div>
-          </div>
-
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-            <div style={{ fontWeight: 600 }}>焦点</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
           </div>
         </div>
       </div>

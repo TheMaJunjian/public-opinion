@@ -31,7 +31,7 @@ const MIN_CARD_H = 86;
 const GRID_LEFT = 18;
 const GRID_TOP = 18;
 const COL_GAP = 28;
-const ROW_GAP = 12;
+const ROW_GAP = 32;
 const CANVAS_BOTTOM_PAD = 120;
 
 function colX(col: number) {
@@ -405,7 +405,10 @@ export default function GraphView(props: GraphViewProps) {
     });
     for (const m of normals) { const el=cardRefs.current[m.id]; if (el) ro.observe(el); }
     return () => ro.disconnect();
-  }, [normals]);
+  // layout is added so that when cards first appear in the DOM (after layout is computed),
+  // we re-run and observe them — this fixes the initial-load overlap bug.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normals, layout]);
 
   useEffect(() => {
     const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol });
@@ -491,13 +494,17 @@ export default function GraphView(props: GraphViewProps) {
     const decorationRects: Record<string,{kind:"agree"|"disagree";rect:Rect;key:string;messageId:string}> = {};
     for (const [mid,data] of Object.entries(decorationsByMsg)) {
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
-      const decW=64,decH=28,gap=6; let offsetY=box.y+box.height+gap;
-      if (data.agreeCount>0) {
-        decorationRects[`${mid}::agree`]={kind:"agree",key:data.agreeKey,messageId:mid,rect:{x:box.x+(box.width-decW)/2,y:offsetY,width:decW,height:decH}};
-        offsetY+=decH+4;
+      const decW=52, decH=22, gap=4, decGap=4;
+      const hasAgree=data.agreeCount>0, hasDisagree=data.disagreeCount>0;
+      const totalW=hasAgree&&hasDisagree ? decW*2+decGap : decW;
+      const startX=box.x+(box.width-totalW)/2;
+      const offsetY=box.y+box.height+gap;
+      if (hasAgree) {
+        decorationRects[`${mid}::agree`]={kind:"agree",key:data.agreeKey,messageId:mid,rect:{x:startX,y:offsetY,width:decW,height:decH}};
       }
-      if (data.disagreeCount>0) {
-        decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect:{x:box.x+(box.width-decW)/2,y:offsetY,width:decW,height:decH}};
+      if (hasDisagree) {
+        const x=hasAgree ? startX+decW+decGap : startX;
+        decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect:{x,y:offsetY,width:decW,height:decH}};
       }
     }
     for (const v of Object.values(decorationRects)) globalForbiddenRects.push(v.rect);
@@ -709,7 +716,7 @@ export default function GraphView(props: GraphViewProps) {
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"8px 10px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:6,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
                 <span>{msg.author}</span><span style={{opacity:0.7}}>{msg.id}</span>
               </div>
@@ -762,8 +769,9 @@ export default function GraphView(props: GraphViewProps) {
         return (
           <div key={`dec-${v.key}`} onClick={ev=>{ev.stopPropagation();onDecorationClick?.(v.messageId,v.kind);}}
             title={`${relationTypeName(v.kind)}：点击查看记录`}
-            style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:5,background:v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)",color:"#fff",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,pointerEvents:"auto",cursor:"pointer",boxShadow:"0 4px 10px rgba(0,0,0,0.6)",border:"1px solid rgba(255,255,255,0.06)"}}>
+            style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:5,background:v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)",color:"#fff",borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",gap:3,fontSize:11,pointerEvents:"auto",cursor:"pointer",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)"}}>
             <span style={{fontWeight:700}}>{cnt}</span>
+            <span style={{fontSize:10,opacity:0.9}}>{v.kind==="agree"?"赞":"反"}</span>
           </div>
         );
       })}

@@ -6,7 +6,7 @@
  *   - Double click  → toggle text-selection mode for this card
  *   - In text-selection mode, drag-select text → calls onSelectFragment
  *   - Click highlighted fragment badge → calls onSelectFragment (toggle)
- *   - Click edge-label relation row below card → calls onClickRelation (toggle)
+ *   - Click edge-label/edge-decoration relation row below card → calls onClickRelation (toggle)
  *   - Click blank area (not on a card) → calls onBlankClick (to clear candidates)
  *
  * Visual states:
@@ -120,11 +120,11 @@ export default function InteractiveMessageList({
     }
   }, [textSelectionModeId, onSelectFragment]);
 
-  // Handle blank area click: fire onBlankClick if click target is the container itself
-  const handleContainerClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget && onBlankClick) {
-      onBlankClick();
-    }
+  // Handle blank area click: fire onBlankClick for any click that reaches the container.
+  // Message cards and relation rows call e.stopPropagation() to prevent this from
+  // firing when the user clicks on an actual card or relation row.
+  const handleContainerClick = useCallback(() => {
+    if (onBlankClick) onBlankClick();
   }, [onBlankClick]);
 
   // Build decoration map: messageId → list of relation decorations (for badges on target)
@@ -140,15 +140,16 @@ export default function InteractiveMessageList({
     }
   }
 
-  // Build outgoing edge-label map: sourceMessageId → list of edge-label relations
-  // These are shown as interactive "relation rows" below the source message card
-  const outgoingEdgeLabelMap = new Map<string, { rel: Relation; spec: ReturnType<typeof getPresentationSpec> }[]>();
+  // Build outgoing relation rows map: sourceMessageId → list of directed relations
+  // Includes edge-label AND edge-decoration types (both have a directed connector).
+  // These are shown as interactive "relation rows" below the source message card.
+  const outgoingRelationRowsMap = new Map<string, { rel: Relation; spec: ReturnType<typeof getPresentationSpec> }[]>();
   for (const rel of relations) {
     const spec = getPresentationSpec(rel.relationType);
-    if (spec.kind !== 'edge-label') continue;
-    const list = outgoingEdgeLabelMap.get(rel.sourceMessageId) ?? [];
+    if (spec.kind !== 'edge-label' && spec.kind !== 'edge-decoration') continue;
+    const list = outgoingRelationRowsMap.get(rel.sourceMessageId) ?? [];
     list.push({ rel, spec });
-    outgoingEdgeLabelMap.set(rel.sourceMessageId, list);
+    outgoingRelationRowsMap.set(rel.sourceMessageId, list);
   }
 
   if (messages.length === 0) {
@@ -170,13 +171,13 @@ export default function InteractiveMessageList({
         const isTextMode = textSelectionModeId === msg.id;
         const stats = stanceStatsMap.get(msg.id);
         const decos = decorationMap.get(msg.id) ?? [];
-        const outgoingEdgeLabels = outgoingEdgeLabelMap.get(msg.id) ?? [];
+        const outgoingRelationRows = outgoingRelationRowsMap.get(msg.id) ?? [];
 
         return (
           <div key={msg.id} className="space-y-0.5">
             {/* ── Message card ──────────────────────────────────────────── */}
             <div
-              onClick={isTextMode ? undefined : (e) => { e.stopPropagation(); onClickMessage(msg.id); }}
+              onClick={(e) => { e.stopPropagation(); if (!isTextMode) onClickMessage(msg.id); }}
               onDoubleClick={e => handleDoubleClick(msg.id, e)}
               onMouseUp={() => handleMouseUp(msg.id)}
               title={
@@ -270,7 +271,7 @@ export default function InteractiveMessageList({
             {/* Show edge-label type relations (REPLY, ANNOTATION, REFERENCE, SUPPLEMENT)
                 originating from this message as clickable rows below the card.
                 Clicking a row adds/removes the relation from the draft (candidates). */}
-            {outgoingEdgeLabels.map(({ rel, spec }) => {
+            {outgoingRelationRows.map(({ rel, spec }) => {
               const isRelSelected = selectedRelationIds.has(rel.id);
               const bgColor = isRelSelected
                 ? (COLOR_STROKE[spec.color] ?? '#9ca3af')

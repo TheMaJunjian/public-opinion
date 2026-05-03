@@ -23,7 +23,7 @@
 
 import { useState } from 'react';
 import type { Message, Relation, TargetRef, DraftItem } from '../types';
-import { getPresentationSpec } from '../types';
+import { getPresentationSpec, PRESENTATION_SPECS } from '../types';
 
 export type { DraftItem };
 
@@ -184,7 +184,7 @@ export default function DraftPanel({
   onImport,
   onExport,
   relationType,
-  onRelationTypeChange: _onRelationTypeChange, // managed by parent toolbar; accepted for API consistency
+  onRelationTypeChange,
   focusMode,
   focusMessageId,
   focusHops,
@@ -579,7 +579,7 @@ export default function DraftPanel({
         </p>
       )}
 
-      {/* ── Message input + Action buttons (at bottom of content area) ─────── */}
+      {/* ── Message input + Relation type + Action buttons ─────────── */}
       <div className="border-t border-gray-200 pt-3 space-y-2">
         <label className="block text-xs font-medium text-gray-600 mb-1">
           消息内容 <span className="text-gray-400 font-normal">(操作 A/B/C 需要)</span>
@@ -591,6 +591,34 @@ export default function DraftPanel({
           rows={3}
           className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
+
+        {/* Relation type selector (inline, for creating relations — operations B/C/D) */}
+        <div className="flex items-start gap-2" role="group" aria-label="关系类型选择">
+          <span id="relation-type-label" className="text-xs font-medium text-gray-500 shrink-0 pt-1">关系类型</span>
+          <div className="flex flex-wrap gap-1" aria-labelledby="relation-type-label">
+            {Object.entries(PRESENTATION_SPECS)
+              .filter(([, s]) =>
+                s.kind === 'edge-label' ||
+                s.kind === 'edge-decoration' ||
+                s.kind === 'decoration',
+              )
+              .map(([key, s]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onRelationTypeChange(key)}
+                  title={`${s.label} · ${s.kind}`}
+                  className={`text-xs px-2 py-0.5 rounded border font-medium transition-all ${
+                    relationType === key
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'border-gray-200 text-gray-600 hover:border-indigo-300 hover:text-indigo-600'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 gap-1.5">
           {/* Action A: Send message only */}

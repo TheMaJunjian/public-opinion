@@ -14,29 +14,31 @@
 /**
  * All currently supported relation types.
  *
- * Types by presentation category:
- *   Edge-label (directed connector): ANNOTATION, REFERENCE, REPLY, SUPPLEMENT
- *   Decoration (badge on target):    AGREE, DISAGREE
- *   Edge + Decoration:               SUPPORT, REBUT
- *   Replace/Overlay:                 CORRECT, SUMMARY
- *   Frame/Group:                     CLASSIFY, MERGE
- *   Inline badge:                    RECOMMEND, ARCHIVE
+ * This is the backend's canonical list for API validation.
+ * Presentation metadata (display label, color, edge kind, stance effect, formsTrees)
+ * lives exclusively in the frontend's PRESENTATION_SPECS registry:
+ *   frontend/src/types/index.ts → PRESENTATION_SPECS
+ *
+ * When adding a new relation type:
+ *   1. Append the type string to this array (backend validation).
+ *   2. Add a matching entry in PRESENTATION_SPECS (frontend rendering).
+ *   No DB migration required — the relationType column is plain TEXT.
  */
 export const RELATION_TYPES = [
-  'ANNOTATION',   // 注释 — edge-label, blue
-  'REFERENCE',    // 引用 — edge-label, indigo
-  'REPLY',        // 回复 — edge-label, blue, formsTrees
-  'AGREE',        // 赞同 — decoration, green, stanceEffect=support
-  'DISAGREE',     // 反对 — decoration, red, stanceEffect=oppose
-  'SUPPORT',      // 支持 — edge-decoration, green, formsTrees, stanceEffect=support
-  'REBUT',        // 反驳 — edge-decoration, red, formsTrees, stanceEffect=oppose
-  'CORRECT',      // 更正 — replace-overlay, yellow, formsTrees
-  'SUPPLEMENT',   // 补充 — edge-label, purple, formsTrees
-  'CLASSIFY',     // 分类 — frame-group, gray
-  'MERGE',        // 归并 — frame-group, gray
-  'SUMMARY',      // 总结 — replace-overlay, amber
-  'RECOMMEND',    // 推荐 — inline-badge, orange
-  'ARCHIVE',      // 冷藏 — inline-badge, slate
+  'ANNOTATION',   // 注释
+  'REFERENCE',    // 引用
+  'REPLY',        // 回复
+  'AGREE',        // 赞同
+  'DISAGREE',     // 反对
+  'SUPPORT',      // 支持（含立场表达）
+  'REBUT',        // 反驳
+  'CORRECT',      // 更正
+  'SUPPLEMENT',   // 补充
+  'CLASSIFY',     // 分类
+  'MERGE',        // 归并
+  'SUMMARY',      // 总结
+  'RECOMMEND',    // 推荐
+  'ARCHIVE',      // 冷藏
 ] as const;
 
 /** The union type of all known relation types (for TypeScript type safety) */

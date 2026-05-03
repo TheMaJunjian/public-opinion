@@ -74,6 +74,19 @@ const COLOR_BG: Record<string, string> = {
  */
 const MAX_LAYOUT_ITERATIONS = 200;
 
+/**
+ * Number of distinct vertical offsets to cycle through for edge labels.
+ * Labels at the same bezier midpoint are staggered in LABEL_OFFSET_INCREMENT steps.
+ */
+const LABEL_OFFSET_POSITIONS = 5;
+
+/**
+ * Vertical pixel increment per label offset position.
+ * Together with LABEL_OFFSET_POSITIONS, this ensures labels stagger over a
+ * LABEL_OFFSET_POSITIONS * LABEL_OFFSET_INCREMENT px range before repeating.
+ */
+const LABEL_OFFSET_INCREMENT = 14;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CardPos {
@@ -464,7 +477,7 @@ export default function GraphView({
           const bgColor = COLOR_BG[edge.color] ?? '#f3f4f6';
           const textColor = COLOR_STROKE[edge.color] ?? '#6b7280';
           // Apply a small vertical offset per edge index to reduce label overlap
-          const labelYOffset = (edge.edgeIndex % 5) * 14;
+          const labelYOffset = (edge.edgeIndex % LABEL_OFFSET_POSITIONS) * LABEL_OFFSET_INCREMENT;
           return (
             <button
               key={`label-${edge.id}`}

@@ -88,6 +88,9 @@ function RelationItem({
       {(spec.kind === 'edge-label' || spec.kind === 'edge-decoration') && (
         <span className="text-gray-400">→</span>
       )}
+      {spec.kind === 'frame-group' && (
+        <span className="text-gray-400" aria-label="frame-group relation">⊂</span>
+      )}
       {targetLabels}
     </div>
   );
@@ -442,7 +445,7 @@ export default function TopicDetailPage() {
       </div>
 
       {/* Toolbar */}
-      <div className="mb-4 space-y-3">
+      <div className="mb-4">
         {/* Row 1: Stats + view mode + focus indicator */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-gray-500">
@@ -472,46 +475,6 @@ export default function TopicDetailPage() {
               </button>
             ))}
           </div>
-        </div>
-
-        {/* Row 2: Relation type buttons */}
-        <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-200 rounded-lg px-3 py-2">
-          <span className="text-xs font-medium text-gray-500 shrink-0">关系类型</span>
-          <div className="flex flex-wrap gap-1">
-            {Object.entries(PRESENTATION_SPECS)
-              .filter(([, s]) =>
-                s.kind === 'edge-label' ||
-                s.kind === 'edge-decoration' ||
-                s.kind === 'decoration',
-              )
-              .map(([key, s]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setRelationType(key)}
-                  title={`${s.label} · ${s.kind}`}
-                  className={`text-xs px-2 py-0.5 rounded border font-medium transition-all ${
-                    relationType === key
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'border-gray-200 text-gray-600 hover:border-indigo-300 hover:text-indigo-600'
-                  }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-          </div>
-          {(() => {
-            const spec = getPresentationSpec(relationType);
-            return (
-              <span className="text-xs text-gray-400 ml-1">
-                {spec.kind === 'edge-label' ? '连接+标签' :
-                  spec.kind === 'edge-decoration' ? '连接+装饰' :
-                  spec.kind === 'decoration' ? '装饰' : spec.kind}
-                {spec.stanceEffect ? ` · ${spec.stanceEffect === 'support' ? '✓支持' : '✗反对'}` : ''}
-              </span>
-            );
-          })()}
-          <span className="text-xs text-gray-300 ml-auto hidden sm:block">焦点/候选/建关系等控制在右侧面板</span>
         </div>
       </div>
 

@@ -179,10 +179,10 @@ export default function DraftPanel({
   targets,
   onDraftRemove,
   onDraftRemoveBatch,
-  onDraftToSources,
+  onDraftToSources: _onDraftToSources,        // kept in API; batch buttons are primary flow
   onDraftToSourcesBatch,
-  onDraftToTargets,
-  onDraftToTargetsBatch,
+  onDraftToTargets: _onDraftToTargets,        // kept in API; batch buttons are primary flow
+  onDraftToTargetsBatch: _onDraftToTargetsBatch, // kept in API; onDraftToTargetsAll is used instead
   onDraftToTargetsAll,
   onSourcesRemove,
   onTargetsRemove,
@@ -471,7 +471,7 @@ export default function DraftPanel({
                   key={`group-${group.messageId}`}
                   className="bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs"
                 >
-                  {/* Group header */}
+                  {/* Group header — delete button only; batch flow via bottom buttons */}
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="shrink-0 px-1 py-0.5 bg-blue-100 text-blue-700 rounded font-medium">消</span>
@@ -480,32 +480,20 @@ export default function DraftPanel({
                         {msg ? `[${msg.createdBy.username}]` : '未知'}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {/* Add all to sources (if has whole) */}
-                      {group.hasWhole && group.wholeIndex !== null && (
-                        <button
-                          onClick={() => onDraftToSources(group.wholeIndex!)}
-                          className="px-1 py-0.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded font-medium border border-blue-200"
-                          title="整条消息加入来源集合"
-                        >→来源</button>
-                      )}
-                      {/* Add all to targets in a single batch operation */}
-                      <button
-                        onClick={() => {
-                          const indices: number[] = [];
-                          if (group.hasWhole && group.wholeIndex !== null) {
-                            indices.push(group.wholeIndex);
-                          }
-                          group.fragments.forEach(f => indices.push(f.index));
-                          onDraftToTargetsBatch(indices);
-                        }}
-                        className="px-1 py-0.5 bg-green-50 text-green-600 hover:bg-green-100 rounded font-medium border border-green-200"
-                        title="加入目标集合"
-                      >→目标</button>
-                    </div>
+                    {/* Delete button only — use the bottom batch buttons to move to collections */}
+                    <button
+                      onClick={() => {
+                        const indices: number[] = [];
+                        if (group.hasWhole && group.wholeIndex !== null) indices.push(group.wholeIndex);
+                        group.fragments.forEach(f => indices.push(f.index));
+                        onDraftRemoveBatch(indices);
+                      }}
+                      className="text-[10px] text-gray-400 hover:text-red-500 px-0.5 shrink-0"
+                      title="移除整组"
+                    >×</button>
                   </div>
 
-                  {/* Whole-message row */}
+                  {/* Whole-message indicator */}
                   <div className="flex items-center gap-1 mb-1">
                     <span className={`text-[10px] px-1 rounded ${group.hasWhole ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-400'}`}>
                       整条：{group.hasWhole ? '是' : '否'}
@@ -577,18 +565,12 @@ export default function DraftPanel({
                         <span className="text-gray-500 truncate">by {srcMsg.createdBy.username}</span>
                       )}
                     </div>
-                    <div className="flex gap-1 shrink-0">
-                      <button
-                        onClick={() => onDraftToTargets(relItem.index)}
-                        className="px-1 py-0.5 bg-green-50 text-green-600 hover:bg-green-100 rounded font-medium border border-green-200"
-                        title="加入目标集合"
-                      >→目标</button>
-                      <button
-                        onClick={() => onDraftRemove(relItem.index)}
-                        className="text-gray-400 hover:text-red-500 px-0.5"
-                        title="移除"
-                      >×</button>
-                    </div>
+                    {/* Delete only — use bottom batch button to move to targets */}
+                    <button
+                      onClick={() => onDraftRemove(relItem.index)}
+                      className="text-gray-400 hover:text-red-500 px-0.5 shrink-0"
+                      title="移除"
+                    >×</button>
                   </div>
                 </div>
               );
@@ -596,9 +578,9 @@ export default function DraftPanel({
           </div>
         )}
 
-        {/* Add buttons below draft */}
+        {/* Batch action buttons below draft — PRIMARY interaction for moving to collections */}
         {draft.length > 0 && (
-          <div className="flex gap-2 mt-2">
+          <div className="flex gap-2 mt-2 border-t border-gray-100 pt-2">
             <button
               onClick={() => {
                 // Add all whole-message items to sources in a single batch operation
@@ -607,15 +589,15 @@ export default function DraftPanel({
                   .map(g => g.wholeIndex as number);
                 onDraftToSourcesBatch(indices);
               }}
-              className="flex-1 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded text-xs font-medium hover:bg-blue-100"
-              title="将候选区中的整条消息加入来源集合"
+              className="flex-1 py-2 bg-blue-600 text-white border border-blue-600 rounded text-xs font-semibold hover:bg-blue-700 transition-colors"
+              title="将候选区中的整条文本消息批量加入来源集合"
             >
               加入来源集合
             </button>
             <button
               onClick={onDraftToTargetsAll}
-              className="flex-1 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded text-xs font-medium hover:bg-green-100"
-              title="将候选区全部加入目标集合"
+              className="flex-1 py-2 bg-green-600 text-white border border-green-600 rounded text-xs font-semibold hover:bg-green-700 transition-colors"
+              title="将候选区全部内容批量加入目标集合"
             >
               加入目标集合
             </button>

@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { RELATION_TYPES } from '../lib/relationTypes';
 
 const relationsRouter = Router({ mergeParams: true });
 
@@ -9,27 +10,8 @@ const relationsRouter = Router({ mergeParams: true });
 // Validation Schemas
 // ============================================================
 
-/**
- * All currently supported relation types.
- * Using a string enum here for runtime validation; the DB column is plain TEXT
- * so new types can be added here without a migration.
- */
-const RELATION_TYPES = [
-  'ANNOTATION',   // 注释
-  'REFERENCE',    // 引用
-  'REPLY',        // 回复
-  'AGREE',        // 赞同
-  'DISAGREE',     // 反对
-  'SUPPORT',      // 支持（含立场表达）
-  'REBUT',        // 反驳
-  'CORRECT',      // 更正
-  'SUPPLEMENT',   // 补充
-  'CLASSIFY',     // 分类
-  'MERGE',        // 归并
-  'SUMMARY',      // 总结
-  'RECOMMEND',    // 推荐
-  'ARCHIVE',      // 冷藏
-] as const;
+// RELATION_TYPES is imported from lib/relationTypes.ts.
+// To add a new relation type, update that file — no changes needed here.
 
 /**
  * TargetRef - a discriminated union for what a relation points to.

@@ -236,7 +236,10 @@ export default function TopicDetailPage() {
   const mouseDownRef = useRef<{ x: number; y: number; messageId: string | null } | null>(null);
   const lastDragOrSelectTimeRef = useRef<number>(0);
   const lastClickActionsRef = useRef<{ type: "toggleWhole"; messageId: string; prevExisted: boolean; time: number }[]>([]);
-  const [leftFlex, setLeftFlex] = useState(2);
+  const TOTAL_FLEX = 4;
+  const MIN_LEFT_FLEX = 0.6;
+  const MAX_LEFT_FLEX = TOTAL_FLEX - MIN_LEFT_FLEX;
+  const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
 
@@ -772,9 +775,8 @@ export default function TopicDetailPage() {
       if (!splitterDragRef.current || !panelContainerRef.current) return;
       const dx = ev.clientX - splitterDragRef.current.startX;
       const containerW = panelContainerRef.current.clientWidth;
-      const totalFlex = 4;
-      const flexChange = containerW > 0 ? (dx / containerW) * totalFlex : 0;
-      const newLeft = Math.max(0.6, Math.min(3.4, splitterDragRef.current.startFlex + flexChange));
+      const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
+      const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
       setLeftFlex(newLeft);
     }
     function onMouseUp() {
@@ -894,7 +896,7 @@ export default function TopicDetailPage() {
           onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
         />
 
-        <div ref={rightPanelRef} style={{ flex: 4 - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
+        <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
               <div style={{ fontWeight: 600 }}>候选区（Draft）</div>

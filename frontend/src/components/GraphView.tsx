@@ -33,6 +33,10 @@ const GRID_TOP = 18;
 const COL_GAP = 28;
 const ROW_GAP = 32;
 const CANVAS_BOTTOM_PAD = 120;
+const DEC_W = 52;
+const DEC_H = 22;
+const DEC_GAP = 4;
+const DEC_OFFSET_Y = 4;
 
 function colX(col: number) {
   return GRID_LEFT + col * (CARD_W + COL_GAP);
@@ -494,17 +498,16 @@ export default function GraphView(props: GraphViewProps) {
     const decorationRects: Record<string,{kind:"agree"|"disagree";rect:Rect;key:string;messageId:string}> = {};
     for (const [mid,data] of Object.entries(decorationsByMsg)) {
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
-      const decW=52, decH=22, gap=4, decGap=4;
       const hasAgree=data.agreeCount>0, hasDisagree=data.disagreeCount>0;
-      const totalW=hasAgree&&hasDisagree ? decW*2+decGap : decW;
+      const totalW=hasAgree&&hasDisagree ? DEC_W*2+DEC_GAP : DEC_W;
       const startX=box.x+(box.width-totalW)/2;
-      const offsetY=box.y+box.height+gap;
+      const offsetY=box.y+box.height+DEC_OFFSET_Y;
       if (hasAgree) {
-        decorationRects[`${mid}::agree`]={kind:"agree",key:data.agreeKey,messageId:mid,rect:{x:startX,y:offsetY,width:decW,height:decH}};
+        decorationRects[`${mid}::agree`]={kind:"agree",key:data.agreeKey,messageId:mid,rect:{x:startX,y:offsetY,width:DEC_W,height:DEC_H}};
       }
       if (hasDisagree) {
-        const x=hasAgree ? startX+decW+decGap : startX;
-        decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect:{x,y:offsetY,width:decW,height:decH}};
+        const x=hasAgree ? startX+DEC_W+DEC_GAP : startX;
+        decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect:{x,y:offsetY,width:DEC_W,height:DEC_H}};
       }
     }
     for (const v of Object.values(decorationRects)) globalForbiddenRects.push(v.rect);

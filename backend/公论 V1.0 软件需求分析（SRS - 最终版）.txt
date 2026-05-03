@@ -1,0 +1,414 @@
+下面给出 **《公论 V1.0 软件需求分析（SRS - 最终版）》**。它包含你最终确认的“可重复结算 + 可回滚重分配 + 押注锁定 + 负债冻结”的完整规格，并把“恶意刷屏分类→清爽消息树”作为**无治理前提下的可用性机制**写成可实现的功能（注意：这不是删帖/封禁治理，而是“视图过滤与折叠规则”）。
+
+> 你要求：根据 SRS 能生成可商用质量代码（架构、接口、数据模型、验收、部署齐全）。本版已满足：  
+> - 明确的功能范围、页面、流程  
+> - 可建库的数据模型（含状态机）  
+> - API 契约（可转 OpenAPI）  
+> - 结算与账本可实现算法  
+> - 验收标准与里程碑  
+> - 自托管、无治理的风险声明与替代机制（标签过滤）
+
+---
+
+# 公论 V1.0 软件需求分析（SRS - 最终版）
+
+## 0. 决策冻结摘要（便于开发人员快速读）
+
+- 形态：Web 自托管、单实例广场、论坛/知乎式主视图
+- 访问：必须登录才能浏览（无匿名只读）
+- 内容：不可删除；原消息不可编辑；所有“修改/更正”通过新消息 + CORRECT 关系完成
+- 关系类型（V1.0）：QUOTE、REPLY、SUPPORT、OPPOSE、CORRECT、LINK、UNLINK
+- 局部引用：存 selected_text + hash（原文不变）
+- 价值排序：权重由押注（资金）决定，默认折叠低权重分支
+- 结论：任何人可创建结论卡
+- 导出：增量导出 Markdown + JSON
+- 阅读记录：默认开启，记录消息级曝光时长（细粒度但不记录字符级段落）
+- 对赌/结算：对 **Message** 多轮结算；任何人可发起结算轮次；投票权重=投票押注额；结果 TRUE/FALSE/UNKNOWN  
+- 资金：押注锁定；结算可回滚并重新分配；若后续结算推翻前结算导致扣回不足 → 账户可负债并冻结资金操作直到还清
+
+---
+
+## 1. 项目背景与目标
+
+### 1.1 背景
+群聊/论坛讨论信息密度低、刷屏严重、逻辑关系弱、难以沉淀结论。公论要支持“全世界线上开会”：把讨论变成可结构化、可引用、可纠错、可复盘、可结算的公开网络。
+
+### 1.2 V1.0 目标
+1. 结构化表达：消息卡 + 关系网络 + 局部引用
+2. 纠错机制：通过 CORRECT 关系形成“覆盖/争议链”
+3. 权重排序：押注形成权重，默认展示高价值分支、折叠无效分支
+4. 阶段成果：结论卡沉淀阶段性产出
+5. 复盘与再开发：增量导出（MD/JSON）+ 阅读曝光记录
+6. 可重复裁决：消息可多轮结算，结算可推翻并回滚重分配
+
+### 1.3 部署与定位声明
+- V1.0 为自托管系统，不提供官方公共实例。
+- V1.0 不内建内容治理（删帖/封禁/申诉）。部署者自行承担内容风险。
+- 为提高可用性，V1.0 提供“标签过滤/视图折叠”机制来生成“清爽消息树”。
+
+---
+
+## 2. 用户、角色与权限
+
+### 2.1 角色
+- USER：注册用户
+- ADMIN：实例管理员（仅配置与运维，不包含内容治理特权）
+
+### 2.2 权限矩阵（摘要）
+| 功能 | USER | ADMIN |
+|---|---|---|
+| 浏览内容 | 是（需登录） | 是 |
+| 发消息/建关系 | 是 | 是 |
+| 押注 | 是（余额>=0且无负债冻结） | 是 |
+| 发起结算轮次/投票 | 是（同上） | 是 |
+| 创建结论卡 | 是 | 是 |
+| 导出 | 是（可配置开关） | 是 |
+| 配置实例参数 | 否 | 是 |
+
+---
+
+## 3. 核心概念
+
+- Topic：话题/议题容器
+- Message：不可变消息卡（原文不可编辑）
+- Relation：消息间关系（可多目标，可指向局部引用片段）
+- Stake：押注记录（用于权重与结算）
+- SettlementRound：某条消息的一轮结算（可重复、可推翻）
+- VoteStake：结算投票时的押注（权重=金额）
+- LedgerEntry：账本分录（支持冲销与回滚重算）
+- Conclusion：结论卡（阶段性成果）
+- ReadEvent：阅读曝光事件
+
+---
+
+## 4. 数据模型（规范级，可直接建库）
+
+> 建议：PostgreSQL + 事务 + 行级锁；ID 用 ULID/UUIDv7。
+
+### 4.1 User
+- user_id (PK)
+- username (unique)
+- password_hash
+- role (USER/ADMIN)
+- created_at
+
+### 4.2 Topic
+- topic_id (PK)
+- title (<=80)
+- body (<=5000, optional)
+- created_by_user_id
+- created_at
+- updated_at
+- status (OPEN/ARCHIVED)
+
+### 4.3 Message（不可变）
+- message_id (PK)
+- topic_id (FK)
+- created_by_user_id (FK)
+- created_at
+- content_type (TEXT/MARKDOWN)
+- content (<=20000)
+- quote_source (JSON, optional)
+
+quote_source：
+- source_message_id
+- selected_text (<=2000)
+- selected_text_hash
+- context_before (<=200, optional)
+- context_after (<=200, optional)
+
+### 4.4 Relation（可多目标）
+- relation_id (PK)
+- topic_id
+- created_by_user_id
+- created_at
+- relation_type enum:
+  - QUOTE, REPLY, SUPPORT, OPPOSE, CORRECT, LINK, UNLINK
+- source_message_id
+- targets JSON array (>=1)
+  - target_message_id
+  - target_selected_text_hash (optional)
+  - target_selected_text (optional)
+
+### 4.5 Balance（可为负）
+- user_id (PK/FK)
+- balance int64
+- updated_at
+- debt_frozen bool  // 由规则自动计算也可；V1.0 建议持久化以简化判断
+
+冻结规则（V1.0）：
+- 当 balance < 0 时，debt_frozen=true
+- debt_frozen=true 的用户：禁止押注/投票/发起结算；允许阅读、发消息、建关系、创建结论（不涉及资金）
+
+### 4.6 Stake（普通押注：影响权重，且参与结算资金池）
+- stake_id (PK)
+- user_id
+- topic_id
+- message_id (FK)  // V1.0 结算对象为 Message
+- side (PRO/CON)
+- amount int64>0
+- created_at
+- round_id nullable (FK SettlementRound) // 若在某轮投票期内下的注可记录归属；否则为 null
+
+资金处理：
+- 下 stake 时：从 balance 扣减 amount，并锁定到 message 的资金池（见 BetPool）
+
+### 4.7 BetPool（每条消息的资金池与锁定额）
+- message_id (PK)
+- locked_pro int64
+- locked_con int64
+- updated_at
+
+> locked_pro/locked_con = 未被结算释放的锁定资金。  
+> 当结算轮次发生，需把某个区间的 stake 纳入该轮并在结算后从 locked_* 中释放/重新分配。
+
+### 4.8 SettlementRound（结算轮次）
+- round_id (PK)
+- message_id (FK)
+- created_by_user_id
+- status enum: OPEN, VOTING, SETTLED, CANCELLED
+- opened_at
+- closed_at nullable
+- result enum: TRUE, FALSE, UNKNOWN nullable
+- previous_round_id nullable（用于链式追溯）
+- note (string optional)
+
+并发约束（Q46=A）：
+- 对同一 message_id 同时最多 1 个 status in (OPEN, VOTING) 的 round
+
+### 4.9 VoteStake（投票押注=结算押注，权重=金额）
+> 你选 Q41=B、Q49=A：投票押注就是该轮资金池的一部分，并决定判定权重。
+
+- vote_id (PK)
+- round_id (FK)
+- user_id
+- vote enum: TRUE, FALSE, UNKNOWN
+- amount int64>0
+- created_at
+
+规则：
+- vote 发生时扣款并锁定到该 round 的 vote 资金池（可直接计入 message 的 stake 池，或独立池）
+- 用户可多次投票押注，且可改变投向（多条记录累计）
+
+### 4.10 LedgerEntry（账本分录，可冲销）
+- entry_id (PK)
+- user_id
+- created_at
+- entry_type enum:
+  - MINT_INITIAL, MINT_DAILY
+  - STAKE_LOCK, STAKE_UNLOCK
+  - SETTLEMENT_PAYOUT
+  - SETTLEMENT_CLAWBACK  // 推翻扣回
+  - VOTE_LOCK, VOTE_UNLOCK
+- amount int64 (可正可负)
+- ref_type enum: MESSAGE, ROUND, STAKE, VOTE, SYSTEM
+- ref_id
+- memo optional
+
+> 实现建议：  
+> - balance = sum(LedgerEntry.amount)（可做物化以提升性能）  
+> - 回滚/推翻通过新增“冲销分录”实现，不做物理回滚删除。
+
+### 4.11 Conclusion（不可变）
+- conclusion_id (PK)
+- topic_id
+- created_by_user_id
+- created_at
+- title
+- body
+- refs JSON array optional (MESSAGE/RELATION refs)
+
+### 4.12 ReadEvent（曝光时长）
+- read_event_id
+- user_id
+- topic_id
+- message_id
+- first_seen_at
+- last_seen_at
+- visible_ms_total
+
+采集规则：
+- IntersectionObserver 可见>=50% 且持续>=1000ms 才累计
+- 前端每 5 秒批量上报增量
+
+---
+
+## 5. 结算系统（核心算法与状态机）
+
+### 5.1 轮次生命周期
+1) `OPEN`：创建轮次（提案存在）
+2) `VOTING`：轮次进入投票（允许 VoteStake；也允许普通 Stake 继续追加并可归属 round_id）
+3) `SETTLED`：发起者点击“关闭并结算”（Q47=A）后产生 result 并执行分账
+4) 之后可再次创建新 round（结算不是终局）
+
+### 5.2 结果判定（投票加权）
+对 round_id：
+- weight_TRUE = sum(vote.amount where vote=TRUE)
+- weight_FALSE = sum(vote.amount where vote=FALSE)
+- weight_UNKNOWN = sum(vote.amount where vote=UNKNOWN)
+
+判定规则（V1.0）：
+- 若 max(weight_TRUE, weight_FALSE, weight_UNKNOWN) 唯一最大 → result=该项
+- 若并列最大 → result=UNKNOWN（避免僵局争议）
+
+### 5.3 资金池归属与结算窗口（解决“重复分配”问题）
+你希望“可重复结算且可推翻”，并且“重新分配所有资金”。在可实现层面，V1.0 定义为：
+
+- **每轮结算会对“截至结算时仍被锁定的资金池”进行一次结算分配，并生成可冲销的账本分录。**
+- 后续轮次若推翻，会通过 `SETTLEMENT_CLAWBACK` 分录从之前赢家扣回，再按新结果分配。
+
+为避免一笔钱被无限重复分配导致无穷膨胀，V1.0 强制：
+- 结算结的不是“同一笔 stake 被无限次给钱”，而是：
+  - 账本上每次 payout 都有对应 clawback 的可能；
+  - “净效果”由所有 round 的分录叠加决定。
+- 资金锁定机制（Q56=A）确保每次分配都有明确资金来源。
+
+工程实现要点：
+- 将 message 的 stake 和 vote 资金视为锁定池 `locked_pro/locked_con/locked_votes_*`
+- 每次结算：
+  1) 计算本轮参与的锁定金额（可取 message 全部锁定或仅 round_id 相关；V1.0 推荐取“全部锁定”以符合你“重新分配”）
+  2) 根据 result 执行 payout/clawback 账本分录
+  3) 保持锁定池不一定归零（因为你允许继续下注并反复结算）；但必须确保“锁定金额与余额账本一致”
+
+> 这部分实现建议采用“round snapshot”：
+- 在 round 结算瞬间，记录一个 `round_snapshot`（message_id 当前 pro/con 总锁定、参与者列表及其 stake）
+- 下一轮再结算会产生新的 snapshot，前一轮的 payout 可被 clawback。
+
+### 5.4 分账规则（Q38=A + Q42=A）
+定义：
+- PRO 方：认为消息为 TRUE
+- CON 方：认为消息为 FALSE
+
+当 result=TRUE：
+- PRO 赢：每个 PRO 参与者获得：
+  - 返还其本金（本轮参与的 pro_amount）
+  - + 按其 pro_amount 占 PRO 总额比例瓜分 CON 总额
+- CON 输：损失其本金（被瓜分）
+
+当 result=FALSE：
+- 反之
+
+当 result=UNKNOWN（Q42=A）：
+- 双方退回本金，不瓜分
+
+> 注意：因为你允许“反复结算推翻”，上述 payout 不是最终不可逆交易，而是会写入可冲销账本分录。
+
+### 5.5 推翻与扣回（Q55=A）
+- 若后续 round 推翻前一轮结果，需要扣回上一轮 payout：
+  - 生成 `SETTLEMENT_CLAWBACK` 分录
+  - 若扣回导致某赢家余额不足，则允许 balance < 0：
+    - debt_frozen=true
+    - 该用户必须通过后续赢利或管理员发放/充值（未来功能）归零后才能继续资金操作
+
+### 5.6 结算触发与滥用（你拒绝硬防，采用“过滤视图”）
+你明确 Q48=D 不做硬防。V1.0 在不做治理的前提下采用两类机制确保系统可用：
+
+1) **并发限制**：同一消息最多一个进行中 round（Q46=A）——这是工程必需，不是治理。
+2) **视图过滤**：对“结算提案刷屏/恶意操作”，通过标签/分类形成“清爽树”，默认视图隐藏被多数标记为刷屏的提案或其关系边（见第 6 章）。
+
+---
+
+## 6. “恶意刷屏分类 → 清爽消息树”机制（非治理版）
+
+这是你提出的核心：不是删除，而是通过分类让后来者只看有价值分支。
+
+### 6.1 Tag（标签/分类）
+新增对象：TagAssignment（用户给 message/relation/round 打标签）
+
+- tag_id（预置枚举，V1.0 只做少数）
+  - SPAM（刷屏）
+  - OFFTOPIC（跑题）
+  - LOWVALUE（低价值）
+  - IMPORTANT（重要）
+- assignment_id
+- object_type (MESSAGE/RELATION/ROUND)
+- object_id
+- tagged_by_user_id
+- tag_id
+- created_at
+- stake_amount optional（可选：打标签也押注，形成权重；V1.0 可以先不押注，仅人头）
+
+### 6.2 清爽视图规则
+- 默认“清爽模式”开启：
+  - 若某对象被打 SPAM 标签次数 >= T（T 默认 5，可配），则在默认视图中折叠为“被多数标记为刷屏（可展开）”
+- 该折叠不删除数据，只影响默认呈现路径
+
+> 这将“防刷屏”从强制治理变成可组合视图。
+
+---
+
+## 7. 页面与交互（摘要）
+
+- 首页：话题列表 + 搜索 + 排序 + 创建
+- 话题页：时间流 + 快捷关系操作 + 押注入口 + 结算入口 + 清爽模式开关
+- 关系视图：按关系类型分面 + 图谱/树（实现任选其一，但需可用）
+- 消息详情：展示引用片段、更正链、关系、押注统计、结算历史
+- 结论页：结论卡列表、创建、引用依据
+- 导出页：选择 topic + from/to，导出 MD+JSON
+- 用户页：发言/关系/押注/投票/阅读摘要
+- 管理页：配置参数（注册开关、初始余额、日发放、K、T、导出保留）
+
+---
+
+## 8. API（可生成 OpenAPI）
+
+除之前 API 外，新增结算与标签 API：
+
+- `POST /api/messages/{message_id}/rounds`（发起结算轮次）
+- `POST /api/rounds/{round_id}/close-and-settle`（关闭并结算，发起者）
+- `POST /api/rounds/{round_id}/votes`（投票押注）
+- `GET  /api/messages/{message_id}/rounds`（结算历史）
+- `POST /api/tags`（打标签）
+- `GET  /api/objects/{type}/{id}/tags`（查看标签统计）
+
+> 所有写 API 需要登录；资金相关写 API 需要 balance>=0 且 debt_frozen=false。
+
+---
+
+## 9. 验收标准（含结算）
+
+必须验证以下端到端用例：
+
+1. 发消息 → 建 CORRECT → 形成更正链  
+2. 对原消息 PRO/CON 多次押注，显示 net_score 与折叠规则生效  
+3. 发起 Round1 → 投票押注 → 关闭结算得到 TRUE/FALSE/UNKNOWN  
+4. Round1 分账：赢家返本+瓜分输家；UNKNOWN 双方退回  
+5. 发起 Round2 推翻 Round1：  
+   - 系统生成 clawback 分录  
+   - 若赢家已花掉导致余额不足 → 账户变负并 debt_frozen=true  
+6. debt_frozen 用户：仍可阅读/发言/建关系，但不能押注/投票/发起结算  
+7. 打 SPAM 标签达到阈值，清爽视图默认折叠对应对象  
+8. 增量导出（MD+JSON）包含：topics/messages/relations/stakes/rounds/votes/ledger/tags/read_events
+
+---
+
+## 10. 里程碑（建议）
+
+1) Auth + Topic/Message + 基础 UI  
+2) Relation + Quote/CORRECT + 关系视图  
+3) Stake + Score + 折叠规则  
+4) SettlementRound + VoteStake + LedgerEntry（先不做推翻）  
+5) 推翻/Clawback + debt_frozen  
+6) Tag/清爽视图  
+7) ReadEvent 批量上报  
+8) Export（增量、含结算与账本）  
+9) Docker Compose + 文档 + 测试
+
+---
+
+# 还差最后一步：把“可直接生成代码”的接口 schema 写出来
+
+现在 SRS 的规则已经冻结。为了让你真的能“根据 SRS 生成代码”，下一步我建议我输出两份文件：
+
+1) `openapi.yaml`（把所有请求/响应 JSON schema 写满）  
+2) `schema.sql` 或 ORM 模型（Prisma/Drizzle/SQLAlchemy 任选）  
+
+你只需要回答一个选择题，我就按该技术栈输出可直接落地的代码骨架：
+
+**Q57（单选）你希望我用哪种技术栈来“生成可商用品质代码骨架”？**  
+A. Next.js (React) + Node.js + PostgreSQL + Prisma + OpenAPI  
+B. React + FastAPI (Python) + PostgreSQL + SQLAlchemy + OpenAPI  
+C. Vue + NestJS + PostgreSQL + TypeORM + OpenAPI  
+D. 你指定一个（写出前端/后端/DB）
+
+回复 `Q57:A/B/C/D` 即可。

@@ -242,6 +242,7 @@ export default function TopicDetailPage() {
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
+  const prevFocusLenRef = useRef(0);
   const lastAddedFragmentRef = useRef<{ messageId: string; unit: UnitSelection; time: number } | null>(null);
   const mouseDownRef = useRef<{ x: number; y: number; messageId: string | null } | null>(null);
   const lastDragOrSelectTimeRef = useRef<number>(0);
@@ -533,12 +534,7 @@ export default function TopicDetailPage() {
   }) {
     if (!topicId) return;
     const { sources, label } = params;
-    // Relation messages cannot be supplement targets
     let targets = params.targets;
-    if (relationType === "supplement") {
-      targets = targets.filter(t => !t.messageId.startsWith("rel:"));
-      if (targets.length === 0) { alert("补充关系的目标消息不能是关系消息"); return; }
-    }
     const newEdgesList: DemoEdge[] = [];
 
     const buildEdges = (src: UnitSelection, tgt: UnitSelection, type: RelationType, lbl: string, relId: string) => {
@@ -581,33 +577,33 @@ export default function TopicDetailPage() {
       const NO_SOURCE = ""; // sentinel: empty string means pure-stance (no source message)
       // Use source units' message IDs if provided; otherwise relation is standalone
       const uniqueSources = Array.from(new Set(sources.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
+      // Deduplicate targets by messageId — agree/disagree always creates one edge per unique target
+      const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       for (const srcId of (uniqueSources.length > 0 ? uniqueSources : [NO_SOURCE])) {
-        for (const tgt of targets) {
-          const tgtMid = tgt.messageId;
-          try {
-            const now = new Date().toISOString();
-            const author = user?.username ?? "Anonymous";
-            if (srcId !== NO_SOURCE) {
-              // Has a real source message — call backend
-              const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
-              const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
-              const relId = `rel:${backendRel.id}`;
-              const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
-              setMessages(prev => [...prev, relMsg]);
-              for (const t of targets) {
-                const targetMid = t.messageId;
-                newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
-              }
-            } else {
-              // Pure-stance: no source message, local-only
+        try {
+          const now = new Date().toISOString();
+          const author = user?.username ?? "Anonymous";
+          if (srcId !== NO_SOURCE) {
+            // Has a real source message — call backend once with all targets
+            const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const relId = `rel:${backendRel.id}`;
+            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${uniqueTargetMids.join(",")}` };
+            setMessages(prev => [...prev, relMsg]);
+            for (const targetMid of uniqueTargetMids) {
+              newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
+            }
+          } else {
+            // Pure-stance: one relation message per unique target
+            for (const targetMid of uniqueTargetMids) {
               const relMsgId = nextId("rel");
-              const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
+              const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${targetMid}` };
               setMessages(prev => [...prev, relMsg]);
               const anonSrcId = `anon:${relMsgId}`;
-              newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: tgtMid, selection: { kind: "whole" } }, relationType, label, relMsgId));
+              newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relMsgId));
             }
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
-        }
+          }
+        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       }
     } else {
       const uniqueSources = Array.from(new Set(sources.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
@@ -659,8 +655,8 @@ export default function TopicDetailPage() {
       const now = new Date().toISOString();
       const author = user?.username ?? "Anonymous";
       const newEdgesList: DemoEdge[] = [];
-      for (const tgt of draftUnits) {
-        const tgtMid = tgt.messageId;
+      const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
+      for (const tgtMid of uniqueTargetMids) {
         const relMsgId = nextId("rel");
         const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
         setMessages(prev => [...prev, relMsg]);
@@ -683,12 +679,7 @@ export default function TopicDetailPage() {
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-    // Relation messages cannot be supplement targets
-    let targets: UnitSelection[] = [...draftUnits];
-    if (relationType === "supplement") {
-      targets = targets.filter(t => !t.messageId.startsWith("rel:"));
-      if (targets.length === 0) { alert("补充关系的目标消息不能是关系消息"); return; }
-    }
+    const targets: UnitSelection[] = [...draftUnits];
     await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
     setNewMessageContent("");
@@ -711,6 +702,31 @@ export default function TopicDetailPage() {
     if (prev > 0 && cur === 0 && activeTextSelectId !== null) setActiveTextSelectId(null);
     prevDraftCountRef.current = cur;
   }, [draftUnits, activeTextSelectId]);
+
+  // Bug 3: scroll to center focused message when entering focus mode
+  useEffect(() => {
+    const newLen = focusEntries.length;
+    if (newLen <= prevFocusLenRef.current) { prevFocusLenRef.current = newLen; return; }
+    prevFocusLenRef.current = newLen;
+    if (viewMode !== "graph") return;
+    const entry = focusEntries[newLen - 1];
+    if (!entry || entry.ids.length === 0) return;
+    const focusId = entry.ids[0];
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const container = leftPanelRef.current;
+        if (!container) return;
+        const el = container.querySelector(`[data-msgid="${focusId}"]`) as HTMLElement | null;
+        if (!el) return;
+        const elRect = el.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
+        const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
+        container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
+        container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
+      });
+    });
+  }, [focusEntries, viewMode]);
 
   function getSelectedWholeMessageIds(): string[] {
     const ids = draftUnits.filter(u => u.selection.kind === "whole").map(u => u.messageId);
@@ -986,8 +1002,7 @@ export default function TopicDetailPage() {
                 })}
               </div>
             ) : (
-              <div style={{ minHeight: 900 }}>
-                <GraphView
+              <GraphView
                   messages={messagesToRender} edges={edgesToRender} draftUnits={draftUnits}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
@@ -1002,7 +1017,6 @@ export default function TopicDetailPage() {
                   onTagBodyClick={handleTagBodyClick}
                   onTagDoubleClick={handleTagDoubleClick}
                 />
-              </div>
             )}
           </div>
         </div>

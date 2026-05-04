@@ -778,7 +778,9 @@ export default function TopicDetailPage() {
           if (mf && mf.kind === "normal") { effectiveStartIds.add(e.from.messageId); foundNormal = true; }
           if (mt && mt.kind === "normal") { effectiveStartIds.add(e.to.messageId); foundNormal = true; }
         }
-        if (!foundNormal) effectiveStartIds.add(id); // fallback: no connected normal messages
+        // Fallback: relation has no connected normal messages (e.g. pure-stance with anon source);
+        // keep the relation message itself as BFS root so focus mode still shows something.
+        if (!foundNormal) effectiveStartIds.add(id);
       } else {
         effectiveStartIds.add(id);
       }

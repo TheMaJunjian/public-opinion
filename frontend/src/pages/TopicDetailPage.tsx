@@ -207,6 +207,11 @@ export default function TopicDetailPage() {
     messageId: string; kind: "agree" | "disagree";
     x: number; y: number;
   } | null>(null);
+  // Popup state for tag badge double-click (shows who tagged)
+  const [tagPopup, setTagPopup] = useState<{
+    messageId: string; tagLabel: string; relMsgIds: string[];
+    x: number; y: number;
+  } | null>(null);
 
   const currentFocusIds = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].ids : null;
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
@@ -527,7 +532,13 @@ export default function TopicDetailPage() {
     sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }) {
     if (!topicId) return;
-    const { sources, targets, label } = params;
+    const { sources, label } = params;
+    // Relation messages cannot be supplement targets
+    let targets = params.targets;
+    if (relationType === "supplement") {
+      targets = targets.filter(t => !t.messageId.startsWith("rel:"));
+      if (targets.length === 0) { alert("补充关系的目标消息不能是关系消息"); return; }
+    }
     const newEdgesList: DemoEdge[] = [];
 
     const buildEdges = (src: UnitSelection, tgt: UnitSelection, type: RelationType, lbl: string, relId: string) => {
@@ -672,7 +683,12 @@ export default function TopicDetailPage() {
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-    const targets: UnitSelection[] = [...draftUnits];
+    // Relation messages cannot be supplement targets
+    let targets: UnitSelection[] = [...draftUnits];
+    if (relationType === "supplement") {
+      targets = targets.filter(t => !t.messageId.startsWith("rel:"));
+      if (targets.length === 0) { alert("补充关系的目标消息不能是关系消息"); return; }
+    }
     await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
     setNewMessageContent("");
@@ -831,6 +847,25 @@ export default function TopicDetailPage() {
     setDecorationPopup({ messageId, kind, x: e.clientX, y: e.clientY });
   }
 
+  function handleTagBodyClick(e: React.MouseEvent, messageId: string, _tagLabel: string, relMsgIds: string[]) {
+    e.stopPropagation();
+    setLastClickedMessageId(messageId);
+    setDraftUnits(prev => {
+      const anySelected = relMsgIds.some(id => prev.some(u => u.messageId === id && u.selection.kind === "whole"));
+      if (anySelected) {
+        return prev.filter(u => !(relMsgIds.includes(u.messageId) && u.selection.kind === "whole"));
+      } else {
+        const toAdd = relMsgIds.filter(id => !prev.some(u => u.messageId === id && u.selection.kind === "whole"));
+        return [...prev, ...toAdd.map(id => ({ messageId: id, selection: { kind: "whole" as const } }))];
+      }
+    });
+  }
+
+  function handleTagDoubleClick(e: React.MouseEvent, messageId: string, tagLabel: string, relMsgIds: string[]) {
+    e.stopPropagation();
+    setTagPopup({ messageId, tagLabel, relMsgIds, x: e.clientX, y: e.clientY });
+  }
+
   async function handleArchiveTopic() {
     if (!topicId || !topic) return;
     try {
@@ -957,6 +992,8 @@ export default function TopicDetailPage() {
                   onDecorationIconClick={handleDecorationIconClick}
                   onDecorationBodyClick={handleDecorationBodyClick}
                   onDecorationDoubleClick={handleDecorationDoubleClick}
+                  onTagBodyClick={handleTagBodyClick}
+                  onTagDoubleClick={handleTagDoubleClick}
                 />
               </div>
             )}
@@ -1145,6 +1182,43 @@ export default function TopicDetailPage() {
               </ul>
             )}
             <button onClick={() => setDecorationPopup(null)}
+              style={{ marginTop: 10, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+              关闭
+            </button>
+          </div>
+        </div>
+      );
+    })()}
+
+    {/* Tag double-click popup: shows who tagged with the given label */}
+    {tagPopup && (() => {
+      const { messageId, tagLabel, relMsgIds, x, y } = tagPopup;
+      const taggers = relMsgIds.map(id => {
+        const relMsg = messages.find(m => m.id === id);
+        return relMsg ? { id: relMsg.id, author: relMsg.author, createdAt: relMsg.createdAt } : null;
+      }).filter(Boolean) as { id: string; author: string; createdAt: string }[];
+      return (
+        <div key="tag-popup" onClick={() => setTagPopup(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 200), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
+              🏷 标注「{tagLabel}」（共 {taggers.length} 人）<br />
+              <span style={{ fontSize: 11, opacity: 0.7 }}>消息：{messageId}</span>
+            </div>
+            {taggers.length === 0 ? (
+              <div style={{ fontSize: 12, opacity: 0.6 }}>暂无记录</div>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 160, overflow: "auto", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                {taggers.map(r => (
+                  <li key={r.id} style={{ padding: "4px 6px", borderRadius: 4, background: "#2a2a2a", display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontWeight: 600 }}>{r.author}</span>
+                    <span style={{ opacity: 0.6 }}>{new Date(r.createdAt).toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button onClick={() => setTagPopup(null)}
               style={{ marginTop: 10, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
               关闭
             </button>

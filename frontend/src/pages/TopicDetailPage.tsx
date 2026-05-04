@@ -764,18 +764,23 @@ export default function TopicDetailPage() {
     for (const e of edges) {
       addEdgeAdj(e.from.messageId, e.to.messageId); addEdgeAdj(e.relationMessageId, e.from.messageId); addEdgeAdj(e.relationMessageId, e.to.messageId);
     }
-    const effectiveStartIds = new Set<string>(startIds);
-    if (focusHop === 0) {
-      for (const id of startIds) {
-        const m = msgMap.get(id);
-        if (m && m.kind === "relation") {
-          for (const e of edges) {
-            if (e.relationMessageId !== id) continue;
-            const mf = msgMap.get(e.from.messageId), mt = msgMap.get(e.to.messageId);
-            if (mf && mf.kind === "normal") effectiveStartIds.add(e.from.messageId);
-            if (mt && mt.kind === "normal") effectiveStartIds.add(e.to.messageId);
-          }
+    // When a relation message is the focus, use its connected normal (text) messages as BFS roots.
+    // This ensures focusHop correctly measures distance from the relation's text messages,
+    // so hop=0 shows only those text messages and hop=1 shows their 1-hop neighbors.
+    const effectiveStartIds = new Set<string>();
+    for (const id of startIds) {
+      const m = msgMap.get(id);
+      if (m && m.kind === "relation") {
+        let foundNormal = false;
+        for (const e of edges) {
+          if (e.relationMessageId !== id) continue;
+          const mf = msgMap.get(e.from.messageId), mt = msgMap.get(e.to.messageId);
+          if (mf && mf.kind === "normal") { effectiveStartIds.add(e.from.messageId); foundNormal = true; }
+          if (mt && mt.kind === "normal") { effectiveStartIds.add(e.to.messageId); foundNormal = true; }
         }
+        if (!foundNormal) effectiveStartIds.add(id); // fallback: no connected normal messages
+      } else {
+        effectiveStartIds.add(id);
       }
     }
     const dist = new Map<string, number>(); const q: string[] = [];

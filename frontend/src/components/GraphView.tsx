@@ -1080,15 +1080,15 @@ export default function GraphView(props: GraphViewProps) {
           Gate on either having edges or frames so frames render even with no other edges. */}
       {(positionedEdges.length>0||supplementFrames.length>0)&&(
         <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:3,pointerEvents:"none"}}>
-          {/* SUPPLEMENT frames — stroke reflects selection state */}
+          {/* SUPPLEMENT frames — stroke and fill reflect selection state */}
           {supplementFrames.map(sf=>{
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
               <rect key={`supp-frame-${sf.relMsgId}`} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
                 rx={SUPP_FRAME_RADIUS} ry={SUPP_FRAME_RADIUS}
-                fill="rgba(130,80,200,0.04)"
-                stroke={isWhole?"rgba(11,132,255,0.85)":"rgba(130,80,200,0.55)"}
-                strokeWidth={2.5} strokeDasharray={isWhole?undefined:"5 3"}/>
+                fill={isWhole?"rgba(11,132,255,0.08)":"rgba(130,80,200,0.04)"}
+                stroke={isWhole?"rgba(11,132,255,0.9)":"rgba(130,80,200,0.55)"}
+                strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
             );
           })}
           {positionedEdges.map(pe=>{
@@ -1152,10 +1152,12 @@ export default function GraphView(props: GraphViewProps) {
 
       {/* Supplement frame border-strip hit areas — 4 thin divs at zIndex:4 covering the frame border,
           one strip per side.  Each strip is SUPP_FRAME_PAD wide (half inside, half outside the rect),
-          so it exactly covers the padding zone between the visible SVG border and the message cards. */}
+          so it exactly covers the padding zone between the visible SVG border and the message cards.
+          Supplement relation messages are treated as first-class messages: single-click toggles whole
+          selection (like a normal message card), double-click uses the message double-click handler. */}
       {supplementFrames.map(sf=>{
-        const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();onEdgeLabelSingleClick(e,sf.relMsgId,"frame");};
-        const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();onEdgeLabelDoubleClick(e,sf.relMsgId);};
+        const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageClick(e,sf.relMsgId);};
+        const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageDoubleClick(e,sf.relMsgId);};
         const {x,y,width,height}=sf.rect;
         const HH=SUPP_FRAME_PAD; // half-width of each border strip
         const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
@@ -1178,19 +1180,43 @@ export default function GraphView(props: GraphViewProps) {
         );
       })}
 
-      {/* Supplement frame decoration badges — AGREE/DISAGREE counts shown to the RIGHT of the frame,
-          outside the frame border (not inside), per spec. */}
+      {/* Supplement frame decoration badges — full-size AGREE/DISAGREE badges to the RIGHT of the frame,
+          styled and interactive identically to text-message decoration badges.
+          Icon area: quick-send agree/disagree targeting the supplement relation message.
+          Body area: toggle selection of all agree/disagree relation messages on this supplement. */}
       {supplementFrames.map(sf=>{
         if (sf.relAgreeCount===0&&sf.relDisagreeCount===0) return null;
         const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
-        const sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
-        const disagreeLeft=sfDecLeft+(sf.relAgreeCount>0?REL_DEC_W+REL_DEC_GAP:0);
-        return (
-          <React.Fragment key={`supp-dec-${sf.relMsgId}`}>
-            {renderRelDecBadge(`sf-agree-${sf.relMsgId}`,"agree",sf.relAgreeCount,sfDecLeft,sfDecTop,4,sf.relAgreeMsgIds.length>0?sf.relAgreeMsgIds[0]:undefined)}
-            {renderRelDecBadge(`sf-disagree-${sf.relMsgId}`,"disagree",sf.relDisagreeCount,disagreeLeft,sfDecTop,4,sf.relDisagreeMsgIds.length>0?sf.relDisagreeMsgIds[0]:undefined)}
-          </React.Fragment>
-        );
+        let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
+        const nodes: React.ReactNode[]=[];
+        for (const kind of ["agree","disagree"] as const) {
+          const count=kind==="agree"?sf.relAgreeCount:sf.relDisagreeCount;
+          if (count<=0) continue;
+          const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+          const icon=kind==="agree"?"👍":"👎";
+          const label=kind==="agree"?"赞":"反";
+          nodes.push(
+            <div key={`sf-${kind}-${sf.relMsgId}`} data-rel-overlay="true"
+              onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
+              title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+              style={{position:"absolute",left:sfDecLeft,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:5,
+                background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                overflow:"hidden"}}>
+              <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(sf.relMsgId,kind);}}
+                style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                  cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
+              <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,sf.relMsgId,kind);}}
+                style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
+                <span style={{fontWeight:700}}>{count}</span>
+                <span style={{fontSize:9,opacity:0.85}}>{label}</span>
+              </div>
+            </div>
+          );
+          sfDecTop+=DEC_H+DEC_GAP;
+        }
+        return <React.Fragment key={`supp-dec-${sf.relMsgId}`}>{nodes}</React.Fragment>;
       })}
 
       {/* TAG decoration labels — aggregated by label text, interactive */}

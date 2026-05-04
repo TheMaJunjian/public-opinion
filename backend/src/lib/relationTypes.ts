@@ -28,7 +28,6 @@
  *   AGREE/DISAGREE: sourceMessageId is optional (null when no text is attached).
  *     With text: treated as support/rebut stance with an associated message.
  *     Without text: pure stance declaration, no source message.
- *   SUPPLEMENT: sourceMessageId must be present (label content is taken from source message).
  *   SUPPLEMENT: sourceMessageId is optional (null when no source text is attached).
  *     With source: source message is placed directly below target in the non-linear view,
  *     wrapped together in a border frame.

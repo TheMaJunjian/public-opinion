@@ -204,12 +204,12 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
   const msgById = new Map(normals.map(m => [m.id, m]));
   const minAllowed: Record<string, number> = {};
   for (const m of normals) minAllowed[m.id] = baseCol[m.id] ?? 0;
-  // Pre-build relEdgesByRelMsg for relation-message endpoint lookup
-  const relEdgesByRelMsgReply = new Map<string, DemoEdge[]>();
+  // Pre-build relEdgesByRelMsg for relation-message endpoint lookup (used for reply-to-relation column constraints)
+  const relEdgesByRelMsgForReply = new Map<string, DemoEdge[]>();
   for (const e of edges) {
-    const arr = relEdgesByRelMsgReply.get(e.relationMessageId) ?? [];
+    const arr = relEdgesByRelMsgForReply.get(e.relationMessageId) ?? [];
     arr.push(e);
-    relEdgesByRelMsgReply.set(e.relationMessageId, arr);
+    relEdgesByRelMsgForReply.set(e.relationMessageId, arr);
   }
   for (const e of edges) {
     if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
@@ -223,7 +223,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
     if (e.relationType !== "reply") continue;
     if (!normalSet.has(e.from.messageId)) continue;
     if (!e.to.messageId.startsWith("rel:")) continue;
-    const targetRelEdges = relEdgesByRelMsgReply.get(e.to.messageId) ?? [];
+    const targetRelEdges = relEdgesByRelMsgForReply.get(e.to.messageId) ?? [];
     for (const te of targetRelEdges) {
       if (normalSet.has(te.from.messageId)) {
         const need = (col[te.from.messageId] ?? 0) + 1;

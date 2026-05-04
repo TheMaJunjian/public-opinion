@@ -299,9 +299,10 @@ function applyAgreeDisagreeColumnOverride(params: {
   const col = { ...params.col };
   let maxCol = params.maxCol;
   const normalSet = new Set(normals.map(m => m.id));
+  // Only process stance-type edges between two normal (text) messages
+  const stanceEdges = edges.filter(e => e.relationType === "agree" || e.relationType === "disagree");
 
-  for (const e of edges) {
-    if (e.relationType !== "agree" && e.relationType !== "disagree") continue;
+  for (const e of stanceEdges) {
     const fromId = e.from.messageId, toId = e.to.messageId;
     // Skip pure-stance (anon: source) and relation-message targets
     if (!normalSet.has(fromId) || !normalSet.has(toId)) continue;
@@ -785,6 +786,8 @@ export default function GraphView(props: GraphViewProps) {
       if (toMsg?.kind==="relation") {
         const relId=e.to.messageId;
         const targetRelEdges = edgesByRelMsg.get(relId) ?? [];
+        // All edges in the same relation message share the same relationType by construction
+        // (a relation has exactly one type), so using the first edge is always correct.
         const targetRelType = targetRelEdges[0]?.relationType ?? "";
 
         // Supplement frame: edge should point to the frame border (the relation's clickable area)
@@ -1019,10 +1022,24 @@ export default function GraphView(props: GraphViewProps) {
     return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
   }
 
+  /** Render small AGREE/DISAGREE count badges next to a relation's visual element. */
+  function renderRelDecBadge(key: string, kind: "agree"|"disagree", count: number, left: number, top: number, zIndex: number) {
+    if (count <= 0) return null;
+    return (
+      <div key={key} data-rel-overlay="true"
+        style={{position:"absolute",left,top,width:REL_DEC_W,height:REL_DEC_H,zIndex,
+          background:kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)",
+          color:"#fff",borderRadius:3,fontSize:9,
+          display:"flex",alignItems:"center",justifyContent:"center",
+          pointerEvents:"none",boxShadow:"0 1px 3px rgba(0,0,0,0.4)"}}>
+        {kind==="agree"?"👍":"👎"}{count}
+      </div>
+    );
+  }
+
   return (
     <div ref={canvasRef} style={{position:"relative",width:"100%",height:"100%"}}
-      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
-      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
+      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
@@ -1085,6 +1102,10 @@ export default function GraphView(props: GraphViewProps) {
         {/* Clickable SUPPLEMENT frames — zIndex 1 (below message cards) so clicks on inner cards pass through */}
         {supplementFrames.map(sf=>{
           const isWhole=isRelWholeSel(sf.relMsgId);
+          // Relation-on-relation badges appear at the top-right corner of the frame, going left
+          const sfBadgeTop = sf.rect.y - REL_DEC_H / 2;
+          const sfAgreeLeft = sf.rect.x + sf.rect.width - REL_DEC_W - REL_DEC_GAP;
+          const sfDisagreeLeft = sfAgreeLeft - (sf.relAgreeCount > 0 ? REL_DEC_W + REL_DEC_GAP : 0);
           return (
             <React.Fragment key={`supp-hit-${sf.relMsgId}`}>
               <div
@@ -1093,29 +1114,8 @@ export default function GraphView(props: GraphViewProps) {
                 onDoubleClick={e=>{e.stopPropagation();onEdgeLabelDoubleClick(e,sf.relMsgId);}}
                 title={`补充关系：${sf.relMsgId}；单击选中，双击展开详情`}
                 style={{position:"absolute",left:sf.rect.x,top:sf.rect.y,width:sf.rect.width,height:sf.rect.height,zIndex:1,cursor:"pointer",pointerEvents:"auto",background:"transparent",border:isWhole?"2px solid rgba(11,132,255,0.85)":"2px solid transparent",borderRadius:SUPP_FRAME_RADIUS}}/>
-              {/* Relation-on-relation decorations: AGREE/DISAGREE badges on this SUPPLEMENT frame */}
-              {sf.relAgreeCount>0&&(
-                <div data-rel-overlay="true" style={{position:"absolute",
-                  left:sf.rect.x+sf.rect.width-REL_DEC_W-REL_DEC_GAP,
-                  top:sf.rect.y-REL_DEC_H/2,
-                  width:REL_DEC_W,height:REL_DEC_H,zIndex:4,
-                  background:"rgba(2,150,80,0.9)",color:"#fff",borderRadius:3,fontSize:9,
-                  display:"flex",alignItems:"center",justifyContent:"center",gap:1,
-                  pointerEvents:"none",boxShadow:"0 1px 3px rgba(0,0,0,0.4)"}}>
-                  👍{sf.relAgreeCount}
-                </div>
-              )}
-              {sf.relDisagreeCount>0&&(
-                <div data-rel-overlay="true" style={{position:"absolute",
-                  left:sf.rect.x+sf.rect.width-REL_DEC_W-REL_DEC_GAP-(sf.relAgreeCount>0?REL_DEC_W+REL_DEC_GAP:0),
-                  top:sf.rect.y-REL_DEC_H/2,
-                  width:REL_DEC_W,height:REL_DEC_H,zIndex:4,
-                  background:"rgba(200,40,40,0.9)",color:"#fff",borderRadius:3,fontSize:9,
-                  display:"flex",alignItems:"center",justifyContent:"center",gap:1,
-                  pointerEvents:"none",boxShadow:"0 1px 3px rgba(0,0,0,0.4)"}}>
-                  👎{sf.relDisagreeCount}
-                </div>
-              )}
+              {renderRelDecBadge(`sf-agree-${sf.relMsgId}`, "agree", sf.relAgreeCount, sfAgreeLeft, sfBadgeTop, 4)}
+              {renderRelDecBadge(`sf-disagree-${sf.relMsgId}`, "disagree", sf.relDisagreeCount, sfDisagreeLeft, sfBadgeTop, 4)}
             </React.Fragment>
           );
         })}
@@ -1127,6 +1127,10 @@ export default function GraphView(props: GraphViewProps) {
           const count=group.relMsgIds.length;
           const displayLabel=count>1?`${group.label}（${count}人）`:group.label;
           const isSelected=group.relMsgIds.some(id=>isRelWholeSel(id));
+          // Relation-on-relation badges appear to the right of the tag badge
+          const tagBadgeRight = group.rect.x + group.rect.width;
+          const tagAgreeLeft = tagBadgeRight + REL_DEC_GAP;
+          const tagDisagreeLeft = tagAgreeLeft + (group.relAgreeCount > 0 ? REL_DEC_W + REL_DEC_GAP : 0);
           return (
             <React.Fragment key={`tag-${_mid}-${group.label}`}>
               <div
@@ -1141,26 +1145,8 @@ export default function GraphView(props: GraphViewProps) {
                 🏷{displayLabel}
               </div>
               {/* Relation-on-relation decorations: AGREE/DISAGREE badges on this TAG relation */}
-              {group.relAgreeCount>0&&(
-                <div data-rel-overlay="true" style={{position:"absolute",
-                  left:group.rect.x+group.rect.width+REL_DEC_GAP,top:group.rect.y,
-                  width:REL_DEC_W,height:REL_DEC_H,zIndex:5,
-                  background:"rgba(2,150,80,0.9)",color:"#fff",borderRadius:3,fontSize:9,
-                  display:"flex",alignItems:"center",justifyContent:"center",gap:1,
-                  pointerEvents:"none",boxShadow:"0 1px 3px rgba(0,0,0,0.4)"}}>
-                  👍{group.relAgreeCount}
-                </div>
-              )}
-              {group.relDisagreeCount>0&&(
-                <div data-rel-overlay="true" style={{position:"absolute",
-                  left:group.rect.x+group.rect.width+REL_DEC_GAP+(group.relAgreeCount>0?REL_DEC_W+REL_DEC_GAP:0),top:group.rect.y,
-                  width:REL_DEC_W,height:REL_DEC_H,zIndex:5,
-                  background:"rgba(200,40,40,0.9)",color:"#fff",borderRadius:3,fontSize:9,
-                  display:"flex",alignItems:"center",justifyContent:"center",gap:1,
-                  pointerEvents:"none",boxShadow:"0 1px 3px rgba(0,0,0,0.4)"}}>
-                  👎{group.relDisagreeCount}
-                </div>
-              )}
+              {renderRelDecBadge(`tag-agree-${_mid}-${group.label}`, "agree", group.relAgreeCount, tagAgreeLeft, group.rect.y, 5)}
+              {renderRelDecBadge(`tag-disagree-${_mid}-${group.label}`, "disagree", group.relDisagreeCount, tagDisagreeLeft, group.rect.y, 5)}
             </React.Fragment>
           );
         })

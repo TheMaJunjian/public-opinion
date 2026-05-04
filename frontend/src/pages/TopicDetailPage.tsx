@@ -648,10 +648,11 @@ export default function TopicDetailPage() {
   async function handleQuickSendAndRelateFromDraftTargets() {
     if (draftUnits.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
+    const isSupplement = relationType === "supplement";
     const text = newMessageContent.trim();
 
-    if (isAgreeDisagree && text.length === 0) {
-      // Pure-stance agree/disagree: no text message, just a local relation message
+    if ((isAgreeDisagree || isSupplement) && text.length === 0) {
+      // Pure-stance agree/disagree or no-source supplement: no text message, just a local relation message
       const now = new Date().toISOString();
       const author = user?.username ?? "Anonymous";
       const newEdgesList: DemoEdge[] = [];
@@ -738,8 +739,9 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isTagType = relationType === "tag";
-  // agree/disagree: text can be empty (pure stance); tag: text required; others: text required for source
-  const quickButtonEnabled = draftUnits.length > 0 && (isAgreeDisagreeType || newMessageContent.trim().length > 0);
+  const isSupplementType = relationType === "supplement";
+  // agree/disagree/supplement: text can be empty (pure stance / no-source); tag: text required; others: text required for source
+  const quickButtonEnabled = draftUnits.length > 0 && (isAgreeDisagreeType || isSupplementType || newMessageContent.trim().length > 0);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
@@ -1141,7 +1143,7 @@ export default function TopicDetailPage() {
               <textarea style={{ width: "100%", minHeight: 90, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 13, resize: "vertical" }} placeholder="输入一条新普通消息（支持自由换行）" value={newMessageContent} onChange={e => setNewMessageContent(e.target.value)} />
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => handleSendMessageOnly()} disabled={newMessageContent.trim().length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: newMessageContent.trim().length === 0 ? "#333" : "#444", color: newMessageContent.trim().length === 0 ? "#777" : "#fff", cursor: newMessageContent.trim().length === 0 ? "default" : "pointer", fontSize: 12 }}>仅发送消息</button>
-                <button onClick={handleQuickSendAndRelateFromDraftTargets} disabled={!quickButtonEnabled} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: !quickButtonEnabled ? "#333" : "#0b84ff", color: !quickButtonEnabled ? "#777" : "#fff", cursor: !quickButtonEnabled ? "default" : "pointer", fontSize: 12 }} title={isAgreeDisagreeType ? "候选区作为目标（赞同/反对时文本框可为空，将自动填入标签）" : "文本框作为来源（整条），候选区作为目标"}>发送消息并建立关系（用候选作目标）</button>
+                <button onClick={handleQuickSendAndRelateFromDraftTargets} disabled={!quickButtonEnabled} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: !quickButtonEnabled ? "#333" : "#0b84ff", color: !quickButtonEnabled ? "#777" : "#fff", cursor: !quickButtonEnabled ? "default" : "pointer", fontSize: 12 }} title={isAgreeDisagreeType || isSupplementType ? "候选区作为目标（赞同/反对/补充时文本框可为空，将自动填入标签）" : "文本框作为来源（整条），候选区作为目标"}>发送消息并建立关系（用候选作目标）</button>
                 <button onClick={() => handleCreateRelation(true)} disabled={newMessageContent.trim().length === 0 || targetUnits.length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "#333" : "#444", color: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "#777" : "#fff", cursor: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>发送新消息并建立关系（Targets集合）</button>
                 <button onClick={() => handleCreateRelation(false)} disabled={sourceUnits.length === 0 || targetUnits.length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: sourceUnits.length === 0 || targetUnits.length === 0 ? "#333" : "#444", color: sourceUnits.length === 0 || targetUnits.length === 0 ? "#777" : "#fff", cursor: sourceUnits.length === 0 || targetUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>仅用已有消息建立关系（Sources/Targets集合）</button>
               </div>

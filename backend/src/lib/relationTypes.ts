@@ -28,9 +28,11 @@
  *   AGREE/DISAGREE: sourceMessageId is optional (null when no text is attached).
  *     With text: treated as support/rebut stance with an associated message.
  *     Without text: pure stance declaration, no source message.
- *   TAG: sourceMessageId must be present (label content is taken from source message).
- *   SUPPLEMENT: source message is placed directly below target in the non-linear view,
+ *   SUPPLEMENT: sourceMessageId must be present (label content is taken from source message).
+ *   SUPPLEMENT: sourceMessageId is optional (null when no source text is attached).
+ *     With source: source message is placed directly below target in the non-linear view,
  *     wrapped together in a border frame.
+ *     Without source: the frame wraps only the target message(s).
  */
 export const RELATION_TYPES = [
   'ANNOTATION',   // 注释

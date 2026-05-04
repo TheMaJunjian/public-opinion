@@ -130,6 +130,19 @@ function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[]
     (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
       normalSet.has(e.from.messageId) && normalSet.has(e.to.messageId)
   );
+  // anno/ref edges where source is a normal message but target is a relation message (rel:...)
+  // Rule: source must be in a column to the right of the relation's rightmost normal endpoint.
+  const toRelEdges = edges.filter(
+    (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
+      normalSet.has(e.from.messageId) && e.to.messageId.startsWith("rel:")
+  );
+  // Pre-build relEdgesByRelMsg for relation-message endpoint lookup
+  const relEdgesByRelMsg = new Map<string, DemoEdge[]>();
+  for (const e of edges) {
+    const arr = relEdgesByRelMsg.get(e.relationMessageId) ?? [];
+    arr.push(e);
+    relEdgesByRelMsg.set(e.relationMessageId, arr);
+  }
   const col: Record<string, number> = {};
   for (const id of normalIds) col[id] = 0;
   let changed = true, iter = 0;
@@ -139,6 +152,19 @@ function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[]
       const need = (col[e.to.messageId] ?? 0) + 1;
       if ((col[e.from.messageId] ?? 0) < need) { col[e.from.messageId] = need; changed = true; }
     }
+    // Constraint: anno/ref source targeting a relation message must be to the right of the
+    // relation's rightmost normal-message endpoint column.
+    for (const e of toRelEdges) {
+      const targetRelEdges = relEdgesByRelMsg.get(e.to.messageId) ?? [];
+      let maxEndpointCol = -1;
+      for (const te of targetRelEdges) {
+        if (normalSet.has(te.from.messageId)) maxEndpointCol = Math.max(maxEndpointCol, col[te.from.messageId] ?? 0);
+        if (normalSet.has(te.to.messageId)) maxEndpointCol = Math.max(maxEndpointCol, col[te.to.messageId] ?? 0);
+      }
+      if (maxEndpointCol < 0) continue;
+      const need = maxEndpointCol + 1;
+      if ((col[e.from.messageId] ?? 0) < need) { col[e.from.messageId] = need; changed = true; }
+    }
   }
   if (iter >= 5000) { console.warn("Anno/Ref cycle; fallback."); for (const id of normalIds) col[id] = 0; }
   const targetsByFrom = new Map<string, string[]>();
@@ -146,6 +172,16 @@ function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[]
     const arr = targetsByFrom.get(e.from.messageId) ?? [];
     arr.push(e.to.messageId);
     targetsByFrom.set(e.from.messageId, arr);
+  }
+  // For anno/ref-to-relation edges, add the relation's normal endpoints as effective targets
+  for (const e of toRelEdges) {
+    const arr = targetsByFrom.get(e.from.messageId) ?? [];
+    targetsByFrom.set(e.from.messageId, arr);
+    const targetRelEdges = relEdgesByRelMsg.get(e.to.messageId) ?? [];
+    for (const te of targetRelEdges) {
+      if (normalSet.has(te.from.messageId) && !arr.includes(te.from.messageId)) arr.push(te.from.messageId);
+      if (normalSet.has(te.to.messageId) && !arr.includes(te.to.messageId)) arr.push(te.to.messageId);
+    }
   }
   for (const [fromId, toArr] of targetsByFrom) {
     let maxTarget = -Infinity;
@@ -168,11 +204,36 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
   const msgById = new Map(normals.map(m => [m.id, m]));
   const minAllowed: Record<string, number> = {};
   for (const m of normals) minAllowed[m.id] = baseCol[m.id] ?? 0;
+  // Pre-build relEdgesByRelMsg for relation-message endpoint lookup
+  const relEdgesByRelMsgReply = new Map<string, DemoEdge[]>();
+  for (const e of edges) {
+    const arr = relEdgesByRelMsgReply.get(e.relationMessageId) ?? [];
+    arr.push(e);
+    relEdgesByRelMsgReply.set(e.relationMessageId, arr);
+  }
   for (const e of edges) {
     if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const need = (col[e.to.messageId] ?? 0) + 1;
     minAllowed[e.from.messageId] = Math.max(minAllowed[e.from.messageId] ?? 0, need);
+  }
+  // Constraint for reply edges targeting relation messages: source must be to the right of
+  // the relation's rightmost normal-message endpoint column.
+  for (const e of edges) {
+    if (e.relationType !== "reply") continue;
+    if (!normalSet.has(e.from.messageId)) continue;
+    if (!e.to.messageId.startsWith("rel:")) continue;
+    const targetRelEdges = relEdgesByRelMsgReply.get(e.to.messageId) ?? [];
+    for (const te of targetRelEdges) {
+      if (normalSet.has(te.from.messageId)) {
+        const need = (col[te.from.messageId] ?? 0) + 1;
+        minAllowed[e.from.messageId] = Math.max(minAllowed[e.from.messageId] ?? 0, need);
+      }
+      if (normalSet.has(te.to.messageId)) {
+        const need = (col[te.to.messageId] ?? 0) + 1;
+        minAllowed[e.from.messageId] = Math.max(minAllowed[e.from.messageId] ?? 0, need);
+      }
+    }
   }
   const replyTargetsByFrom = new Map<string, string[]>();
   for (const e of edges.filter(e => e.relationType === "reply")) {
@@ -261,7 +322,10 @@ function applySupplementColumnOverride(params: {
   for (const e of edges) {
     if (e.relationType !== "supplement") continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
-    suppSourceToTarget.set(e.from.messageId, e.to.messageId);
+    // First target wins: deterministic column assignment regardless of edge ordering.
+    if (!suppSourceToTarget.has(e.from.messageId)) {
+      suppSourceToTarget.set(e.from.messageId, e.to.messageId);
+    }
   }
 
   // Propagate columns: source gets same column as target (iterate until stable for chains)
@@ -720,25 +784,55 @@ export default function GraphView(props: GraphViewProps) {
       }
     }
 
-    // Compute SUPPLEMENT frames (border wrapping target + source messages, or target only for no-source)
+    // Compute SUPPLEMENT frames — one frame per relation message (relMsgId), wrapping all target
+    // messages and the source message (if any) within a single border frame.
     const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
-    for (const e of edges) {
-      if (e.relationType!=="supplement") continue;
-      if (e.to.selection.kind!=="whole"&&e.to.selection.kind!=="text") continue;
-      const targetId=e.to.messageId, sourceId=e.from.messageId;
-      const targetBox=endpointBoxForNormal(targetId)?.box??layout[targetId];
-      if (!targetBox) continue;
-      // hasExplicitSource: false when sourceId is an anon: placeholder (no-source supplement),
-      // meaning the frame wraps only the target message.
-      const hasExplicitSource = !sourceId.startsWith("anon:");
-      const sourceBox = hasExplicitSource ? (endpointBoxForNormal(sourceId)?.box??layout[sourceId]) : null;
-      if (hasExplicitSource && !sourceBox) continue;
-      const minX=(sourceBox?Math.min(targetBox.x,sourceBox.x):targetBox.x)-SUPP_FRAME_PAD;
-      const minY=(sourceBox?Math.min(targetBox.y,sourceBox.y):targetBox.y)-SUPP_FRAME_PAD;
-      const maxX=(sourceBox?Math.max(targetBox.x+targetBox.width,sourceBox.x+sourceBox.width):targetBox.x+targetBox.width)+SUPP_FRAME_PAD;
-      const maxY=(sourceBox?Math.max(targetBox.y+targetBox.height,sourceBox.y+sourceBox.height):targetBox.y+targetBox.height)+SUPP_FRAME_PAD;
-      const rect={x:minX,y:minY,width:maxX-minX,height:maxY-minY};
-      newSupplementFrames.push({targetId,sourceId,relMsgId:e.relationMessageId,rect,relAgreeCount:0,relDisagreeCount:0,relAgreeMsgIds:[],relDisagreeMsgIds:[]});
+    {
+      // Group supplement edges by relMsgId
+      const suppEdgesByRelMsg = new Map<string, DemoEdge[]>();
+      for (const e of edges) {
+        if (e.relationType !== "supplement") continue;
+        if (e.to.selection.kind !== "whole" && e.to.selection.kind !== "text") continue;
+        const arr = suppEdgesByRelMsg.get(e.relationMessageId) ?? [];
+        arr.push(e);
+        suppEdgesByRelMsg.set(e.relationMessageId, arr);
+      }
+      for (const [relMsgId, suppEdges] of suppEdgesByRelMsg) {
+        if (suppEdges.length === 0) continue;
+        const sourceId = suppEdges[0].from.messageId;
+        // hasExplicitSource: false when sourceId is an anon: placeholder (no-source supplement)
+        const hasExplicitSource = !sourceId.startsWith("anon:");
+        const sourceBox = hasExplicitSource ? (endpointBoxForNormal(sourceId)?.box ?? layout[sourceId]) : null;
+        if (hasExplicitSource && !sourceBox) continue;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        if (sourceBox) {
+          minX = Math.min(minX, sourceBox.x);
+          minY = Math.min(minY, sourceBox.y);
+          maxX = Math.max(maxX, sourceBox.x + sourceBox.width);
+          maxY = Math.max(maxY, sourceBox.y + sourceBox.height);
+        }
+        let anyTarget = false;
+        for (const e of suppEdges) {
+          const targetBox = endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
+          if (!targetBox) continue;
+          anyTarget = true;
+          minX = Math.min(minX, targetBox.x);
+          minY = Math.min(minY, targetBox.y);
+          maxX = Math.max(maxX, targetBox.x + targetBox.width);
+          maxY = Math.max(maxY, targetBox.y + targetBox.height);
+        }
+        if (!anyTarget && !sourceBox) continue;
+        if (minX === Infinity) continue;
+        const rect = {
+          x: minX - SUPP_FRAME_PAD,
+          y: minY - SUPP_FRAME_PAD,
+          width: maxX - minX + SUPP_FRAME_PAD * 2,
+          height: maxY - minY + SUPP_FRAME_PAD * 2,
+        };
+        // Use the first target's messageId for compatibility with the frame data type
+        const targetId = suppEdges[0].to.messageId;
+        newSupplementFrames.push({targetId, sourceId, relMsgId, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[]});
+      }
     }
 
     // Compute AGREE/DISAGREE decorations targeting relation messages (relDecByRelMsgId)
@@ -919,7 +1013,7 @@ export default function GraphView(props: GraphViewProps) {
         };
         const toSel = e.to.selection;
         if (toSel.kind==="edge") (edgesByRelMsg.get(relId)??[]).filter(x=>x.id===(toSel as {kind:"edge";edgeId:string}).edgeId).forEach(expand);
-        else if (toSel.kind==="whole") (edgesByRelMsg.get(relId)??[]).forEach(expand);
+        else if (toSel.kind==="whole") { const tes=edgesByRelMsg.get(relId)??[]; if (tes.length>0) expand(tes[0]); }
         continue;
       }
 

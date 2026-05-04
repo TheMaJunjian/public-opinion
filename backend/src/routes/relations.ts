@@ -112,7 +112,9 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     // Relation types that require a source message (non-stance types and TAG which needs content)
-    const requiresSource = data.relationType !== 'AGREE' && data.relationType !== 'DISAGREE';
+    // AGREE/DISAGREE: optional (pure-stance declaration without text)
+    // SUPPLEMENT: optional (no-source form wraps target messages in a frame without a source text)
+    const requiresSource = data.relationType !== 'AGREE' && data.relationType !== 'DISAGREE' && data.relationType !== 'SUPPLEMENT';
 
     if (requiresSource && !data.sourceMessageId) {
       res.status(400).json({ error: '该关系类型需要提供来源消息 ID' });

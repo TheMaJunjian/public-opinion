@@ -90,7 +90,7 @@ export function getRelations(topicId: string, params?: { page?: number; limit?: 
 
 export function createRelation(topicId: string, data: {
   relationType: string;
-  sourceMessageId: string;
+  sourceMessageId?: string | null;
   targetRefs: import('../types').TargetRef[];
 }) {
   return request<import('../types').Relation>(`/topics/${topicId}/relations`, {

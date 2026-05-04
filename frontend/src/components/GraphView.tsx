@@ -49,10 +49,6 @@ const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 // SUPPLEMENT frame constants
 const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pairs (wide enough to click)
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
-// Relation-decoration constants (AGREE/DISAGREE badges on relation visual elements, e.g. next to TAG badges)
-const REL_DEC_W = 36;   // width of a relation-decoration badge
-const REL_DEC_H = 16;   // height of a relation-decoration badge
-const REL_DEC_GAP = 3;  // gap between adjacent relation-decoration badges
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -766,7 +762,13 @@ export default function GraphView(props: GraphViewProps) {
 
     const rawEdges: Omit<PositionedEdge,"labelX"|"labelY">[] = [];
     const labelSeeds: LabelSeed[] = [];
-    const labelText = (e:DemoEdge,author:string) => `${author} · ${relationTypeName(e.relationType)}`;
+    // For agree/disagree with a real source message, use "支持"/"反驳" labels (support/rebut semantics).
+    function edgeLabelName(relType: string): string {
+      if (relType === "agree") return "支持";
+      if (relType === "disagree") return "反驳";
+      return relationTypeName(relType);
+    }
+    const labelText = (e:DemoEdge,author:string) => `${author} · ${edgeLabelName(e.relationType)}`;
 
     for (const e of edges) {
       const fromMsg=msgMap.get(e.from.messageId); if (!fromMsg||fromMsg.kind!=="normal") continue;
@@ -775,23 +777,26 @@ export default function GraphView(props: GraphViewProps) {
       const toMsg=msgMap.get(e.to.messageId);
 
       // Tag and supplement relations are rendered as decorations/frames — no directed arrows.
-      // Agree/disagree: pure-stance (anon: source) → decoration only; with real source → directed arrow to decoration badge.
+      // Agree/disagree: pure-stance (anon: source) → decoration only;
+      //   with real source → directed arrow pointing to the decorated message (not the badge).
       if (e.relationType==="tag"||e.relationType==="supplement") continue;
       if (e.relationType==="agree"||e.relationType==="disagree") {
         if (e.from.messageId.startsWith("anon:")) continue; // pure-stance, decoration only
-        // With source message: render directed arrow pointing to the decoration badge
+        // Has source message: render directed arrow.
+        // If the target is a normal message, point to its card box directly.
+        // If the target is a relation message, fall through to the relation-message block below.
         const targetMid=e.to.messageId;
-        const decKey=`${targetMid}::${e.relationType}`;
-        const decRect=decorationRects[decKey]?.rect;
-        if (!decRect) continue; // decoration not yet laid out
-        const toBox: LayoutBox={x:decRect.x,y:decRect.y,width:decRect.width,height:decRect.height};
-        rawEdges.push({
-          drawId:e.id,edge:e,fromAuthor,
-          fromBox:fromEp.box,toBox,fromCol:fromEp.col,toCol:fromEp.col,
-          fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
-          start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
-        });
-        continue;
+        if (!targetMid.startsWith("rel:")) {
+          const toEpN=endpointBoxForNormal(targetMid); if (!toEpN) continue;
+          rawEdges.push({
+            drawId:e.id,edge:e,fromAuthor,
+            fromBox:fromEp.box,toBox:toEpN.box,fromCol:fromEp.col,toCol:toEpN.col,
+            fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+            start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
+          });
+          continue;
+        }
+        // else: target is a relation message — fall through to the toMsg.kind==="relation" block.
       }
 
       if (toMsg?.kind==="relation") {
@@ -831,16 +836,15 @@ export default function GraphView(props: GraphViewProps) {
           continue;
         }
 
-        // Agree/disagree decoration: edge should point to the decoration badge
+        // Agree/disagree decoration: per spec, edge points to the message the decoration decorates
+        // (not the decoration badge itself).
         if (targetRelType === "agree" || targetRelType === "disagree") {
           const targetMid = targetRelEdges[0]?.to.messageId ?? "";
-          const decKey = `${targetMid}::${targetRelType}`;
-          const decRect = decorationRects[decKey]?.rect;
-          if (decRect) {
+          const toEpN = endpointBoxForNormal(targetMid);
+          if (toEpN) {
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:{x:decRect.x,y:decRect.y,width:decRect.width,height:decRect.height},
-              fromCol:fromEp.col,toCol:fromEp.col,
+              fromBox:fromEp.box,toBox:toEpN.box,fromCol:fromEp.col,toCol:toEpN.col,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -1033,24 +1037,7 @@ export default function GraphView(props: GraphViewProps) {
     return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
   }
 
-  /** Render small AGREE/DISAGREE count badges next to a relation's visual element.
-   *  Pass `relMsgId` to make the badge clickable (selects the agree/disagree relation message). */
-  function renderRelDecBadge(key: string, kind: "agree"|"disagree", count: number, left: number, top: number, zIndex: number, relMsgId?: string) {
-    if (count <= 0) return null;
-    const clickable = !!relMsgId;
-    return (
-      <div key={key} data-rel-overlay="true"
-        onClick={clickable ? (e) => { e.stopPropagation(); onEdgeLabelSingleClick(e, relMsgId!, "whole"); } : undefined}
-        style={{position:"absolute",left,top,width:REL_DEC_W,height:REL_DEC_H,zIndex,
-          background:kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)",
-          color:"#fff",borderRadius:3,fontSize:9,
-          display:"flex",alignItems:"center",justifyContent:"center",
-          pointerEvents:clickable?"auto":"none",cursor:clickable?"pointer":"default",
-          boxShadow:"0 1px 3px rgba(0,0,0,0.4)"}}>
-        {kind==="agree"?"👍":"👎"}{count}
-      </div>
-    );
-  }
+
 
   return (
     <div ref={canvasRef} style={{position:"relative",width:"100%",height:"100%"}}
@@ -1125,8 +1112,9 @@ export default function GraphView(props: GraphViewProps) {
         );
       })}
 
-      {/* Edge-label relation decoration badges — AGREE/DISAGREE counts on annotation/reference/reply relations,
-          shown to the RIGHT of the edge label (right of the target message, per spec). */}
+      {/* Edge-label relation decoration badges — full-size AGREE/DISAGREE badges on annotation/reference/reply
+          relations, shown to the RIGHT of the edge label. Interactive identically to normal-message decoration
+          badges (icon area: quick-send; body area: toggle selection; relation messages are first-class messages). */}
       {(()=>{
         const rendered=new Set<string>();
         const items: React.ReactNode[]=[];
@@ -1140,12 +1128,35 @@ export default function GraphView(props: GraphViewProps) {
           const dec=relDecByRelMsgState.get(relId);
           if (!dec||(dec.agreeCount===0&&dec.disagreeCount===0)) continue;
           rendered.add(relId);
-          const badgeLeft=bb.x+bb.width+REL_DEC_GAP;
-          const badgeTop=bb.y+Math.floor((bb.height-REL_DEC_H)/2);
-          const disagreeLeft=badgeLeft+(dec.agreeCount>0?REL_DEC_W+REL_DEC_GAP:0);
-          const a=renderRelDecBadge(`reldec-agree-${relId}`,"agree",dec.agreeCount,badgeLeft,badgeTop,5,dec.agreeRelMsgIds.length>0?dec.agreeRelMsgIds[0]:undefined);
-          const d=renderRelDecBadge(`reldec-disagree-${relId}`,"disagree",dec.disagreeCount,disagreeLeft,badgeTop,5,dec.disagreeRelMsgIds.length>0?dec.disagreeRelMsgIds[0]:undefined);
-          if (a) items.push(a); if (d) items.push(d);
+          let decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
+          let decTop=bb.y+Math.floor((bb.height-DEC_H)/2);
+          for (const kind of ["agree","disagree"] as const) {
+            const count=kind==="agree"?dec.agreeCount:dec.disagreeCount;
+            if (count<=0) continue;
+            const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+            const icon=kind==="agree"?"👍":"👎";
+            const label=kind==="agree"?"赞":"反";
+            const offsetLeft=kind==="disagree"&&dec.agreeCount>0 ? DEC_W+DEC_GAP : 0;
+            items.push(
+              <div key={`reldec-${kind}-${relId}`} data-rel-overlay="true"
+                onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,relId,kind);}}
+                title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+                style={{position:"absolute",left:decLeft+offsetLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:5,
+                  background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                  fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                  overflow:"hidden"}}>
+                <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(relId,kind);}}
+                  style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                    cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                  title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
+                <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,relId,kind);}}
+                  style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
+                  <span style={{fontWeight:700}}>{count}</span>
+                  <span style={{fontSize:9,opacity:0.85}}>{label}</span>
+                </div>
+              </div>
+            );
+          }
         }
         return items;
       })()}
@@ -1225,10 +1236,30 @@ export default function GraphView(props: GraphViewProps) {
           const count=group.relMsgIds.length;
           const displayLabel=count>1?`${group.label}（${count}人）`:group.label;
           const isSelected=group.relMsgIds.some(id=>isRelWholeSel(id));
-          // Relation-on-relation badges appear to the right of the tag badge
+          // Full-size agree/disagree decoration badges to the right of the tag badge.
+          // For icon click: quick-send targeting the first tag relation message in the group.
+          // For body click: toggle selection of agree/disagree relations targeting any tag in the group.
           const tagBadgeRight = group.rect.x + group.rect.width;
-          const tagAgreeLeft = tagBadgeRight + REL_DEC_GAP;
-          const tagDisagreeLeft = tagAgreeLeft + (group.relAgreeCount > 0 ? REL_DEC_W + REL_DEC_GAP : 0);
+          const tagDecLeft = tagBadgeRight + DEC_RIGHT_GAP;
+          const tagDecTop = group.rect.y + Math.floor((group.rect.height - DEC_H) / 2);
+          const tagIconRelMsgId = group.relMsgIds[0]; // first tag in group for icon-click quick-send
+          // Guard: tagIconRelMsgId is always defined here (group.relMsgIds is non-empty when a group exists),
+          // but the check ensures TypeScript and runtime safety.
+          if (!tagIconRelMsgId) return (
+            <React.Fragment key={`tag-${_mid}-${group.label}`}>
+              <div
+                data-rel-overlay="true"
+                onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
+                onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
+                style={{position:"absolute",left:group.rect.x,top:group.rect.y,width:group.rect.width,height:group.rect.height,zIndex:5,
+                  background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
+                  justifyContent:"center",fontSize:10,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
+                  boxShadow:"0 1px 4px rgba(0,0,0,0.4)",border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
+                title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}>
+                🏷{displayLabel}
+              </div>
+            </React.Fragment>
+          );
           return (
             <React.Fragment key={`tag-${_mid}-${group.label}`}>
               <div
@@ -1242,9 +1273,34 @@ export default function GraphView(props: GraphViewProps) {
                 title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}>
                 🏷{displayLabel}
               </div>
-              {/* Relation-on-relation decorations: AGREE/DISAGREE badges on this TAG relation */}
-              {renderRelDecBadge(`tag-agree-${_mid}-${group.label}`,"agree",group.relAgreeCount,tagAgreeLeft,group.rect.y,5,group.relAgreeMsgIds.length>0?group.relAgreeMsgIds[0]:undefined)}
-              {renderRelDecBadge(`tag-disagree-${_mid}-${group.label}`,"disagree",group.relDisagreeCount,tagDisagreeLeft,group.rect.y,5,group.relDisagreeMsgIds.length>0?group.relDisagreeMsgIds[0]:undefined)}
+              {/* Full-size AGREE/DISAGREE decoration badges on this TAG relation group */}
+              {(["agree","disagree"] as const).map((kind)=>{
+                const cnt=kind==="agree"?group.relAgreeCount:group.relDisagreeCount;
+                if (cnt<=0) return null;
+                const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+                const icon=kind==="agree"?"👍":"👎";
+                const label=kind==="agree"?"赞":"反";
+                const offsetLeft=kind==="disagree"&&group.relAgreeCount>0 ? DEC_W+DEC_GAP : 0;
+                return (
+                  <div key={`tag-dec-${kind}-${_mid}-${group.label}`} data-rel-overlay="true"
+                    onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,tagIconRelMsgId,kind);}}
+                    title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+                    style={{position:"absolute",left:tagDecLeft+offsetLeft,top:tagDecTop,width:DEC_W,height:DEC_H,zIndex:5,
+                      background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                      fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                      overflow:"hidden"}}>
+                    <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(tagIconRelMsgId,kind);}}
+                      style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                        cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                      title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
+                    <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,tagIconRelMsgId,kind);}}
+                      style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
+                      <span style={{fontWeight:700}}>{cnt}</span>
+                      <span style={{fontSize:9,opacity:0.85}}>{label}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </React.Fragment>
           );
         })

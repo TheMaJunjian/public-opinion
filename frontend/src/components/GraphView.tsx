@@ -304,6 +304,8 @@ function applyAgreeDisagreeColumnOverride(params: {
   // constraints (annotation/reference source must be in the column to the RIGHT of its target).
   // These minimums are computed from the incoming column values, which already satisfy the
   // annotation/reference constraint, so targets won't move and these bounds stay valid.
+  // annoRefMinCol[id] = minimum column index that message `id` must be assigned to,
+  // derived from annotation/reference edges where `id` is the source.
   const annoRefMinCol: Record<string, number> = {};
   for (const e of edges) {
     if (e.relationType !== "annotation" && e.relationType !== "reference") continue;
@@ -726,10 +728,11 @@ export default function GraphView(props: GraphViewProps) {
       const targetId=e.to.messageId, sourceId=e.from.messageId;
       const targetBox=endpointBoxForNormal(targetId)?.box??layout[targetId];
       if (!targetBox) continue;
-      // anon: sources represent a no-source supplement — frame wraps the target message only
-      const hasRealSource = !sourceId.startsWith("anon:");
-      const sourceBox = hasRealSource ? (endpointBoxForNormal(sourceId)?.box??layout[sourceId]) : null;
-      if (hasRealSource && !sourceBox) continue;
+      // hasExplicitSource: false when sourceId is an anon: placeholder (no-source supplement),
+      // meaning the frame wraps only the target message.
+      const hasExplicitSource = !sourceId.startsWith("anon:");
+      const sourceBox = hasExplicitSource ? (endpointBoxForNormal(sourceId)?.box??layout[sourceId]) : null;
+      if (hasExplicitSource && !sourceBox) continue;
       const minX=(sourceBox?Math.min(targetBox.x,sourceBox.x):targetBox.x)-SUPP_FRAME_PAD;
       const minY=(sourceBox?Math.min(targetBox.y,sourceBox.y):targetBox.y)-SUPP_FRAME_PAD;
       const maxX=(sourceBox?Math.max(targetBox.x+targetBox.width,sourceBox.x+sourceBox.width):targetBox.x+targetBox.width)+SUPP_FRAME_PAD;

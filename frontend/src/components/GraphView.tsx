@@ -33,6 +33,7 @@ const GRID_TOP = 18;
 const COL_GAP = 80;      // right-side decorations need ~58px (DEC_RIGHT_GAP=6 + DEC_W=56 + buffer)
 const ROW_GAP = 32;
 const CANVAS_BOTTOM_PAD = 120;
+const CANVAS_RIGHT_PAD = 120; // extra right padding so decoration badges/frames never overflow the canvas
 // Decoration constants — decorations are now on the RIGHT side of each card, stacked vertically
 const DEC_W = 56;        // width of each decoration badge
 const DEC_H = 22;        // height of each decoration badge
@@ -284,6 +285,9 @@ function applySupplementColumnOverride(params: {
  *
  * Only applies when both source and target are normal (text) messages.
  * Pure-stance (anon: source) or relation-message targets are skipped.
+ *
+ * Annotation/reference column constraints are respected: if a message is also an
+ * annotation/reference source it will not be placed to the left of its anno/ref targets.
  */
 function applyAgreeDisagreeColumnOverride(params: {
   normals: DemoMessage[];
@@ -295,6 +299,19 @@ function applyAgreeDisagreeColumnOverride(params: {
   const col = { ...params.col };
   let maxCol = params.maxCol;
   const normalSet = new Set(normals.map(m => m.id));
+
+  // Pre-compute the minimum column each message must occupy due to annotation/reference
+  // constraints (annotation/reference source must be in the column to the RIGHT of its target).
+  // These minimums are computed from the incoming column values, which already satisfy the
+  // annotation/reference constraint, so targets won't move and these bounds stay valid.
+  const annoRefMinCol: Record<string, number> = {};
+  for (const e of edges) {
+    if (e.relationType !== "annotation" && e.relationType !== "reference") continue;
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    const need = (col[e.to.messageId] ?? 0) + 1;
+    annoRefMinCol[e.from.messageId] = Math.max(annoRefMinCol[e.from.messageId] ?? 0, need);
+  }
+
   // Only process stance-type edges between two normal (text) messages
   const stanceEdges = edges.filter(e => e.relationType === "agree" || e.relationType === "disagree");
 
@@ -303,7 +320,10 @@ function applyAgreeDisagreeColumnOverride(params: {
     // Skip pure-stance (anon: source) and relation-message targets
     if (!normalSet.has(fromId) || !normalSet.has(toId)) continue;
     const tgtCol = col[toId] ?? 0;
-    col[fromId] = e.relationType === "agree" ? tgtCol : tgtCol + 1;
+    const desired = e.relationType === "agree" ? tgtCol : tgtCol + 1;
+    // Enforce annotation/reference minimum: agree/disagree cannot place a source message
+    // to the left of any message it annotates or references.
+    col[fromId] = Math.max(desired, annoRefMinCol[fromId] ?? 0);
     maxCol = Math.max(maxCol, col[fromId]);
   }
 
@@ -532,7 +552,7 @@ export default function GraphView(props: GraphViewProps) {
   // TAG relations targeting relation messages — for rendering next to edge labels / supplement frames
   const [tagsByRelMsgState, setTagsByRelMsgState] = useState<Map<string,Array<{fromMsgId:string;relMsgId:string}>>>(new Map());
 
-  const canvasWidth = GRID_LEFT*2 + (maxCol+1)*CARD_W + maxCol*COL_GAP;
+  const canvasWidth = GRID_LEFT + (maxCol+1)*CARD_W + maxCol*COL_GAP + CANVAS_RIGHT_PAD;
   const edgesByRelMsg = useMemo(() => {
     const map = new Map<string,DemoEdge[]>();
     for (const e of edges) { const arr=map.get(e.relationMessageId)??[]; arr.push(e); map.set(e.relationMessageId,arr); }
@@ -698,19 +718,22 @@ export default function GraphView(props: GraphViewProps) {
       }
     }
 
-    // Compute SUPPLEMENT frames (border wrapping target + source messages)
+    // Compute SUPPLEMENT frames (border wrapping target + source messages, or target only for no-source)
     const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
     for (const e of edges) {
       if (e.relationType!=="supplement") continue;
       if (e.to.selection.kind!=="whole"&&e.to.selection.kind!=="text") continue;
       const targetId=e.to.messageId, sourceId=e.from.messageId;
       const targetBox=endpointBoxForNormal(targetId)?.box??layout[targetId];
-      const sourceBox=endpointBoxForNormal(sourceId)?.box??layout[sourceId];
-      if (!targetBox||!sourceBox) continue;
-      const minX=Math.min(targetBox.x,sourceBox.x)-SUPP_FRAME_PAD;
-      const minY=Math.min(targetBox.y,sourceBox.y)-SUPP_FRAME_PAD;
-      const maxX=Math.max(targetBox.x+targetBox.width,sourceBox.x+sourceBox.width)+SUPP_FRAME_PAD;
-      const maxY=Math.max(targetBox.y+targetBox.height,sourceBox.y+sourceBox.height)+SUPP_FRAME_PAD;
+      if (!targetBox) continue;
+      // anon: sources represent a no-source supplement — frame wraps the target message only
+      const hasRealSource = !sourceId.startsWith("anon:");
+      const sourceBox = hasRealSource ? (endpointBoxForNormal(sourceId)?.box??layout[sourceId]) : null;
+      if (hasRealSource && !sourceBox) continue;
+      const minX=(sourceBox?Math.min(targetBox.x,sourceBox.x):targetBox.x)-SUPP_FRAME_PAD;
+      const minY=(sourceBox?Math.min(targetBox.y,sourceBox.y):targetBox.y)-SUPP_FRAME_PAD;
+      const maxX=(sourceBox?Math.max(targetBox.x+targetBox.width,sourceBox.x+sourceBox.width):targetBox.x+targetBox.width)+SUPP_FRAME_PAD;
+      const maxY=(sourceBox?Math.max(targetBox.y+targetBox.height,sourceBox.y+sourceBox.height):targetBox.y+targetBox.height)+SUPP_FRAME_PAD;
       const rect={x:minX,y:minY,width:maxX-minX,height:maxY-minY};
       newSupplementFrames.push({targetId,sourceId,relMsgId:e.relationMessageId,rect,relAgreeCount:0,relDisagreeCount:0,relAgreeMsgIds:[],relDisagreeMsgIds:[]});
     }

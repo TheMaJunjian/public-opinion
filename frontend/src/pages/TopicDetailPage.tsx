@@ -688,7 +688,7 @@ export default function TopicDetailPage() {
               relationLabel: typeName,
             } as DemoEdge);
           }
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        } catch (e: any) { alert(`建立无来源补充关系失败: ${e?.message ?? e}`); }
       } else {
         // Agree/disagree: one relation per target
         for (const tgtMid of uniqueTargetMids) {

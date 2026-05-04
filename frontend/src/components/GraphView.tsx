@@ -345,8 +345,8 @@ function applySupplementColumnOverride(params: {
     if (targetIds.length < 2) continue;
     // Sort by creation time for deterministic, chronological ordering.
     targetIds.sort((a, b) =>
-      new Date(msgById.get(a)?.createdAt ?? 0).getTime() -
-      new Date(msgById.get(b)?.createdAt ?? 0).getTime()
+      new Date(msgById.get(a)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime() -
+      new Date(msgById.get(b)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime()
     );
     // Chain: each subsequent target is "stacked below" the previous one.
     for (let i = 1; i < targetIds.length; i++) {

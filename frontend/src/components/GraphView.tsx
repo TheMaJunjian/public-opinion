@@ -50,6 +50,9 @@ const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 const SUPP_FRAME_PAD = 6; // padding around the frame that wraps supplement pairs
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
 
+// Shared empty map to avoid allocating a new one on every render
+const EMPTY_MAP: Map<string, string> = new Map();
+
 function colX(col: number) {
   return GRID_LEFT + col * (CARD_W + COL_GAP);
 }
@@ -242,10 +245,53 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
   return { col, maxCol };
 }
 
+/** High-priority rule: supplement source is placed in the same column as its target. */
+function applySupplementColumnOverride(params: {
+  normals: DemoMessage[];
+  edges: DemoEdge[];
+  col: Record<string, number>;
+  maxCol: number;
+}): { col: Record<string, number>; maxCol: number; suppSourceToTarget: Map<string, string> } {
+  const { normals, edges } = params;
+  const col = { ...params.col };
+  const normalSet = new Set(normals.map(m => m.id));
+
+  const suppSourceToTarget = new Map<string, string>();
+  for (const e of edges) {
+    if (e.relationType !== "supplement") continue;
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    suppSourceToTarget.set(e.from.messageId, e.to.messageId);
+  }
+
+  // Propagate columns: source gets same column as target (iterate until stable for chains)
+  let changed = true, iter = 0;
+  while (changed && iter < 1000) {
+    changed = false; iter++;
+    for (const [srcId, tgtId] of suppSourceToTarget) {
+      const tgtCol = col[tgtId] ?? 0;
+      if ((col[srcId] ?? 0) !== tgtCol) { col[srcId] = tgtCol; changed = true; }
+    }
+  }
+
+  const maxCol = Math.max(0, ...(Object.values(col).length ? Object.values(col) : [0]));
+  return { col, maxCol, suppSourceToTarget };
+}
+
 function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
+  suppSourceToTarget?: Map<string, string>;
 }) {
   const { normals, colOf, measuredHeights, maxCol } = params;
+  const suppSourceToTarget = params.suppSourceToTarget ?? EMPTY_MAP;
+
+  // Build reverse map: target → list of supplement sources
+  const suppTargetToSources = new Map<string, string[]>();
+  for (const [srcId, tgtId] of suppSourceToTarget) {
+    const arr = suppTargetToSources.get(tgtId) ?? [];
+    arr.push(srcId);
+    suppTargetToSources.set(tgtId, arr);
+  }
+
   const byCol = new Map<number, DemoMessage[]>();
   for (const m of normals) {
     const c = colOf[m.id] ?? 0;
@@ -253,17 +299,49 @@ function computeNoOverlapLayout(params: {
     arr.push(m);
     byCol.set(c, arr);
   }
-  for (const [, arr] of byCol) arr.sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  // Supplement sources in the same column as their target are NOT "root" messages
+  const suppSourceIds = new Set(suppSourceToTarget.keys());
+
   const colCursor: Record<number, number> = {};
   for (let c = 0; c <= maxCol; c++) colCursor[c] = GRID_TOP;
   const layout: Record<string, LayoutBox> = {};
   let maxBottom = GRID_TOP;
+
+  // Recursively place a message then its supplement children (with zero gap)
+  function placeGroup(msg: DemoMessage, c: number, gapBefore: number, visited: Set<string>) {
+    if (visited.has(msg.id)) return;
+    visited.add(msg.id);
+    colCursor[c] += gapBefore;
+    const h = Math.max(MIN_CARD_H, measuredHeights[msg.id] ?? MIN_CARD_H);
+    layout[msg.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
+    maxBottom = Math.max(maxBottom, colCursor[c] + h);
+    colCursor[c] += h;
+    // Place supplement sources directly below with zero gap
+    const colMsgs = byCol.get(c) ?? [];
+    const sources = (suppTargetToSources.get(msg.id) ?? []).filter(s => (colOf[s] ?? 0) === c);
+    sources.sort((a, b) => {
+      const ma = colMsgs.find(m => m.id === a), mb = colMsgs.find(m => m.id === b);
+      return new Date(ma?.createdAt ?? 0).getTime() - new Date(mb?.createdAt ?? 0).getTime();
+    });
+    for (const srcId of sources) {
+      const srcMsg = colMsgs.find(m => m.id === srcId);
+      if (srcMsg) placeGroup(srcMsg, c, 0, visited);
+    }
+  }
+
   for (let c = 0; c <= maxCol; c++) {
-    for (const m of byCol.get(c) ?? []) {
-      const h = Math.max(MIN_CARD_H, measuredHeights[m.id] ?? MIN_CARD_H);
-      layout[m.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
-      maxBottom = Math.max(maxBottom, colCursor[c] + h);
-      colCursor[c] += h + ROW_GAP;
+    const colMsgs = byCol.get(c) ?? [];
+    // Root messages: not supplement sources that have their target in the same column
+    const roots = colMsgs.filter(m => {
+      if (!suppSourceIds.has(m.id)) return true;
+      const tgtId = suppSourceToTarget.get(m.id)!;
+      return (colOf[tgtId] ?? 0) !== c; // target in different col → treat as root
+    });
+    roots.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const visited = new Set<string>();
+    for (let i = 0; i < roots.length; i++) {
+      placeGroup(roots[i], c, i === 0 ? 0 : ROW_GAP, visited);
     }
   }
   return { layout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
@@ -369,6 +447,10 @@ export interface GraphViewProps {
   onDecorationBodyClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
   /** Double-click on a decoration badge — shows sender info popup */
   onDecorationDoubleClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
+  /** Click on an aggregated tag badge — toggles selection of all relation messages in the group */
+  onTagBodyClick?: (e: React.MouseEvent, messageId: string, tagLabel: string, relMsgIds: string[]) => void;
+  /** Double-click on a tag badge — shows details popup */
+  onTagDoubleClick?: (e: React.MouseEvent, messageId: string, tagLabel: string, relMsgIds: string[]) => void;
 }
 
 export default function GraphView(props: GraphViewProps) {
@@ -379,6 +461,7 @@ export default function GraphView(props: GraphViewProps) {
     onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
     onMessageMouseDown, onMessageMouseUp,
     onDecorationIconClick, onDecorationBodyClick, onDecorationDoubleClick,
+    onTagBodyClick, onTagDoubleClick,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
@@ -393,7 +476,9 @@ export default function GraphView(props: GraphViewProps) {
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
 
   const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges), [normalIds, edges]);
-  const { col: colOf, maxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol }), [normals, edges, baseCol, baseMaxCol]);
+  const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol }), [normals, edges, baseCol, baseMaxCol]);
+  // High-priority supplement column override: source must be in same column as target
+  const { col: colOf, maxCol, suppSourceToTarget } = useMemo(() => applySupplementColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   const [layout, setLayout] = useState<Record<string,LayoutBox>>({});
@@ -402,8 +487,8 @@ export default function GraphView(props: GraphViewProps) {
   const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
   const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}>|null>(null);
   const [decorationsByMsgState, setDecorationsByMsgState] = useState<Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>|null>(null);
-  // TAG decorations: map from messageId → list of {label, relId, rect}
-  const [tagDecorationsByMsg, setTagDecorationsByMsg] = useState<Record<string,{label:string;relMsgId:string;rect:Rect}[]>>({});
+  // TAG decorations: aggregated by label text — map from messageId → list of {label, relMsgIds, rect}
+  const [tagDecorationsByMsg, setTagDecorationsByMsg] = useState<Record<string,{label:string;relMsgIds:string[];rect:Rect}[]>>({});
   // SUPPLEMENT frames: list of {targetId, sourceId, frame rect}
   const [supplementFrames, setSupplementFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;rect:Rect}[]>([]);
 
@@ -438,9 +523,9 @@ export default function GraphView(props: GraphViewProps) {
   }, [normals, layout]);
 
   useEffect(() => {
-    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol });
+    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, suppSourceToTarget });
     setLayout(nl); setCanvasHeight(h);
-  }, [normals, colOf, maxCol, measuredHeights]);
+  }, [normals, colOf, maxCol, measuredHeights, suppSourceToTarget]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
@@ -544,29 +629,31 @@ export default function GraphView(props: GraphViewProps) {
     }
     for (const v of Object.values(decorationRects)) globalForbiddenRects.push(v.rect);
 
-    // Compute TAG label positions (right side, below decorations or at top if no decorations)
-    const newTagDecorationsByMsg: Record<string,{label:string;relMsgId:string;rect:Rect}[]> = {};
+    // Compute TAG label positions — aggregated by label text, stacked below agree/disagree decorations
+    const newTagDecorationsByMsg: Record<string,{label:string;relMsgIds:string[];rect:Rect}[]> = {};
     for (const e of edges) {
       if (e.relationType!=="tag") continue;
       if (e.to.selection.kind!=="whole") continue;
       const mid=e.to.messageId;
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
-      const relMsg=msgMap.get(e.relationMessageId);
-      if (!relMsg) continue;
-      // Get tag label from source message content (extract meaningful part)
       const fromMsg=msgMap.get(e.from.messageId);
       const label=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
       if (!newTagDecorationsByMsg[mid]) newTagDecorationsByMsg[mid]=[];
-      const tagX=box.x+box.width+TAG_RIGHT_GAP;
-      // Stack below agree/disagree decorations
-      const dec=decorationRects[`${mid}::agree`]||decorationRects[`${mid}::disagree`];
-      const hasAgree=!!decorationRects[`${mid}::agree`], hasDisagree=!!decorationRects[`${mid}::disagree`];
-      const decBottomY = box.y+DEC_RIGHT_TOP + (hasAgree?DEC_H+DEC_GAP:0) + (hasDisagree?DEC_H+DEC_GAP:0);
-      const tagY=decBottomY + newTagDecorationsByMsg[mid].length*(TAG_H+TAG_V_GAP);
-      const tagW=Math.max(TAG_MIN_W, label.length*8+8);
-      const rect={x:tagX,y:tagY,width:tagW,height:TAG_H};
-      newTagDecorationsByMsg[mid].push({label,relMsgId:e.relationMessageId,rect});
-      globalForbiddenRects.push(rect);
+      // Find existing group for this label (aggregate same-text tags)
+      const existing=newTagDecorationsByMsg[mid].find(g=>g.label===label);
+      if (existing) {
+        existing.relMsgIds.push(e.relationMessageId);
+      } else {
+        const tagX=box.x+box.width+TAG_RIGHT_GAP;
+        const hasAgree=!!decorationRects[`${mid}::agree`], hasDisagree=!!decorationRects[`${mid}::disagree`];
+        const decBottomY = box.y+DEC_RIGHT_TOP + (hasAgree?DEC_H+DEC_GAP:0) + (hasDisagree?DEC_H+DEC_GAP:0);
+        const tagY=decBottomY + newTagDecorationsByMsg[mid].length*(TAG_H+TAG_V_GAP);
+        // Reserve width for count suffix; we'll recalculate at render time
+        const tagW=Math.max(TAG_MIN_W, label.length*8+8+28);
+        const rect={x:tagX,y:tagY,width:tagW,height:TAG_H};
+        newTagDecorationsByMsg[mid].push({label,relMsgIds:[e.relationMessageId],rect});
+        globalForbiddenRects.push(rect);
+      }
     }
     setTagDecorationsByMsg(newTagDecorationsByMsg);
 
@@ -598,9 +685,25 @@ export default function GraphView(props: GraphViewProps) {
       const fromAuthor=fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);
 
-      // Agree/disagree, tag, and supplement relations are rendered as decorations/frames —
-      // no directed arrows are drawn for them.
-      if (e.relationType==="agree"||e.relationType==="disagree"||e.relationType==="tag"||e.relationType==="supplement") continue;
+      // Tag and supplement relations are rendered as decorations/frames — no directed arrows.
+      // Agree/disagree: pure-stance (anon: source) → decoration only; with real source → directed arrow to decoration badge.
+      if (e.relationType==="tag"||e.relationType==="supplement") continue;
+      if (e.relationType==="agree"||e.relationType==="disagree") {
+        if (e.from.messageId.startsWith("anon:")) continue; // pure-stance, decoration only
+        // With source message: render directed arrow pointing to the decoration badge
+        const targetMid=e.to.messageId;
+        const decKey=`${targetMid}::${e.relationType}`;
+        const decRect=decorationRects[decKey]?.rect;
+        if (!decRect) continue; // decoration not yet laid out
+        const toBox: LayoutBox={x:decRect.x,y:decRect.y,width:decRect.width,height:decRect.height};
+        rawEdges.push({
+          drawId:e.id,edge:e,fromAuthor,
+          fromBox:fromEp.box,toBox,fromCol:fromEp.col,toCol:fromEp.col,
+          fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+          start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
+        });
+        continue;
+      }
 
       if (toMsg?.kind==="relation") {
         const relId=e.to.messageId;
@@ -778,7 +881,7 @@ export default function GraphView(props: GraphViewProps) {
 
   return (
     <div ref={canvasRef} style={{position:"relative",width:"100%",height:"100%"}}
-      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')))return;onCanvasBlankClick?.();}}>
+      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
@@ -814,7 +917,7 @@ export default function GraphView(props: GraphViewProps) {
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
             const angle=Math.atan2(end.y-ctrl.y,end.x-ctrl.x),al=7,aa=Math.PI/7;
             const ax1=end.x-al*Math.cos(angle-aa),ay1=end.y-al*Math.sin(angle-aa),ax2=end.x-al*Math.cos(angle+aa),ay2=end.y-al*Math.sin(angle+aa);
-            const color=edge.relationType==="annotation"?"rgba(255,215,0,0.92)":edge.relationType==="reference"?"rgba(80,180,255,0.92)":edge.relationType==="reply"?"rgba(160,255,140,0.72)":"rgba(120,120,120,0.72)";
+            const color=edge.relationType==="annotation"?"rgba(255,215,0,0.92)":edge.relationType==="reference"?"rgba(80,180,255,0.92)":edge.relationType==="reply"?"rgba(160,255,140,0.72)":edge.relationType==="agree"?"rgba(2,170,90,0.92)":edge.relationType==="disagree"?"rgba(210,50,50,0.92)":"rgba(120,120,120,0.72)";
             const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
             const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
             const labelStroke=isWhole||isFrag?"rgba(11,132,255,0.95)":"rgba(0,0,0,0.85)";
@@ -834,36 +937,45 @@ export default function GraphView(props: GraphViewProps) {
           const padX=8,padY=6,box:LayoutBox={x:bb.x-padX,y:bb.y-padY,width:bb.width+padX*2,height:bb.height+padY*2};
           const relId=pe.edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
-            <div key={`hit-${pe.drawId}`} onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+            <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}/>
           );
         })}
-        {/* Clickable SUPPLEMENT frames */}
+        {/* Clickable SUPPLEMENT frames — zIndex 1 (below message cards) so clicks on inner cards pass through */}
         {supplementFrames.map(sf=>{
           const isWhole=isRelWholeSel(sf.relMsgId);
           return (
             <div key={`supp-hit-${sf.relMsgId}`}
+              data-rel-overlay="true"
               onClick={e=>{e.stopPropagation();onEdgeLabelSingleClick(e,sf.relMsgId,"frame");}}
               onDoubleClick={e=>{e.stopPropagation();onEdgeLabelDoubleClick(e,sf.relMsgId);}}
               title={`补充关系：${sf.relMsgId}；单击选中，双击展开详情`}
-              style={{position:"absolute",left:sf.rect.x,top:sf.rect.y,width:sf.rect.width,height:sf.rect.height,zIndex:2,cursor:"pointer",pointerEvents:"auto",background:"transparent",border:isWhole?"2px solid rgba(11,132,255,0.85)":"2px solid transparent",borderRadius:SUPP_FRAME_RADIUS}}/>
+              style={{position:"absolute",left:sf.rect.x,top:sf.rect.y,width:sf.rect.width,height:sf.rect.height,zIndex:1,cursor:"pointer",pointerEvents:"auto",background:"transparent",border:isWhole?"2px solid rgba(11,132,255,0.85)":"2px solid transparent",borderRadius:SUPP_FRAME_RADIUS}}/>
           );
         })}
       </>}
 
-      {/* TAG decoration labels */}
-      {Object.entries(tagDecorationsByMsg).map(([mid,tags])=>
-        tags.map(tag=>(
-          <div key={`tag-${tag.relMsgId}`}
-            style={{position:"absolute",left:tag.rect.x,top:tag.rect.y,width:tag.rect.width,height:tag.rect.height,zIndex:5,
-              background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
-              justifyContent:"center",fontSize:10,pointerEvents:"none",cursor:"default",padding:"0 4px",
-              boxShadow:"0 1px 4px rgba(0,0,0,0.4)",border:"1px solid rgba(255,255,255,0.15)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
-            title={`标注：${tag.label}`}>
-            🏷{tag.label}
-          </div>
-        ))
+      {/* TAG decoration labels — aggregated by label text, interactive */}
+      {Object.entries(tagDecorationsByMsg).map(([_mid,groups])=>
+        groups.map(group=>{
+          const count=group.relMsgIds.length;
+          const displayLabel=count>1?`${group.label}（${count}人）`:group.label;
+          const isSelected=group.relMsgIds.some(id=>isRelWholeSel(id));
+          return (
+            <div key={`tag-${_mid}-${group.label}`}
+              data-rel-overlay="true"
+              onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
+              onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
+              style={{position:"absolute",left:group.rect.x,top:group.rect.y,width:group.rect.width,height:group.rect.height,zIndex:5,
+                background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
+                justifyContent:"center",fontSize:10,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
+                boxShadow:"0 1px 4px rgba(0,0,0,0.4)",border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
+              title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}>
+              🏷{displayLabel}
+            </div>
+          );
+        })
       )}
 
       {/* Decoration badges (agree/disagree) — right side, with icon + body areas */}
@@ -874,6 +986,7 @@ export default function GraphView(props: GraphViewProps) {
         const icon=v.kind==="agree"?"👍":"👎";
         return (
           <div key={`dec-${v.key}`}
+            data-rel-overlay="true"
             onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}
             title={`${v.kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
             style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:5,

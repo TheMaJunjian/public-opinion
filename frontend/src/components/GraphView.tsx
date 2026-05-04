@@ -317,6 +317,7 @@ function applySupplementColumnOverride(params: {
   const { normals, edges } = params;
   const col = { ...params.col };
   const normalSet = new Set(normals.map(m => m.id));
+  const msgById = new Map(normals.map(m => [m.id, m]));
 
   const suppSourceToTarget = new Map<string, string>();
   for (const e of edges) {
@@ -325,6 +326,33 @@ function applySupplementColumnOverride(params: {
     // First target wins: deterministic column assignment regardless of edge ordering.
     if (!suppSourceToTarget.has(e.from.messageId)) {
       suppSourceToTarget.set(e.from.messageId, e.to.messageId);
+    }
+  }
+
+  // For no-source supplements (anon: from), chain multiple targets together so they
+  // are placed in the same column and stacked tightly (zero gap), matching the
+  // visual layout used for supplements with a real source message.
+  const noSuppTargetsByRelMsg = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.relationType !== "supplement") continue;
+    if (!e.from.messageId.startsWith("anon:")) continue;
+    if (!normalSet.has(e.to.messageId)) continue;
+    const arr = noSuppTargetsByRelMsg.get(e.relationMessageId) ?? [];
+    arr.push(e.to.messageId);
+    noSuppTargetsByRelMsg.set(e.relationMessageId, arr);
+  }
+  for (const [, targetIds] of noSuppTargetsByRelMsg) {
+    if (targetIds.length < 2) continue;
+    // Sort by creation time for deterministic, chronological ordering.
+    targetIds.sort((a, b) =>
+      new Date(msgById.get(a)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime() -
+      new Date(msgById.get(b)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime()
+    );
+    // Chain: each subsequent target is "stacked below" the previous one.
+    for (let i = 1; i < targetIds.length; i++) {
+      if (!suppSourceToTarget.has(targetIds[i])) {
+        suppSourceToTarget.set(targetIds[i], targetIds[i - 1]);
+      }
     }
   }
 

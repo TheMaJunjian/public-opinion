@@ -107,6 +107,9 @@ export function convertMessagesToDemoModel(
     // If there's no source message, we don't need a DemoMessage for it
     // (it won't appear in the normal messages list).
 
+    // Deduplicate relation-type targetRefs by relationId to prevent duplicate arrows.
+    const seenRelationTargetIds = new Set<string>();
+
     rel.targetRefs.forEach((ref, index) => {
       const edgeId = `${rel.id}::${index}`;
       let toUnit: UnitSelection;
@@ -120,6 +123,9 @@ export function convertMessagesToDemoModel(
           ? { messageId: ref.messageId, selection: { kind: "text", start: pos.start, len: pos.len, text: ref.text } }
           : { messageId: ref.messageId, selection: { kind: "whole" } };
       } else {
+        // Skip duplicate relation targetRefs pointing to the same relationId.
+        if (seenRelationTargetIds.has(ref.relationId)) return;
+        seenRelationTargetIds.add(ref.relationId);
         toUnit = { messageId: `rel:${ref.relationId}`, selection: { kind: "whole" } };
       }
 
@@ -133,6 +139,10 @@ export function convertMessagesToDemoModel(
       });
     });
   }
+
+  // Sort all messages (normal + relation) by creation time so the linear view
+  // shows them in send order after exit-and-reenter.
+  demoMessages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return { messages: demoMessages, edges: demoEdges };
 }

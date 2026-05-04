@@ -567,17 +567,16 @@ export default function TopicDetailPage() {
       }
     } else if (relationType === "agree" || relationType === "disagree") {
       // agree/disagree: source message only created if there's text content
-      const decKind = relationType === "disagree" ? "disagree" : "agree";
-      const uniqueTargets = targets.map(t => t.messageId);
+      const NO_SOURCE = ""; // sentinel: empty string means pure-stance (no source message)
       // Use source units' message IDs if provided; otherwise relation is standalone
       const uniqueSources = Array.from(new Set(sources.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
-      for (const srcId of (uniqueSources.length > 0 ? uniqueSources : ["__none__"])) {
+      for (const srcId of (uniqueSources.length > 0 ? uniqueSources : [NO_SOURCE])) {
         for (const tgt of targets) {
           const tgtMid = tgt.messageId;
           try {
             const now = new Date().toISOString();
             const author = user?.username ?? "Anonymous";
-            if (srcId !== "__none__") {
+            if (srcId !== NO_SOURCE) {
               // Has a real source message — call backend
               const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
               const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });

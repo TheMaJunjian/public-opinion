@@ -30,7 +30,7 @@ const CARD_W = 320;
 const MIN_CARD_H = 86;
 const GRID_LEFT = 18;
 const GRID_TOP = 18;
-const COL_GAP = 80;      // increased from 28 to accommodate right-side decorations
+const COL_GAP = 80;      // right-side decorations need ~58px (DEC_RIGHT_GAP=6 + DEC_W=56 + buffer)
 const ROW_GAP = 32;
 const CANVAS_BOTTOM_PAD = 120;
 // Decoration constants — decorations are now on the RIGHT side of each card, stacked vertically
@@ -41,10 +41,11 @@ const DEC_RIGHT_GAP = 6; // horizontal gap between card right edge and decoratio
 const DEC_RIGHT_TOP = 4; // y offset from card top
 const DEC_ICON_W = 20;   // clickable icon area width within a decoration badge
 // TAG label constants
-const TAG_H = 18;        // height of each tag label badge
-const TAG_MIN_W = 36;    // minimum width
-const TAG_V_GAP = 3;     // vertical gap between stacked tag labels
-const TAG_RIGHT_GAP = 6; // horizontal gap from card right edge
+const TAG_H = 18;            // height of each tag label badge
+const TAG_MIN_W = 36;        // minimum width
+const TAG_V_GAP = 3;         // vertical gap between stacked tag labels
+const TAG_RIGHT_GAP = 6;     // horizontal gap from card right edge
+const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 // SUPPLEMENT frame constants
 const SUPP_FRAME_PAD = 6; // padding around the frame that wraps supplement pairs
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
@@ -554,7 +555,7 @@ export default function GraphView(props: GraphViewProps) {
       if (!relMsg) continue;
       // Get tag label from source message content (extract meaningful part)
       const fromMsg=msgMap.get(e.from.messageId);
-      const label=fromMsg?.content?.slice(0,20)??"标注";
+      const label=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
       if (!newTagDecorationsByMsg[mid]) newTagDecorationsByMsg[mid]=[];
       const tagX=box.x+box.width+TAG_RIGHT_GAP;
       // Stack below agree/disagree decorations

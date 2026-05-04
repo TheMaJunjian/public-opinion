@@ -30,13 +30,24 @@ const CARD_W = 320;
 const MIN_CARD_H = 86;
 const GRID_LEFT = 18;
 const GRID_TOP = 18;
-const COL_GAP = 28;
+const COL_GAP = 80;      // increased from 28 to accommodate right-side decorations
 const ROW_GAP = 32;
 const CANVAS_BOTTOM_PAD = 120;
-const DEC_W = 52;
-const DEC_H = 22;
-const DEC_GAP = 4;
-const DEC_OFFSET_Y = 4;
+// Decoration constants — decorations are now on the RIGHT side of each card, stacked vertically
+const DEC_W = 56;        // width of each decoration badge
+const DEC_H = 22;        // height of each decoration badge
+const DEC_GAP = 4;       // vertical gap between agree / disagree decorations
+const DEC_RIGHT_GAP = 6; // horizontal gap between card right edge and decoration
+const DEC_RIGHT_TOP = 4; // y offset from card top
+const DEC_ICON_W = 20;   // clickable icon area width within a decoration badge
+// TAG label constants
+const TAG_H = 18;        // height of each tag label badge
+const TAG_MIN_W = 36;    // minimum width
+const TAG_V_GAP = 3;     // vertical gap between stacked tag labels
+const TAG_RIGHT_GAP = 6; // horizontal gap from card right edge
+// SUPPLEMENT frame constants
+const SUPP_FRAME_PAD = 6; // padding around the frame that wraps supplement pairs
+const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
 
 function colX(col: number) {
   return GRID_LEFT + col * (CARD_W + COL_GAP);
@@ -102,7 +113,8 @@ export function extractTextTargetsForMessage(messageId: string, edges: DemoEdge[
 export function relationTypeName(t: RelationType | string): string {
   const names: Record<string, string> = {
     annotation: "注释", reference: "引用", reply: "回复",
-    agree: "赞同", disagree: "反对", support: "支持", rebut: "反驳",
+    agree: "赞同", disagree: "反对", tag: "标注",
+    correct: "更正", supplement: "补充",
   };
   return names[t] ?? t;
 }
@@ -350,7 +362,12 @@ export interface GraphViewProps {
   onCanvasBlankClick?: () => void;
   onMessageMouseDown?: (e: React.MouseEvent, messageId: string) => void;
   onMessageMouseUp?: (e: React.MouseEvent, messageId: string) => void;
-  onDecorationClick?: (messageId: string, kind: "agree" | "disagree") => void;
+  /** Click on the icon area of a decoration badge — quick send empty agree/disagree */
+  onDecorationIconClick?: (messageId: string, kind: "agree" | "disagree") => void;
+  /** Click on the body (non-icon area) of a decoration badge — toggles selection */
+  onDecorationBodyClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
+  /** Double-click on a decoration badge — shows sender info popup */
+  onDecorationDoubleClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
 }
 
 export default function GraphView(props: GraphViewProps) {
@@ -359,7 +376,8 @@ export default function GraphView(props: GraphViewProps) {
     onMessageClick, onMessageDoubleClick, onTextMouseUp,
     onEdgeLabelSingleClick, onEdgeLabelDoubleClick,
     onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
-    onMessageMouseDown, onMessageMouseUp, onDecorationClick,
+    onMessageMouseDown, onMessageMouseUp,
+    onDecorationIconClick, onDecorationBodyClick, onDecorationDoubleClick,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
@@ -381,8 +399,12 @@ export default function GraphView(props: GraphViewProps) {
   const [canvasHeight, setCanvasHeight] = useState<number>(900);
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
   const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
-  const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;key:string;messageId:string}>|null>(null);
+  const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}>|null>(null);
   const [decorationsByMsgState, setDecorationsByMsgState] = useState<Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>|null>(null);
+  // TAG decorations: map from messageId → list of {label, relId, rect}
+  const [tagDecorationsByMsg, setTagDecorationsByMsg] = useState<Record<string,{label:string;relMsgId:string;rect:Rect}[]>>({});
+  // SUPPLEMENT frames: list of {targetId, sourceId, frame rect}
+  const [supplementFrames, setSupplementFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;rect:Rect}[]>([]);
 
   const canvasWidth = GRID_LEFT*2 + (maxCol+1)*CARD_W + maxCol*COL_GAP;
   const edgesByRelMsg = useMemo(() => {
@@ -483,34 +505,87 @@ export default function GraphView(props: GraphViewProps) {
           if (parts.length>=3) {
             const mid=parts.slice(2).join(":");
             if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
-            if (e.relationType==="support"||e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
-            else if (e.relationType==="rebut"||e.relationType==="disagree") decorationsByMsg[mid].disagreeCount++;
+            if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
+            else if (e.relationType==="disagree") decorationsByMsg[mid].disagreeCount++;
           }
         }
       } else if (e.to.selection.kind==="whole") {
         const mid=e.to.messageId;
-        if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
-        if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
-        else if (e.relationType==="disagree") decorationsByMsg[mid].disagreeCount++;
+        if (e.relationType==="agree"||e.relationType==="disagree") {
+          if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
+          if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
+          else decorationsByMsg[mid].disagreeCount++;
+        }
       }
     }
 
-    const decorationRects: Record<string,{kind:"agree"|"disagree";rect:Rect;key:string;messageId:string}> = {};
+    // Decorations are now placed to the RIGHT of the card, stacked vertically (agree on top, disagree below).
+    // Each badge is split into icon area (left DEC_ICON_W px) and body area (rest).
+    const decorationRects: Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}> = {};
     for (const [mid,data] of Object.entries(decorationsByMsg)) {
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
       const hasAgree=data.agreeCount>0, hasDisagree=data.disagreeCount>0;
-      const totalW=hasAgree&&hasDisagree ? DEC_W*2+DEC_GAP : DEC_W;
-      const startX=box.x+(box.width-totalW)/2;
-      const offsetY=box.y+box.height+DEC_OFFSET_Y;
+      const decX=box.x+box.width+DEC_RIGHT_GAP;
+      let decY=box.y+DEC_RIGHT_TOP;
       if (hasAgree) {
-        decorationRects[`${mid}::agree`]={kind:"agree",key:data.agreeKey,messageId:mid,rect:{x:startX,y:offsetY,width:DEC_W,height:DEC_H}};
+        const rect={x:decX,y:decY,width:DEC_W,height:DEC_H};
+        const iconRect={x:decX,y:decY,width:DEC_ICON_W,height:DEC_H};
+        const bodyRect={x:decX+DEC_ICON_W,y:decY,width:DEC_W-DEC_ICON_W,height:DEC_H};
+        decorationRects[`${mid}::agree`]={kind:"agree",key:data.agreeKey,messageId:mid,rect,iconRect,bodyRect};
+        decY+=DEC_H+DEC_GAP;
       }
       if (hasDisagree) {
-        const x=hasAgree ? startX+DEC_W+DEC_GAP : startX;
-        decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect:{x,y:offsetY,width:DEC_W,height:DEC_H}};
+        const rect={x:decX,y:decY,width:DEC_W,height:DEC_H};
+        const iconRect={x:decX,y:decY,width:DEC_ICON_W,height:DEC_H};
+        const bodyRect={x:decX+DEC_ICON_W,y:decY,width:DEC_W-DEC_ICON_W,height:DEC_H};
+        decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect,iconRect,bodyRect};
       }
     }
     for (const v of Object.values(decorationRects)) globalForbiddenRects.push(v.rect);
+
+    // Compute TAG label positions (right side, below decorations or at top if no decorations)
+    const newTagDecorationsByMsg: Record<string,{label:string;relMsgId:string;rect:Rect}[]> = {};
+    for (const e of edges) {
+      if (e.relationType!=="tag") continue;
+      if (e.to.selection.kind!=="whole") continue;
+      const mid=e.to.messageId;
+      const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
+      const relMsg=msgMap.get(e.relationMessageId);
+      if (!relMsg) continue;
+      // Get tag label from source message content (extract meaningful part)
+      const fromMsg=msgMap.get(e.from.messageId);
+      const label=fromMsg?.content?.slice(0,20)??"标注";
+      if (!newTagDecorationsByMsg[mid]) newTagDecorationsByMsg[mid]=[];
+      const tagX=box.x+box.width+TAG_RIGHT_GAP;
+      // Stack below agree/disagree decorations
+      const dec=decorationRects[`${mid}::agree`]||decorationRects[`${mid}::disagree`];
+      const hasAgree=!!decorationRects[`${mid}::agree`], hasDisagree=!!decorationRects[`${mid}::disagree`];
+      const decBottomY = box.y+DEC_RIGHT_TOP + (hasAgree?DEC_H+DEC_GAP:0) + (hasDisagree?DEC_H+DEC_GAP:0);
+      const tagY=decBottomY + newTagDecorationsByMsg[mid].length*(TAG_H+TAG_V_GAP);
+      const tagW=Math.max(TAG_MIN_W, label.length*8+8);
+      const rect={x:tagX,y:tagY,width:tagW,height:TAG_H};
+      newTagDecorationsByMsg[mid].push({label,relMsgId:e.relationMessageId,rect});
+      globalForbiddenRects.push(rect);
+    }
+    setTagDecorationsByMsg(newTagDecorationsByMsg);
+
+    // Compute SUPPLEMENT frames (border wrapping target + source messages)
+    const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;rect:Rect}[] = [];
+    for (const e of edges) {
+      if (e.relationType!=="supplement") continue;
+      if (e.to.selection.kind!=="whole"&&e.to.selection.kind!=="text") continue;
+      const targetId=e.to.messageId, sourceId=e.from.messageId;
+      const targetBox=endpointBoxForNormal(targetId)?.box??layout[targetId];
+      const sourceBox=endpointBoxForNormal(sourceId)?.box??layout[sourceId];
+      if (!targetBox||!sourceBox) continue;
+      const minX=Math.min(targetBox.x,sourceBox.x)-SUPP_FRAME_PAD;
+      const minY=Math.min(targetBox.y,sourceBox.y)-SUPP_FRAME_PAD;
+      const maxX=Math.max(targetBox.x+targetBox.width,sourceBox.x+sourceBox.width)+SUPP_FRAME_PAD;
+      const maxY=Math.max(targetBox.y+targetBox.height,sourceBox.y+sourceBox.height)+SUPP_FRAME_PAD;
+      const rect={x:minX,y:minY,width:maxX-minX,height:maxY-minY};
+      newSupplementFrames.push({targetId,sourceId,relMsgId:e.relationMessageId,rect});
+    }
+    setSupplementFrames(newSupplementFrames);
 
     const rawEdges: Omit<PositionedEdge,"labelX"|"labelY">[] = [];
     const labelSeeds: LabelSeed[] = [];
@@ -521,6 +596,10 @@ export default function GraphView(props: GraphViewProps) {
       const fromEp=endpointBoxForNormal(fromMsg.id); if (!fromEp) continue;
       const fromAuthor=fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);
+
+      // Agree/disagree, tag, and supplement relations are rendered as decorations/frames —
+      // no directed arrows are drawn for them.
+      if (e.relationType==="agree"||e.relationType==="disagree"||e.relationType==="tag"||e.relationType==="supplement") continue;
 
       if (toMsg?.kind==="relation") {
         const relId=e.to.messageId;
@@ -545,17 +624,6 @@ export default function GraphView(props: GraphViewProps) {
       const toEp=endpointBoxForNormal(toId); if (!toEp) continue;
       let fragRectCanvas: DOMRect|null=null;
 
-      if (e.to.selection.kind==="edge") {
-        const eid=e.to.selection.edgeId||"";
-        if (eid.startsWith("dec:")) {
-          const parts=eid.split(":");
-          if (parts.length>=3) {
-            const mid=parts.slice(2).join(":");
-            const dec=decorationRects[`${mid}::${parts[1]}`];
-            if (dec) fragRectCanvas=new DOMRect(dec.rect.x,dec.rect.y,dec.rect.width,dec.rect.height);
-          }
-        }
-      }
       if ((e.relationType==="annotation"||e.relationType==="reference") && selectionIsText(e.to.selection) && contentRefs.current[toId]) {
         const container=contentRefs.current[toId]!;
         const start=e.to.selection.start, end=start+e.to.selection.len;
@@ -734,12 +802,18 @@ export default function GraphView(props: GraphViewProps) {
 
       {positionedEdges.length>0&&<>
         <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:3,pointerEvents:"none"}}>
+          {/* SUPPLEMENT frames */}
+          {supplementFrames.map(sf=>(
+            <rect key={`supp-frame-${sf.relMsgId}`} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
+              rx={SUPP_FRAME_RADIUS} ry={SUPP_FRAME_RADIUS}
+              fill="rgba(130,80,200,0.04)" stroke="rgba(130,80,200,0.55)" strokeWidth={1.5} strokeDasharray="5 3"/>
+          ))}
           {positionedEdges.map(pe=>{
             const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
             const angle=Math.atan2(end.y-ctrl.y,end.x-ctrl.x),al=7,aa=Math.PI/7;
             const ax1=end.x-al*Math.cos(angle-aa),ay1=end.y-al*Math.sin(angle-aa),ax2=end.x-al*Math.cos(angle+aa),ay2=end.y-al*Math.sin(angle+aa);
-            const color=edge.relationType==="annotation"?"rgba(255,215,0,0.92)":edge.relationType==="reference"?"rgba(80,180,255,0.92)":edge.relationType==="reply"?"rgba(160,255,140,0.72)":edge.relationType==="agree"?"rgba(2,150,80,0.92)":edge.relationType==="disagree"?"rgba(200,40,40,0.92)":edge.relationType==="support"?"rgba(2,150,80,0.92)":"rgba(200,40,40,0.92)";
+            const color=edge.relationType==="annotation"?"rgba(255,215,0,0.92)":edge.relationType==="reference"?"rgba(80,180,255,0.92)":edge.relationType==="reply"?"rgba(160,255,140,0.72)":"rgba(120,120,120,0.72)";
             const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
             const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
             const labelStroke=isWhole||isFrag?"rgba(11,132,255,0.95)":"rgba(0,0,0,0.85)";
@@ -764,17 +838,63 @@ export default function GraphView(props: GraphViewProps) {
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}/>
           );
         })}
+        {/* Clickable SUPPLEMENT frames */}
+        {supplementFrames.map(sf=>{
+          const isWhole=isRelWholeSel(sf.relMsgId);
+          return (
+            <div key={`supp-hit-${sf.relMsgId}`}
+              onClick={e=>{e.stopPropagation();onEdgeLabelSingleClick(e,sf.relMsgId,"frame");}}
+              onDoubleClick={e=>{e.stopPropagation();onEdgeLabelDoubleClick(e,sf.relMsgId);}}
+              title={`补充关系：${sf.relMsgId}；单击选中，双击展开详情`}
+              style={{position:"absolute",left:sf.rect.x,top:sf.rect.y,width:sf.rect.width,height:sf.rect.height,zIndex:2,cursor:"pointer",pointerEvents:"auto",background:"transparent",border:isWhole?"2px solid rgba(11,132,255,0.85)":"2px solid transparent",borderRadius:SUPP_FRAME_RADIUS}}/>
+          );
+        })}
       </>}
 
+      {/* TAG decoration labels */}
+      {Object.entries(tagDecorationsByMsg).map(([mid,tags])=>
+        tags.map(tag=>(
+          <div key={`tag-${tag.relMsgId}`}
+            style={{position:"absolute",left:tag.rect.x,top:tag.rect.y,width:tag.rect.width,height:tag.rect.height,zIndex:5,
+              background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
+              justifyContent:"center",fontSize:10,pointerEvents:"none",cursor:"default",padding:"0 4px",
+              boxShadow:"0 1px 4px rgba(0,0,0,0.4)",border:"1px solid rgba(255,255,255,0.15)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
+            title={`标注：${tag.label}`}>
+            🏷{tag.label}
+          </div>
+        ))
+      )}
+
+      {/* Decoration badges (agree/disagree) — right side, with icon + body areas */}
       {decorationRectsState&&decorationsByMsgState&&Object.entries(decorationRectsState).map(([,v])=>{
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
         const cnt=v.kind==="agree"?counts.agreeCount:counts.disagreeCount;
+        const bgColor=v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+        const icon=v.kind==="agree"?"👍":"👎";
         return (
-          <div key={`dec-${v.key}`} onClick={ev=>{ev.stopPropagation();onDecorationClick?.(v.messageId,v.kind);}}
-            title={`${relationTypeName(v.kind)}：点击查看记录`}
-            style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:5,background:v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)",color:"#fff",borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",gap:3,fontSize:11,pointerEvents:"auto",cursor:"pointer",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)"}}>
-            <span style={{fontWeight:700}}>{cnt}</span>
-            <span style={{fontSize:10,opacity:0.9}}>{v.kind==="agree"?"赞":"反"}</span>
+          <div key={`dec-${v.key}`}
+            onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}
+            title={`${v.kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+            style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:5,
+              background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
+              fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+              overflow:"hidden"}}>
+            {/* Icon area: click = quick send */}
+            <div
+              onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(v.messageId,v.kind);}}
+              style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+              title={`点击：快速发送${v.kind==="agree"?"赞同":"反对"}`}>
+              {icon}
+            </div>
+            {/* Body area: click = toggle selection */}
+            <div
+              onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,v.messageId,v.kind);}}
+              style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                gap:2,cursor:"pointer"}}>
+              <span style={{fontWeight:700}}>{cnt}</span>
+              <span style={{fontSize:9,opacity:0.85}}>{v.kind==="agree"?"赞":"反"}</span>
+            </div>
           </div>
         );
       })}

@@ -29,7 +29,7 @@ function makeMsg(id: string, username = 'user'): Message {
 function makeRelation(
   id: string,
   relationType: string,
-  sourceMessageId: string,
+  sourceMessageId: string | null,
   targetRef: Relation['targetRefs'][number],
 ): Relation {
   return {
@@ -130,13 +130,15 @@ describe('computeStanceStats', () => {
     expect(stats.get('m1')).toEqual({ support: 0, oppose: 1 });
   });
 
-  it('counts SUPPORT as support', () => {
-    const msgs = [makeMsg('m1'), makeMsg('m2')];
-    const rels = [
-      makeRelation('r1', 'SUPPORT', 'm2', { kind: 'message', messageId: 'm1' }),
-    ];
-    const stats = computeStanceStats(msgs, rels);
-    expect(stats.get('m1')?.support).toBe(1);
+  it('handles AGREE with null sourceMessageId (pure-stance)', () => {
+    const msgs = [makeMsg('m1')];
+    const rel: Relation = {
+      id: 'r1', topicId: 'topic1', relationType: 'AGREE',
+      sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: 'm1' }],
+      createdAt: new Date().toISOString(), createdBy: { id: 'u-user', username: 'user', createdAt: new Date().toISOString() },
+    };
+    const stats = computeStanceStats(msgs, [rel]);
+    expect(stats.get('m1')).toEqual({ support: 1, oppose: 0 });
   });
 
   it('does NOT count stance when target is a relation-kind ref', () => {

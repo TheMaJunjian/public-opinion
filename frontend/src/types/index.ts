@@ -41,23 +41,27 @@ export interface Message {
  * The union with `string` allows new types to be used without a type system change.
  *
  * Types by presentation category:
- *   Edge-label (directed connector): ANNOTATION, REFERENCE, REPLY, SUPPLEMENT
+ *   Edge-label (directed connector): ANNOTATION, REFERENCE, REPLY
  *   Decoration (badge on target):    AGREE, DISAGREE
- *   Edge + Decoration:               SUPPORT, REBUT
+ *   Decoration-label (text tag):     TAG
+ *   Supplement-frame (border wrap):  SUPPLEMENT
  *   Replace/Overlay:                 CORRECT, SUMMARY
  *   Frame/Group:                     CLASSIFY, MERGE
  *   Inline badge:                    RECOMMEND, ARCHIVE
+ *
+ * Notes:
+ *   AGREE/DISAGREE: when accompanied by a text message, function as support/rebut.
+ *   SUPPORT and REBUT have been removed; their semantics are covered by AGREE/DISAGREE+text.
  */
 export type RelationType =
   | 'ANNOTATION'   // 注释
   | 'REFERENCE'    // 引用
   | 'REPLY'        // 回复
-  | 'AGREE'        // 赞同
-  | 'DISAGREE'     // 反对
-  | 'SUPPORT'      // 支持（立场表达 + 连接）
-  | 'REBUT'        // 反驳（立场表达 + 连接）
+  | 'AGREE'        // 赞同（有文本时视为支持）
+  | 'DISAGREE'     // 反对（有文本时视为反驳）
+  | 'TAG'          // 标注（消息旁的装饰标签）
   | 'CORRECT'      // 更正
-  | 'SUPPLEMENT'   // 补充
+  | 'SUPPLEMENT'   // 补充（边框包裹目标+来源消息）
   | 'CLASSIFY'     // 分类
   | 'MERGE'        // 归并
   | 'SUMMARY'      // 总结
@@ -97,8 +101,11 @@ export interface Relation {
   id: string;
   topicId: string;
   relationType: RelationType;
-  /** ID of the text message that "sends" / authors this relation */
-  sourceMessageId: string;
+  /**
+   * ID of the text message that "sends" / authors this relation.
+   * Nullable for AGREE/DISAGREE pure-stance relations (no attached text message).
+   */
+  sourceMessageId: string | null;
   targetRefs: TargetRef[];
   createdAt: string;
   createdBy: User;
@@ -118,12 +125,13 @@ export interface Relation {
  *   3. Optionally adding rendering logic for a new PresentationKind
  */
 export type PresentationKind =
-  | 'edge-label'      // Directed connector with a clickable label
-  | 'decoration'      // Badge/decoration attached to target message card
-  | 'edge-decoration' // Directed connector AND badge on target
-  | 'frame-group'     // Frames a group of messages
-  | 'replace-overlay' // Overlays / replaces the target message display
-  | 'inline-badge';   // Small inline badge on target message
+  | 'edge-label'        // Directed connector with a clickable label
+  | 'decoration'        // Badge/decoration attached to target message card (right side)
+  | 'decoration-label'  // Text label badge attached to target message card
+  | 'supplement-frame'  // Border frame wrapping target + source messages (source below target)
+  | 'frame-group'       // Frames a group of messages
+  | 'replace-overlay'   // Overlays / replaces the target message display
+  | 'inline-badge';     // Small inline badge on target message
 
 export interface PresentationSpec {
   /** How this relation is rendered */
@@ -149,20 +157,19 @@ export interface PresentationSpec {
  * To add a new relation type, add an entry here — no GraphView changes needed.
  */
 export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
-  ANNOTATION:  { kind: 'edge-label',      label: '注释', color: 'blue',   formsTrees: false },
-  REFERENCE:   { kind: 'edge-label',      label: '引用', color: 'indigo', formsTrees: false },
-  REPLY:       { kind: 'edge-label',      label: '回复', color: 'blue',   formsTrees: true  },
-  AGREE:       { kind: 'decoration',      label: '赞同', color: 'green',  stanceEffect: 'support' },
-  DISAGREE:    { kind: 'decoration',      label: '反对', color: 'red',    stanceEffect: 'oppose'  },
-  SUPPORT:     { kind: 'edge-decoration', label: '支持', color: 'green',  stanceEffect: 'support', formsTrees: true },
-  REBUT:       { kind: 'edge-decoration', label: '反驳', color: 'red',    stanceEffect: 'oppose',  formsTrees: true },
-  CORRECT:     { kind: 'replace-overlay', label: '更正', color: 'yellow', formsTrees: true  },
-  SUPPLEMENT:  { kind: 'edge-label',      label: '补充', color: 'purple', formsTrees: true  },
-  CLASSIFY:    { kind: 'frame-group',     label: '分类', color: 'gray',   formsTrees: false },
-  MERGE:       { kind: 'frame-group',     label: '归并', color: 'gray',   formsTrees: false },
-  SUMMARY:     { kind: 'replace-overlay', label: '总结', color: 'amber',  formsTrees: false },
-  RECOMMEND:   { kind: 'inline-badge',    label: '推荐', color: 'orange', formsTrees: false },
-  ARCHIVE:     { kind: 'inline-badge',    label: '冷藏', color: 'slate',  formsTrees: false },
+  ANNOTATION:  { kind: 'edge-label',        label: '注释', color: 'blue',   formsTrees: false },
+  REFERENCE:   { kind: 'edge-label',        label: '引用', color: 'indigo', formsTrees: false },
+  REPLY:       { kind: 'edge-label',        label: '回复', color: 'blue',   formsTrees: true  },
+  AGREE:       { kind: 'decoration',        label: '赞同', color: 'green',  stanceEffect: 'support' },
+  DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
+  TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
+  CORRECT:     { kind: 'replace-overlay',   label: '更正', color: 'yellow', formsTrees: true  },
+  SUPPLEMENT:  { kind: 'supplement-frame',  label: '补充', color: 'purple', formsTrees: true  },
+  CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false },
+  MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false },
+  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false },
+  RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
+  ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
 };
 
 /** Get the presentation spec for a relation type, with a sensible default */

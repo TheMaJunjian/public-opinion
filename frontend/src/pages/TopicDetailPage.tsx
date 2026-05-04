@@ -202,6 +202,11 @@ export default function TopicDetailPage() {
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [focusHop, setFocusHop] = useState<number>(1);
+  // Popup state for decoration double-click (shows sender info)
+  const [decorationPopup, setDecorationPopup] = useState<{
+    messageId: string; kind: "agree" | "disagree";
+    x: number; y: number;
+  } | null>(null);
 
   const currentFocusIds = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].ids : null;
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
@@ -560,23 +565,39 @@ export default function TopicDetailPage() {
           }
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       }
-    } else if (relationType === "agree" || relationType === "disagree" || relationType === "support" || relationType === "rebut") {
-      const decKind = (relationType === "disagree" || relationType === "rebut") ? "disagree" : "agree";
+    } else if (relationType === "agree" || relationType === "disagree") {
+      // agree/disagree: source message only created if there's text content
+      const decKind = relationType === "disagree" ? "disagree" : "agree";
+      const uniqueTargets = targets.map(t => t.messageId);
+      // Use source units' message IDs if provided; otherwise relation is standalone
       const uniqueSources = Array.from(new Set(sources.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
-      for (const srcId of uniqueSources) {
-        const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
-        try {
-          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
-          const relId = `rel:${backendRel.id}`;
-          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
-          setMessages(prev => [...prev, relMsg]);
-          for (const s of sources) {
-            for (const t of targets) {
-              const targetMid = t.messageId;
-              newEdgesList.push(buildEdges({ ...s }, { messageId: targetMid, selection: { kind: "edge", edgeId: `dec:${decKind}:${targetMid}` } }, relationType, label, relId));
+      for (const srcId of (uniqueSources.length > 0 ? uniqueSources : ["__none__"])) {
+        for (const tgt of targets) {
+          const tgtMid = tgt.messageId;
+          try {
+            const now = new Date().toISOString();
+            const author = user?.username ?? "Anonymous";
+            if (srcId !== "__none__") {
+              // Has a real source message — call backend
+              const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
+              const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+              const relId = `rel:${backendRel.id}`;
+              const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
+              setMessages(prev => [...prev, relMsg]);
+              for (const t of targets) {
+                const targetMid = t.messageId;
+                newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
+              }
+            } else {
+              // Pure-stance: no source message, local-only
+              const relMsgId = nextId("rel");
+              const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
+              setMessages(prev => [...prev, relMsg]);
+              const anonSrcId = `anon:${relMsgId}`;
+              newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: tgtMid, selection: { kind: "whole" } }, relationType, label, relMsgId));
             }
-          }
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        }
       }
     } else {
       const uniqueSources = Array.from(new Set(sources.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
@@ -621,14 +642,35 @@ export default function TopicDetailPage() {
   async function handleQuickSendAndRelateFromDraftTargets() {
     if (draftUnits.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
-    // For agree/disagree, allow empty text by auto-filling a minimal label
-    const textToSend = newMessageContent.trim().length > 0
-      ? newMessageContent
-      : (isAgreeDisagree ? `[${relationTypeName(relationType)}]` : '');
-    if (textToSend.length === 0) return;
+    const text = newMessageContent.trim();
+
+    if (isAgreeDisagree && text.length === 0) {
+      // Pure-stance agree/disagree: no text message, just a local relation message
+      const now = new Date().toISOString();
+      const author = user?.username ?? "Anonymous";
+      const newEdgesList: DemoEdge[] = [];
+      for (const tgt of draftUnits) {
+        const tgtMid = tgt.messageId;
+        const relMsgId = nextId("rel");
+        const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
+        setMessages(prev => [...prev, relMsg]);
+        const anonSrcId = `anon:${relMsgId}`;
+        newEdgesList.push({
+          id: nextId("edge"), relationMessageId: relMsgId, relationType,
+          from: { messageId: anonSrcId, selection: { kind: "whole" } },
+          to: { messageId: tgtMid, selection: { kind: "whole" } },
+          relationLabel: relationTypeName(relationType),
+        } as DemoEdge);
+      }
+      setEdges(prev => [...prev, ...newEdgesList]);
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      return;
+    }
+
+    if (text.length === 0) return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
-    const msg = await handleSendMessageOnly(textToSend);
+    const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
     const targets: UnitSelection[] = [...draftUnits];
@@ -664,8 +706,9 @@ export default function TopicDetailPage() {
   const recentNormals = useMemo(() => messages.filter(m => m.kind === "normal").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
-  // For agree/disagree: candidate area non-empty is sufficient (text auto-filled); for others: text required
-  const quickButtonEnabled = draftUnits.length > 0 && (newMessageContent.trim().length > 0 || isAgreeDisagreeType);
+  const isTagType = relationType === "tag";
+  // agree/disagree: text can be empty (pure stance); tag: text required; others: text required for source
+  const quickButtonEnabled = draftUnits.length > 0 && (isAgreeDisagreeType || newMessageContent.trim().length > 0);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
@@ -752,12 +795,41 @@ export default function TopicDetailPage() {
   function handleDecorationClick(messageId: string, kind: "agree" | "disagree") {
     const now = new Date().toISOString();
     const author = user?.username ?? "Anonymous";
-    const msg: DemoMessage = { id: nextId("msg"), author, createdAt: now, content: kind === "agree" ? "赞同" : "反对", kind: "normal" };
     const relMsgId = nextId("rel");
-    const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${msg.id} ${relationTypeName(kind)} ${messageId}` };
-    const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relMsg.id, relationType: kind, from: { messageId: msg.id, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "edge", edgeId: `dec:${kind}:${messageId}` } }, relationLabel: relationTypeName(kind) };
-    setMessages(prev => [...prev, msg, relMsg]);
+    const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${kind}: (无来源消息) → ${messageId}` };
+    const anonSrcId = `anon:${relMsgId}`;
+    const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relMsg.id, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };
+    setMessages(prev => [...prev, relMsg]);
     setEdges(prev => [...prev, edge]);
+  }
+
+  function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree") {
+    // Quick send: pure-stance agree/disagree with no text message
+    handleDecorationClick(messageId, kind);
+  }
+
+  function handleDecorationBodyClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {
+    e.stopPropagation();
+    // Toggle selection of all agree/disagree relation messages targeting this message
+    const matchingRelMsgs = edges.filter(edge =>
+      edge.relationType === kind &&
+      edge.to.messageId === messageId &&
+      edge.to.selection.kind === "whole"
+    ).map(edge => edge.relationMessageId);
+    const uniqueRelMsgIds = Array.from(new Set(matchingRelMsgs));
+    setLastClickedMessageId(messageId);
+    for (const relMsgId of uniqueRelMsgIds) {
+      const wholeUnit: UnitSelection = { messageId: relMsgId, selection: { kind: "whole" } };
+      setDraftUnits(prev => {
+        const exists = prev.some(u => unitEquals(u, wholeUnit));
+        return exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
+      });
+    }
+  }
+
+  function handleDecorationDoubleClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {
+    e.stopPropagation();
+    setDecorationPopup({ messageId, kind, x: e.clientX, y: e.clientY });
   }
 
   async function handleArchiveTopic() {
@@ -813,6 +885,7 @@ export default function TopicDetailPage() {
   const isOwner = user && topic && (topic as any).author?.id === user.id;
 
   return (
+    <>
     <div style={{ height: "calc(100vh - 56px)", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -827,7 +900,7 @@ export default function TopicDetailPage() {
         </div>
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
-          {(["annotation", "reference", "reply", "agree", "disagree", "support", "rebut"] as RelationType[]).map(rt => (
+          {(["annotation", "reference", "reply", "agree", "disagree", "tag", "supplement"] as RelationType[]).map(rt => (
             <button key={rt} onClick={() => { setRelationType(rt); setSecondaryRelationType("none"); }}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
@@ -881,7 +954,10 @@ export default function TopicDetailPage() {
                   onEdgeLabelDoubleClick={handleEdgeLabelDoubleClick} onFragmentAnchorClick={handleFragmentAnchorClick}
                   isFragmentSelected={isFragmentSelected} onCanvasBlankClick={handleCanvasBlankClick}
                   onMessageMouseDown={handleMessageMouseDown} onMessageMouseUp={handleMessageMouseUp}
-                  voteStats={voteStats} onDecorationClick={handleDecorationClick}
+                  voteStats={voteStats}
+                  onDecorationIconClick={handleDecorationIconClick}
+                  onDecorationBodyClick={handleDecorationBodyClick}
+                  onDecorationDoubleClick={handleDecorationDoubleClick}
                 />
               </div>
             )}
@@ -1039,5 +1115,44 @@ export default function TopicDetailPage() {
         </div>
       </div>
     </div>
+
+    {/* Decoration double-click popup: shows sender info for agree/disagree relations */}
+    {decorationPopup && (() => {
+      const { messageId, kind, x, y } = decorationPopup;
+      const matchingRelations = edges.filter(e =>
+        e.relationType === kind && e.to.messageId === messageId && e.to.selection.kind === "whole"
+      ).map(e => {
+        const relMsg = messages.find(m => m.id === e.relationMessageId);
+        return relMsg ? { id: relMsg.id, author: relMsg.author, createdAt: relMsg.createdAt } : null;
+      }).filter(Boolean) as { id: string; author: string; createdAt: string }[];
+      return (
+        <div key="dec-popup" onClick={() => setDecorationPopup(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 200), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
+              {kind === "agree" ? "👍 赞同" : "👎 反对"} 记录（共 {matchingRelations.length} 条）
+            </div>
+            {matchingRelations.length === 0 ? (
+              <div style={{ fontSize: 12, opacity: 0.6 }}>暂无记录</div>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 160, overflow: "auto", fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                {matchingRelations.map(r => (
+                  <li key={r.id} style={{ padding: "4px 6px", borderRadius: 4, background: "#2a2a2a", display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontWeight: 600 }}>{r.author}</span>
+                    <span style={{ opacity: 0.6 }}>{new Date(r.createdAt).toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button onClick={() => setDecorationPopup(null)}
+              style={{ marginTop: 10, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+              关闭
+            </button>
+          </div>
+        </div>
+      );
+    })()}
+    </>
   );
 }

@@ -65,7 +65,7 @@ model Relation {
   topicId         String
   createdById     String
   relationType    String
-  sourceMessageId String
+  sourceMessageId String?
   targetRefs      Json
   createdAt       DateTime @default(now())
 

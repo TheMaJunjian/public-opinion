@@ -652,22 +652,41 @@ export default function TopicDetailPage() {
     const text = newMessageContent.trim();
 
     if ((isAgreeDisagree || isSupplement) && text.length === 0) {
-      // Pure-stance agree/disagree or no-source supplement: no text message, just a local relation message
+      // Pure-stance agree/disagree or no-source supplement: no text message, just a local relation message.
+      // Supplement: ONE relation message containing all targets in a single frame.
+      // Agree/disagree: one relation message per target (separate decoration badges).
       const now = new Date().toISOString();
       const author = user?.username ?? "Anonymous";
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
-      for (const tgtMid of uniqueTargetMids) {
+      if (isSupplement) {
+        // One relation with all targets
         const relMsgId = nextId("rel");
-        const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
+        const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `supplement: (无来源消息) → ${uniqueTargetMids.join(",")}` };
         setMessages(prev => [...prev, relMsg]);
         const anonSrcId = `anon:${relMsgId}`;
-        newEdgesList.push({
-          id: nextId("edge"), relationMessageId: relMsgId, relationType,
-          from: { messageId: anonSrcId, selection: { kind: "whole" } },
-          to: { messageId: tgtMid, selection: { kind: "whole" } },
-          relationLabel: relationTypeName(relationType),
-        } as DemoEdge);
+        for (const tgtMid of uniqueTargetMids) {
+          newEdgesList.push({
+            id: nextId("edge"), relationMessageId: relMsgId, relationType: "supplement",
+            from: { messageId: anonSrcId, selection: { kind: "whole" } },
+            to: { messageId: tgtMid, selection: { kind: "whole" } },
+            relationLabel: relationTypeName("supplement"),
+          } as DemoEdge);
+        }
+      } else {
+        // Agree/disagree: one relation per target
+        for (const tgtMid of uniqueTargetMids) {
+          const relMsgId = nextId("rel");
+          const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
+          setMessages(prev => [...prev, relMsg]);
+          const anonSrcId = `anon:${relMsgId}`;
+          newEdgesList.push({
+            id: nextId("edge"), relationMessageId: relMsgId, relationType,
+            from: { messageId: anonSrcId, selection: { kind: "whole" } },
+            to: { messageId: tgtMid, selection: { kind: "whole" } },
+            relationLabel: relationTypeName(relationType),
+          } as DemoEdge);
+        }
       }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -945,7 +964,7 @@ export default function TopicDetailPage() {
 
   return (
     <>
-    <div style={{ height: "calc(100vh - 56px)", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ height: "calc(100vh - 56px)", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontWeight: 600 }}>{topic?.title ?? "加载中…"}</span>
@@ -968,7 +987,7 @@ export default function TopicDetailPage() {
         </div>
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>

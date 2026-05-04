@@ -534,7 +534,17 @@ export default function TopicDetailPage() {
   }) {
     if (!topicId) return;
     const { sources, label } = params;
-    let targets = params.targets;
+    // Deduplicate rel: targets: when both a whole and edge selection exist for the same
+    // relation message, keep only the whole (it covers all edges, preventing duplicate
+    // targetRefs that the backend would reject and that GraphView would render as extra arrows).
+    const wholeRelIds = new Set(
+      params.targets
+        .filter(t => t.messageId.startsWith('rel:') && t.selection.kind === 'whole')
+        .map(t => t.messageId)
+    );
+    let targets = params.targets.filter(t =>
+      !(t.messageId.startsWith('rel:') && t.selection.kind === 'edge' && wholeRelIds.has(t.messageId))
+    );
     const newEdgesList: DemoEdge[] = [];
 
     const buildEdges = (src: UnitSelection, tgt: UnitSelection, type: RelationType, lbl: string, relId: string) => {
@@ -660,19 +670,25 @@ export default function TopicDetailPage() {
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
       if (isSupplement) {
-        // One relation with all targets
-        const relMsgId = nextId("rel");
-        const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `supplement: (无来源消息) → ${uniqueTargetMids.join(",")}` };
-        setMessages(prev => [...prev, relMsg]);
-        const anonSrcId = `anon:${relMsgId}`;
-        for (const tgtMid of uniqueTargetMids) {
-          newEdgesList.push({
-            id: nextId("edge"), relationMessageId: relMsgId, relationType: "supplement",
-            from: { messageId: anonSrcId, selection: { kind: "whole" } },
-            to: { messageId: tgtMid, selection: { kind: "whole" } },
-            relationLabel: relationTypeName("supplement"),
-          } as DemoEdge);
-        }
+        // Save no-source supplement to backend (sourceMessageId: null) so it persists
+        // across exit/re-enter, matching the behaviour of sourced supplement relations.
+        const targetRefs = uniqueTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }));
+        try {
+          const backendRel = await api.createRelation(topicId!, { relationType: 'SUPPLEMENT', sourceMessageId: null, targetRefs });
+          const relId = `rel:${backendRel.id}`;
+          const typeName = relationTypeName("supplement");
+          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系（无来源消息）；类型：${typeName}` };
+          setMessages(prev => [...prev, relMsg]);
+          const anonSrcId = `anon:${backendRel.id}`;
+          for (const tgtMid of uniqueTargetMids) {
+            newEdgesList.push({
+              id: nextId("edge"), relationMessageId: relId, relationType: "supplement",
+              from: { messageId: anonSrcId, selection: { kind: "whole" } },
+              to: { messageId: tgtMid, selection: { kind: "whole" } },
+              relationLabel: typeName,
+            } as DemoEdge);
+          }
+        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       } else {
         // Agree/disagree: one relation per target
         for (const tgtMid of uniqueTargetMids) {
@@ -1001,7 +1017,7 @@ export default function TopicDetailPage() {
             </div>
           </div>
 
-          <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8 }}>
+          <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}>
             {viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {messagesToRender.map(msg => {

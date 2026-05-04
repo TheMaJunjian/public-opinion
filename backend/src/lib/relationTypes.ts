@@ -23,17 +23,24 @@
  *   1. Append the type string to this array (backend validation).
  *   2. Add a matching entry in PRESENTATION_SPECS (frontend rendering).
  *   No DB migration required — the relationType column is plain TEXT.
+ *
+ * Notes on specific types:
+ *   AGREE/DISAGREE: sourceMessageId is optional (null when no text is attached).
+ *     With text: treated as support/rebut stance with an associated message.
+ *     Without text: pure stance declaration, no source message.
+ *   TAG: sourceMessageId must be present (label content is taken from source message).
+ *   SUPPLEMENT: source message is placed directly below target in the non-linear view,
+ *     wrapped together in a border frame.
  */
 export const RELATION_TYPES = [
   'ANNOTATION',   // 注释
   'REFERENCE',    // 引用
   'REPLY',        // 回复
-  'AGREE',        // 赞同
-  'DISAGREE',     // 反对
-  'SUPPORT',      // 支持（含立场表达）
-  'REBUT',        // 反驳
+  'AGREE',        // 赞同（有附带文本消息时，视为支持）
+  'DISAGREE',     // 反对（有附带文本消息时，视为反驳）
+  'TAG',          // 标注（消息旁的装饰标签，内容不能为空）
   'CORRECT',      // 更正
-  'SUPPLEMENT',   // 补充
+  'SUPPLEMENT',   // 补充（来源消息紧贴目标消息下方，以边框包裹）
   'CLASSIFY',     // 分类
   'MERGE',        // 归并
   'SUMMARY',      // 总结

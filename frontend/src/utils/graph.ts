@@ -33,13 +33,18 @@ export function buildMessageTree(messages: Message[], relations: Relation[]): Me
   // Only take tree-forming relations that target text messages (not relation messages)
   const treeRels = relations.filter(r => {
     const spec = getPresentationSpec(r.relationType);
-    return spec.formsTrees && r.targetRefs.some(ref => ref.kind === 'message' || ref.kind === 'text-fragment');
+    return (
+      spec.formsTrees &&
+      r.sourceMessageId !== null &&
+      r.targetRefs.some(ref => ref.kind === 'message' || ref.kind === 'text-fragment')
+    );
   });
 
   // Build child → parent mapping (take first message target as the parent)
   const childParentMap = new Map<string, { parentId: string; relationType: string; relationId: string }>();
 
   for (const rel of treeRels) {
+    if (!rel.sourceMessageId) continue;
     if (childParentMap.has(rel.sourceMessageId)) continue;
     const firstMessageTarget = rel.targetRefs.find(
       (r): r is Extract<TargetRef, { kind: 'message' | 'text-fragment' }> =>
@@ -150,7 +155,7 @@ export function computeTextHops(
 
   for (const rel of relations) {
     const src = rel.sourceMessageId;
-    if (!messageIds.has(src)) continue;
+    if (!src || !messageIds.has(src)) continue;
 
     for (const ref of rel.targetRefs) {
       if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
@@ -224,7 +229,9 @@ export function buildFocusSubgraph(
     changed = false;
     for (const rel of relations) {
       if (visibleRelations.has(rel.id)) continue;
-      if (!visibleMessages.has(rel.sourceMessageId)) continue;
+      // Relations with no sourceMessageId (pure-stance AGREE/DISAGREE) are always visible
+      // if their targets are visible (they have no source to check).
+      if (rel.sourceMessageId && !visibleMessages.has(rel.sourceMessageId)) continue;
 
       const allTargetsVisible = rel.targetRefs.every(ref => {
         if (ref.kind === 'message' || ref.kind === 'text-fragment') {

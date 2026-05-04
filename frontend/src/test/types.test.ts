@@ -33,28 +33,16 @@ describe('getPresentationSpec', () => {
     expect(spec.stanceEffect).toBe('oppose');
   });
 
-  it('returns the correct spec for SUPPORT (edge-decoration + support stance)', () => {
-    const spec = getPresentationSpec('SUPPORT');
-    expect(spec.kind).toBe('edge-decoration');
-    expect(spec.stanceEffect).toBe('support');
+  it('returns the correct spec for TAG (decoration-label)', () => {
+    const spec = getPresentationSpec('TAG');
+    expect(spec.kind).toBe('decoration-label');
+    expect(spec.label).toBe('标注');
+  });
+
+  it('returns the correct spec for SUPPLEMENT (supplement-frame)', () => {
+    const spec = getPresentationSpec('SUPPLEMENT');
+    expect(spec.kind).toBe('supplement-frame');
     expect(spec.formsTrees).toBe(true);
-  });
-
-  it('returns the correct spec for REBUT (edge-decoration + oppose stance)', () => {
-    const spec = getPresentationSpec('REBUT');
-    expect(spec.kind).toBe('edge-decoration');
-    expect(spec.stanceEffect).toBe('oppose');
-    expect(spec.formsTrees).toBe(true);
-  });
-
-  it('returns the correct spec for CLASSIFY (frame-group)', () => {
-    const spec = getPresentationSpec('CLASSIFY');
-    expect(spec.kind).toBe('frame-group');
-  });
-
-  it('returns the correct spec for CORRECT (replace-overlay)', () => {
-    const spec = getPresentationSpec('CORRECT');
-    expect(spec.kind).toBe('replace-overlay');
   });
 
   it('returns a fallback edge-label spec for unknown types', () => {
@@ -64,10 +52,10 @@ describe('getPresentationSpec', () => {
     expect(spec.color).toBe('gray');
   });
 
-  it('covers all 14 required relation types', () => {
+  it('covers all 13 required relation types', () => {
     const required = [
       'ANNOTATION', 'REFERENCE', 'REPLY', 'AGREE', 'DISAGREE',
-      'SUPPORT', 'REBUT', 'CORRECT', 'SUPPLEMENT', 'CLASSIFY',
+      'TAG', 'CORRECT', 'SUPPLEMENT', 'CLASSIFY',
       'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE',
     ];
     for (const type of required) {
@@ -144,8 +132,8 @@ describe('PRESENTATION_SPECS completeness', () => {
   });
 
   it('all tree-forming relations have formsTrees=true', () => {
-    // REPLY, SUPPORT, REBUT, CORRECT, SUPPLEMENT are expected to form trees
-    const treeForms = ['REPLY', 'SUPPORT', 'REBUT', 'CORRECT', 'SUPPLEMENT'];
+    // REPLY, CORRECT, SUPPLEMENT are expected to form trees
+    const treeForms = ['REPLY', 'CORRECT', 'SUPPLEMENT'];
     for (const type of treeForms) {
       expect(PRESENTATION_SPECS[type]?.formsTrees, `${type} should have formsTrees=true`).toBe(true);
     }

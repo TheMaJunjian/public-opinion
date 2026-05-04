@@ -47,7 +47,9 @@ const createRelationSchema = z.object({
   relationType: z.enum(RELATION_TYPES, {
     errorMap: () => ({ message: `关系类型必须是以下之一: ${RELATION_TYPES.join(', ')}` }),
   }),
-  sourceMessageId: z.string().min(1, '来源消息 ID 不能为空'),
+  // sourceMessageId is required for most relation types, but optional for AGREE/DISAGREE
+  // (which may be pure stance declarations without an attached text message).
+  sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
   targetRefs: z.array(targetRefSchema).min(1, '至少需要一个目标引用').max(20),
 });
 
@@ -109,13 +111,24 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // sourceMessageId must reference a text message in this topic
-    const sourceMessage = await prisma.message.findFirst({
-      where: { id: data.sourceMessageId, topicId },
-    });
-    if (!sourceMessage) {
-      res.status(404).json({ error: '来源消息不存在或不属于该话题' });
+    // Relation types that require a source message (non-stance types and TAG which needs content)
+    const requiresSource = data.relationType !== 'AGREE' && data.relationType !== 'DISAGREE';
+
+    if (requiresSource && !data.sourceMessageId) {
+      res.status(400).json({ error: '该关系类型需要提供来源消息 ID' });
       return;
+    }
+
+    // sourceMessageId must reference a text message in this topic
+    let sourceMessage = null;
+    if (data.sourceMessageId) {
+      sourceMessage = await prisma.message.findFirst({
+        where: { id: data.sourceMessageId, topicId },
+      });
+      if (!sourceMessage) {
+        res.status(404).json({ error: '来源消息不存在或不属于该话题' });
+        return;
+      }
     }
 
     // Validate all target refs
@@ -165,7 +178,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         topicId,
         createdById: req.user!.id,
         relationType: data.relationType,
-        sourceMessageId: data.sourceMessageId,
+        sourceMessageId: data.sourceMessageId ?? null,
         targetRefs: data.targetRefs,
       },
       include: { createdBy: { select: { id: true, username: true } } },

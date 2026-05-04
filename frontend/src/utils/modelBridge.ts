@@ -7,8 +7,9 @@ export type RelationType =
   | "reply"
   | "agree"
   | "disagree"
-  | "support"
-  | "rebut";
+  | "tag"
+  | "correct"
+  | "supplement";
 export type SecondaryRelationType = "none" | "annotation" | "reference";
 
 export type Selection =
@@ -49,9 +50,11 @@ function hashText(text: string): string {
 function relationTypeName(t: string): string {
   const names: Record<string, string> = {
     annotation: "注释", reference: "引用", reply: "回复",
-    agree: "赞同", disagree: "反对", support: "支持", rebut: "反驳",
+    agree: "赞同", disagree: "反对", tag: "标注",
+    correct: "更正", supplement: "补充",
     ANNOTATION: "注释", REFERENCE: "引用", REPLY: "回复",
-    AGREE: "赞同", DISAGREE: "反对", SUPPORT: "支持", REBUT: "反驳",
+    AGREE: "赞同", DISAGREE: "反对", TAG: "标注",
+    CORRECT: "更正", SUPPLEMENT: "补充",
   };
   return names[t] ?? t;
 }
@@ -90,10 +93,19 @@ export function convertMessagesToDemoModel(
         id: relMsgId,
         author: rel.createdBy.username,
         createdAt: rel.createdAt,
-        content: `建立${typeName}关系：来自 ${rel.sourceMessageId}；类型：${typeName}`,
+        content: rel.sourceMessageId
+          ? `建立${typeName}关系：来自 ${rel.sourceMessageId}；类型：${typeName}`
+          : `建立${typeName}关系（无来源消息）；类型：${typeName}`,
         kind: "relation",
       });
     }
+
+    // For pure-stance relations (no source message), we still create edges
+    // from a virtual "anonymous" origin that points to the target.
+    const fromMessageId = rel.sourceMessageId ?? `anon:${rel.id}`;
+
+    // If there's no source message, we don't need a DemoMessage for it
+    // (it won't appear in the normal messages list).
 
     rel.targetRefs.forEach((ref, index) => {
       const edgeId = `${rel.id}::${index}`;
@@ -115,7 +127,7 @@ export function convertMessagesToDemoModel(
         id: edgeId,
         relationMessageId: relMsgId,
         relationType: relType,
-        from: { messageId: rel.sourceMessageId, selection: { kind: "whole" } },
+        from: { messageId: fromMessageId, selection: { kind: "whole" } },
         to: toUnit,
         relationLabel: relType,
       });

@@ -50,6 +50,9 @@ const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 const SUPP_FRAME_PAD = 6; // padding around the frame that wraps supplement pairs
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
 
+// Shared empty map to avoid allocating a new one on every render
+const EMPTY_MAP: Map<string, string> = new Map();
+
 function colX(col: number) {
   return GRID_LEFT + col * (CARD_W + COL_GAP);
 }
@@ -243,7 +246,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
 }
 
 /** High-priority rule: supplement source is placed in the same column as its target. */
-function applySuppplementColumnOverride(params: {
+function applySupplementColumnOverride(params: {
   normals: DemoMessage[];
   edges: DemoEdge[];
   col: Record<string, number>;
@@ -278,7 +281,8 @@ function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
   suppSourceToTarget?: Map<string, string>;
 }) {
-  const { normals, colOf, measuredHeights, maxCol, suppSourceToTarget = new Map<string,string>() } = params;
+  const { normals, colOf, measuredHeights, maxCol } = params;
+  const suppSourceToTarget = params.suppSourceToTarget ?? EMPTY_MAP;
 
   // Build reverse map: target → list of supplement sources
   const suppTargetToSources = new Map<string, string[]>();
@@ -474,7 +478,7 @@ export default function GraphView(props: GraphViewProps) {
   const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges), [normalIds, edges]);
   const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol }), [normals, edges, baseCol, baseMaxCol]);
   // High-priority supplement column override: source must be in same column as target
-  const { col: colOf, maxCol, suppSourceToTarget } = useMemo(() => applySuppplementColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
+  const { col: colOf, maxCol, suppSourceToTarget } = useMemo(() => applySupplementColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   const [layout, setLayout] = useState<Record<string,LayoutBox>>({});

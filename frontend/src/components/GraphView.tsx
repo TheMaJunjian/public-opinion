@@ -1143,8 +1143,8 @@ export default function GraphView(props: GraphViewProps) {
           const badgeLeft=bb.x+bb.width+REL_DEC_GAP;
           const badgeTop=bb.y+Math.floor((bb.height-REL_DEC_H)/2);
           const disagreeLeft=badgeLeft+(dec.agreeCount>0?REL_DEC_W+REL_DEC_GAP:0);
-          const a=renderRelDecBadge(`reldec-agree-${relId}`,"agree",dec.agreeCount,badgeLeft,badgeTop,5,dec.agreeRelMsgIds[0]);
-          const d=renderRelDecBadge(`reldec-disagree-${relId}`,"disagree",dec.disagreeCount,disagreeLeft,badgeTop,5,dec.disagreeRelMsgIds[0]);
+          const a=renderRelDecBadge(`reldec-agree-${relId}`,"agree",dec.agreeCount,badgeLeft,badgeTop,5,dec.agreeRelMsgIds.length>0?dec.agreeRelMsgIds[0]:undefined);
+          const d=renderRelDecBadge(`reldec-disagree-${relId}`,"disagree",dec.disagreeCount,disagreeLeft,badgeTop,5,dec.disagreeRelMsgIds.length>0?dec.disagreeRelMsgIds[0]:undefined);
           if (a) items.push(a); if (d) items.push(d);
         }
         return items;
@@ -1187,8 +1187,8 @@ export default function GraphView(props: GraphViewProps) {
         const disagreeLeft=sfDecLeft+(sf.relAgreeCount>0?REL_DEC_W+REL_DEC_GAP:0);
         return (
           <React.Fragment key={`supp-dec-${sf.relMsgId}`}>
-            {renderRelDecBadge(`sf-agree-${sf.relMsgId}`,"agree",sf.relAgreeCount,sfDecLeft,sfDecTop,4,sf.relAgreeMsgIds[0])}
-            {renderRelDecBadge(`sf-disagree-${sf.relMsgId}`,"disagree",sf.relDisagreeCount,disagreeLeft,sfDecTop,4,sf.relDisagreeMsgIds[0])}
+            {renderRelDecBadge(`sf-agree-${sf.relMsgId}`,"agree",sf.relAgreeCount,sfDecLeft,sfDecTop,4,sf.relAgreeMsgIds.length>0?sf.relAgreeMsgIds[0]:undefined)}
+            {renderRelDecBadge(`sf-disagree-${sf.relMsgId}`,"disagree",sf.relDisagreeCount,disagreeLeft,sfDecTop,4,sf.relDisagreeMsgIds.length>0?sf.relDisagreeMsgIds[0]:undefined)}
           </React.Fragment>
         );
       })}
@@ -1217,8 +1217,8 @@ export default function GraphView(props: GraphViewProps) {
                 🏷{displayLabel}
               </div>
               {/* Relation-on-relation decorations: AGREE/DISAGREE badges on this TAG relation */}
-              {renderRelDecBadge(`tag-agree-${_mid}-${group.label}`,"agree",group.relAgreeCount,tagAgreeLeft,group.rect.y,5,group.relAgreeMsgIds[0])}
-              {renderRelDecBadge(`tag-disagree-${_mid}-${group.label}`,"disagree",group.relDisagreeCount,tagDisagreeLeft,group.rect.y,5,group.relDisagreeMsgIds[0])}
+              {renderRelDecBadge(`tag-agree-${_mid}-${group.label}`,"agree",group.relAgreeCount,tagAgreeLeft,group.rect.y,5,group.relAgreeMsgIds.length>0?group.relAgreeMsgIds[0]:undefined)}
+              {renderRelDecBadge(`tag-disagree-${_mid}-${group.label}`,"disagree",group.relDisagreeCount,tagDisagreeLeft,group.rect.y,5,group.relDisagreeMsgIds.length>0?group.relDisagreeMsgIds[0]:undefined)}
             </React.Fragment>
           );
         })

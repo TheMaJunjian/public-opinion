@@ -16,7 +16,7 @@ export interface Topic {
   createdAt: string;
   updatedAt: string;
   createdBy: User;
-  _count?: { messages: number; relations?: number };
+  _count?: { messages: number };
 }
 
 // ============================================================

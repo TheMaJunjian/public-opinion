@@ -70,7 +70,7 @@ export function convertMessagesToDemoModel(
   relations: BackendRelation[]
 ): { messages: DemoMessage[]; edges: DemoEdge[] } {
   const msgContentMap = new Map(messages.map(m => [m.id, m.content]));
-  // Build a set of relation IDs so we can detect when sourceMessageId references a relation
+  // Build a set of relation IDs to detect when sourceMessageId references a relation message.
   const relationIds = new Set(relations.map(r => r.id));
 
   const demoMessages: DemoMessage[] = messages.map(m => ({
@@ -82,14 +82,15 @@ export function convertMessagesToDemoModel(
   }));
 
   const demoEdges: DemoEdge[] = [];
-  const relationMsgIds = new Set<string>();
+  const seenRelMsgIds = new Set<string>();
 
   for (const rel of relations) {
-    const relMsgId = `rel:${rel.id}`;
+    // Relation messages use their plain backend ID — no synthetic prefix needed.
+    const relMsgId = rel.id;
     const relType = rel.relationType.toLowerCase() as RelationType;
 
-    if (!relationMsgIds.has(relMsgId)) {
-      relationMsgIds.add(relMsgId);
+    if (!seenRelMsgIds.has(relMsgId)) {
+      seenRelMsgIds.add(relMsgId);
       const typeName = relationTypeName(rel.relationType);
       demoMessages.push({
         id: relMsgId,
@@ -104,15 +105,12 @@ export function convertMessagesToDemoModel(
 
     // For pure-stance relations (no source message), we still create edges
     // from a virtual "anonymous" origin that points to the target.
-    // If sourceMessageId references a relation message, use the rel: prefix.
+    // If sourceMessageId references a relation message, use its plain ID (no prefix).
     const fromMessageId = rel.sourceMessageId
       ? (relationIds.has(rel.sourceMessageId)
-          ? `rel:${rel.sourceMessageId}`
+          ? rel.sourceMessageId
           : rel.sourceMessageId)
       : `anon:${rel.id}`;
-
-    // If there's no source message, we don't need a DemoMessage for it
-    // (it won't appear in the normal messages list).
 
     // Deduplicate relation-type targetRefs by relationId to prevent duplicate arrows.
     const seenRelationTargetIds = new Set<string>();
@@ -133,7 +131,8 @@ export function convertMessagesToDemoModel(
         // Skip duplicate relation targetRefs pointing to the same relationId.
         if (seenRelationTargetIds.has(ref.relationId)) return;
         seenRelationTargetIds.add(ref.relationId);
-        toUnit = { messageId: `rel:${ref.relationId}`, selection: { kind: "whole" } };
+        // Relation messages use their plain backend ID — no synthetic prefix.
+        toUnit = { messageId: ref.relationId, selection: { kind: "whole" } };
       }
 
       demoEdges.push({
@@ -154,18 +153,27 @@ export function convertMessagesToDemoModel(
   return { messages: demoMessages, edges: demoEdges };
 }
 
-export function unitSelectionToTargetRef(unit: UnitSelection): TargetRef {
+/**
+ * Convert a UnitSelection back to a backend TargetRef.
+ *
+ * Requires the message map to determine whether a messageId refers to a text
+ * message or a relation message — no synthetic ID prefix is used.
+ */
+export function unitSelectionToTargetRef(
+  unit: UnitSelection,
+  msgMap: Map<string, DemoMessage>
+): TargetRef {
   const s = unit.selection;
   if (s.kind === 'whole') {
-    if (unit.messageId.startsWith('rel:')) {
-      return { kind: 'relation', relationId: unit.messageId.replace('rel:', '') };
+    if (msgMap.get(unit.messageId)?.kind === "relation") {
+      return { kind: 'relation', relationId: unit.messageId };
     }
     return { kind: 'message', messageId: unit.messageId };
   }
   if (s.kind === 'text') {
     return { kind: 'text-fragment', messageId: unit.messageId, text: s.text, hash: hashText(s.text) };
   }
-  // edge
-  const relationId = unit.messageId.startsWith('rel:') ? unit.messageId.replace('rel:', '') : unit.messageId;
-  return { kind: 'relation', relationId, part: 'label' };
+  // edge selection always targets a relation message's label/edge part
+  return { kind: 'relation', relationId: unit.messageId, part: 'label' };
 }
+

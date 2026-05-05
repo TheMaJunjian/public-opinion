@@ -34,9 +34,9 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     }
 
     const [total, messages] = await Promise.all([
-      prisma.message.count({ where: { topicId } }),
+      prisma.message.count({ where: { topicId, kind: 'TEXT' } }),
       prisma.message.findMany({
-        where: { topicId },
+        where: { topicId, kind: 'TEXT' },
         orderBy: { createdAt: 'asc' },
         skip,
         take: limit,
@@ -78,6 +78,7 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
       data: {
         topicId,
         createdById: req.user!.id,
+        kind: 'TEXT',
         contentType: data.contentType,
         content: data.content,
         quoteSourceId: data.quoteSourceId,

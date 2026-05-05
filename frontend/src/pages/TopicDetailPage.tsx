@@ -228,8 +228,8 @@ export default function TopicDetailPage() {
           if (parts.length >= 3) {
             const mid = parts.slice(2).join(":");
             if (!res[mid]) res[mid] = { agreeCount: 0, disagreeCount: 0, agreeKey: `dec:agree:${mid}`, disagreeKey: `dec:disagree:${mid}` };
-            if (e.relationType === "support" || e.relationType === "agree") res[mid].agreeCount++;
-            if (e.relationType === "rebut" || e.relationType === "disagree") res[mid].disagreeCount++;
+            if (e.relationType === "agree") res[mid].agreeCount++;
+            if (e.relationType === "disagree") res[mid].disagreeCount++;
           }
         }
       } else if (e.to.selection.kind === "whole") {
@@ -536,22 +536,18 @@ export default function TopicDetailPage() {
   }) {
     if (!topicId) return;
     const { sources, label } = params;
-    // Deduplicate rel: targets: when both a whole and edge selection exist for the same
+    // Deduplicate relation-message targets: when both a whole and edge selection exist for the same
     // relation message, keep only the whole (it covers all edges, preventing duplicate
     // targetRefs that the backend would reject and that GraphView would render as extra arrows).
     const wholeRelIds = new Set(
       params.targets
-        .filter(t => t.messageId.startsWith('rel:') && t.selection.kind === 'whole')
+        .filter(t => msgMap.get(t.messageId)?.kind === "relation" && t.selection.kind === 'whole')
         .map(t => t.messageId)
     );
     let targets = params.targets.filter(t =>
-      !(t.messageId.startsWith('rel:') && t.selection.kind === 'edge' && wholeRelIds.has(t.messageId))
+      !(msgMap.get(t.messageId)?.kind === "relation" && t.selection.kind === 'edge' && wholeRelIds.has(t.messageId))
     );
     const newEdgesList: DemoEdge[] = [];
-
-    // Strip the frontend "rel:" prefix to get the backend relation ID.
-    // Relation messages are also messages and can be used as sources.
-    const toBackendId = (id: string) => id.startsWith('rel:') ? id.slice(4) : id;
 
     const buildEdges = (src: UnitSelection, tgt: UnitSelection, type: RelationType, lbl: string, relId: string) => {
       return {
@@ -570,10 +566,10 @@ export default function TopicDetailPage() {
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(fromReply.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
-        const targetRefs = toReply.map(t => unitSelectionToTargetRef(t));
+        const targetRefs = toReply.map(t => unitSelectionToTargetRef(t, msgMap));
         try {
-          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: toBackendId(srcId), targetRefs });
-          const relId = `rel:${backendRel.id}`;
+          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+          const relId = backendRel.id;
           const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${toReply.map(t => t.messageId).join(",")}` };
           setMessages(prev => [...prev, relMsg]);
           for (const s of fromReply) {
@@ -597,9 +593,9 @@ export default function TopicDetailPage() {
       if (uniqueSources.length > 0) {
         for (const srcId of uniqueSources) {
           try {
-            const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: toBackendId(srcId), targetRefs });
-            const relId = `rel:${backendRel.id}`;
+            const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const relId = backendRel.id;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${uniqueTargetMids.join(",")}` };
             setMessages(prev => [...prev, relMsg]);
             for (const targetMid of uniqueTargetMids) {
@@ -611,8 +607,8 @@ export default function TopicDetailPage() {
         // Pure-stance: no source — persist to backend (relation messages are first-class messages)
         for (const targetMid of uniqueTargetMids) {
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } })] });
-            const relId = `rel:${backendRel.id}`;
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
+            const relId = backendRel.id;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${targetMid}` };
             setMessages(prev => [...prev, relMsg]);
             const anonSrcId = `anon:${backendRel.id}`;
@@ -626,10 +622,10 @@ export default function TopicDetailPage() {
       for (const srcId of uniqueSources) {
         const srcs = sources.filter(s => s.messageId === srcId);
         for (const srcUnit of srcs) {
-          const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
+          const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: toBackendId(srcId), targetRefs });
-            const relId = `rel:${backendRel.id}`;
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const relId = backendRel.id;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
             setMessages(prev => [...prev, relMsg]);
             for (const t of targets) {
@@ -675,10 +671,10 @@ export default function TopicDetailPage() {
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
       if (isSupplement) {
-        const targetRefs = uniqueTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }));
+        const targetRefs = uniqueTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
         try {
           const backendRel = await api.createRelation(topicId!, { relationType: 'SUPPLEMENT', sourceMessageId: null, targetRefs });
-          const relId = `rel:${backendRel.id}`;
+          const relId = backendRel.id;
           const typeName = relationTypeName("supplement");
           const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系（无来源消息）；类型：${typeName}` };
           setMessages(prev => [...prev, relMsg]);
@@ -695,10 +691,10 @@ export default function TopicDetailPage() {
       } else {
         // Agree/disagree: one relation per target — persist to backend
         for (const tgtMid of uniqueTargetMids) {
-          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } });
+          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
           try {
             const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
-            const relId = `rel:${backendRel.id}`;
+            const relId = backendRel.id;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
             setMessages(prev => [...prev, relMsg]);
             const anonSrcId = `anon:${backendRel.id}`;
@@ -780,7 +776,6 @@ export default function TopicDetailPage() {
   const recentNormals = useMemo(() => messages.filter(m => m.kind === "normal").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
-  const isTagType = relationType === "tag";
   const isSupplementType = relationType === "supplement";
   // agree/disagree/supplement: text can be empty (pure stance / no-source); tag: text required; others: text required for source
   const quickButtonEnabled = draftUnits.length > 0 && (isAgreeDisagreeType || isSupplementType || newMessageContent.trim().length > 0);
@@ -883,7 +878,7 @@ export default function TopicDetailPage() {
         sourceMessageId: null,
         targetRefs: [{ kind: 'message', messageId }],
       });
-      const relId = `rel:${backendRel.id}`;
+      const relId = backendRel.id;
       const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${kind}: (无来源消息) → ${messageId}` };
       const anonSrcId = `anon:${backendRel.id}`;
       const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relId, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };

@@ -20,7 +20,7 @@ const relationsRouter = Router({ mergeParams: true });
  * 'text-fragment' - targets a specific fragment of a text message
  * 'relation'      - targets a relation message (or a specific selectable part of it)
  *
- * Sources (sourceMessageId) can be text messages OR relation messages (relation messages are also messages).
+ * Sources (relSourceId) can be any message (TEXT or RELATION kind) in this topic.
  * Targets can be text messages, fragments, OR relation messages.
  */
 const targetRefSchema = z.discriminatedUnion('kind', [
@@ -75,16 +75,28 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
       return;
     }
 
-    const [total, relations] = await Promise.all([
-      prisma.relation.count({ where: { topicId } }),
-      prisma.relation.findMany({
-        where: { topicId },
+    // Relation messages are stored in the unified Message table with kind=RELATION.
+    const [total, messages] = await Promise.all([
+      prisma.message.count({ where: { topicId, kind: 'RELATION' } }),
+      prisma.message.findMany({
+        where: { topicId, kind: 'RELATION' },
         orderBy: { createdAt: 'asc' },
         skip,
         take: limit,
         include: { createdBy: { select: { id: true, username: true } } },
       }),
     ]);
+
+    // Map unified Message rows back to the Relation API shape expected by the frontend.
+    const relations = messages.map(m => ({
+      id: m.id,
+      topicId: m.topicId,
+      relationType: m.relationType!,
+      sourceMessageId: m.relSourceId ?? null,
+      targetRefs: m.targetRefs,
+      createdAt: m.createdAt,
+      createdBy: m.createdBy,
+    }));
 
     res.json({
       data: relations,
@@ -121,14 +133,13 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // sourceMessageId must reference a text message OR a relation message in this topic
+    // sourceMessageId can reference ANY message in this topic (TEXT or RELATION kind),
+    // because relation messages are also messages — a single unified table lookup suffices.
     if (data.sourceMessageId) {
-      // Query both tables concurrently — relation messages are also messages and can be sources
-      const [sourceMessage, sourceRelation] = await Promise.all([
-        prisma.message.findFirst({ where: { id: data.sourceMessageId, topicId } }),
-        prisma.relation.findFirst({ where: { id: data.sourceMessageId, topicId } }),
-      ]);
-      if (!sourceMessage && !sourceRelation) {
+      const sourceMessage = await prisma.message.findFirst({
+        where: { id: data.sourceMessageId, topicId },
+      });
+      if (!sourceMessage) {
         res.status(404).json({ error: '来源消息不存在或不属于该话题' });
         return;
       }
@@ -150,11 +161,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // Validate target messages exist in this topic
+    // Validate target text messages exist in this topic (kind=TEXT)
     if (targetMessageIds.length > 0) {
       const uniqueMessageIds = [...new Set(targetMessageIds)];
       const foundMessages = await prisma.message.findMany({
-        where: { id: { in: uniqueMessageIds }, topicId },
+        where: { id: { in: uniqueMessageIds }, topicId, kind: 'TEXT' },
         select: { id: true },
       });
       if (foundMessages.length !== uniqueMessageIds.length) {
@@ -163,11 +174,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       }
     }
 
-    // Validate target relations exist in this topic
+    // Validate target relation messages exist in this topic (kind=RELATION)
     if (targetRelationIds.length > 0) {
       const uniqueRelationIds = [...new Set(targetRelationIds)];
-      const foundRelations = await prisma.relation.findMany({
-        where: { id: { in: uniqueRelationIds }, topicId },
+      const foundRelations = await prisma.message.findMany({
+        where: { id: { in: uniqueRelationIds }, topicId, kind: 'RELATION' },
         select: { id: true },
       });
       if (foundRelations.length !== uniqueRelationIds.length) {
@@ -176,21 +187,33 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       }
     }
 
-    const relation = await prisma.relation.create({
+    // Create the relation as a RELATION-kind message in the unified Message table.
+    const message = await prisma.message.create({
       data: {
         topicId,
         createdById: req.user!.id,
+        kind: 'RELATION',
         relationType: data.relationType,
-        sourceMessageId: data.sourceMessageId ?? null,
+        relSourceId: data.sourceMessageId ?? null,
         targetRefs: data.targetRefs,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     });
 
-    res.status(201).json(relation);
+    // Return in the Relation API shape expected by the frontend.
+    res.status(201).json({
+      id: message.id,
+      topicId: message.topicId,
+      relationType: message.relationType!,
+      sourceMessageId: message.relSourceId ?? null,
+      targetRefs: message.targetRefs,
+      createdAt: message.createdAt,
+      createdBy: message.createdBy,
+    });
   } catch (err) {
     next(err);
   }
 });
 
 export default relationsRouter;
+

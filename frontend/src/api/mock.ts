@@ -30,7 +30,7 @@ const topics: Topic[] = [
     createdAt: '2024-02-01T10:00:00Z',
     updatedAt: '2024-02-10T15:00:00Z',
     createdBy: users[0],
-    _count: { messages: 7, relations: 11 },
+    _count: { messages: 7 },
   },
   {
     id: 't2',
@@ -40,7 +40,7 @@ const topics: Topic[] = [
     createdAt: '2024-02-05T09:00:00Z',
     updatedAt: '2024-02-12T11:00:00Z',
     createdBy: users[1],
-    _count: { messages: 3, relations: 3 },
+    _count: { messages: 3 },
   },
   {
     id: 't3',
@@ -50,7 +50,7 @@ const topics: Topic[] = [
     createdAt: '2024-01-15T08:00:00Z',
     updatedAt: '2024-01-30T16:00:00Z',
     createdBy: users[2],
-    _count: { messages: 3, relations: 2 },
+    _count: { messages: 3 },
   },
 ];
 
@@ -330,7 +330,7 @@ export async function createTopic(data: { title: string; body?: string }) {
   const topic: Topic = {
     id: genId(), title: data.title, body: data.body, status: 'OPEN',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    createdBy: mockUser, _count: { messages: 0, relations: 0 },
+    createdBy: mockUser, _count: { messages: 0 },
   };
   topics.push(topic);
   return topic;

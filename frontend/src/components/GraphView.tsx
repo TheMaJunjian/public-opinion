@@ -1091,42 +1091,24 @@ export default function GraphView(props: GraphViewProps) {
           continue;
         }
 
-        // For annotation/reference/reply (edge-label kind): use approximate midpoint of that relation's endpoints
-        // as the best available proxy for where the edge label will appear.
-        const expand=(te:DemoEdge) => {
-          let approxToBox: LayoutBox;
-          let toCol = fromEp.col;
-          if (msgMap.get(te.to.messageId)?.kind === "relation") {
-            // Target is a nested relation message — resolve its visual position recursively.
-            // This fixes multi-level nesting where an annotation targets another annotation,
-            // preventing the arrow from incorrectly pointing back to the outer source.
-            approxToBox = getRelVisualBox(te.to.messageId) ?? fromEp.box;
-          } else {
-            const teToMsg=msgMap.get(te.to.messageId);
-            const epTarget=teToMsg?.kind==="normal" ? endpointBoxForNormal(te.to.messageId) : null;
-            // Compute the approximate midpoint between the relation's from and to boxes
-            const teFromMsg=msgMap.get(te.from.messageId);
-            const epFrom=teFromMsg?.kind==="normal" ? endpointBoxForNormal(te.from.messageId) : null;
-            if (epTarget && epFrom) {
-              const midX=(epFrom.box.x+epFrom.box.width/2+epTarget.box.x+epTarget.box.width/2)/2;
-              const midY=(epFrom.box.y+epFrom.box.height/2+epTarget.box.y+epTarget.box.height/2)/2;
-              approxToBox={x:midX-20,y:midY-8,width:40,height:16};
-            } else {
-              approxToBox=epTarget?.box??fromEp.box;
-            }
-            toCol=epTarget?.col??fromEp.col;
+        // For annotation/reference/reply (edge-label kind): use getRelVisualBox to correctly resolve
+        // the visual position of the target relation message at any level of nesting.
+        // This is the same pattern used for agree/disagree above, which already handles nested
+        // relation targets correctly — the arrow always points to the targeted relation message,
+        // not to one of its inner endpoints.
+        {
+          const visualBox = getRelVisualBox(relId);
+          if (visualBox) {
+            rawEdges.push({
+              drawId:`${e.id}__toRel__${relId}`,edge:e,fromAuthor,
+              fromBox:fromEp.box,
+              toBox:{x:visualBox.x,y:visualBox.y,width:visualBox.width,height:visualBox.height},
+              fromCol:fromEp.col,toCol:fromEp.col,
+              fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
+              start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
+            });
           }
-          rawEdges.push({
-            drawId:`${e.id}__toRel__${te.id}`,edge:e,fromAuthor,
-            fromBox:fromEp.box,toBox:approxToBox,
-            fromCol:fromEp.col,toCol,
-            fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:te.id,
-            start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
-          });
-        };
-        const toSel = e.to.selection;
-        if (toSel.kind==="edge") (edgesByRelMsg.get(relId)??[]).filter(x=>x.id===(toSel as {kind:"edge";edgeId:string}).edgeId).forEach(expand);
-        else if (toSel.kind==="whole") { const tes=edgesByRelMsg.get(relId)??[]; if (tes.length>0) expand(tes[0]); }
+        }
         continue;
       }
 

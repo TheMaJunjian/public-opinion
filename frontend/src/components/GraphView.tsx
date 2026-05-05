@@ -50,6 +50,7 @@ const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 // SUPPLEMENT frame constants
 const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pairs (wide enough to click)
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
+const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -923,6 +924,54 @@ export default function GraphView(props: GraphViewProps) {
       }
     }
 
+    // Helper: recursively resolve the visual bounding box for a relation message.
+    // This is needed when an edge targets a relation message (rel:...) that is itself
+    // a relation whose endpoints may also be relation messages (deeply nested annotations).
+    function getRelVisualBox(relId: string, depth = 0): LayoutBox | null {
+      if (depth > MAX_RELATION_NESTING_DEPTH) return null;
+      const relEdges = edgesByRelMsg.get(relId) ?? [];
+      if (relEdges.length === 0) return null;
+      const te0 = relEdges[0];
+      const relType = te0.relationType;
+      if (relType === "supplement") {
+        const fr = suppFrameByRelMsgId.get(relId);
+        return fr ? { x: fr.x, y: fr.y, width: fr.width, height: fr.height } : null;
+      }
+      if (relType === "tag") {
+        const tagInfo = tagBadgeByRelMsgId.get(relId);
+        return tagInfo ? { x: tagInfo.rect.x, y: tagInfo.rect.y, width: tagInfo.rect.width, height: tagInfo.rect.height } : null;
+      }
+      if (relType === "agree" || relType === "disagree") {
+        const targetMid = te0.to.messageId;
+        if (targetMid.startsWith("rel:")) return getRelVisualBox(targetMid, depth + 1);
+        const ep = endpointBoxForNormal(targetMid);
+        return ep?.box ?? null;
+      }
+      // annotation / reference / reply: midpoint of from and to visual boxes
+      let fromBox: LayoutBox | null = null;
+      if (!te0.from.messageId.startsWith("anon:")) {
+        if (te0.from.messageId.startsWith("rel:")) {
+          fromBox = getRelVisualBox(te0.from.messageId, depth + 1);
+        } else {
+          const fm = msgMap.get(te0.from.messageId);
+          if (fm?.kind === "normal") fromBox = endpointBoxForNormal(te0.from.messageId)?.box ?? null;
+        }
+      }
+      let toBox: LayoutBox | null = null;
+      if (te0.to.messageId.startsWith("rel:")) {
+        toBox = getRelVisualBox(te0.to.messageId, depth + 1);
+      } else {
+        const tm = msgMap.get(te0.to.messageId);
+        if (tm?.kind === "normal") toBox = endpointBoxForNormal(te0.to.messageId)?.box ?? null;
+      }
+      if (fromBox && toBox) {
+        const midX = (fromBox.x + fromBox.width / 2 + toBox.x + toBox.width / 2) / 2;
+        const midY = (fromBox.y + fromBox.height / 2 + toBox.y + toBox.height / 2) / 2;
+        return { x: midX - 20, y: midY - 8, width: 40, height: 16 };
+      }
+      return fromBox ?? toBox ?? null;
+    }
+
     const rawEdges: Omit<PositionedEdge,"labelX"|"labelY">[] = [];
     const labelSeeds: LabelSeed[] = [];
     // For agree/disagree with a real source message, use "支持"/"反驳" labels (support/rebut semantics).
@@ -1018,23 +1067,32 @@ export default function GraphView(props: GraphViewProps) {
         // For annotation/reference/reply (edge-label kind): use approximate midpoint of that relation's endpoints
         // as the best available proxy for where the edge label will appear.
         const expand=(te:DemoEdge) => {
-          const teToMsg=msgMap.get(te.to.messageId);
-          const epTarget=teToMsg?.kind==="normal" ? endpointBoxForNormal(te.to.messageId) : null;
-          // Compute the approximate midpoint between the relation's from and to boxes
-          const teFromMsg=msgMap.get(te.from.messageId);
-          const epFrom=teFromMsg?.kind==="normal" ? endpointBoxForNormal(te.from.messageId) : null;
           let approxToBox: LayoutBox;
-          if (epTarget && epFrom) {
-            const midX=(epFrom.box.x+epFrom.box.width/2+epTarget.box.x+epTarget.box.width/2)/2;
-            const midY=(epFrom.box.y+epFrom.box.height/2+epTarget.box.y+epTarget.box.height/2)/2;
-            approxToBox={x:midX-20,y:midY-8,width:40,height:16};
+          let toCol = fromEp.col;
+          if (te.to.messageId.startsWith("rel:")) {
+            // Target is a nested relation message — resolve its visual position recursively.
+            // This fixes multi-level nesting where an annotation targets another annotation,
+            // preventing the arrow from incorrectly pointing back to the outer source.
+            approxToBox = getRelVisualBox(te.to.messageId) ?? fromEp.box;
           } else {
-            approxToBox=epTarget?.box??fromEp.box;
+            const teToMsg=msgMap.get(te.to.messageId);
+            const epTarget=teToMsg?.kind==="normal" ? endpointBoxForNormal(te.to.messageId) : null;
+            // Compute the approximate midpoint between the relation's from and to boxes
+            const teFromMsg=msgMap.get(te.from.messageId);
+            const epFrom=teFromMsg?.kind==="normal" ? endpointBoxForNormal(te.from.messageId) : null;
+            if (epTarget && epFrom) {
+              const midX=(epFrom.box.x+epFrom.box.width/2+epTarget.box.x+epTarget.box.width/2)/2;
+              const midY=(epFrom.box.y+epFrom.box.height/2+epTarget.box.y+epTarget.box.height/2)/2;
+              approxToBox={x:midX-20,y:midY-8,width:40,height:16};
+            } else {
+              approxToBox=epTarget?.box??fromEp.box;
+            }
+            toCol=epTarget?.col??fromEp.col;
           }
           rawEdges.push({
             drawId:`${e.id}__toRel__${te.id}`,edge:e,fromAuthor,
             fromBox:fromEp.box,toBox:approxToBox,
-            fromCol:fromEp.col,toCol:epTarget?.col??fromEp.col,
+            fromCol:fromEp.col,toCol,
             fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:te.id,
             start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
           });

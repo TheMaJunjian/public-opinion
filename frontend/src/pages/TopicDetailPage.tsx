@@ -255,6 +255,34 @@ export default function TopicDetailPage() {
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
+  // Ref to track the ID of a newly sent message that should be scrolled into view.
+  const pendingScrollMsgIdRef = useRef<string | null>(null);
+
+  // Scroll the left panel canvas so the message with the given ID is centered.
+  // Polls via requestAnimationFrame until the card appears in the DOM.
+  // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
+  const MAX_SCROLL_ATTEMPTS = 60;
+  function scrollMsgToCenter(msgId: string) {
+    pendingScrollMsgIdRef.current = msgId;
+    let attempts = 0;
+    function tryScroll() {
+      attempts++;
+      if (attempts > MAX_SCROLL_ATTEMPTS) { pendingScrollMsgIdRef.current = null; return; }
+      if (pendingScrollMsgIdRef.current !== msgId) return; // superseded by newer message
+      const container = leftPanelRef.current;
+      if (!container) { requestAnimationFrame(tryScroll); return; }
+      const el = container.querySelector(`[data-msgid="${msgId}"]`) as HTMLElement | null;
+      if (!el) { requestAnimationFrame(tryScroll); return; }
+      pendingScrollMsgIdRef.current = null;
+      const elRect = el.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
+      const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
+      container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
+      container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
+    }
+    requestAnimationFrame(tryScroll);
+  }
 
   function captureSnapshot(): FocusSnapshot {
     return {
@@ -355,6 +383,7 @@ export default function TopicDetailPage() {
       };
       setMessages(prev => [...prev, msg]);
       if (!overrideContent) setNewMessageContent("");
+      scrollMsgToCenter(msg.id);
       return msg;
     } catch (e: any) {
       alert(`发送消息失败: ${e?.message ?? e}`);
@@ -1028,7 +1057,7 @@ export default function TopicDetailPage() {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
                   const isActiveText = activeTextSelectId === msg.id;
                   return (
-                    <div key={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
+                    <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{ borderRadius: 6, border: msg.kind === "relation" ? "1px solid #886400" : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444", background: msg.kind === "relation" ? "#232018" : "#1f1f1f", padding: "10px 14px", cursor: "pointer", fontSize: 13, outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none", userSelect: isActiveText ? "text" : "auto" }}>
                       <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
                         <span>{msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
@@ -1179,7 +1208,7 @@ export default function TopicDetailPage() {
                 </div>
               )}
               <input style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }} placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签" : "关系标签"} value={relationLabel} onChange={e => setRelationLabel(e.target.value)} />
-              <textarea style={{ width: "100%", minHeight: 60, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 13, resize: "vertical" }} placeholder="输入一条新普通消息（支持自由换行）" value={newMessageContent} onChange={e => setNewMessageContent(e.target.value)} />
+              <textarea style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 13, resize: "vertical" }} placeholder="输入一条新普通消息（支持自由换行）" value={newMessageContent} onChange={e => setNewMessageContent(e.target.value)} />
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => handleSendMessageOnly()} disabled={newMessageContent.trim().length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: newMessageContent.trim().length === 0 ? "#333" : "#444", color: newMessageContent.trim().length === 0 ? "#777" : "#fff", cursor: newMessageContent.trim().length === 0 ? "default" : "pointer", fontSize: 12 }}>仅发送消息</button>
                 <button onClick={handleQuickSendAndRelateFromDraftTargets} disabled={!quickButtonEnabled} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: !quickButtonEnabled ? "#333" : "#0b84ff", color: !quickButtonEnabled ? "#777" : "#fff", cursor: !quickButtonEnabled ? "default" : "pointer", fontSize: 12 }} title={isAgreeDisagreeType || isSupplementType ? "候选区作为目标（赞同/反对/补充时文本框可为空，将自动填入标签）" : "文本框作为来源（整条），候选区作为目标"}>发送消息并建立关系（用候选作目标）</button>

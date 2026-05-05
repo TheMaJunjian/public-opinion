@@ -966,6 +966,8 @@ export default function TopicDetailPage() {
     if (!targetRelMsgId) return ['none'];
     const relEdgesForTarget = edges.filter(e => e.relationMessageId === targetRelMsgId);
     if (relEdgesForTarget.length === 0) return ['none'];
+    // All edges sharing the same relationMessageId are created from the same Relation record
+    // and therefore have identical relationType. Using the first edge is sufficient.
     const targetRelType = relEdgesForTarget[0].relationType;
     const targetSpec = getPresentationSpec(targetRelType);
     const sameKindTypes = ALL_RELATION_TYPES.filter(rt => getPresentationSpec(rt).kind === targetSpec.kind);

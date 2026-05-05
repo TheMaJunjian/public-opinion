@@ -1659,7 +1659,8 @@ export default function GraphView(props: GraphViewProps) {
             <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
-              {showCorrBadge&&corrInfo!.slice(0,1).map(ci=>{
+              {showCorrBadge&&(()=>{
+                const ci=corrInfo![0];
                 const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
                 return (
                   <div key={`corr-edge-${ci.corrRelMsgId}`}
@@ -1676,7 +1677,7 @@ export default function GraphView(props: GraphViewProps) {
                     ✏更正
                   </div>
                 );
-              })}
+              })()}
             </div>
           );
         });
@@ -1789,7 +1790,8 @@ export default function GraphView(props: GraphViewProps) {
             <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
               style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             {/* Correction badge — embedded in frame top border when this supplement is a CORRECT target */}
-            {sfCorrInfo&&sfCorrInfo.slice(0,1).map(ci=>{
+            {sfCorrInfo&&(()=>{
+              const ci=sfCorrInfo[0];
               const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
               return (
                 <div key={`corr-supp-${ci.corrRelMsgId}`} data-rel-overlay="true"
@@ -1806,7 +1808,7 @@ export default function GraphView(props: GraphViewProps) {
                   ✏更正
                 </div>
               );
-            })}
+            })()}
           </React.Fragment>
         );
       })}
@@ -1831,7 +1833,8 @@ export default function GraphView(props: GraphViewProps) {
             <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
               style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             {/* Correction badge — embedded in frame top border when this group frame is a CORRECT target */}
-            {gfCorrInfo&&gfCorrInfo.slice(0,1).map(ci=>{
+            {gfCorrInfo&&(()=>{
+              const ci=gfCorrInfo[0];
               const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
               return (
                 <div key={`corr-gf-${ci.corrRelMsgId}`} data-rel-overlay="true"
@@ -1848,7 +1851,7 @@ export default function GraphView(props: GraphViewProps) {
                   ✏更正
                 </div>
               );
-            })}
+            })()}
           </React.Fragment>
         );
       })}

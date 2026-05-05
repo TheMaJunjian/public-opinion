@@ -1067,6 +1067,7 @@ export default function GraphView(props: GraphViewProps) {
         // as the best available proxy for where the edge label will appear.
         const expand=(te:DemoEdge) => {
           let approxToBox: LayoutBox;
+          let toCol = fromEp.col;
           if (te.to.messageId.startsWith("rel:")) {
             // Target is a nested relation message — resolve its visual position recursively.
             // This fixes multi-level nesting where an annotation targets another annotation,
@@ -1085,11 +1086,12 @@ export default function GraphView(props: GraphViewProps) {
             } else {
               approxToBox=epTarget?.box??fromEp.box;
             }
+            toCol=epTarget?.col??fromEp.col;
           }
           rawEdges.push({
             drawId:`${e.id}__toRel__${te.id}`,edge:e,fromAuthor,
             fromBox:fromEp.box,toBox:approxToBox,
-            fromCol:fromEp.col,toCol:fromEp.col,
+            fromCol:fromEp.col,toCol,
             fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:te.id,
             start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
           });

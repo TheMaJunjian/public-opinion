@@ -620,7 +620,25 @@ export default function GraphView(props: GraphViewProps) {
   const textRefs = useRef<Record<string,SVGTextElement|null>>({});
 
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id,m])), [messages]);
-  const normals = useMemo(() => messages.filter(m => m.kind === "normal"), [messages]);
+  // TAG-only source messages: normal messages used exclusively as TAG relation sources.
+  // They should not appear as graph cards — their label text is accessible via msgMap.
+  const tagSourceIds = useMemo(() => {
+    const isTagSource = new Set<string>();
+    const shouldKeepVisible = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+        isTagSource.add(e.from.messageId);
+      }
+      // Keep visible: any message targeted by a relation, or source of a non-TAG relation
+      if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
+      if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+        shouldKeepVisible.add(e.from.messageId);
+      }
+    }
+    for (const id of shouldKeepVisible) isTagSource.delete(id);
+    return isTagSource;
+  }, [edges, msgMap]);
+  const normals = useMemo(() => messages.filter(m => m.kind === "normal" && !tagSourceIds.has(m.id)), [messages, tagSourceIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
   const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation").map(m => m.id)), [messages]);
 
@@ -944,7 +962,11 @@ export default function GraphView(props: GraphViewProps) {
       }
       if (relType === "agree" || relType === "disagree") {
         const targetMid = te0.to.messageId;
-      if (msgMap.get(targetMid)?.kind === "relation") return getRelVisualBox(targetMid, depth + 1);
+        if (msgMap.get(targetMid)?.kind === "relation") return getRelVisualBox(targetMid, depth + 1);
+        // Point to the decoration badge rect so the arrow targets the badge, not the whole card
+        const decKey = `${targetMid}::${relType}`;
+        const decRect = decorationRects[decKey];
+        if (decRect) return { x: decRect.rect.x, y: decRect.rect.y, width: decRect.rect.width, height: decRect.rect.height };
         const ep = endpointBoxForNormal(targetMid);
         return ep?.box ?? null;
       }
@@ -1049,15 +1071,19 @@ export default function GraphView(props: GraphViewProps) {
           continue;
         }
 
-        // Agree/disagree decoration: per spec, edge points to the message the decoration decorates
-        // (not the decoration badge itself).
+        // Agree/disagree decoration: edge points to the decoration badge of the relation message.
+        // getRelVisualBox handles nested relation targets (e.g. agree/disagree on a relation message).
         if (targetRelType === "agree" || targetRelType === "disagree") {
-          const targetMid = targetRelEdges[0]?.to.messageId ?? "";
-          const toEpN = endpointBoxForNormal(targetMid);
-          if (toEpN) {
+          const visualBox = getRelVisualBox(relId);
+          if (visualBox) {
+            // Use the column of the decorated message for proper edge routing
+            const decoratedMid = targetRelEdges[0]?.to.messageId ?? "";
+            const toCol = msgMap.get(decoratedMid)?.kind === "relation"
+              ? fromEp.col  // nested relation target — fall back to source col
+              : (colOf[decoratedMid] ?? fromEp.col);
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:toEpN.box,fromCol:fromEp.col,toCol:toEpN.col,
+              fromBox:fromEp.box,toBox:visualBox,fromCol:fromEp.col,toCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -1379,24 +1405,32 @@ export default function GraphView(props: GraphViewProps) {
             );
             decTop+=DEC_H+DEC_GAP;
           }
-          // TAG badges on this relation message
+          // TAG badges on this relation message — aggregated by label text
+          const tagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
           for (const {fromMsgId,relMsgId:tagRelMsgId} of tagItems) {
             const fromMsg=msgMap.get(fromMsgId);
-            const tagLabel=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
-            const tagW=Math.max(TAG_MIN_W,tagLabel.length*8+8+28);
-            const isTagSel=isRelWholeSel(tagRelMsgId);
+            const label=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
+            const existing=tagGroupMap.get(label);
+            if (existing) { existing.relMsgIds.push(tagRelMsgId); }
+            else { tagGroupMap.set(label,{label,relMsgIds:[tagRelMsgId]}); }
+          }
+          for (const {label:tagLabel,relMsgIds} of tagGroupMap.values()) {
+            const count=relMsgIds.length;
+            const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
+            const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
+            const isTagSel=relMsgIds.some(id=>isRelWholeSel(id));
             items.push(
-              <div key={`reltag-${tagRelMsgId}`} data-rel-overlay="true"
-                onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,[tagRelMsgId]);}}
-                onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,[tagRelMsgId]);}}
-                title={`标注：${tagLabel}；单击选中，双击展开详情`}
+              <div key={`reltag-${relMsgIds[0]}`} data-rel-overlay="true"
+                onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,relMsgIds);}}
+                onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,relMsgIds);}}
+                title={`标注：${displayLabel}；单击选中，双击展开详情`}
                 style={{position:"absolute",left:decLeft,top:decTop,width:tagW,height:TAG_H,zIndex:5,
                   background:isTagSel?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
                   display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,pointerEvents:"auto",
                   cursor:"pointer",padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
                   border:isTagSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                🏷{tagLabel}
+                🏷{displayLabel}
               </div>
             );
             decTop+=TAG_H+TAG_V_GAP;
@@ -1472,24 +1506,32 @@ export default function GraphView(props: GraphViewProps) {
           );
           sfDecTop+=DEC_H+DEC_GAP;
         }
-        // TAG badges on this supplement relation message
+        // TAG badges on this supplement relation message — aggregated by label text
+        const sfTagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
         for (const {fromMsgId,relMsgId:tagRelMsgId} of sfTagItems) {
           const fromMsg=msgMap.get(fromMsgId);
-          const tagLabel=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
-          const tagW=Math.max(TAG_MIN_W,tagLabel.length*8+8+28);
-          const isTagSel=isRelWholeSel(tagRelMsgId);
+          const label=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
+          const existing=sfTagGroupMap.get(label);
+          if (existing) { existing.relMsgIds.push(tagRelMsgId); }
+          else { sfTagGroupMap.set(label,{label,relMsgIds:[tagRelMsgId]}); }
+        }
+        for (const {label:tagLabel,relMsgIds} of sfTagGroupMap.values()) {
+          const count=relMsgIds.length;
+          const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
+          const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
+          const isTagSel=relMsgIds.some(id=>isRelWholeSel(id));
           nodes.push(
-            <div key={`sftag-${tagRelMsgId}`} data-rel-overlay="true"
-              onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,sf.relMsgId,tagLabel,[tagRelMsgId]);}}
-              onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,sf.relMsgId,tagLabel,[tagRelMsgId]);}}
-              title={`标注：${tagLabel}；单击选中，双击展开详情`}
+            <div key={`sftag-${relMsgIds[0]}`} data-rel-overlay="true"
+              onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
+              onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
+              title={`标注：${displayLabel}；单击选中，双击展开详情`}
               style={{position:"absolute",left:sfDecLeft,top:sfDecTop,width:tagW,height:TAG_H,zIndex:5,
                 background:isTagSel?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
                 display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,pointerEvents:"auto",
                 cursor:"pointer",padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
                 border:isTagSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-              🏷{tagLabel}
+              🏷{displayLabel}
             </div>
           );
           sfDecTop+=TAG_H+TAG_V_GAP;

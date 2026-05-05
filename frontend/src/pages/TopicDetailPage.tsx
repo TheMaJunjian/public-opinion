@@ -967,11 +967,11 @@ export default function TopicDetailPage() {
   }
 
   if (loading) {
-    return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "calc(100vh - 56px)" }}>加载中…</div>;
+    return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
   }
   if (loadError) {
     return (
-      <div style={{ padding: 16, background: "#101010", color: "#eee", height: "calc(100vh - 56px)" }}>
+      <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
         <pre style={{ whiteSpace: "pre-wrap", color: "#ff8080" }}>{loadError}</pre>
       </div>
@@ -984,7 +984,7 @@ export default function TopicDetailPage() {
 
   return (
     <>
-    <div style={{ height: "calc(100vh - 56px)", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontWeight: 600 }}>{topic?.title ?? "加载中…"}</span>
@@ -1008,7 +1008,7 @@ export default function TopicDetailPage() {
       </div>
 
       <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
@@ -1070,7 +1070,7 @@ export default function TopicDetailPage() {
           onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
         />
 
-        <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "hidden", minWidth: 0 }}>
+        <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
               <div style={{ fontWeight: 600 }}>候选区（Draft）</div>

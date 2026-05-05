@@ -811,7 +811,7 @@ export default function TopicDetailPage() {
       try {
         const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
         const relId = backendRel.id;
-        const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系（无来源消息）\n目标：${draftUnits.map(u => u.messageId).join(",")}` };
+        const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系（无来源消息）\n目标：${draftUnits.slice(0, 3).map(u => u.messageId).join(",") + (draftUnits.length > 3 ? "…" : "")}` };
         setMessages(prev => [...prev, relMsg]);
         const anonSrcId = `anon:${backendRel.id}`;
         for (const t of draftUnits) {
@@ -1000,7 +1000,7 @@ export default function TopicDetailPage() {
     if (draftHasRelationTarget && hasSecondaryRelationSelector) {
       if (newMessageContent.trim().length > 0) return `请清空文本输入框（目标为关系消息时不应有文本）`;
       if (sourceUnits.length > 0) return `请清空来源集合（目标为关系消息时来源必须为空）`;
-      const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType);
+      const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
       return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
     }
     if (isAgreeDisagreeType || isSupplementType) {

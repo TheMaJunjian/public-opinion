@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
+import { getPresentationSpec } from '../types';
+import type { PresentationKind } from '../types';
 
 // ========================= Layout types =========================
 
@@ -118,12 +120,29 @@ export function extractTextTargetsForMessage(messageId: string, edges: DemoEdge[
 }
 
 export function relationTypeName(t: RelationType | string): string {
-  const names: Record<string, string> = {
-    annotation: "注释", reference: "引用", reply: "回复",
-    agree: "赞同", disagree: "反对", tag: "标注",
-    correct: "更正", supplement: "补充",
-  };
-  return names[t] ?? t;
+  return getPresentationSpec(t).label;
+}
+
+/** Get the PresentationKind for a relation type (handles lowercase bridge keys). */
+function getRelKind(relType: string): PresentationKind {
+  return getPresentationSpec(relType).kind;
+}
+
+/** True for relation types that cluster targets in a frame (supplement-frame, frame-group, replace-overlay with groupsTargets). */
+function isFramingRel(relType: string): boolean {
+  const spec = getPresentationSpec(relType);
+  return spec.kind === 'supplement-frame' || spec.kind === 'frame-group' || (spec.kind === 'replace-overlay' && !!spec.groupsTargets);
+}
+
+/** True for relation types that use the supplement-frame kind specifically. */
+function isSuppFrameRel(relType: string): boolean {
+  return getRelKind(relType) === 'supplement-frame';
+}
+
+/** True for relation types that render as a frame (supplement-frame OR frame-group OR replace-overlay). */
+function isAnyFrameRel(relType: string): boolean {
+  const k = getRelKind(relType);
+  return k === 'supplement-frame' || k === 'frame-group' || k === 'replace-overlay';
 }
 
 function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
@@ -309,41 +328,54 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
   return { col, maxCol };
 }
 
-/** High-priority rule: supplement source is placed in the same column as its target. */
-function applySupplementColumnOverride(params: {
+/**
+ * High-priority grouping column rule.
+ *
+ * Applies to ALL relation types with `groupsTargets=true` (supplement-frame, frame-group)
+ * and to replace-overlay types that also group targets (SUMMARY).
+ * For CORRECT (replace-overlay without groupsTargets), only the source→target pair is handled.
+ *
+ * Rules:
+ *   - Source message (if real, not anon:) → same column as its first target.
+ *   - No-source framing relations with multiple targets → all targets chained into the same column.
+ *   - All framing-type relations (supplement-frame, frame-group, replace-overlay) participate.
+ */
+function applyGroupingColumnOverride(params: {
   normals: DemoMessage[];
   edges: DemoEdge[];
   col: Record<string, number>;
   maxCol: number;
-}): { col: Record<string, number>; maxCol: number; suppSourceToTarget: Map<string, string> } {
+}): { col: Record<string, number>; maxCol: number; groupSourceToTarget: Map<string, string> } {
   const { normals, edges } = params;
   const col = { ...params.col };
   const normalSet = new Set(normals.map(m => m.id));
   const msgById = new Map(normals.map(m => [m.id, m]));
 
-  const suppSourceToTarget = new Map<string, string>();
+  // groupSourceToTarget: maps a "child" message to the message it should be stacked below.
+  // For supplement/correct: source message → target message.
+  // For frame-group / no-source framing: target[i] → target[i-1] (chain).
+  const groupSourceToTarget = new Map<string, string>();
   for (const e of edges) {
-    if (e.relationType !== "supplement") continue;
+    if (!isAnyFrameRel(e.relationType)) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
-    // First target wins: deterministic column assignment regardless of edge ordering.
-    if (!suppSourceToTarget.has(e.from.messageId)) {
-      suppSourceToTarget.set(e.from.messageId, e.to.messageId);
+    // Source message gets stacked below its first target.
+    if (!groupSourceToTarget.has(e.from.messageId)) {
+      groupSourceToTarget.set(e.from.messageId, e.to.messageId);
     }
   }
 
-  // For no-source supplements (anon: from), chain multiple targets together so they
-  // are placed in the same column and stacked tightly (zero gap), matching the
-  // visual layout used for supplements with a real source message.
-  const noSuppTargetsByRelMsg = new Map<string, string[]>();
+  // For no-source framing relations (anon: from), chain multiple targets together so they
+  // are placed in the same column and stacked tightly (zero gap).
+  const noFrameTargetsByRelMsg = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.relationType !== "supplement") continue;
+    if (!isAnyFrameRel(e.relationType)) continue;
     if (!e.from.messageId.startsWith("anon:")) continue;
     if (!normalSet.has(e.to.messageId)) continue;
-    const arr = noSuppTargetsByRelMsg.get(e.relationMessageId) ?? [];
+    const arr = noFrameTargetsByRelMsg.get(e.relationMessageId) ?? [];
     arr.push(e.to.messageId);
-    noSuppTargetsByRelMsg.set(e.relationMessageId, arr);
+    noFrameTargetsByRelMsg.set(e.relationMessageId, arr);
   }
-  for (const [, targetIds] of noSuppTargetsByRelMsg) {
+  for (const [, targetIds] of noFrameTargetsByRelMsg) {
     if (targetIds.length < 2) continue;
     // Sort by creation time for deterministic, chronological ordering.
     targetIds.sort((a, b) =>
@@ -352,24 +384,24 @@ function applySupplementColumnOverride(params: {
     );
     // Chain: each subsequent target is "stacked below" the previous one.
     for (let i = 1; i < targetIds.length; i++) {
-      if (!suppSourceToTarget.has(targetIds[i])) {
-        suppSourceToTarget.set(targetIds[i], targetIds[i - 1]);
+      if (!groupSourceToTarget.has(targetIds[i])) {
+        groupSourceToTarget.set(targetIds[i], targetIds[i - 1]);
       }
     }
   }
 
-  // Propagate columns: source gets same column as target (iterate until stable for chains)
+  // Propagate columns: each chained message gets the same column as its anchor.
   let changed = true, iter = 0;
   while (changed && iter < 1000) {
     changed = false; iter++;
-    for (const [srcId, tgtId] of suppSourceToTarget) {
+    for (const [srcId, tgtId] of groupSourceToTarget) {
       const tgtCol = col[tgtId] ?? 0;
       if ((col[srcId] ?? 0) !== tgtCol) { col[srcId] = tgtCol; changed = true; }
     }
   }
 
   const maxCol = Math.max(0, ...(Object.values(col).length ? Object.values(col) : [0]));
-  return { col, maxCol, suppSourceToTarget };
+  return { col, maxCol, groupSourceToTarget };
 }
 
 /**
@@ -428,17 +460,17 @@ function applyAgreeDisagreeColumnOverride(params: {
 
 function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
-  suppSourceToTarget?: Map<string, string>;
+  groupSourceToTarget?: Map<string, string>;
 }) {
   const { normals, colOf, measuredHeights, maxCol } = params;
-  const suppSourceToTarget = params.suppSourceToTarget ?? EMPTY_MAP;
+  const groupSourceToTarget = params.groupSourceToTarget ?? EMPTY_MAP;
 
-  // Build reverse map: target → list of supplement sources
-  const suppTargetToSources = new Map<string, string[]>();
-  for (const [srcId, tgtId] of suppSourceToTarget) {
-    const arr = suppTargetToSources.get(tgtId) ?? [];
+  // Build reverse map: target → list of grouped children (supplement sources, frame-group members, etc.)
+  const groupTargetToChildren = new Map<string, string[]>();
+  for (const [srcId, tgtId] of groupSourceToTarget) {
+    const arr = groupTargetToChildren.get(tgtId) ?? [];
     arr.push(srcId);
-    suppTargetToSources.set(tgtId, arr);
+    groupTargetToChildren.set(tgtId, arr);
   }
 
   const byCol = new Map<number, DemoMessage[]>();
@@ -449,15 +481,15 @@ function computeNoOverlapLayout(params: {
     byCol.set(c, arr);
   }
 
-  // Supplement sources in the same column as their target are NOT "root" messages
-  const suppSourceIds = new Set(suppSourceToTarget.keys());
+  // Grouped children in the same column as their anchor are NOT "root" messages
+  const groupChildIds = new Set(groupSourceToTarget.keys());
 
   const colCursor: Record<number, number> = {};
   for (let c = 0; c <= maxCol; c++) colCursor[c] = GRID_TOP;
   const layout: Record<string, LayoutBox> = {};
   let maxBottom = GRID_TOP;
 
-  // Recursively place a message then its supplement children (with zero gap)
+  // Recursively place a message then its grouped children (with zero gap)
   function placeGroup(msg: DemoMessage, c: number, gapBefore: number, visited: Set<string>) {
     if (visited.has(msg.id)) return;
     visited.add(msg.id);
@@ -466,26 +498,26 @@ function computeNoOverlapLayout(params: {
     layout[msg.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
     maxBottom = Math.max(maxBottom, colCursor[c] + h);
     colCursor[c] += h;
-    // Place supplement sources directly below with zero gap
+    // Place grouped children directly below with zero gap
     const colMsgs = byCol.get(c) ?? [];
-    const sources = (suppTargetToSources.get(msg.id) ?? []).filter(s => (colOf[s] ?? 0) === c);
-    sources.sort((a, b) => {
+    const children = (groupTargetToChildren.get(msg.id) ?? []).filter(s => (colOf[s] ?? 0) === c);
+    children.sort((a, b) => {
       const ma = colMsgs.find(m => m.id === a), mb = colMsgs.find(m => m.id === b);
       return new Date(ma?.createdAt ?? 0).getTime() - new Date(mb?.createdAt ?? 0).getTime();
     });
-    for (const srcId of sources) {
-      const srcMsg = colMsgs.find(m => m.id === srcId);
-      if (srcMsg) placeGroup(srcMsg, c, 0, visited);
+    for (const childId of children) {
+      const childMsg = colMsgs.find(m => m.id === childId);
+      if (childMsg) placeGroup(childMsg, c, 0, visited);
     }
   }
 
   for (let c = 0; c <= maxCol; c++) {
     const colMsgs = byCol.get(c) ?? [];
-    // Root messages: not supplement sources that have their target in the same column
+    // Root messages: not grouped children that have their anchor in the same column
     const roots = colMsgs.filter(m => {
-      if (!suppSourceIds.has(m.id)) return true;
-      const tgtId = suppSourceToTarget.get(m.id)!;
-      return (colOf[tgtId] ?? 0) !== c; // target in different col → treat as root
+      if (!groupChildIds.has(m.id)) return true;
+      const tgtId = groupSourceToTarget.get(m.id)!;
+      return (colOf[tgtId] ?? 0) !== c; // anchor in different col → treat as root
     });
     roots.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     const visited = new Set<string>();
@@ -600,6 +632,26 @@ export interface GraphViewProps {
   onTagBodyClick?: (e: React.MouseEvent, messageId: string, tagLabel: string, relMsgIds: string[]) => void;
   /** Double-click on a tag badge — shows details popup */
   onTagDoubleClick?: (e: React.MouseEvent, messageId: string, tagLabel: string, relMsgIds: string[]) => void;
+  /**
+   * Single-click on a group frame border (frame-group: CLASSIFY/MERGE) — selects the relation
+   * or opens "add message to group" UI.  Falls back to onMessageClick if not provided.
+   */
+  onGroupFrameClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  /**
+   * Double-click on a group frame border (frame-group: CLASSIFY/MERGE) — expands the topic view
+   * for this group, or shows group details.  Falls back to onMessageDoubleClick if not provided.
+   */
+  onGroupFrameDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  /**
+   * Single-click on an inline badge (RECOMMEND / ARCHIVE) — selects the relation message.
+   * Falls back to onMessageClick if not provided.
+   */
+  onInlineBadgeClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  /**
+   * Double-click on an inline badge (RECOMMEND / ARCHIVE) — shows operation details
+   * (who operated, when, etc.).  Falls back to onMessageDoubleClick if not provided.
+   */
+  onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
 }
 
 export default function GraphView(props: GraphViewProps) {
@@ -611,6 +663,8 @@ export default function GraphView(props: GraphViewProps) {
     onMessageMouseDown, onMessageMouseUp,
     onDecorationIconClick, onDecorationBodyClick, onDecorationDoubleClick,
     onTagBodyClick, onTagDoubleClick,
+    onGroupFrameClick, onGroupFrameDoubleClick,
+    onInlineBadgeClick, onInlineBadgeDoubleClick,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
@@ -645,11 +699,11 @@ export default function GraphView(props: GraphViewProps) {
 
   const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges, relIds), [normalIds, edges, relIds]);
   const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol, relIds }), [normals, edges, baseCol, baseMaxCol, relIds]);
-  // AGREE/DISAGREE column override: applied before supplement so supplement can override it
+  // AGREE/DISAGREE column override: applied before grouping so grouping can override it
   const { col: agreeDisCol, maxCol: agreeDisMaxCol } = useMemo(() => applyAgreeDisagreeColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
-  // Supplement column override: highest priority — source must be in same column as target,
-  // overriding any agree/disagree placement so zero-gap stacking is always preserved.
-  const { col: colOf, maxCol, suppSourceToTarget } = useMemo(() => applySupplementColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
+  // Grouping column override: highest priority — supplement/frame-group/replace-overlay source must
+  // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
+  const { col: colOf, maxCol, groupSourceToTarget } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   const [layout, setLayout] = useState<Record<string,LayoutBox>>({});
@@ -662,6 +716,11 @@ export default function GraphView(props: GraphViewProps) {
   const [tagDecorationsByMsg, setTagDecorationsByMsg] = useState<Record<string,{label:string;relMsgIds:string[];rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>>({});
   // SUPPLEMENT frames: list of {targetId, sourceId, frame rect, relAgreeCount, relDisagreeCount, relAgreeMsgIds, relDisagreeMsgIds}
   const [supplementFrames, setSupplementFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
+  // GROUP frames: frame-group (CLASSIFY/MERGE) and replace-overlay (CORRECT/SUMMARY) — same visual structure as supplement frames
+  // relKind field distinguishes supplement-frame / frame-group / replace-overlay for styling
+  const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
+  // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
+  const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
   const [relDecByRelMsgState, setRelDecByRelMsgState] = useState<Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>>(new Map());
   // TAG relations targeting relation messages — for rendering next to edge labels / supplement frames
@@ -698,7 +757,7 @@ export default function GraphView(props: GraphViewProps) {
   }, [normals, layout]);
 
   useEffect(() => {
-    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, suppSourceToTarget });
+    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget });
     setLayout(nl); setCanvasHeight(h);
   }, [normals, colOf, maxCol, measuredHeights, suppSourceToTarget]);
 
@@ -836,52 +895,74 @@ export default function GraphView(props: GraphViewProps) {
     // Compute SUPPLEMENT frames — one frame per relation message (relMsgId), wrapping all target
     // messages and the source message (if any) within a single border frame.
     const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
-    {
-      // Group supplement edges by relMsgId
-      const suppEdgesByRelMsg = new Map<string, DemoEdge[]>();
+    // Compute GROUP frames — frame-group (CLASSIFY/MERGE) and replace-overlay (CORRECT/SUMMARY).
+    // Same structure as supplement frames; relKind/relLabel/relColor distinguish them for styling.
+    const newGroupFrames: {targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
+
+    // Generic frame computation — shared logic for supplement, frame-group, replace-overlay.
+    function computeFramesForRelType(
+      filterFn: (relType: string) => boolean,
+      appendFn: (f: {targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}) => void
+    ) {
+      const frameEdgesByRelMsg = new Map<string, DemoEdge[]>();
       for (const e of edges) {
-        if (e.relationType !== "supplement") continue;
+        if (!filterFn(e.relationType)) continue;
         if (e.to.selection.kind !== "whole" && e.to.selection.kind !== "text") continue;
-        const arr = suppEdgesByRelMsg.get(e.relationMessageId) ?? [];
+        const arr = frameEdgesByRelMsg.get(e.relationMessageId) ?? [];
         arr.push(e);
-        suppEdgesByRelMsg.set(e.relationMessageId, arr);
+        frameEdgesByRelMsg.set(e.relationMessageId, arr);
       }
-      for (const [relMsgId, suppEdges] of suppEdgesByRelMsg) {
-        if (suppEdges.length === 0) continue;
-        const sourceId = suppEdges[0].from.messageId;
-        // hasExplicitSource: false when sourceId is an anon: placeholder (no-source supplement)
+      for (const [relMsgId, frameEdges] of frameEdgesByRelMsg) {
+        if (frameEdges.length === 0) continue;
+        const relType = frameEdges[0].relationType;
+        const spec = getPresentationSpec(relType);
+        const sourceId = frameEdges[0].from.messageId;
         const hasExplicitSource = !sourceId.startsWith("anon:");
         const sourceBox = hasExplicitSource ? (endpointBoxForNormal(sourceId)?.box ?? layout[sourceId]) : null;
         if (hasExplicitSource && !sourceBox) continue;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         if (sourceBox) {
-          minX = Math.min(minX, sourceBox.x);
-          minY = Math.min(minY, sourceBox.y);
-          maxX = Math.max(maxX, sourceBox.x + sourceBox.width);
-          maxY = Math.max(maxY, sourceBox.y + sourceBox.height);
+          minX = Math.min(minX, sourceBox.x); minY = Math.min(minY, sourceBox.y);
+          maxX = Math.max(maxX, sourceBox.x + sourceBox.width); maxY = Math.max(maxY, sourceBox.y + sourceBox.height);
         }
         let anyTarget = false;
-        for (const e of suppEdges) {
+        for (const e of frameEdges) {
           const targetBox = endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
           if (!targetBox) continue;
           anyTarget = true;
-          minX = Math.min(minX, targetBox.x);
-          minY = Math.min(minY, targetBox.y);
-          maxX = Math.max(maxX, targetBox.x + targetBox.width);
-          maxY = Math.max(maxY, targetBox.y + targetBox.height);
+          minX = Math.min(minX, targetBox.x); minY = Math.min(minY, targetBox.y);
+          maxX = Math.max(maxX, targetBox.x + targetBox.width); maxY = Math.max(maxY, targetBox.y + targetBox.height);
         }
         if (!anyTarget && !sourceBox) continue;
         if (minX === Infinity) continue;
         const rect = {
-          x: minX - SUPP_FRAME_PAD,
-          y: minY - SUPP_FRAME_PAD,
-          width: maxX - minX + SUPP_FRAME_PAD * 2,
-          height: maxY - minY + SUPP_FRAME_PAD * 2,
+          x: minX - SUPP_FRAME_PAD, y: minY - SUPP_FRAME_PAD,
+          width: maxX - minX + SUPP_FRAME_PAD * 2, height: maxY - minY + SUPP_FRAME_PAD * 2,
         };
-        // Use the first target's messageId for compatibility with the frame data type
-        const targetId = suppEdges[0].to.messageId;
-        newSupplementFrames.push({targetId, sourceId, relMsgId, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[]});
+        const targetId = frameEdges[0].to.messageId;
+        appendFn({ targetId, sourceId, relMsgId, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[] });
       }
+    }
+
+    computeFramesForRelType(isSuppFrameRel, f => newSupplementFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
+    computeFramesForRelType(t => !isSuppFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
+
+    // Compute INLINE BADGES — RECOMMEND / ARCHIVE: small badge anchored to target message card
+    // Position: top-right corner of the target card, stacked upward for multiple badges.
+    const BADGE_W = 46, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
+    const newInlineBadgesByMsg = new Map<string, Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>();
+    for (const e of edges) {
+      if (getRelKind(e.relationType) !== 'inline-badge') continue;
+      if (e.to.selection.kind !== 'whole') continue;
+      const mid = e.to.messageId;
+      if (msgMap.get(mid)?.kind !== 'normal') continue;
+      const ep = endpointBoxForNormal(mid), box = ep?.box ?? layout[mid]; if (!box) continue;
+      const spec = getPresentationSpec(e.relationType);
+      const arr = newInlineBadgesByMsg.get(mid) ?? [];
+      const badgeX = box.x + box.width - BADGE_W + BADGE_RIGHT_GAP;
+      const badgeY = box.y + BADGE_TOP_OFFSET - arr.length * (BADGE_H + 2);
+      arr.push({ relMsgId: e.relationMessageId, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H } });
+      newInlineBadgesByMsg.set(mid, arr);
     }
 
     // Compute AGREE/DISAGREE decorations targeting relation messages (relDecByRelMsgId)
@@ -897,7 +978,7 @@ export default function GraphView(props: GraphViewProps) {
       else { cur.disagreeCount++; cur.disagreeRelMsgIds.push(e.relationMessageId); }
       relDecByRelMsgId.set(toId, cur);
     }
-    // Propagate counts and IDs to tag groups and supplement frames
+    // Propagate counts and IDs to tag groups, supplement frames, and group frames
     for (const groups of Object.values(newTagDecorationsByMsg)) {
       for (const group of groups) {
         for (const rmId of group.relMsgIds) {
@@ -909,7 +990,7 @@ export default function GraphView(props: GraphViewProps) {
         }
       }
     }
-    for (const sf of newSupplementFrames) {
+    for (const sf of [...newSupplementFrames, ...newGroupFrames]) {
       const dec=relDecByRelMsgId.get(sf.relMsgId);
       if (dec) {
         sf.relAgreeCount+=dec.agreeCount; sf.relDisagreeCount+=dec.disagreeCount;
@@ -919,6 +1000,8 @@ export default function GraphView(props: GraphViewProps) {
     setRelDecByRelMsgState(relDecByRelMsgId);
     setTagDecorationsByMsg(newTagDecorationsByMsg);
     setSupplementFrames(newSupplementFrames);
+    setGroupFrames(newGroupFrames);
+    setInlineBadgesByMsg(newInlineBadgesByMsg);
 
     // Collect TAG relations targeting relation messages (for display next to edge labels / frames)
     const newTagsByRelMsg = new Map<string,Array<{fromMsgId:string;relMsgId:string}>>();

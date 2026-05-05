@@ -1,4 +1,5 @@
 import type { Message as BackendMessage, Relation as BackendRelation, TargetRef } from '../types';
+import { getPresentationSpec } from '../types';
 
 export type MessageKind = "normal" | "relation";
 export type RelationType =
@@ -9,7 +10,12 @@ export type RelationType =
   | "disagree"
   | "tag"
   | "correct"
-  | "supplement";
+  | "supplement"
+  | "classify"
+  | "merge"
+  | "summary"
+  | "recommend"
+  | "archive";
 export type SecondaryRelationType = "none" | "annotation" | "reference";
 
 export type Selection =
@@ -61,15 +67,7 @@ function hashText(text: string): string {
 }
 
 function relationTypeName(t: string): string {
-  const names: Record<string, string> = {
-    annotation: "注释", reference: "引用", reply: "回复",
-    agree: "赞同", disagree: "反对", tag: "标注",
-    correct: "更正", supplement: "补充",
-    ANNOTATION: "注释", REFERENCE: "引用", REPLY: "回复",
-    AGREE: "赞同", DISAGREE: "反对", TAG: "标注",
-    CORRECT: "更正", SUPPLEMENT: "补充",
-  };
-  return names[t] ?? t;
+  return getPresentationSpec(t).label;
 }
 
 function findTextInContent(content: string, text: string): { start: number; len: number } | null {

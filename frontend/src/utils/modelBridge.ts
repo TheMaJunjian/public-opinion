@@ -39,6 +39,19 @@ export type DemoEdge = {
   relationLabel: string;
 };
 
+function targetRefsSummary(targetRefs: TargetRef[]): string {
+  if (targetRefs.length === 0) return '（无目标）';
+  return targetRefs.map(ref => {
+    if (ref.kind === 'message') return `消息 ${ref.messageId}`;
+    if (ref.kind === 'text-fragment') {
+      const preview = ref.text.slice(0, 20) + (ref.text.length > 20 ? '…' : '');
+      return `消息 ${ref.messageId} 的文本片段「${preview}」`;
+    }
+    const partStr = ref.part ? `（${ref.part}）` : '';
+    return `关系 ${ref.relationId}${partStr}`;
+  }).join('；');
+}
+
 function hashText(text: string): string {
   let h = 0;
   for (let i = 0; i < text.length; i++) {
@@ -97,8 +110,8 @@ export function convertMessagesToDemoModel(
         author: rel.createdBy.username,
         createdAt: rel.createdAt,
         content: rel.sourceMessageId
-          ? `建立${typeName}关系：来自 ${rel.sourceMessageId}；类型：${typeName}`
-          : `建立${typeName}关系（无来源消息）；类型：${typeName}`,
+          ? `建立${typeName}关系\n来源：${rel.sourceMessageId}\n目标：${targetRefsSummary(rel.targetRefs)}`
+          : `建立${typeName}关系（无来源消息）\n目标：${targetRefsSummary(rel.targetRefs)}`,
         kind: "relation",
       });
     }

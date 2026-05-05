@@ -1660,13 +1660,13 @@ export default function GraphView(props: GraphViewProps) {
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{
-                const ci=corrInfo![0];
-                const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
+                const corrItem=corrInfo![0];
+                const isCorrSel=isRelWholeSel(corrItem.corrRelMsgId);
                 return (
-                  <div key={`corr-edge-${ci.corrRelMsgId}`}
-                    onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
-                    onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
-                    title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
+                  <div key={`corr-edge-${corrItem.corrRelMsgId}`}
+                    onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,corrItem.corrRelMsgId);}}
+                    onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,corrItem.corrRelMsgId);}}
+                    title={`更正关系：${corrItem.corrRelMsgId}；单击选中，双击查看历史`}
                     style={{position:"absolute",left:2,top:"50%",transform:"translateY(-50%)",
                       width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
                       color:"#fff",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,

@@ -955,6 +955,7 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
+  const hasSecondaryRelationSelector = relationType === "reply" || relationType === "correct";
   // agree/disagree/supplement: text can be empty (pure stance / no-source); tag: text required; others: text required for source
   const quickButtonEnabled = draftUnits.length > 0 && (isAgreeDisagreeType || isSupplementType || newMessageContent.trim().length > 0);
 
@@ -1392,7 +1393,7 @@ export default function TopicDetailPage() {
           {user && (
             <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ fontWeight: 600 }}>关系标签与消息文本</div>
-              {(relationType === "reply" || relationType === "correct") && (
+              {hasSecondaryRelationSelector && (
                 <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
                   <span style={{ opacity: 0.85 }}>附加关系：</span>
                   {(relationType === "reply" ? ["none", "annotation", "reference"] : correctSecondaryOptions).map(t => (

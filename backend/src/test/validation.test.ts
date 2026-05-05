@@ -7,15 +7,10 @@
  */
 
 import { z } from 'zod';
+import { RELATION_TYPES } from '../lib/relationTypes';
 
 // ─── Replicate the validation schemas from routes/relations.ts ─────────────
 // (We re-declare them here so we can test them in isolation)
-
-const RELATION_TYPES = [
-  'ANNOTATION', 'REFERENCE', 'REPLY', 'AGREE', 'DISAGREE',
-  'SUPPORT', 'REBUT', 'CORRECT', 'SUPPLEMENT', 'CLASSIFY',
-  'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE',
-] as const;
 
 const targetRefSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -181,7 +176,7 @@ describe('createRelationSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('accepts all 14 defined relation types', () => {
+  it('accepts all defined relation types', () => {
     for (const type of RELATION_TYPES) {
       const result = createRelationSchema.safeParse({
         ...validPayload,

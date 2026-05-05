@@ -20,7 +20,7 @@ const relationsRouter = Router({ mergeParams: true });
  * 'text-fragment' - targets a specific fragment of a text message
  * 'relation'      - targets a relation message (or a specific selectable part of it)
  *
- * Sources (sourceMessageId) must always be text messages.
+ * Sources (sourceMessageId) can be text messages OR relation messages (relation messages are also messages).
  * Targets can be text messages, fragments, OR relation messages.
  */
 const targetRefSchema = z.discriminatedUnion('kind', [
@@ -121,13 +121,14 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // sourceMessageId must reference a text message in this topic
-    let sourceMessage = null;
+    // sourceMessageId must reference a text message OR a relation message in this topic
     if (data.sourceMessageId) {
-      sourceMessage = await prisma.message.findFirst({
-        where: { id: data.sourceMessageId, topicId },
-      });
-      if (!sourceMessage) {
+      // Query both tables concurrently — relation messages are also messages and can be sources
+      const [sourceMessage, sourceRelation] = await Promise.all([
+        prisma.message.findFirst({ where: { id: data.sourceMessageId, topicId } }),
+        prisma.relation.findFirst({ where: { id: data.sourceMessageId, topicId } }),
+      ]);
+      if (!sourceMessage && !sourceRelation) {
         res.status(404).json({ error: '来源消息不存在或不属于该话题' });
         return;
       }

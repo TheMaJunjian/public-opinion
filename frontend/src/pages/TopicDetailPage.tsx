@@ -100,15 +100,18 @@ function generateCorrectionContent(
 
 type DiffPart = { type: 'keep' | 'del' | 'ins'; text: string };
 
+/** Maximum string length (chars) for which character-level diff is computed. Beyond this, plain display is used. */
+const MAX_DIFF_LENGTH = 500;
+
 /**
  * Compute a character-level diff between two strings.
  * Returns separate part arrays for the original and new text, each annotated
  * with keep/del/ins so changed characters can be highlighted.
- * Falls back to plain (no diff) for strings longer than 500 chars.
+ * Falls back to plain (no diff) for strings longer than MAX_DIFF_LENGTH chars.
  */
 function computeCharDiff(orig: string, next: string): { origParts: DiffPart[]; nextParts: DiffPart[] } {
   const n = orig.length, m = next.length;
-  if (n > 500 || m > 500) {
+  if (n > MAX_DIFF_LENGTH || m > MAX_DIFF_LENGTH) {
     return { origParts: [{ type: 'keep', text: orig }], nextParts: [{ type: 'keep', text: next }] };
   }
   // LCS dynamic programming

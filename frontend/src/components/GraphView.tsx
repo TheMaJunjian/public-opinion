@@ -884,7 +884,7 @@ export default function GraphView(props: GraphViewProps) {
   useEffect(() => {
     const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: correctedTargetMsgIds });
     setLayout(nl); setCanvasHeight(h);
-  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget]);
+  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget, correctedTargetMsgIds]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;

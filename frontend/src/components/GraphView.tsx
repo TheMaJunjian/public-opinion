@@ -135,6 +135,98 @@ export function relationTypeName(t: RelationType | string): string {
   return getPresentationSpec(t).label;
 }
 
+// ========================= Annotation tree helpers =========================
+// Supports nested annotations where a sub-fragment is annotated within an
+// already-annotated parent fragment.  The tree is built from a flat list of
+// annotation/reference targets sorted by start ASC then end DESC (outer first).
+
+export type AnnoNode = {
+  start: number;
+  end: number;
+  relationType: RelationType;
+  edgeId: string;
+  children: AnnoNode[];
+};
+
+/** Build a nesting tree from a flat list of annotation targets. */
+export function buildAnnoTree(
+  items: { start: number; end: number; relationType: RelationType; edgeId: string }[]
+): AnnoNode[] {
+  // Sort: start ascending, end descending (larger/outer intervals first at same start)
+  const sorted = [...items].sort((a, b) => a.start - b.start || b.end - a.end);
+
+  function consume(idx: number, boundEnd: number): { nodes: AnnoNode[]; nextIdx: number } {
+    const nodes: AnnoNode[] = [];
+    let i = idx;
+    while (i < sorted.length) {
+      const item = sorted[i];
+      if (item.start >= boundEnd) break;
+      const { nodes: children, nextIdx } = consume(i + 1, item.end);
+      nodes.push({ start: item.start, end: item.end, relationType: item.relationType, edgeId: item.edgeId, children });
+      i = nextIdx;
+    }
+    return { nodes, nextIdx: i };
+  }
+
+  return consume(0, Infinity).nodes;
+}
+
+/** Recursively render annotation tree nodes as React spans. */
+export function renderAnnoNodes(
+  text: string,
+  nodes: AnnoNode[],
+  from: number,
+  to: number,
+  depth: number,
+  messageId: string,
+  isFragSel: (id: string, start: number, len: number, text: string) => boolean,
+  onFragClick: (id: string, start: number, len: number, text: string) => void,
+): React.ReactNode[] {
+  const result: React.ReactNode[] = [];
+  let cursor = from;
+  for (const node of nodes) {
+    if (node.start >= to) break;
+    if (node.start > cursor) {
+      result.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor, node.start)}</span>);
+    }
+    const len = node.end - node.start;
+    const frag = text.slice(node.start, node.end);
+    const isAnno = node.relationType === "annotation";
+    const selected = isFragSel(messageId, node.start, len, frag);
+    const isInner = depth > 0;
+    const bgColor = selected
+      ? "rgba(11,132,255,0.25)"
+      : isInner
+        ? (isAnno ? "rgba(255,220,0,0.30)" : "rgba(80,180,255,0.20)")
+        : (isAnno ? "rgba(255,255,0,0.12)" : "rgba(80,180,255,0.08)");
+    const outlineStyle = selected
+      ? "2px solid rgba(11,132,255,0.95)"
+      : isInner
+        ? (isAnno ? "2px solid rgba(255,210,0,0.95)" : "2px solid rgba(80,180,255,0.85)")
+        : (isAnno ? "1px solid rgba(255,255,0,0.8)" : "1px solid rgba(80,180,255,0.45)");
+    const innerContent = node.children.length > 0
+      ? renderAnnoNodes(text, node.children, node.start, node.end, depth + 1, messageId, isFragSel, onFragClick)
+      : text.slice(node.start, node.end);
+    result.push(
+      <span key={`h-${node.start}-${node.end}`}
+        data-rel-anchor={`${node.relationType}::${node.start}:${node.end}`}
+        onClick={e => { e.stopPropagation(); onFragClick(messageId, node.start, len, frag); }}
+        title="点击：进入文本选择状态并切换选中该片段"
+        style={{whiteSpace:"pre-wrap",cursor:"pointer",position:"relative",zIndex:isInner?1:undefined,
+          backgroundColor:bgColor,outline:outlineStyle,borderRadius:2}}
+      >
+        {innerContent}
+      </span>
+    );
+    cursor = node.end;
+  }
+  if (cursor < to) {
+    result.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor, to)}</span>);
+  }
+  return result;
+}
+// ===========================================================================
+
 /** Get the PresentationKind for a relation type (handles lowercase bridge keys). */
 function getRelKind(relType: string): PresentationKind {
   return getPresentationSpec(relType).kind;
@@ -155,6 +247,11 @@ function isSuppFrameRel(relType: string): boolean {
 function isAnyFrameRel(relType: string): boolean {
   const k = getRelKind(relType);
   return k === 'supplement-frame' || k === 'frame-group' || k === 'replace-overlay';
+}
+
+/** True for correction-badge relations (CORRECT): badge inside source card, same-column stacking. */
+function isCorrectionBadgeRel(relType: string): boolean {
+  return getRelKind(relType) === 'correction-badge';
 }
 
 function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
@@ -345,12 +442,13 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
  *
  * Applies to ALL relation types with `groupsTargets=true` (supplement-frame, frame-group)
  * and to replace-overlay types that also group targets (SUMMARY).
- * For CORRECT (replace-overlay without groupsTargets), only the source→target pair is handled.
+ * For CORRECT (correction-badge), only the source→target pair is handled (no frame).
  *
  * Rules:
  *   - Source message (if real, not anon:) → same column as its first target.
  *   - No-source framing relations with multiple targets → all targets chained into the same column.
  *   - All framing-type relations (supplement-frame, frame-group, replace-overlay) participate.
+ *   - correction-badge (CORRECT) also uses same-column stacking without a frame.
  */
 function applyGroupingColumnOverride(params: {
   normals: DemoMessage[];
@@ -368,7 +466,7 @@ function applyGroupingColumnOverride(params: {
   // For frame-group / no-source framing: target[i] → target[i-1] (chain).
   const groupSourceToTarget = new Map<string, string>();
   for (const e of edges) {
-    if (!isAnyFrameRel(e.relationType)) continue;
+    if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     // Source message gets stacked below its first target.
     if (!groupSourceToTarget.has(e.from.messageId)) {
@@ -380,7 +478,7 @@ function applyGroupingColumnOverride(params: {
   // are placed in the same column and stacked tightly (zero gap).
   const noFrameTargetsByRelMsg = new Map<string, string[]>();
   for (const e of edges) {
-    if (!isAnyFrameRel(e.relationType)) continue;
+    if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
     if (!e.from.messageId.startsWith("anon:")) continue;
     if (!normalSet.has(e.to.messageId)) continue;
     const arr = noFrameTargetsByRelMsg.get(e.relationMessageId) ?? [];
@@ -713,7 +811,7 @@ export default function GraphView(props: GraphViewProps) {
   const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol, relIds }), [normals, edges, baseCol, baseMaxCol, relIds]);
   // AGREE/DISAGREE column override: applied before grouping so grouping can override it
   const { col: agreeDisCol, maxCol: agreeDisMaxCol } = useMemo(() => applyAgreeDisagreeColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
-  // Grouping column override: highest priority — supplement/frame-group/replace-overlay source must
+  // Grouping column override: highest priority — supplement/frame-group/replace-overlay/correction-badge source must
   // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
   const { col: colOf, maxCol, groupSourceToTarget } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
 
@@ -728,11 +826,13 @@ export default function GraphView(props: GraphViewProps) {
   const [tagDecorationsByMsg, setTagDecorationsByMsg] = useState<Record<string,{label:string;relMsgIds:string[];rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>>({});
   // SUPPLEMENT frames: list of {targetId, sourceId, frame rect, relAgreeCount, relDisagreeCount, relAgreeMsgIds, relDisagreeMsgIds}
   const [supplementFrames, setSupplementFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
-  // GROUP frames: frame-group (CLASSIFY/MERGE) and replace-overlay (CORRECT/SUMMARY) — same visual structure as supplement frames
+  // GROUP frames: frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY) — same visual structure as supplement frames
   // relKind field distinguishes supplement-frame / frame-group / replace-overlay for styling
   const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
   const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
+  // CORRECTION BADGES: CORRECT — small badge anchored inside the source message card
+  const [correctionBadgesBySourceMsg, setCorrectionBadgesBySourceMsg] = useState<Map<string,Array<{relMsgId:string;targetMsgId:string;rect:Rect}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
   const [relDecByRelMsgState, setRelDecByRelMsgState] = useState<Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>>(new Map());
   // TAG relations targeting relation messages — for rendering next to edge labels / supplement frames
@@ -743,6 +843,15 @@ export default function GraphView(props: GraphViewProps) {
     const map = new Map<string,DemoEdge[]>();
     for (const e of edges) { const arr=map.get(e.relationMessageId)??[]; arr.push(e); map.set(e.relationMessageId,arr); }
     return map;
+  }, [edges]);
+
+  // IDs of whole-message targets of CORRECT relations — their cards are dimmed in the non-linear view.
+  const correctedTargetMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === 'correct' && e.to.selection.kind === 'whole') ids.add(e.to.messageId);
+    }
+    return ids;
   }, [edges]);
 
   useEffect(() => {
@@ -907,8 +1016,9 @@ export default function GraphView(props: GraphViewProps) {
     // Compute SUPPLEMENT frames — one frame per relation message (relMsgId), wrapping all target
     // messages and the source message (if any) within a single border frame.
     const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
-    // Compute GROUP frames — frame-group (CLASSIFY/MERGE) and replace-overlay (CORRECT/SUMMARY).
+    // Compute GROUP frames — frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY).
     // Same structure as supplement frames; relKind/relLabel/relColor distinguish them for styling.
+    // Note: CORRECT uses correction-badge kind (not replace-overlay) — no frame, badge only.
     const newGroupFrames: {targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
 
     // Generic frame computation — shared logic for supplement, frame-group, replace-overlay.
@@ -1015,6 +1125,25 @@ export default function GraphView(props: GraphViewProps) {
     setGroupFrames(newGroupFrames);
     setInlineBadgesByMsg(newInlineBadgesByMsg);
 
+    // Compute CORRECTION BADGES — CORRECT: small badge inside the source message card.
+    // Position: bottom-left corner inside the source card (inside, not overlapping the border).
+    const CORR_BADGE_W = 52, CORR_BADGE_H = 18, CORR_BADGE_PAD = 6;
+    const newCorrectionBadgesBySourceMsg = new Map<string, Array<{relMsgId:string;targetMsgId:string;rect:Rect}>>();
+    for (const e of edges) {
+      if (getRelKind(e.relationType) !== 'correction-badge') continue;
+      if (e.from.messageId.startsWith("anon:")) continue;
+      const srcId = e.from.messageId;
+      if (msgMap.get(srcId)?.kind !== 'normal') continue;
+      const ep = endpointBoxForNormal(srcId), box = ep?.box ?? layout[srcId]; if (!box) continue;
+      const arr = newCorrectionBadgesBySourceMsg.get(srcId) ?? [];
+      // Place badge at bottom-left inside the source card
+      const badgeX = box.x + CORR_BADGE_PAD;
+      const badgeY = box.y + box.height - CORR_BADGE_H - CORR_BADGE_PAD;
+      arr.push({ relMsgId: e.relationMessageId, targetMsgId: e.to.messageId, rect: { x: badgeX, y: badgeY, width: CORR_BADGE_W, height: CORR_BADGE_H } });
+      newCorrectionBadgesBySourceMsg.set(srcId, arr);
+    }
+    setCorrectionBadgesBySourceMsg(newCorrectionBadgesBySourceMsg);
+
     // Collect TAG relations targeting relation messages (for display next to edge labels / frames)
     const newTagsByRelMsg = new Map<string,Array<{fromMsgId:string;relMsgId:string}>>();
     for (const e of edges) {
@@ -1057,7 +1186,7 @@ export default function GraphView(props: GraphViewProps) {
       }
       // frame-group or replace-overlay: use the computed group frame rect
       const relTypeKind = getPresentationSpec(relType).kind;
-      if (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay') {
+      if (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay' || relTypeKind === 'correction-badge') {
         const fr = groupFrameByRelMsgId.get(relId);
         return fr ? { x: fr.x, y: fr.y, width: fr.width, height: fr.height } : null;
       }
@@ -1149,9 +1278,9 @@ export default function GraphView(props: GraphViewProps) {
       // Agree/disagree: pure-stance (anon: source) → decoration only;
       //   with real source → directed arrow pointing to the decorated message (not the badge).
       if (e.relationType==="tag"||e.relationType==="supplement") continue;
-      // frame-group and replace-overlay relations are rendered as frames/overlays, not arrows
+      // frame-group, replace-overlay, and correction-badge relations are rendered as frames/badges, not arrows
       const eSpec = getPresentationSpec(e.relationType);
-      if (eSpec.kind === 'frame-group' || eSpec.kind === 'replace-overlay') continue;
+      if (eSpec.kind === 'frame-group' || eSpec.kind === 'replace-overlay' || eSpec.kind === 'correction-badge') continue;
       if (e.relationType==="agree"||e.relationType==="disagree") {
         if (e.from.messageId.startsWith("anon:")) continue; // pure-stance, decoration only
         // Has source message: render directed arrow.
@@ -1390,29 +1519,14 @@ export default function GraphView(props: GraphViewProps) {
   }
 
   function renderContent(message: DemoMessage) {
-    const targets=extractTextTargetsForMessage(message.id,edges);
+    const targets = extractTextTargetsForMessage(message.id, edges);
     if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{message.content}</pre>;
-    const text=message.content;
-    const segs:{start:number;end:number;relationType:RelationType}[]=[]; let lastEnd=-1;
-    for (const t of targets) {
-      if (t.start<0||t.start+t.len>text.length||t.len<=0||t.start<lastEnd) continue;
-      segs.push({start:t.start,end:t.start+t.len,relationType:t.relationType}); lastEnd=t.start+t.len;
-    }
-    const nodes: React.ReactNode[]=[]; let cursor=0;
-    for (const s of segs) {
-      if (cursor<s.start) nodes.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor,s.start)}</span>);
-      const frag=text.slice(s.start,s.end), len=s.end-s.start, isAnno=s.relationType==="annotation";
-      const selected=isFragmentSelected(message.id,s.start,len,frag);
-      nodes.push(
-        <span key={`h-${s.start}-${s.end}`} data-rel-anchor={`${s.relationType}::${s.start}:${s.end}`}
-          onClick={e=>{e.stopPropagation();onFragmentAnchorClick(message.id,s.start,len,frag);}}
-          title="点击：进入文本选择状态并切换选中该片段"
-          style={{whiteSpace:"pre-wrap",cursor:"pointer",backgroundColor:selected?"rgba(11,132,255,0.18)":isAnno?"rgba(255,255,0,0.12)":"rgba(80,180,255,0.08)",outline:selected?"2px solid rgba(11,132,255,0.95)":isAnno?"1px solid rgba(255,255,0,0.8)":"1px solid rgba(80,180,255,0.45)",borderRadius:2}}
-        >{frag}</span>
-      );
-      cursor=s.end;
-    }
-    if (cursor<text.length) nodes.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor)}</span>);
+    const text = message.content;
+    const validItems = targets
+      .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
+      .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
+    const tree = buildAnnoTree(validItems);
+    const nodes = renderAnnoNodes(text, tree, 0, text.length, 0, message.id, isFragmentSelected, onFragmentAnchorClick);
     return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
   }
 
@@ -1425,14 +1539,16 @@ export default function GraphView(props: GraphViewProps) {
           const box=layout[msg.id]; if(!box) return null;
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
           const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
+          const isCorrectedTarget=correctedTargetMsgIds.has(msg.id);
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto",opacity:isCorrectedTarget?0.55:1}}>
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
                 <span>{msg.author}</span><span style={{opacity:0.7}}>{msg.id}</span>
               </div>
+              {isCorrectedTarget&&<div style={{fontSize:10,color:"rgba(200,160,0,0.85)",marginBottom:2}}>已被更正</div>}
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
@@ -1457,7 +1573,7 @@ export default function GraphView(props: GraphViewProps) {
                 strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
             );
           })}
-          {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (CORRECT/SUMMARY) */}
+          {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY) */}
           {groupFrames.map(gf=>{
             const isWhole=isRelWholeSel(gf.relMsgId);
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
@@ -1872,6 +1988,27 @@ export default function GraphView(props: GraphViewProps) {
                 border:isWholeSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
               {badge.relLabel}
+            </div>
+          );
+        })
+      )}
+
+      {/* CORRECTION BADGES (CORRECT) — small badge inside source message card */}
+      {Array.from(correctionBadgesBySourceMsg.entries()).map(([_srcId, badges]) =>
+        badges.map(badge => {
+          const isWholeSel = isRelWholeSel(badge.relMsgId);
+          return (
+            <div key={`corr-badge-${badge.relMsgId}`} data-rel-overlay="true"
+              onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
+              onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId);}}
+              title={`更正关系：${badge.relMsgId}；单击选中，双击查看历史`}
+              style={{position:"absolute",left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,
+                zIndex:5,background:"rgba(170,110,0,0.9)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
+                justifyContent:"center",fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
+                boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
+                border:isWholeSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
+              ✏更正
             </div>
           );
         })

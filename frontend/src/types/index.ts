@@ -130,7 +130,8 @@ export type PresentationKind =
   | 'decoration-label'  // Text label badge attached to target message card
   | 'supplement-frame'  // Border frame wrapping target + source messages (source below target)
   | 'frame-group'       // Frames a group of messages
-  | 'replace-overlay'   // Overlays / replaces the target message display
+  | 'replace-overlay'   // Overlays / replaces the target message display (e.g. SUMMARY)
+  | 'correction-badge'  // Small badge inside source message card; source replaces target (CORRECT)
   | 'inline-badge';     // Small inline badge on target message
 
 export interface PresentationSpec {
@@ -158,7 +159,7 @@ export interface PresentationSpec {
    */
   groupsTargets?: boolean;
   /**
-   * True for replace-overlay types (CORRECT, SUMMARY).
+   * True for replace-overlay types (SUMMARY) and correction-badge types (CORRECT).
    * The source message visually replaces / covers the target message(s) in the
    * non-linear view.  The source is still placed in the same column as the
    * target (same-column stacking, like supplement), but is presented as the
@@ -178,7 +179,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   AGREE:       { kind: 'decoration',        label: '赞同', color: 'green',  stanceEffect: 'support' },
   DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
-  CORRECT:     { kind: 'replace-overlay',   label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
+  CORRECT:     { kind: 'correction-badge',  label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
   SUPPLEMENT:  { kind: 'supplement-frame',  label: '补充', color: 'purple', formsTrees: true,  groupsTargets: true   },
   CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true   },
   MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },

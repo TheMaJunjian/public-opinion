@@ -9,7 +9,7 @@ import type {
 } from '../utils/modelBridge';
 import type { Topic } from '../types';
 import { getPresentationSpec } from '../types';
-import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment } from '../components/GraphView';
+import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 
 // ========================= Helpers =========================
 
@@ -823,26 +823,11 @@ export default function TopicDetailPage() {
     const targets = extractTextTargetsForMessage(message.id, edges);
     if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
     const text = message.content;
-    const segs: { start: number; end: number; relationType: RelationType }[] = [];
-    let lastEnd = -1;
-    for (const t of targets) {
-      const start = t.start; const end = t.start + t.len;
-      if (start < 0 || end > text.length || t.len <= 0 || start < lastEnd) continue;
-      segs.push({ start, end, relationType: t.relationType }); lastEnd = end;
-    }
-    const nodes: React.ReactNode[] = []; let cursor = 0;
-    for (const s of segs) {
-      if (cursor < s.start) nodes.push(<span key={`t-${cursor}`}>{text.slice(cursor, s.start)}</span>);
-      const frag = text.slice(s.start, s.end), isAnno = s.relationType === "annotation", len = s.end - s.start;
-      const selected = isFragmentSelected(message.id, s.start, len, frag);
-      nodes.push(
-        <span key={`h-${s.start}-${s.end}`} onClick={e => { e.stopPropagation(); handleFragmentAnchorClick(message.id, s.start, len, frag); }}
-          style={{ cursor: "pointer", backgroundColor: selected ? "rgba(11,132,255,0.18)" : isAnno ? "rgba(255,255,0,0.12)" : "rgba(80,180,255,0.08)", outline: selected ? "2px solid rgba(11,132,255,0.95)" : isAnno ? "1px solid rgba(255,255,0,0.8)" : "1px solid rgba(80,180,255,0.45)", borderRadius: 2, whiteSpace: "pre-wrap" }}
-          title="点击：进入文本选择状态并切换选中该片段">{frag}</span>
-      );
-      cursor = s.end;
-    }
-    if (cursor < text.length) nodes.push(<span key={`t-${cursor}`}>{text.slice(cursor)}</span>);
+    const validItems = targets
+      .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
+      .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
+    const tree = buildAnnoTree(validItems);
+    const nodes = renderAnnoNodes(text, tree, 0, text.length, 0, message.id, isFragmentSelected, handleFragmentAnchorClick);
     return <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
   }
 
@@ -978,7 +963,7 @@ export default function TopicDetailPage() {
   function handleGroupFrameDoubleClick(e: React.MouseEvent, relMsgId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relMsgId);
-    // For correct/summary (replace-overlay): show comparison popup
+    // For summary (replace-overlay): show comparison popup
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType ?? "";
     const spec = getPresentationSpec(relType);

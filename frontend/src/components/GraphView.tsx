@@ -835,8 +835,6 @@ export default function GraphView(props: GraphViewProps) {
   const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
   const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
-  // CORRECTION BADGES: CORRECT — small badge anchored inside the source message card
-  const [correctionBadgesBySourceMsg, setCorrectionBadgesBySourceMsg] = useState<Map<string,Array<{relMsgId:string;targetMsgId:string;rect:Rect}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
   const [relDecByRelMsgState, setRelDecByRelMsgState] = useState<Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>>(new Map());
   // TAG relations targeting relation messages — for rendering next to edge labels / supplement frames
@@ -857,6 +855,37 @@ export default function GraphView(props: GraphViewProps) {
     }
     return ids;
   }, [edges]);
+
+  // Map: source normal-message ID → [{relMsgId, targetMsgId}] for CORRECT relations.
+  // Used to render the correction badge inline in the source card header.
+  const correctionsBySourceMsgId = useMemo(() => {
+    const map = new Map<string, Array<{relMsgId: string; targetMsgId: string}>>();
+    for (const e of edges) {
+      if (e.relationType !== 'correct') continue;
+      if (e.from.messageId.startsWith('anon:')) continue;
+      const srcId = e.from.messageId;
+      if (msgMap.get(srcId)?.kind !== 'normal') continue;
+      const arr = map.get(srcId) ?? [];
+      arr.push({ relMsgId: e.relationMessageId, targetMsgId: e.to.messageId });
+      map.set(srcId, arr);
+    }
+    return map;
+  }, [edges, msgMap]);
+
+  // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
+  // Used to embed correction badge in the target relation's hit area.
+  const correctedRelMsgTargets = useMemo(() => {
+    const map = new Map<string, Array<{corrRelMsgId: string; srcMsgId: string}>>();
+    for (const e of edges) {
+      if (e.relationType !== 'correct') continue;
+      const targetId = e.to.messageId;
+      if (msgMap.get(targetId)?.kind !== 'relation') continue;
+      const arr = map.get(targetId) ?? [];
+      arr.push({ corrRelMsgId: e.relationMessageId, srcMsgId: e.from.messageId });
+      map.set(targetId, arr);
+    }
+    return map;
+  }, [edges, msgMap]);
 
   useEffect(() => {
     const ro = new ResizeObserver(entries => {
@@ -1128,25 +1157,6 @@ export default function GraphView(props: GraphViewProps) {
     setSupplementFrames(newSupplementFrames);
     setGroupFrames(newGroupFrames);
     setInlineBadgesByMsg(newInlineBadgesByMsg);
-
-    // Compute CORRECTION BADGES — CORRECT: small badge inside the source message card.
-    // Position: bottom-left corner inside the source card (inside, not overlapping the border).
-    const CORR_BADGE_W = 52, CORR_BADGE_H = 18, CORR_BADGE_PAD = 6;
-    const newCorrectionBadgesBySourceMsg = new Map<string, Array<{relMsgId:string;targetMsgId:string;rect:Rect}>>();
-    for (const e of edges) {
-      if (getRelKind(e.relationType) !== 'correction-badge') continue;
-      if (e.from.messageId.startsWith("anon:")) continue;
-      const srcId = e.from.messageId;
-      if (msgMap.get(srcId)?.kind !== 'normal') continue;
-      const ep = endpointBoxForNormal(srcId), box = ep?.box ?? layout[srcId]; if (!box) continue;
-      const arr = newCorrectionBadgesBySourceMsg.get(srcId) ?? [];
-      // Place badge at bottom-left inside the source card
-      const badgeX = box.x + CORR_BADGE_PAD;
-      const badgeY = box.y + box.height - CORR_BADGE_H - CORR_BADGE_PAD;
-      arr.push({ relMsgId: e.relationMessageId, targetMsgId: e.to.messageId, rect: { x: badgeX, y: badgeY, width: CORR_BADGE_W, height: CORR_BADGE_H } });
-      newCorrectionBadgesBySourceMsg.set(srcId, arr);
-    }
-    setCorrectionBadgesBySourceMsg(newCorrectionBadgesBySourceMsg);
 
     // Collect TAG relations targeting relation messages (for display next to edge labels / frames)
     const newTagsByRelMsg = new Map<string,Array<{fromMsgId:string;relMsgId:string}>>();
@@ -1550,8 +1560,25 @@ export default function GraphView(props: GraphViewProps) {
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
-              <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
-                <span>{msg.author}</span><span style={{opacity:0.7}}>{msg.id}</span>
+              <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{display:"flex",alignItems:"center",gap:4}}>
+                  {correctionsBySourceMsgId.get(msg.id)?.map((b) => (
+                    <div key={`corr-hdr-${b.relMsgId}`}
+                      data-rel-overlay="true"
+                      onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
+                      onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
+                      title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
+                      style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                        color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                        cursor:"pointer",pointerEvents:"auto",
+                        border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                        whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
+                      ✏更正
+                    </div>
+                  ))}
+                  <span>{msg.author}</span>
+                </div>
+                <span style={{opacity:0.7}}>{msg.id}</span>
               </div>
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
@@ -1615,16 +1642,45 @@ export default function GraphView(props: GraphViewProps) {
       )}
 
       {/* Edge label HTML hit areas */}
-      {positionedEdges.map(pe=>{
-        const bb=labelBboxes[pe.drawId]; if (!bb) return null;
-        const padX=8,padY=6,box:LayoutBox={x:bb.x-padX,y:bb.y-padY,width:bb.width+padX*2,height:bb.height+padY*2};
-        const relId=pe.edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
-        return (
-          <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
-            style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
-            title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}/>
-        );
-      })}
+      {(()=>{
+        const corrRendered=new Set<string>();
+        return positionedEdges.map(pe=>{
+          const bb=labelBboxes[pe.drawId]; if (!bb) return null;
+          const CORR_BADGE_W_EDGE=44;
+          const relId=pe.edge.relationMessageId;
+          const corrInfo=correctedRelMsgTargets.get(relId);
+          const showCorrBadge=corrInfo&&corrInfo.length>0&&!corrRendered.has(relId);
+          if (showCorrBadge) corrRendered.add(relId);
+          const padX=8,padY=6;
+          const extraLeft=showCorrBadge?CORR_BADGE_W_EDGE+4:0;
+          const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft,height:bb.height+padY*2};
+          const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
+          return (
+            <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
+              title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
+              {showCorrBadge&&corrInfo!.slice(0,1).map(ci=>{
+                const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
+                return (
+                  <div key={`corr-edge-${ci.corrRelMsgId}`}
+                    onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
+                    onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
+                    title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
+                    style={{position:"absolute",left:2,top:"50%",transform:"translateY(-50%)",
+                      width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                      color:"#fff",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,
+                      cursor:"pointer",pointerEvents:"auto",
+                      border:isCorrSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                      whiteSpace:"nowrap",userSelect:"none",display:"flex",alignItems:"center",
+                      justifyContent:"center",boxSizing:"border-box" as const}}>
+                    ✏更正
+                  </div>
+                );
+              })}
+            </div>
+          );
+        });
+      })()}
 
       {/* Edge-label relation decoration badges — AGREE/DISAGREE + TAG badges on annotation/reference/reply
           relations, shown to the RIGHT of the edge label, stacked vertically (agree → disagree → tags). */}
@@ -1717,6 +1773,7 @@ export default function GraphView(props: GraphViewProps) {
         const HH=SUPP_FRAME_PAD; // half-width of each border strip
         const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=`补充关系：${sf.relMsgId}；单击选中，双击展开详情`;
+        const sfCorrInfo=correctedRelMsgTargets.get(sf.relMsgId);
         return (
           <React.Fragment key={`supp-hit-${sf.relMsgId}`}>
             {/* Top strip — full width including corners */}
@@ -1731,6 +1788,25 @@ export default function GraphView(props: GraphViewProps) {
             {/* Right strip — between top and bottom strips */}
             <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
               style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+            {/* Correction badge — embedded in frame top border when this supplement is a CORRECT target */}
+            {sfCorrInfo&&sfCorrInfo.slice(0,1).map(ci=>{
+              const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
+              return (
+                <div key={`corr-supp-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                  onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
+                  onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
+                  title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
+                  style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
+                    background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                    color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                    cursor:"pointer",pointerEvents:"auto",
+                    border:isCorrSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                    whiteSpace:"nowrap",userSelect:"none",boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
+                    height:HH*2-2,display:"flex",alignItems:"center"}}>
+                  ✏更正
+                </div>
+              );
+            })}
           </React.Fragment>
         );
       })}
@@ -1743,6 +1819,7 @@ export default function GraphView(props: GraphViewProps) {
         const HH=SUPP_FRAME_PAD;
         const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=`${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
+        const gfCorrInfo=correctedRelMsgTargets.get(gf.relMsgId);
         return (
           <React.Fragment key={`gf-hit-${gf.relMsgId}`}>
             <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
@@ -1753,6 +1830,25 @@ export default function GraphView(props: GraphViewProps) {
               style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
               style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+            {/* Correction badge — embedded in frame top border when this group frame is a CORRECT target */}
+            {gfCorrInfo&&gfCorrInfo.slice(0,1).map(ci=>{
+              const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
+              return (
+                <div key={`corr-gf-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                  onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
+                  onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
+                  title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
+                  style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
+                    background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                    color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                    cursor:"pointer",pointerEvents:"auto",
+                    border:isCorrSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                    whiteSpace:"nowrap",userSelect:"none",boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
+                    height:HH*2-2,display:"flex",alignItems:"center"}}>
+                  ✏更正
+                </div>
+              );
+            })}
           </React.Fragment>
         );
       })}
@@ -1997,26 +2093,6 @@ export default function GraphView(props: GraphViewProps) {
         })
       )}
 
-      {/* CORRECTION BADGES (CORRECT) — small badge inside source message card */}
-      {Array.from(correctionBadgesBySourceMsg.entries()).map(([_srcId, badges]) =>
-        badges.map(badge => {
-          const isWholeSel = isRelWholeSel(badge.relMsgId);
-          return (
-            <div key={`corr-badge-${badge.relMsgId}`} data-rel-overlay="true"
-              onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
-              onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId);}}
-              title={`更正关系：${badge.relMsgId}；单击选中，双击查看历史`}
-              style={{position:"absolute",left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,
-                zIndex:5,background:"rgba(170,110,0,0.9)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
-                justifyContent:"center",fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
-                boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
-                border:isWholeSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
-              ✏更正
-            </div>
-          );
-        })
-      )}
     </div>
   );
 }

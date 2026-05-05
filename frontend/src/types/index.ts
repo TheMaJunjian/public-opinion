@@ -150,6 +150,21 @@ export interface PresentationSpec {
    * Tree-forming relations make the source message a "child" of the target.
    */
   formsTrees?: boolean;
+  /**
+   * True for supplement-frame and frame-group types.
+   * These relations cluster all their target messages into the same column
+   * and wrap them in a visible border frame.
+   * Layout pipeline: target messages are stacked with zero gap (same column).
+   */
+  groupsTargets?: boolean;
+  /**
+   * True for replace-overlay types (CORRECT, SUMMARY).
+   * The source message visually replaces / covers the target message(s) in the
+   * non-linear view.  The source is still placed in the same column as the
+   * target (same-column stacking, like supplement), but is presented as the
+   * authoritative content with the original dimmed or accessible via double-click.
+   */
+  replacesTarget?: boolean;
 }
 
 /**
@@ -163,19 +178,22 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   AGREE:       { kind: 'decoration',        label: '赞同', color: 'green',  stanceEffect: 'support' },
   DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
-  CORRECT:     { kind: 'replace-overlay',   label: '更正', color: 'yellow', formsTrees: true  },
-  SUPPLEMENT:  { kind: 'supplement-frame',  label: '补充', color: 'purple', formsTrees: true  },
-  CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false },
-  MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false },
-  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false },
+  CORRECT:     { kind: 'replace-overlay',   label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
+  SUPPLEMENT:  { kind: 'supplement-frame',  label: '补充', color: 'purple', formsTrees: true,  groupsTargets: true   },
+  CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true   },
+  MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },
+  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, groupsTargets: true, replacesTarget: true },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
 };
 
-/** Get the presentation spec for a relation type, with a sensible default */
+/** Get the presentation spec for a relation type, with a sensible default.
+ * Accepts both UPPERCASE (backend/canonical) and lowercase (bridge/internal) keys. */
 export function getPresentationSpec(relationType: string): PresentationSpec {
   return (
-    PRESENTATION_SPECS[relationType] ?? {
+    PRESENTATION_SPECS[relationType] ??
+    PRESENTATION_SPECS[relationType.toUpperCase()] ??
+    {
       kind: 'edge-label',
       label: relationType,
       color: 'gray',

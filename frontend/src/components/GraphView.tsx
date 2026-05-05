@@ -1076,9 +1076,14 @@ export default function GraphView(props: GraphViewProps) {
         if (targetRelType === "agree" || targetRelType === "disagree") {
           const visualBox = getRelVisualBox(relId);
           if (visualBox) {
+            // Use the column of the decorated message for proper edge routing
+            const decoratedMid = targetRelEdges[0]?.to.messageId ?? "";
+            const toCol = msgMap.get(decoratedMid)?.kind === "relation"
+              ? fromEp.col  // nested relation target — fall back to source col
+              : (colOf[decoratedMid] ?? fromEp.col);
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:visualBox,fromCol:fromEp.col,toCol:fromEp.col,
+              fromBox:fromEp.box,toBox:visualBox,fromCol:fromEp.col,toCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });

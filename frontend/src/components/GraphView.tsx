@@ -759,7 +759,7 @@ export default function GraphView(props: GraphViewProps) {
   useEffect(() => {
     const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget });
     setLayout(nl); setCanvasHeight(h);
-  }, [normals, colOf, maxCol, measuredHeights, suppSourceToTarget]);
+  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
@@ -1020,6 +1020,9 @@ export default function GraphView(props: GraphViewProps) {
     const suppFrameByRelMsgId = new Map<string,Rect>();
     for (const sf of newSupplementFrames) suppFrameByRelMsgId.set(sf.relMsgId, sf.rect);
 
+    const groupFrameByRelMsgId = new Map<string,Rect>();
+    for (const gf of newGroupFrames) groupFrameByRelMsgId.set(gf.relMsgId, gf.rect);
+
     const tagBadgeByRelMsgId = new Map<string,{mid:string;rect:Rect}>();
     for (const [mid,groups] of Object.entries(newTagDecorationsByMsg)) {
       for (const group of groups) {
@@ -1038,6 +1041,12 @@ export default function GraphView(props: GraphViewProps) {
       const relType = te0.relationType;
       if (relType === "supplement") {
         const fr = suppFrameByRelMsgId.get(relId);
+        return fr ? { x: fr.x, y: fr.y, width: fr.width, height: fr.height } : null;
+      }
+      // frame-group or replace-overlay: use the computed group frame rect
+      const relTypeKind = getPresentationSpec(relType).kind;
+      if (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay') {
+        const fr = groupFrameByRelMsgId.get(relId);
         return fr ? { x: fr.x, y: fr.y, width: fr.width, height: fr.height } : null;
       }
       if (relType === "tag") {
@@ -1128,6 +1137,9 @@ export default function GraphView(props: GraphViewProps) {
       // Agree/disagree: pure-stance (anon: source) → decoration only;
       //   with real source → directed arrow pointing to the decorated message (not the badge).
       if (e.relationType==="tag"||e.relationType==="supplement") continue;
+      // frame-group and replace-overlay relations are rendered as frames/overlays, not arrows
+      const eSpec = getPresentationSpec(e.relationType);
+      if (eSpec.kind === 'frame-group' || eSpec.kind === 'replace-overlay') continue;
       if (e.relationType==="agree"||e.relationType==="disagree") {
         if (e.from.messageId.startsWith("anon:")) continue; // pure-stance, decoration only
         // Has source message: render directed arrow.
@@ -1420,7 +1432,7 @@ export default function GraphView(props: GraphViewProps) {
 
       {/* SVG layer: supplement frame visuals + edge paths.
           Gate on either having edges or frames so frames render even with no other edges. */}
-      {(positionedEdges.length>0||supplementFrames.length>0)&&(
+      {(positionedEdges.length>0||supplementFrames.length>0||groupFrames.length>0)&&(
         <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:3,pointerEvents:"none"}}>
           {/* SUPPLEMENT frames — stroke and fill reflect selection state */}
           {supplementFrames.map(sf=>{
@@ -1431,6 +1443,23 @@ export default function GraphView(props: GraphViewProps) {
                 fill={isWhole?"rgba(11,132,255,0.08)":"rgba(130,80,200,0.04)"}
                 stroke={isWhole?"rgba(11,132,255,0.9)":"rgba(130,80,200,0.55)"}
                 strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
+            );
+          })}
+          {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (CORRECT/SUMMARY) */}
+          {groupFrames.map(gf=>{
+            const isWhole=isRelWholeSel(gf.relMsgId);
+            const isReplaceOverlay = gf.relKind === 'replace-overlay';
+            const strokeColor = isWhole
+              ? 'rgba(11,132,255,0.9)'
+              : isReplaceOverlay
+                ? (gf.relColor==='yellow'?'rgba(220,180,0,0.7)':'rgba(180,120,0,0.7)')
+                : 'rgba(140,140,150,0.55)';
+            const fillColor = isWhole ? 'rgba(11,132,255,0.06)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
+            return (
+              <rect key={`gf-${gf.relMsgId}`} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
+                rx={SUPP_FRAME_RADIUS} ry={SUPP_FRAME_RADIUS}
+                fill={fillColor} stroke={strokeColor}
+                strokeWidth={isWhole?3:2} strokeDasharray={isReplaceOverlay?undefined:(isWhole?undefined:"6 3")}/>
             );
           })}
           {positionedEdges.map(pe=>{
@@ -1576,6 +1605,28 @@ export default function GraphView(props: GraphViewProps) {
         );
       })}
 
+      {/* GROUP frame hit strips (CLASSIFY/MERGE/CORRECT/SUMMARY) */}
+      {groupFrames.map(gf=>{
+        const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameClick??onMessageClick)(e,gf.relMsgId);};
+        const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameDoubleClick??onMessageDoubleClick)(e,gf.relMsgId);};
+        const {x,y,width,height}=gf.rect;
+        const HH=SUPP_FRAME_PAD;
+        const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
+        const title=`${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
+        return (
+          <React.Fragment key={`gf-hit-${gf.relMsgId}`}>
+            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
+            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
+            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+          </React.Fragment>
+        );
+      })}
+
       {/* Supplement frame decoration badges — full-size AGREE/DISAGREE badges to the RIGHT of the frame,
           styled and interactive identically to text-message decoration badges.
           Icon area: quick-send agree/disagree targeting the supplement relation message.
@@ -1644,6 +1695,42 @@ export default function GraphView(props: GraphViewProps) {
           sfDecTop+=TAG_H+TAG_V_GAP;
         }
         return <React.Fragment key={`supp-dec-${sf.relMsgId}`}>{nodes}</React.Fragment>;
+      })}
+
+      {/* GROUP frame decoration badges — AGREE/DISAGREE badges to the RIGHT of the group frame */}
+      {groupFrames.map(gf=>{
+        if (gf.relAgreeCount===0&&gf.relDisagreeCount===0) return null;
+        const gfDecLeft=gf.rect.x+gf.rect.width+DEC_RIGHT_GAP;
+        let gfDecTop=gf.rect.y+DEC_RIGHT_TOP;
+        const nodes: React.ReactNode[]=[];
+        for (const kind of ["agree","disagree"] as const) {
+          const count=kind==="agree"?gf.relAgreeCount:gf.relDisagreeCount;
+          if (count<=0) continue;
+          const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+          const icon=kind==="agree"?"👍":"👎";
+          const label=kind==="agree"?"赞":"反";
+          nodes.push(
+            <div key={`gf-${kind}-${gf.relMsgId}`} data-rel-overlay="true"
+              onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,gf.relMsgId,kind);}}
+              title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+              style={{position:"absolute",left:gfDecLeft,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:5,
+                background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                overflow:"hidden"}}>
+              <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(gf.relMsgId,kind);}}
+                style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                  cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
+              <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,gf.relMsgId,kind);}}
+                style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
+                <span style={{fontWeight:700}}>{count}</span>
+                <span style={{fontSize:9,opacity:0.85}}>{label}</span>
+              </div>
+            </div>
+          );
+          gfDecTop+=DEC_H+DEC_GAP;
+        }
+        return <React.Fragment key={`gf-dec-${gf.relMsgId}`}>{nodes}</React.Fragment>;
       })}
 
       {/* TAG decoration labels — aggregated by label text, interactive */}
@@ -1758,6 +1845,28 @@ export default function GraphView(props: GraphViewProps) {
           </div>
         );
       })}
+
+      {/* INLINE BADGES (RECOMMEND/ARCHIVE) — small badge anchored to target message card */}
+      {Array.from(inlineBadgesByMsg.entries()).map(([_mid, badges]) =>
+        badges.map(badge => {
+          const isWholeSel = isRelWholeSel(badge.relMsgId);
+          const COLOR_MAP: Record<string,string> = {orange:'rgba(200,90,0,0.9)',slate:'rgba(80,90,100,0.9)'};
+          const bg = COLOR_MAP[badge.relColor] ?? 'rgba(100,100,120,0.9)';
+          return (
+            <div key={`badge-${badge.relMsgId}`} data-rel-overlay="true"
+              onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
+              onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId);}}
+              title={`${badge.relLabel}：${badge.relMsgId}；单击选中，双击展开操作详情`}
+              style={{position:"absolute",left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,
+                zIndex:5,background:bg,color:"#fff",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
+                border:isWholeSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
+              {badge.relLabel}
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }

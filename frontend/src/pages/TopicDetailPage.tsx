@@ -8,6 +8,7 @@ import type {
   RelationType, SecondaryRelationType,
 } from '../utils/modelBridge';
 import type { Topic } from '../types';
+import { getPresentationSpec } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment } from '../components/GraphView';
 
 // ========================= Helpers =========================
@@ -212,6 +213,10 @@ export default function TopicDetailPage() {
   // Popup state for tag badge double-click (shows who tagged)
   const [tagPopup, setTagPopup] = useState<{
     messageId: string; tagLabel: string; relMsgIds: string[];
+    x: number; y: number;
+  } | null>(null);
+  const [comparisonPopup, setComparisonPopup] = useState<{
+    relMsgId: string;
     x: number; y: number;
   } | null>(null);
 
@@ -959,6 +964,47 @@ export default function TopicDetailPage() {
     setTagPopup({ messageId, tagLabel, relMsgIds, x: e.clientX, y: e.clientY });
   }
 
+  function handleGroupFrameClick(e: React.MouseEvent, relMsgId: string) {
+    e.stopPropagation();
+    setLastClickedMessageId(relMsgId);
+    const wholeUnit: UnitSelection = { messageId: relMsgId, selection: { kind: "whole" } };
+    setDraftUnits(prev => {
+      const exists = prev.some(u => unitEquals(u, wholeUnit));
+      return exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
+    });
+  }
+
+  function handleGroupFrameDoubleClick(e: React.MouseEvent, relMsgId: string) {
+    e.stopPropagation();
+    setLastClickedMessageId(relMsgId);
+    // For correct/summary (replace-overlay): show comparison popup
+    const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
+    const relType = relEdges[0]?.relationType ?? "";
+    const spec = getPresentationSpec(relType);
+    if (spec.kind === 'replace-overlay') {
+      setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
+      return;
+    }
+    // For frame-group (classify/merge): enter focus mode
+    enterFocus(relMsgId);
+  }
+
+  function handleInlineBadgeClick(e: React.MouseEvent, relMsgId: string) {
+    e.stopPropagation();
+    setLastClickedMessageId(relMsgId);
+    const wholeUnit: UnitSelection = { messageId: relMsgId, selection: { kind: "whole" } };
+    setDraftUnits(prev => {
+      const exists = prev.some(u => unitEquals(u, wholeUnit));
+      return exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
+    });
+  }
+
+  function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string) {
+    e.stopPropagation();
+    // Show operation details popup (reuse the decoration popup for now)
+    setDecorationPopup({ messageId: relMsgId, kind: "agree", x: e.clientX, y: e.clientY });
+  }
+
   async function handleArchiveTopic() {
     if (!topicId || !topic) return;
     try {
@@ -1027,7 +1073,7 @@ export default function TopicDetailPage() {
         </div>
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
-          {(["annotation", "reference", "reply", "agree", "disagree", "tag", "supplement"] as RelationType[]).map(rt => (
+          {(["annotation", "reference", "reply", "agree", "disagree", "tag", "supplement", "correct", "classify", "merge", "summary", "recommend", "archive"] as RelationType[]).map(rt => (
             <button key={rt} onClick={() => { setRelationType(rt); setSecondaryRelationType("none"); }}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
@@ -1086,6 +1132,10 @@ export default function TopicDetailPage() {
                   onDecorationDoubleClick={handleDecorationDoubleClick}
                   onTagBodyClick={handleTagBodyClick}
                   onTagDoubleClick={handleTagDoubleClick}
+                  onGroupFrameClick={handleGroupFrameClick}
+                  onGroupFrameDoubleClick={handleGroupFrameDoubleClick}
+                  onInlineBadgeClick={handleInlineBadgeClick}
+                  onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
                 />
             )}
           </div>
@@ -1313,6 +1363,47 @@ export default function TopicDetailPage() {
               style={{ marginTop: 10, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
               关闭
             </button>
+          </div>
+        </div>
+      );
+    })()}
+    {comparisonPopup && (()=>{
+      const relEdges = edges.filter(e => e.relationMessageId === comparisonPopup.relMsgId);
+      const sourceMsg = relEdges[0] && !relEdges[0].from.messageId.startsWith('anon:')
+        ? msgMap.get(relEdges[0].from.messageId) : null;
+      const targetMids = Array.from(new Set(relEdges.map(e => e.to.messageId)));
+      const targetMsgs = targetMids.map(id => msgMap.get(id)).filter(Boolean) as typeof sourceMsg[];
+      const relType = relEdges[0]?.relationType ?? "";
+      return (
+        <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
+          onClick={()=>setComparisonPopup(null)}>
+          <div style={{position:"fixed",left:comparisonPopup.x,top:comparisonPopup.y,zIndex:201,background:"#1e1e1e",
+            border:"1px solid #555",borderRadius:8,padding:16,minWidth:320,maxWidth:600,maxHeight:"80vh",
+            overflow:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.8)",color:"#eee"}}
+            onClick={e=>e.stopPropagation()}>
+            <div style={{fontWeight:700,marginBottom:12,fontSize:14}}>
+              {relationTypeName(relType)}对比：{comparisonPopup.relMsgId}
+            </div>
+            <div style={{display:"flex",gap:12,flexDirection:"column"}}>
+              {targetMsgs.map(tm=>tm && (
+                <div key={tm.id} style={{borderRadius:6,border:"1px solid #554",background:"#232018",padding:8}}>
+                  <div style={{fontSize:11,opacity:0.7,marginBottom:4}}>原文（{tm.id}）</div>
+                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace"}}>{tm.content}</pre>
+                </div>
+              ))}
+              {sourceMsg && (
+                <div style={{borderRadius:6,border:"1px solid #255",background:"#182028",padding:8}}>
+                  <div style={{fontSize:11,opacity:0.7,marginBottom:4}}>更新（{sourceMsg.id}）</div>
+                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace"}}>{sourceMsg.content}</pre>
+                </div>
+              )}
+            </div>
+            <div style={{marginTop:12,textAlign:"right"}}>
+              <button onClick={()=>setComparisonPopup(null)}
+                style={{padding:"4px 12px",borderRadius:4,border:"1px solid #555",background:"#333",color:"#eee",cursor:"pointer",fontSize:12}}>
+                关闭
+              </button>
+            </div>
           </div>
         </div>
       );

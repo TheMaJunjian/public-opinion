@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { convertMessagesToDemoModel, unitSelectionToTargetRef } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
-  RelationType, SecondaryRelationType,
+  RelationType,
 } from '../utils/modelBridge';
 import type { Topic } from '../types';
 import { getPresentationSpec } from '../types';
@@ -300,7 +300,7 @@ export default function TopicDetailPage() {
   }, [topicId]);
 
   const [relationType, setRelationType] = useState<RelationType>("annotation");
-  const [secondaryRelationType, setSecondaryRelationType] = useState<SecondaryRelationType>("none");
+  const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
@@ -771,6 +771,12 @@ export default function TopicDetailPage() {
             for (const t of targets) {
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, relationType, label, relId));
             }
+            if (secondaryRelationType !== "none") {
+              const secType = secondaryRelationType as RelationType;
+              for (const t of targets) {
+                newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, secType, label, relId));
+              }
+            }
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
@@ -949,8 +955,25 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
+  const hasSecondaryRelationSelector = relationType === "reply" || relationType === "correct";
   // agree/disagree/supplement: text can be empty (pure stance / no-source); tag: text required; others: text required for source
   const quickButtonEnabled = draftUnits.length > 0 && (isAgreeDisagreeType || isSupplementType || newMessageContent.trim().length > 0);
+
+  // Secondary relation options for CORRECT type: relations of the same PresentationKind as the targeted relation message, plus "none".
+  const correctSecondaryOptions = useMemo((): string[] => {
+    if (relationType !== 'correct') return ['none'];
+    const allUnits = [...draftUnits, ...targetUnits];
+    const targetRelMsgId = allUnits.find(u => msgMap.get(u.messageId)?.kind === 'relation')?.messageId;
+    if (!targetRelMsgId) return ['none'];
+    const relEdgesForTarget = edges.filter(e => e.relationMessageId === targetRelMsgId);
+    if (relEdgesForTarget.length === 0) return ['none'];
+    // All edges sharing the same relationMessageId are created from the same Relation record
+    // and therefore have identical relationType. Using the first edge is sufficient.
+    const targetRelType = relEdgesForTarget[0].relationType;
+    const targetSpec = getPresentationSpec(targetRelType);
+    const sameKindTypes = ALL_RELATION_TYPES.filter(rt => getPresentationSpec(rt).kind === targetSpec.kind);
+    return ['none', ...sameKindTypes];
+  }, [relationType, draftUnits, targetUnits, edges, msgMap]);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
@@ -1370,12 +1393,12 @@ export default function TopicDetailPage() {
           {user && (
             <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ fontWeight: 600 }}>关系标签与消息文本</div>
-              {relationType === "reply" && (
+              {hasSecondaryRelationSelector && (
                 <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
                   <span style={{ opacity: 0.85 }}>附加关系：</span>
-                  {(["none", "annotation", "reference"] as SecondaryRelationType[]).map(t => (
+                  {(relationType === "reply" ? ["none", "annotation", "reference"] : correctSecondaryOptions).map(t => (
                     <button key={t} onClick={() => setSecondaryRelationType(t)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
-                      {t === "none" ? "无" : t === "annotation" ? "注释" : "引用"}
+                      {t === "none" ? "无" : relationTypeName(t)}
                     </button>
                   ))}
                 </div>
@@ -1517,14 +1540,24 @@ export default function TopicDetailPage() {
               <div style={{display:"flex",gap:10}}>
                 {/* Left: original message */}
                 <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #554",background:"#211e14",padding:10}}>
-                  <div style={{fontSize:11,opacity:0.7,marginBottom:6,fontWeight:600}}>原文（{origMsg.id}）</div>
+                  <div style={{fontSize:11,marginBottom:6}}>
+                    <span style={{fontWeight:600}}>原文</span>
+                    <span style={{marginLeft:6}}>{origMsg.author}</span>
+                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(origMsg.createdAt).toLocaleString()}</span>
+                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{origMsg.id}</span>
+                  </div>
                   <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace",lineHeight:1.6}}>
                     {renderDiffParts(origParts, 'orig')}
                   </pre>
                 </div>
                 {/* Right: new (corrected) message */}
                 <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #255",background:"#14201e",padding:10}}>
-                  <div style={{fontSize:11,opacity:0.7,marginBottom:6,fontWeight:600}}>更正后（{sourceMsg.id}）</div>
+                  <div style={{fontSize:11,marginBottom:6}}>
+                    <span style={{fontWeight:600}}>更正后</span>
+                    <span style={{marginLeft:6}}>{sourceMsg.author}</span>
+                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(sourceMsg.createdAt).toLocaleString()}</span>
+                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>
+                  </div>
                   <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace",lineHeight:1.6}}>
                     {renderDiffParts(nextParts, 'next')}
                   </pre>
@@ -1554,13 +1587,23 @@ export default function TopicDetailPage() {
             <div style={{display:"flex",gap:12,flexDirection:"column"}}>
               {targetMsgs.map(tm=>(
                 <div key={tm.id} style={{borderRadius:6,border:"1px solid #554",background:"#232018",padding:8}}>
-                  <div style={{fontSize:11,opacity:0.7,marginBottom:4}}>原文（{tm.id}）</div>
+                  <div style={{fontSize:11,marginBottom:4}}>
+                    <span style={{fontWeight:600}}>原文</span>
+                    <span style={{marginLeft:6}}>{tm.author}</span>
+                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(tm.createdAt).toLocaleString()}</span>
+                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{tm.id}</span>
+                  </div>
                   <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace"}}>{tm.content}</pre>
                 </div>
               ))}
               {sourceMsg && (
                 <div style={{borderRadius:6,border:"1px solid #255",background:"#182028",padding:8}}>
-                  <div style={{fontSize:11,opacity:0.7,marginBottom:4}}>更新（{sourceMsg.id}）</div>
+                  <div style={{fontSize:11,marginBottom:4}}>
+                    <span style={{fontWeight:600}}>更新</span>
+                    <span style={{marginLeft:6}}>{sourceMsg.author}</span>
+                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(sourceMsg.createdAt).toLocaleString()}</span>
+                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>
+                  </div>
                   <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace"}}>{sourceMsg.content}</pre>
                 </div>
               )}

@@ -13,6 +13,10 @@
  *   - 'text-fragment' target
  *   - 'relation' target (targeting a relation message)
  *   - invalid payload rejection
+ *
+ * Relation messages are stored in the unified Message table with kind=RELATION.
+ * The relations router queries/creates Message rows with kind=RELATION instead of
+ * a separate Relation table, making relation messages first-class messages.
  */
 
 import request from 'supertest';
@@ -29,12 +33,7 @@ jest.mock('../lib/prisma', () => ({
       findFirst: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
-    },
-    relation: {
       create: jest.fn(),
-      findFirst: jest.fn(),
-      findMany: jest.fn(),
-      count: jest.fn(),
     },
   },
 }));
@@ -48,13 +47,18 @@ process.env.JWT_SECRET = JWT_SECRET;
 
 const mockUser = { id: 'user-1', username: 'tester' };
 const mockTopic = { id: 'topic-1', status: 'OPEN', title: 'Test Topic' };
-const mockMessage = { id: 'msg-1', topicId: 'topic-1', content: 'Hello', createdBy: mockUser };
-const mockMessage2 = { id: 'msg-2', topicId: 'topic-1', content: 'World', createdBy: mockUser };
-const mockRelation = {
+
+// A TEXT kind message (source / target)
+const mockMessage = { id: 'msg-1', topicId: 'topic-1', kind: 'TEXT', content: 'Hello', createdBy: mockUser };
+const mockMessage2 = { id: 'msg-2', topicId: 'topic-1', kind: 'TEXT', content: 'World', createdBy: mockUser };
+
+// A RELATION kind message (for use as a target relation or as a source relation message)
+const mockRelationMsg = {
   id: 'rel-1',
   topicId: 'topic-1',
+  kind: 'RELATION',
   relationType: 'REPLY',
-  sourceMessageId: 'msg-1',
+  relSourceId: 'msg-1',
   targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
   createdAt: new Date().toISOString(),
   createdBy: mockUser,
@@ -69,8 +73,8 @@ function makeToken(user = mockUser): string {
 describe('GET /api/topics/:topicId/relations', () => {
   beforeEach(() => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
-    (prisma.relation.count as jest.Mock).mockResolvedValue(1);
-    (prisma.relation.findMany as jest.Mock).mockResolvedValue([mockRelation]);
+    (prisma.message.count as jest.Mock).mockResolvedValue(1);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
   });
 
   it('returns 200 with paginated relations', async () => {
@@ -89,8 +93,8 @@ describe('GET /api/topics/:topicId/relations', () => {
   });
 
   it('returns empty data array when no relations exist', async () => {
-    (prisma.relation.count as jest.Mock).mockResolvedValue(0);
-    (prisma.relation.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.message.count as jest.Mock).mockResolvedValue(0);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([]);
     const res = await request(app).get('/api/topics/topic-1/relations');
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(0);
@@ -111,12 +115,13 @@ describe('POST /api/topics/:topicId/relations — auth', () => {
 describe('POST /api/topics/:topicId/relations — validation', () => {
   beforeEach(() => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
+    // Single-table source lookup: any message (TEXT or RELATION kind)
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
+    // Target TEXT message lookup
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
-    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(null);
-    (prisma.relation.findMany as jest.Mock).mockResolvedValue([mockRelation]);
-    (prisma.relation.create as jest.Mock).mockResolvedValue({
-      ...mockRelation,
+    // create returns the new RELATION-kind message
+    (prisma.message.create as jest.Mock).mockResolvedValue({
+      ...mockRelationMsg,
       id: 'rel-new',
     });
   });
@@ -163,9 +168,9 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns 404 when sourceMessageId is neither a message nor a relation in the topic', async () => {
+  it('returns 404 when sourceMessageId does not exist in this topic', async () => {
+    // Unified table: single findFirst returns null → source not found
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(null);
-    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(null);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -180,10 +185,8 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
-    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(null);
-    (prisma.relation.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.relation.create as jest.Mock).mockResolvedValue({
-      ...mockRelation,
+    (prisma.message.create as jest.Mock).mockResolvedValue({
+      ...mockRelationMsg,
       id: 'rel-new',
       createdBy: mockUser,
     });
@@ -220,8 +223,8 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
   });
 
   it('creates a relation targeting a relation message (recursive), returns 201', async () => {
-    // Mock that the target relation exists
-    (prisma.relation.findMany as jest.Mock).mockResolvedValue([mockRelation]);
+    // Target is a RELATION-kind message in the unified table
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -234,9 +237,8 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
   });
 
   it('creates a relation with a relation message as source (relation messages are also messages), returns 201', async () => {
-    // sourceMessageId is a relation ID — not found in message table, but found in relation table
-    (prisma.message.findFirst as jest.Mock).mockResolvedValue(null);
-    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(mockRelation);
+    // sourceMessageId is a RELATION-kind message — unified table lookup finds it in one query
+    (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockRelationMsg);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -249,8 +251,8 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
   });
 
   it('returns 404 when target relation does not exist', async () => {
-    // findMany for relations returns empty (target relation not found)
-    (prisma.relation.findMany as jest.Mock).mockResolvedValue([]);
+    // findMany for RELATION-kind target returns empty (target not found)
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([]);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -263,3 +265,4 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     expect(res.body.error).toContain('目标关系消息');
   });
 });
+

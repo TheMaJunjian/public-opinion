@@ -81,7 +81,7 @@ router.get('/:topicId', async (req: Request, res: Response, next: NextFunction) 
       where: { id: topicId },
       include: {
         createdBy: { select: { id: true, username: true } },
-        _count: { select: { messages: true, relations: true } },
+        _count: { select: { messages: true } },
       },
     });
 
@@ -142,7 +142,6 @@ router.delete('/:topicId', requireAuth, async (req: AuthRequest, res: Response, 
     }
 
     await prisma.$transaction([
-      prisma.relation.deleteMany({ where: { topicId } }),
       prisma.message.deleteMany({ where: { topicId } }),
       prisma.topic.delete({ where: { id: topicId } }),
     ]);

@@ -30,11 +30,8 @@ export default function TopicCard({ topic }: Props) {
         <span>由 <span className="font-medium text-gray-600">{topic.createdBy.username}</span> 发起</span>
         {topic._count && (
           <>
-            {/* 观点数 = 节点数；关联数 = 关系数（非线性表结构的核心统计） */}
+            {/* 观点数 = 节点数（消息数，含文本消息和关系消息） */}
             <span>💬 {topic._count.messages} 条观点</span>
-            {topic._count.relations != null && (
-              <span>🔗 {topic._count.relations} 条关联</span>
-            )}
           </>
         )}
         <span>{new Date(topic.createdAt).toLocaleDateString('zh-CN')}</span>

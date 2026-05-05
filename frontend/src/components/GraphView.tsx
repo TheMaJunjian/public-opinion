@@ -125,17 +125,17 @@ export function relationTypeName(t: RelationType | string): string {
   return names[t] ?? t;
 }
 
-function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[]) {
+function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
   const normalSet = new Set(normalIds);
   const relevant = edges.filter(
     (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
       normalSet.has(e.from.messageId) && normalSet.has(e.to.messageId)
   );
-  // anno/ref edges where source is a normal message but target is a relation message (rel:...)
+  // anno/ref edges where source is a normal message but target is a relation message
   // Rule: source must be in a column to the right of the relation's rightmost normal endpoint.
   const toRelEdges = edges.filter(
     (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
-      normalSet.has(e.from.messageId) && e.to.messageId.startsWith("rel:")
+      normalSet.has(e.from.messageId) && relIds.has(e.to.messageId)
   );
   // Pre-build relEdgesByRelMsg for relation-message endpoint lookup
   const relEdgesByRelMsg = new Map<string, DemoEdge[]>();
@@ -196,9 +196,9 @@ function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[]
 }
 
 function applyReplyLayoutAdjustmentsWithConstraints(params: {
-  normals: DemoMessage[]; edges: DemoEdge[]; baseCol: Record<string, number>; baseMaxCol: number;
+  normals: DemoMessage[]; edges: DemoEdge[]; baseCol: Record<string, number>; baseMaxCol: number; relIds: Set<string>;
 }) {
-  const { normals, edges, baseCol, baseMaxCol } = params;
+  const { normals, edges, baseCol, baseMaxCol, relIds } = params;
   const col: Record<string, number> = { ...baseCol };
   let maxCol = baseMaxCol;
   const normalSet = new Set(normals.map(m => m.id));
@@ -223,7 +223,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
   for (const e of edges) {
     if (e.relationType !== "reply") continue;
     if (!normalSet.has(e.from.messageId)) continue;
-    if (!e.to.messageId.startsWith("rel:")) continue;
+    if (!relIds.has(e.to.messageId)) continue;
     const targetRelEdges = relEdgesByRelMsgForReply.get(e.to.messageId) ?? [];
     for (const te of targetRelEdges) {
       if (normalSet.has(te.from.messageId)) {
@@ -622,9 +622,10 @@ export default function GraphView(props: GraphViewProps) {
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id,m])), [messages]);
   const normals = useMemo(() => messages.filter(m => m.kind === "normal"), [messages]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
+  const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation").map(m => m.id)), [messages]);
 
-  const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges), [normalIds, edges]);
-  const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol }), [normals, edges, baseCol, baseMaxCol]);
+  const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges, relIds), [normalIds, edges, relIds]);
+  const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol, relIds }), [normals, edges, baseCol, baseMaxCol, relIds]);
   // AGREE/DISAGREE column override: applied before supplement so supplement can override it
   const { col: agreeDisCol, maxCol: agreeDisMaxCol } = useMemo(() => applyAgreeDisagreeColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
   // Supplement column override: highest priority — source must be in same column as target,
@@ -752,8 +753,8 @@ export default function GraphView(props: GraphViewProps) {
         }
       } else if (e.to.selection.kind==="whole") {
         const mid=e.to.messageId;
-        // Relation message targets (rel:...) are tracked separately in relDecByRelMsgId below
-        if (mid.startsWith("rel:")) continue;
+        // Relation message targets are tracked separately in relDecByRelMsgId below
+        if (msgMap.get(mid)?.kind === "relation") continue;
         if (e.relationType==="agree"||e.relationType==="disagree") {
           if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
           if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
@@ -871,7 +872,7 @@ export default function GraphView(props: GraphViewProps) {
       if (e.relationType!=="agree"&&e.relationType!=="disagree") continue;
       if (e.to.selection.kind!=="whole") continue;
       const toId=e.to.messageId;
-      if (!toId.startsWith("rel:")) continue;
+      if (msgMap.get(toId)?.kind !== "relation") continue;
       const cur=relDecByRelMsgId.get(toId)??{agreeCount:0,disagreeCount:0,agreeRelMsgIds:[],disagreeRelMsgIds:[]};
       if (e.relationType==="agree") { cur.agreeCount++; cur.agreeRelMsgIds.push(e.relationMessageId); }
       else { cur.disagreeCount++; cur.disagreeRelMsgIds.push(e.relationMessageId); }
@@ -906,7 +907,7 @@ export default function GraphView(props: GraphViewProps) {
       if (e.relationType!=="tag") continue;
       if (e.to.selection.kind!=="whole") continue;
       const toId=e.to.messageId;
-      if (!toId.startsWith("rel:")) continue;
+      if (msgMap.get(toId)?.kind !== "relation") continue;
       const arr=newTagsByRelMsg.get(toId)??[];
       arr.push({fromMsgId:e.from.messageId,relMsgId:e.relationMessageId});
       newTagsByRelMsg.set(toId,arr);
@@ -943,14 +944,14 @@ export default function GraphView(props: GraphViewProps) {
       }
       if (relType === "agree" || relType === "disagree") {
         const targetMid = te0.to.messageId;
-        if (targetMid.startsWith("rel:")) return getRelVisualBox(targetMid, depth + 1);
+      if (msgMap.get(targetMid)?.kind === "relation") return getRelVisualBox(targetMid, depth + 1);
         const ep = endpointBoxForNormal(targetMid);
         return ep?.box ?? null;
       }
       // annotation / reference / reply: midpoint of from and to visual boxes
       let fromBox: LayoutBox | null = null;
       if (!te0.from.messageId.startsWith("anon:")) {
-        if (te0.from.messageId.startsWith("rel:")) {
+        if (msgMap.get(te0.from.messageId)?.kind === "relation") {
           fromBox = getRelVisualBox(te0.from.messageId, depth + 1);
         } else {
           const fm = msgMap.get(te0.from.messageId);
@@ -958,7 +959,7 @@ export default function GraphView(props: GraphViewProps) {
         }
       }
       let toBox: LayoutBox | null = null;
-      if (te0.to.messageId.startsWith("rel:")) {
+      if (msgMap.get(te0.to.messageId)?.kind === "relation") {
         toBox = getRelVisualBox(te0.to.messageId, depth + 1);
       } else {
         const tm = msgMap.get(te0.to.messageId);
@@ -998,7 +999,7 @@ export default function GraphView(props: GraphViewProps) {
         // If the target is a normal message, point to its card box directly.
         // If the target is a relation message, fall through to the relation-message block below.
         const targetMid=e.to.messageId;
-        if (!targetMid.startsWith("rel:")) {
+        if (msgMap.get(targetMid)?.kind !== "relation") {
           const toEpN=endpointBoxForNormal(targetMid); if (!toEpN) continue;
           rawEdges.push({
             drawId:e.id,edge:e,fromAuthor,
@@ -1069,7 +1070,7 @@ export default function GraphView(props: GraphViewProps) {
         const expand=(te:DemoEdge) => {
           let approxToBox: LayoutBox;
           let toCol = fromEp.col;
-          if (te.to.messageId.startsWith("rel:")) {
+          if (msgMap.get(te.to.messageId)?.kind === "relation") {
             // Target is a nested relation message — resolve its visual position recursively.
             // This fixes multi-level nesting where an annotation targets another annotation,
             // preventing the arrow from incorrectly pointing back to the outer source.

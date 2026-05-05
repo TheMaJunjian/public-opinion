@@ -51,6 +51,7 @@ const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pairs (wide enough to click)
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
+const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -962,7 +963,27 @@ export default function GraphView(props: GraphViewProps) {
       }
       if (relType === "agree" || relType === "disagree") {
         const targetMid = te0.to.messageId;
-        if (msgMap.get(targetMid)?.kind === "relation") return getRelVisualBox(targetMid, depth + 1);
+        if (msgMap.get(targetMid)?.kind === "relation") {
+          // The decoration badge for this agree/disagree is rendered to the right of the
+          // target relation message's edge label. Use labelBboxes (from the previous render)
+          // to compute the actual badge position rather than approximating via card midpoints.
+          // Find the edge label bbox for the target relation. Edges are stored in the same
+          // insertion order as `edges` (prop), so the first matching entry corresponds to the
+          // same positioned edge that the decoration-badge renderer picks (it also takes the
+          // first unrendered positioned edge per relation message).
+          const targetRelEdges = edgesByRelMsg.get(targetMid) ?? [];
+          for (const r1e of targetRelEdges) {
+            const bb = labelBboxes[r1e.id] ?? labelBboxes[`${r1e.id}__toRel__${r1e.to.messageId}`];
+            if (bb) {
+              const hasAgree = (relDecByRelMsgId.get(targetMid)?.agreeCount ?? 0) > 0;
+              let badgeY = bb.y + Math.floor((bb.height - DEC_H) / 2);
+              if (relType === "disagree" && hasAgree) badgeY += DEC_H + DEC_GAP;
+              return { x: bb.x + bb.width + DEC_RIGHT_GAP, y: badgeY, width: DEC_W, height: DEC_H };
+            }
+          }
+          // No label bbox available yet (first render) — fall back to recursive approximation
+          return getRelVisualBox(targetMid, depth + 1);
+        }
         // Point to the decoration badge rect so the arrow targets the badge, not the whole card
         const decKey = `${targetMid}::${relType}`;
         const decRect = decorationRects[decKey];
@@ -1219,7 +1240,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -1230,7 +1251,19 @@ export default function GraphView(props: GraphViewProps) {
       const r=t.getBoundingClientRect();
       next[pe.drawId]={x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height};
     }
-    setLabelBboxes(next);
+    // Use a functional update with a stability check to avoid infinite re-render cycles:
+    // the main useEffect now depends on labelBboxes, so we must not update state when the
+    // values haven't meaningfully changed (within 0.5px).
+    setLabelBboxes(prev => {
+      const prevKeys=Object.keys(prev), nextKeys=Object.keys(next);
+      if (prevKeys.length!==nextKeys.length) return next;
+      for (const k of nextKeys) {
+        if (!prev[k]) return next;
+        const p=prev[k], n=next[k];
+        if (Math.abs(p.x-n.x)>LABEL_BBOX_STABILITY_THRESHOLD||Math.abs(p.y-n.y)>LABEL_BBOX_STABILITY_THRESHOLD||Math.abs(p.width-n.width)>LABEL_BBOX_STABILITY_THRESHOLD||Math.abs(p.height-n.height)>LABEL_BBOX_STABILITY_THRESHOLD) return next;
+      }
+      return prev;
+    });
   }, [positionedEdges, canvasWidth, canvasHeight]);
 
   function isEdgeLabelFragSel(relId:string,edgeId:string) {

@@ -259,13 +259,15 @@ export default function TopicDetailPage() {
   const pendingScrollMsgIdRef = useRef<string | null>(null);
 
   // Scroll the left panel canvas so the message with the given ID is centered.
-  // Polls via requestAnimationFrame until the card appears in the DOM (up to 60 frames).
+  // Polls via requestAnimationFrame until the card appears in the DOM.
+  // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
+  const MAX_SCROLL_ATTEMPTS = 60;
   function scrollMsgToCenter(msgId: string) {
     pendingScrollMsgIdRef.current = msgId;
     let attempts = 0;
     function tryScroll() {
       attempts++;
-      if (attempts > 60) { pendingScrollMsgIdRef.current = null; return; }
+      if (attempts > MAX_SCROLL_ATTEMPTS) { pendingScrollMsgIdRef.current = null; return; }
       if (pendingScrollMsgIdRef.current !== msgId) return; // superseded by newer message
       const container = leftPanelRef.current;
       if (!container) { requestAnimationFrame(tryScroll); return; }

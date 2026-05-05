@@ -571,8 +571,10 @@ function applyAgreeDisagreeColumnOverride(params: {
 function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
   groupSourceToTarget?: Map<string, string>;
+  correctedTargetIds?: Set<string>;
 }) {
   const { normals, colOf, measuredHeights, maxCol } = params;
+  const correctedTargetIds = params.correctedTargetIds ?? new Set<string>();
   const groupSourceToTarget = params.groupSourceToTarget ?? EMPTY_MAP;
 
   // Build reverse map: target → list of grouped children (supplement sources, frame-group members, etc.)
@@ -604,7 +606,9 @@ function computeNoOverlapLayout(params: {
     if (visited.has(msg.id)) return;
     visited.add(msg.id);
     colCursor[c] += gapBefore;
-    const h = Math.max(MIN_CARD_H, measuredHeights[msg.id] ?? MIN_CARD_H);
+    // Corrected targets are invisible placeholders with zero height; the correction source
+    // is then placed at the same y-coordinate, effectively replacing the target card.
+    const h = correctedTargetIds.has(msg.id) ? 0 : Math.max(MIN_CARD_H, measuredHeights[msg.id] ?? MIN_CARD_H);
     layout[msg.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
     maxBottom = Math.max(maxBottom, colCursor[c] + h);
     colCursor[c] += h;
@@ -878,9 +882,9 @@ export default function GraphView(props: GraphViewProps) {
   }, [normals, layout]);
 
   useEffect(() => {
-    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget });
+    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: correctedTargetMsgIds });
     setLayout(nl); setCanvasHeight(h);
-  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget]);
+  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget, correctedTargetMsgIds]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
@@ -1537,18 +1541,18 @@ export default function GraphView(props: GraphViewProps) {
       onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
+          // Corrected targets are invisible (replaced by the correction source card)
+          if (correctedTargetMsgIds.has(msg.id)) return null;
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
           const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
-          const isCorrectedTarget=correctedTargetMsgIds.has(msg.id);
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto",opacity:isCorrectedTarget?0.55:1}}>
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
                 <span>{msg.author}</span><span style={{opacity:0.7}}>{msg.id}</span>
               </div>
-              {isCorrectedTarget&&<div style={{fontSize:10,color:"rgba(200,160,0,0.85)",marginBottom:2}}>已被更正</div>}
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}

@@ -61,6 +61,107 @@ function nextId(prefix: string): string {
   return `${prefix}-local-${Date.now()}-${_nextIdCounter++}`;
 }
 
+// ========================= Correction content generation =========================
+
+/**
+ * For a CORRECT relation, generate the new message content by applying
+ * the replacement text to the selected fragment(s) or whole of the target message.
+ * Returns null if the inputs are invalid (e.g. multiple target messages).
+ */
+function generateCorrectionContent(
+  targetUnits: UnitSelection[],
+  replacementText: string,
+  msgMap: Map<string, DemoMessage>
+): string | null {
+  const uniqueTargetMids = Array.from(new Set(targetUnits.map(u => u.messageId)));
+  if (uniqueTargetMids.length !== 1) return null;
+  const targetMid = uniqueTargetMids[0];
+  const targetMsg = msgMap.get(targetMid);
+  if (!targetMsg || targetMsg.kind !== "normal") return null;
+
+  const wholeSelected = targetUnits.some(u => u.selection.kind === "whole");
+  if (wholeSelected) return replacementText;
+
+  const textFragments = targetUnits
+    .filter(u => u.selection.kind === "text")
+    .map(u => u.selection as { kind: "text"; start: number; len: number; text: string });
+  if (textFragments.length === 0) return replacementText;
+
+  // Apply replacements in reverse order so earlier positions remain valid
+  const sorted = [...textFragments].sort((a, b) => b.start - a.start);
+  let content = targetMsg.content;
+  for (const frag of sorted) {
+    content = content.slice(0, frag.start) + replacementText + content.slice(frag.start + frag.len);
+  }
+  return content;
+}
+
+// ========================= Character-level diff for comparison popup =========================
+
+type DiffPart = { type: 'keep' | 'del' | 'ins'; text: string };
+
+/** Maximum string length (chars) for which character-level diff is computed. Beyond this, plain display is used. */
+const MAX_DIFF_LENGTH = 500;
+
+/**
+ * Compute a character-level diff between two strings.
+ * Returns separate part arrays for the original and new text, each annotated
+ * with keep/del/ins so changed characters can be highlighted.
+ * Falls back to plain (no diff) for strings longer than MAX_DIFF_LENGTH chars.
+ */
+function computeCharDiff(orig: string, next: string): { origParts: DiffPart[]; nextParts: DiffPart[] } {
+  const n = orig.length, m = next.length;
+  if (n > MAX_DIFF_LENGTH || m > MAX_DIFF_LENGTH) {
+    return { origParts: [{ type: 'keep', text: orig }], nextParts: [{ type: 'keep', text: next }] };
+  }
+  // LCS dynamic programming
+  const dp: number[][] = Array(n + 1).fill(null).map(() => new Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] = orig[i - 1] === next[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  // Backtrack
+  const origSegs: DiffPart[] = [], nextSegs: DiffPart[] = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && orig[i - 1] === next[j - 1]) {
+      origSegs.unshift({ type: 'keep', text: orig[i - 1] });
+      nextSegs.unshift({ type: 'keep', text: next[j - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      nextSegs.unshift({ type: 'ins', text: next[j - 1] });
+      j--;
+    } else {
+      origSegs.unshift({ type: 'del', text: orig[i - 1] });
+      i--;
+    }
+  }
+  // Merge consecutive same-type segments
+  function merge(segs: DiffPart[]): DiffPart[] {
+    const res: DiffPart[] = [];
+    for (const s of segs) {
+      if (res.length > 0 && res[res.length - 1].type === s.type) res[res.length - 1].text += s.text;
+      else res.push({ ...s });
+    }
+    return res;
+  }
+  return { origParts: merge(origSegs), nextParts: merge(nextSegs) };
+}
+
+function renderDiffParts(parts: DiffPart[], side: 'orig' | 'next'): React.ReactNode {
+  return parts.map((p, idx) => {
+    const isChanged = (side === 'orig' && p.type === 'del') || (side === 'next' && p.type === 'ins');
+    return (
+      <span key={idx} style={isChanged ? {
+        background: side === 'orig' ? 'rgba(220,50,50,0.35)' : 'rgba(50,200,80,0.35)',
+        borderRadius: 2,
+        outline: side === 'orig' ? '1px solid rgba(220,50,50,0.6)' : '1px solid rgba(50,200,80,0.6)',
+      } : undefined}>{p.text}</span>
+    );
+  });
+}
+
 // ========================= StructureView / IncomingOutgoingList =========================
 
 const INCOMING_OUTGOING_LIST_MAX_H = 120; // max height (px) for each incoming/outgoing edge list in the structure view
@@ -685,9 +786,17 @@ export default function TopicDetailPage() {
     const label = relationLabel.trim() || labelDefault;
     let sources: UnitSelection[] = [];
     if (useNewMessageAsSource) {
-      const msg = await handleSendMessageOnly();
-      if (!msg) return;
-      sources = [{ messageId: msg.id, selection: { kind: "whole" } }];
+      // CORRECT relation: auto-generate message content from target + replacement text
+      if (relationType === "correct" && targetUnits.length > 0) {
+        const generated = generateCorrectionContent(targetUnits, newMessageContent.trim(), msgMap);
+        const msg = await handleSendMessageOnly(generated ?? newMessageContent.trim());
+        if (!msg) return;
+        sources = [{ messageId: msg.id, selection: { kind: "whole" } }];
+      } else {
+        const msg = await handleSendMessageOnly();
+        if (!msg) return;
+        sources = [{ messageId: msg.id, selection: { kind: "whole" } }];
+      }
     } else {
       sources = [...sourceUnits];
     }
@@ -754,6 +863,30 @@ export default function TopicDetailPage() {
     if (text.length === 0) return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
+
+    // CORRECT relation: auto-generate the new message content by applying the replacement
+    // (text box content) to the selected fragment(s) or whole of the target message.
+    if (relationType === "correct") {
+      const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
+      if (uniqueTargetMids.length !== 1) {
+        alert("更正关系目前仅支持单个目标消息");
+        return;
+      }
+      const generated = generateCorrectionContent(draftUnits, text, msgMap);
+      if (generated === null) {
+        alert("更正关系目标必须是普通文本消息");
+        return;
+      }
+      const msg = await handleSendMessageOnly(generated);
+      if (!msg) return;
+      const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
+      const targets: UnitSelection[] = [...draftUnits];
+      await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      return;
+    }
+
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
@@ -1364,6 +1497,50 @@ export default function TopicDetailPage() {
       const targetMids = Array.from(new Set(relEdges.map(e => e.to.messageId)));
       const targetMsgs = targetMids.map(id => msgMap.get(id)).filter((m): m is DemoMessage => m != null);
       const relType = relEdges[0]?.relationType ?? "";
+
+      // CORRECT relation: side-by-side comparison with character-level diff highlighting
+      if (relType === "correct" && targetMsgs.length > 0 && sourceMsg) {
+        const origMsg = targetMsgs[0];
+        const { origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content);
+        // Clamp popup so it stays within viewport
+        const popupW = Math.min(700, window.innerWidth - 32);
+        const left = Math.min(Math.max(comparisonPopup.x - popupW / 2, 8), window.innerWidth - popupW - 8);
+        const top = Math.min(comparisonPopup.y + 8, window.innerHeight - 400);
+        return (
+          <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
+            onClick={()=>setComparisonPopup(null)}>
+            <div style={{position:"fixed",left:left,top:top,zIndex:201,background:"#1e1e1e",
+              border:"1px solid #555",borderRadius:8,padding:16,width:popupW,maxHeight:"80vh",
+              overflow:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.8)",color:"#eee"}}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{fontWeight:700,marginBottom:12,fontSize:14}}>✏ 更正对比</div>
+              <div style={{display:"flex",gap:10}}>
+                {/* Left: original message */}
+                <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #554",background:"#211e14",padding:10}}>
+                  <div style={{fontSize:11,opacity:0.7,marginBottom:6,fontWeight:600}}>原文（{origMsg.id}）</div>
+                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace",lineHeight:1.6}}>
+                    {renderDiffParts(origParts, 'orig')}
+                  </pre>
+                </div>
+                {/* Right: new (corrected) message */}
+                <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #255",background:"#14201e",padding:10}}>
+                  <div style={{fontSize:11,opacity:0.7,marginBottom:6,fontWeight:600}}>更正后（{sourceMsg.id}）</div>
+                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace",lineHeight:1.6}}>
+                    {renderDiffParts(nextParts, 'next')}
+                  </pre>
+                </div>
+              </div>
+              <div style={{marginTop:12,textAlign:"right"}}>
+                <button onClick={()=>setComparisonPopup(null)}
+                  style={{padding:"4px 12px",borderRadius:4,border:"1px solid #555",background:"#333",color:"#eee",cursor:"pointer",fontSize:12}}>
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
       return (
         <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
           onClick={()=>setComparisonPopup(null)}>

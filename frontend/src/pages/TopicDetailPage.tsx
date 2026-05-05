@@ -563,11 +563,13 @@ export default function TopicDetailPage() {
     if (relationType === "reply") {
       const fromReply = foldUpToWhole(sources);
       const toReply = foldUpToWhole(targets);
-      const uniqueSources = Array.from(new Set(fromReply.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
+      // Relation messages are also messages — include relation-message sources
+      const uniqueSources = Array.from(new Set(fromReply.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
+        const backendSrcId = srcId.startsWith('rel:') ? srcId.slice(4) : srcId;
         const targetRefs = toReply.map(t => unitSelectionToTargetRef(t));
         try {
-          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: backendSrcId, targetRefs });
           const relId = `rel:${backendRel.id}`;
           const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${toReply.map(t => t.messageId).join(",")}` };
           setMessages(prev => [...prev, relMsg]);
@@ -585,46 +587,47 @@ export default function TopicDetailPage() {
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       }
     } else if (relationType === "agree" || relationType === "disagree") {
-      // agree/disagree: source message only created if there's text content
-      const NO_SOURCE = ""; // sentinel: empty string means pure-stance (no source message)
-      // Use source units' message IDs if provided; otherwise relation is standalone
-      const uniqueSources = Array.from(new Set(sources.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
+      // Relation messages are also messages — include relation-message sources
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       // Deduplicate targets by messageId — agree/disagree always creates one edge per unique target
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
-      for (const srcId of (uniqueSources.length > 0 ? uniqueSources : [NO_SOURCE])) {
-        try {
-          const now = new Date().toISOString();
-          const author = user?.username ?? "Anonymous";
-          if (srcId !== NO_SOURCE) {
-            // Has a real source message — call backend once with all targets
+      if (uniqueSources.length > 0) {
+        for (const srcId of uniqueSources) {
+          const backendSrcId = srcId.startsWith('rel:') ? srcId.slice(4) : srcId;
+          try {
             const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: backendSrcId, targetRefs });
             const relId = `rel:${backendRel.id}`;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${uniqueTargetMids.join(",")}` };
             setMessages(prev => [...prev, relMsg]);
             for (const targetMid of uniqueTargetMids) {
               newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
             }
-          } else {
-            // Pure-stance: one relation message per unique target
-            for (const targetMid of uniqueTargetMids) {
-              const relMsgId = nextId("rel");
-              const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${targetMid}` };
-              setMessages(prev => [...prev, relMsg]);
-              const anonSrcId = `anon:${relMsgId}`;
-              newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relMsgId));
-            }
-          }
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        }
+      } else {
+        // Pure-stance: no source — persist to backend (relation messages are first-class messages)
+        for (const targetMid of uniqueTargetMids) {
+          try {
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } })] });
+            const relId = `rel:${backendRel.id}`;
+            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${targetMid}` };
+            setMessages(prev => [...prev, relMsg]);
+            const anonSrcId = `anon:${backendRel.id}`;
+            newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
+          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        }
       }
     } else {
-      const uniqueSources = Array.from(new Set(sources.filter(s => !s.messageId.startsWith("rel:")).map(s => s.messageId)));
+      // Relation messages are also messages — include relation-message sources
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
+        const backendSrcId = srcId.startsWith('rel:') ? srcId.slice(4) : srcId;
         const srcs = sources.filter(s => s.messageId === srcId);
         for (const srcUnit of srcs) {
           const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: backendSrcId, targetRefs });
             const relId = `rel:${backendRel.id}`;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
             setMessages(prev => [...prev, relMsg]);
@@ -664,16 +667,13 @@ export default function TopicDetailPage() {
     const text = newMessageContent.trim();
 
     if ((isAgreeDisagree || isSupplement) && text.length === 0) {
-      // Pure-stance agree/disagree or no-source supplement: no text message, just a local relation message.
+      // Pure-stance agree/disagree or no-source supplement: no text message.
       // Supplement: ONE relation message containing all targets in a single frame.
       // Agree/disagree: one relation message per target (separate decoration badges).
-      const now = new Date().toISOString();
-      const author = user?.username ?? "Anonymous";
+      // Relation messages are first-class messages — persist all of them to the backend.
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
       if (isSupplement) {
-        // Save no-source supplement to backend (sourceMessageId: null) so it persists
-        // across exit/re-enter, matching the behaviour of sourced supplement relations.
         const targetRefs = uniqueTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }));
         try {
           const backendRel = await api.createRelation(topicId!, { relationType: 'SUPPLEMENT', sourceMessageId: null, targetRefs });
@@ -692,18 +692,22 @@ export default function TopicDetailPage() {
           }
         } catch (e: any) { alert(`建立无来源补充关系失败: ${e?.message ?? e}`); }
       } else {
-        // Agree/disagree: one relation per target
+        // Agree/disagree: one relation per target — persist to backend
         for (const tgtMid of uniqueTargetMids) {
-          const relMsgId = nextId("rel");
-          const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
-          setMessages(prev => [...prev, relMsg]);
-          const anonSrcId = `anon:${relMsgId}`;
-          newEdgesList.push({
-            id: nextId("edge"), relationMessageId: relMsgId, relationType,
-            from: { messageId: anonSrcId, selection: { kind: "whole" } },
-            to: { messageId: tgtMid, selection: { kind: "whole" } },
-            relationLabel: relationTypeName(relationType),
-          } as DemoEdge);
+          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } });
+          try {
+            const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+            const relId = `rel:${backendRel.id}`;
+            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
+            setMessages(prev => [...prev, relMsg]);
+            const anonSrcId = `anon:${backendRel.id}`;
+            newEdgesList.push({
+              id: nextId("edge"), relationMessageId: relId, relationType,
+              from: { messageId: anonSrcId, selection: { kind: "whole" } },
+              to: { messageId: tgtMid, selection: { kind: "whole" } },
+              relationLabel: relationTypeName(relationType),
+            } as DemoEdge);
+          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
       setEdges(prev => [...prev, ...newEdgesList]);
@@ -869,20 +873,22 @@ export default function TopicDetailPage() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
   }
 
-  function handleDecorationClick(messageId: string, kind: "agree" | "disagree") {
-    const now = new Date().toISOString();
-    const author = user?.username ?? "Anonymous";
-    const relMsgId = nextId("rel");
-    const relMsg: DemoMessage = { id: relMsgId, author, createdAt: now, kind: "relation", content: `${kind}: (无来源消息) → ${messageId}` };
-    const anonSrcId = `anon:${relMsgId}`;
-    const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relMsg.id, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };
-    setMessages(prev => [...prev, relMsg]);
-    setEdges(prev => [...prev, edge]);
-  }
-
-  function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree") {
-    // Quick send: pure-stance agree/disagree with no text message
-    handleDecorationClick(messageId, kind);
+  async function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree") {
+    // Quick send: pure-stance agree/disagree — relation messages are first-class, persist to backend
+    if (!topicId) return;
+    try {
+      const backendRel = await api.createRelation(topicId, {
+        relationType: kind.toUpperCase(),
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId }],
+      });
+      const relId = `rel:${backendRel.id}`;
+      const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${kind}: (无来源消息) → ${messageId}` };
+      const anonSrcId = `anon:${backendRel.id}`;
+      const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relId, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };
+      setMessages(prev => [...prev, relMsg]);
+      setEdges(prev => [...prev, edge]);
+    } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
   }
 
   function handleDecorationBodyClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {

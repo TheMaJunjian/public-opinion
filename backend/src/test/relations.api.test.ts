@@ -32,6 +32,7 @@ jest.mock('../lib/prisma', () => ({
     },
     relation: {
       create: jest.fn(),
+      findFirst: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
     },
@@ -112,6 +113,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(null);
     (prisma.relation.findMany as jest.Mock).mockResolvedValue([mockRelation]);
     (prisma.relation.create as jest.Mock).mockResolvedValue({
       ...mockRelation,
@@ -161,8 +163,9 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns 404 when source message does not exist', async () => {
+  it('returns 404 when sourceMessageId is neither a message nor a relation in the topic', async () => {
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(null);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -177,6 +180,7 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(null);
     (prisma.relation.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.relation.create as jest.Mock).mockResolvedValue({
       ...mockRelation,
@@ -225,6 +229,21 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
         relationType: 'ANNOTATION',
         sourceMessageId: 'msg-1',
         targetRefs: [{ kind: 'relation', relationId: 'rel-1', part: 'label' }],
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('creates a relation with a relation message as source (relation messages are also messages), returns 201', async () => {
+    // sourceMessageId is a relation ID — not found in message table, but found in relation table
+    (prisma.message.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.relation.findFirst as jest.Mock).mockResolvedValue(mockRelation);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'ANNOTATION',
+        sourceMessageId: 'rel-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
       });
     expect(res.status).toBe(201);
   });

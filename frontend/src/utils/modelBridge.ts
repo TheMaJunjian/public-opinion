@@ -70,6 +70,8 @@ export function convertMessagesToDemoModel(
   relations: BackendRelation[]
 ): { messages: DemoMessage[]; edges: DemoEdge[] } {
   const msgContentMap = new Map(messages.map(m => [m.id, m.content]));
+  // Build a set of relation IDs so we can detect when sourceMessageId references a relation
+  const relationIds = new Set(relations.map(r => r.id));
 
   const demoMessages: DemoMessage[] = messages.map(m => ({
     id: m.id,
@@ -102,7 +104,12 @@ export function convertMessagesToDemoModel(
 
     // For pure-stance relations (no source message), we still create edges
     // from a virtual "anonymous" origin that points to the target.
-    const fromMessageId = rel.sourceMessageId ?? `anon:${rel.id}`;
+    // If sourceMessageId references a relation message, use the rel: prefix.
+    const fromMessageId = rel.sourceMessageId
+      ? (relationIds.has(rel.sourceMessageId)
+          ? `rel:${rel.sourceMessageId}`
+          : rel.sourceMessageId)
+      : `anon:${rel.id}`;
 
     // If there's no source message, we don't need a DemoMessage for it
     // (it won't appear in the normal messages list).

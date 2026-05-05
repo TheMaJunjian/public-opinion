@@ -390,14 +390,14 @@ export async function getRelations(topicId: string, params?: { page?: number; li
 
 export async function createRelation(topicId: string, data: {
   relationType: string;
-  sourceMessageId: string;
+  sourceMessageId?: string | null;
   targetRefs: TargetRef[];
 }) {
   await delay();
   if (!mockUser) throw new Error('请先登录');
   const rel: Relation = {
     id: genId(), topicId, relationType: data.relationType,
-    sourceMessageId: data.sourceMessageId, targetRefs: data.targetRefs,
+    sourceMessageId: data.sourceMessageId ?? null, targetRefs: data.targetRefs,
     createdAt: new Date().toISOString(), createdBy: mockUser,
   };
   relations.push(rel);

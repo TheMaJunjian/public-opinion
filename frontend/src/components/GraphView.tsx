@@ -991,7 +991,16 @@ export default function GraphView(props: GraphViewProps) {
         const ep = endpointBoxForNormal(targetMid);
         return ep?.box ?? null;
       }
-      // annotation / reference / reply: midpoint of from and to visual boxes
+      // annotation / reference / reply (edge-label kind): the clickable area is the label.
+      // Use labelBboxes from the previous render if available; fall back to midpoint on first render.
+      // Key format: `e.id` when target is a normal message; `${e.id}__toRel__${target}` when target is a relation.
+      for (const r1e of relEdges) {
+        const bb = labelBboxes[r1e.id] ?? labelBboxes[`${r1e.id}__toRel__${r1e.to.messageId}`];
+        if (bb) {
+          return { x: bb.x, y: bb.y, width: bb.width, height: bb.height };
+        }
+      }
+      // Label bbox not yet available (first render) — fall back to midpoint approximation.
       let fromBox: LayoutBox | null = null;
       if (!te0.from.messageId.startsWith("anon:")) {
         if (msgMap.get(te0.from.messageId)?.kind === "relation") {

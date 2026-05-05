@@ -187,7 +187,7 @@ export function renderAnnoNodes(
   for (const node of nodes) {
     if (node.start >= to) break;
     if (node.start > cursor) {
-      result.push(<span key={`t-${node.start}-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor, node.start)}</span>);
+      result.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor, node.start)}</span>);
     }
     const len = node.end - node.start;
     const frag = text.slice(node.start, node.end);
@@ -221,7 +221,7 @@ export function renderAnnoNodes(
     cursor = node.end;
   }
   if (cursor < to) {
-    result.push(<span key={`t-${to}-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor, to)}</span>);
+    result.push(<span key={`t-${cursor}`} style={{whiteSpace:"pre-wrap"}}>{text.slice(cursor, to)}</span>);
   }
   return result;
 }

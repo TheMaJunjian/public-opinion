@@ -998,8 +998,8 @@ export default function TopicDetailPage() {
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string) {
     e.stopPropagation();
-    // Show operation details popup (reuse the decoration popup for now)
-    setDecorationPopup({ messageId: relMsgId, kind: "agree", x: e.clientX, y: e.clientY });
+    // Show operation details popup (reuse the comparison popup to show who operated, when, etc.)
+    setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
   }
 
   function toggleWholeUnit(msgId: string) {
@@ -1377,7 +1377,7 @@ export default function TopicDetailPage() {
       const sourceMsg = relEdges[0] && !relEdges[0].from.messageId.startsWith('anon:')
         ? msgMap.get(relEdges[0].from.messageId) : null;
       const targetMids = Array.from(new Set(relEdges.map(e => e.to.messageId)));
-      const targetMsgs = targetMids.map(id => msgMap.get(id)).filter(Boolean) as typeof sourceMsg[];
+      const targetMsgs = targetMids.map(id => msgMap.get(id)).filter((m): m is DemoMessage => m != null);
       const relType = relEdges[0]?.relationType ?? "";
       return (
         <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
@@ -1390,7 +1390,7 @@ export default function TopicDetailPage() {
               {relationTypeName(relType)}对比：{comparisonPopup.relMsgId}
             </div>
             <div style={{display:"flex",gap:12,flexDirection:"column"}}>
-              {targetMsgs.map(tm=>tm && (
+              {targetMsgs.map(tm=>(
                 <div key={tm.id} style={{borderRadius:6,border:"1px solid #554",background:"#232018",padding:8}}>
                   <div style={{fontSize:11,opacity:0.7,marginBottom:4}}>原文（{tm.id}）</div>
                   <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace"}}>{tm.content}</pre>

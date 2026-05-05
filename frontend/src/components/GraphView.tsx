@@ -58,6 +58,18 @@ const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
 
+// Group frame stroke colors by relColor value
+const GROUP_FRAME_STROKE: Record<string,string> = {
+  yellow: 'rgba(220,180,0,0.7)', amber: 'rgba(200,140,0,0.7)',
+  gray: 'rgba(140,140,150,0.55)', slate: 'rgba(100,110,120,0.55)',
+};
+
+// Inline badge background colors by relColor value
+const INLINE_BADGE_COLOR: Record<string,string> = {
+  orange: 'rgba(200,90,0,0.9)',
+  slate: 'rgba(80,90,100,0.9)',
+};
+
 function colX(col: number) {
   return GRID_LEFT + col * (CARD_W + COL_GAP);
 }
@@ -1451,9 +1463,7 @@ export default function GraphView(props: GraphViewProps) {
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
             const strokeColor = isWhole
               ? 'rgba(11,132,255,0.9)'
-              : isReplaceOverlay
-                ? (gf.relColor==='yellow'?'rgba(220,180,0,0.7)':'rgba(180,120,0,0.7)')
-                : 'rgba(140,140,150,0.55)';
+              : (isReplaceOverlay ? (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(180,120,0,0.7)') : (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(140,140,150,0.55)'));
             const fillColor = isWhole ? 'rgba(11,132,255,0.06)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
             return (
               <rect key={`gf-${gf.relMsgId}`} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
@@ -1850,8 +1860,7 @@ export default function GraphView(props: GraphViewProps) {
       {Array.from(inlineBadgesByMsg.entries()).map(([_mid, badges]) =>
         badges.map(badge => {
           const isWholeSel = isRelWholeSel(badge.relMsgId);
-          const COLOR_MAP: Record<string,string> = {orange:'rgba(200,90,0,0.9)',slate:'rgba(80,90,100,0.9)'};
-          const bg = COLOR_MAP[badge.relColor] ?? 'rgba(100,100,120,0.9)';
+          const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'rgba(100,100,120,0.9)';
           return (
             <div key={`badge-${badge.relMsgId}`} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}

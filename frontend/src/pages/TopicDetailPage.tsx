@@ -1397,7 +1397,7 @@ export default function TopicDetailPage() {
                 <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
                   <span style={{ opacity: 0.85 }}>附加关系：</span>
                   {(relationType === "reply" ? ["none", "annotation", "reference"] : correctSecondaryOptions).map(t => (
-                    <button key={t} onClick={() => setSecondaryRelationType(t)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                    <button key={t} onClick={() => setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
                       {t === "none" ? "无" : relationTypeName(t)}
                     </button>
                   ))}
@@ -1521,10 +1521,45 @@ export default function TopicDetailPage() {
       const targetMsgs = targetMids.map(id => msgMap.get(id)).filter((m): m is DemoMessage => m != null);
       const relType = relEdges[0]?.relationType ?? "";
 
-      // CORRECT relation: side-by-side comparison with character-level diff highlighting
+      // CORRECT relation: side-by-side comparison with highlighting
       if (relType === "correct" && targetMsgs.length > 0 && sourceMsg) {
         const origMsg = targetMsgs[0];
-        const { origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content);
+        // Prefer precise position-based highlighting for single-fragment corrections:
+        // The correction edge carries the exact text selection (start + len) in the
+        // original message, so we can pinpoint the changed region without the LCS
+        // algorithm incorrectly matching repeated substrings elsewhere in the text.
+        // Fall back to LCS for whole-message corrections or edge cases.
+        let origParts: DiffPart[];
+        let nextParts: DiffPart[];
+        const textEdge = relEdges.find(e => e.to.selection.kind === 'text');
+        const textEdges = relEdges.filter(e => e.to.selection.kind === 'text');
+        if (textEdge && textEdges.length === 1) {
+          const sel = textEdge.to.selection as { kind: 'text'; start: number; len: number; text: string };
+          const s = sel.start, l = sel.len;
+          const origLen = origMsg.content.length, nextLen = sourceMsg.content.length;
+          // For a single-fragment correction: prefix [0,s) is identical in both messages,
+          // deleted region is orig[s,s+l), inserted region is next[s,s+insertedLen), and
+          // suffix next[s+insertedLen,) equals orig[s+l,). Verify this before using it.
+          const insertedLen = nextLen - origLen + l;
+          const prefixOk = s >= 0 && l >= 0 && insertedLen >= 0 && s + l <= origLen && s + insertedLen <= nextLen;
+          const contentOk = prefixOk &&
+            origMsg.content.slice(0, s) === sourceMsg.content.slice(0, s) &&
+            origMsg.content.slice(s + l) === sourceMsg.content.slice(s + insertedLen);
+          if (contentOk) {
+            origParts = [];
+            if (s > 0) origParts.push({ type: 'keep', text: origMsg.content.slice(0, s) });
+            if (l > 0) origParts.push({ type: 'del', text: origMsg.content.slice(s, s + l) });
+            if (s + l < origLen) origParts.push({ type: 'keep', text: origMsg.content.slice(s + l) });
+            nextParts = [];
+            if (s > 0) nextParts.push({ type: 'keep', text: sourceMsg.content.slice(0, s) });
+            if (insertedLen > 0) nextParts.push({ type: 'ins', text: sourceMsg.content.slice(s, s + insertedLen) });
+            if (s + insertedLen < nextLen) nextParts.push({ type: 'keep', text: sourceMsg.content.slice(s + insertedLen) });
+          } else {
+            ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
+          }
+        } else {
+          ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
+        }
         // Clamp popup so it stays within viewport
         const popupW = Math.min(700, window.innerWidth - 32);
         const left = Math.min(Math.max(comparisonPopup.x - popupW / 2, 8), window.innerWidth - popupW - 8);

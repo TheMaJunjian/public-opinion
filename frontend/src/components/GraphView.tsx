@@ -474,18 +474,21 @@ function applyGroupingColumnOverride(params: {
     }
   }
 
-  // For no-source framing relations (anon: from), chain multiple targets together so they
-  // are placed in the same column and stacked tightly (zero gap).
-  const noFrameTargetsByRelMsg = new Map<string, string[]>();
+  // For ALL framing / correction-badge relations (regardless of whether the source is anon:
+  // or a real message), collect all *target* message IDs per relation message and chain
+  // them together so that multiple targets within the same relation are placed in the same
+  // column and stacked tightly (zero gap).  This also covers the previously-anon-only case
+  // where an explicit-source supplement has more than one target: those targets now also get
+  // chained, so they are stacked below the first target together with the source message.
+  const frameTargetsByRelMsg = new Map<string, string[]>();
   for (const e of edges) {
     if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
-    if (!e.from.messageId.startsWith("anon:")) continue;
     if (!normalSet.has(e.to.messageId)) continue;
-    const arr = noFrameTargetsByRelMsg.get(e.relationMessageId) ?? [];
+    const arr = frameTargetsByRelMsg.get(e.relationMessageId) ?? [];
     arr.push(e.to.messageId);
-    noFrameTargetsByRelMsg.set(e.relationMessageId, arr);
+    frameTargetsByRelMsg.set(e.relationMessageId, arr);
   }
-  for (const [, targetIds] of noFrameTargetsByRelMsg) {
+  for (const [, targetIds] of frameTargetsByRelMsg) {
     if (targetIds.length < 2) continue;
     // Sort by creation time for deterministic, chronological ordering.
     targetIds.sort((a, b) =>
@@ -847,11 +850,15 @@ export default function GraphView(props: GraphViewProps) {
     return map;
   }, [edges]);
 
-  // IDs of whole-message targets of CORRECT relations — their cards are dimmed in the non-linear view.
+  // IDs of all targets of CORRECT relations — their cards are hidden in the non-linear view
+  // (the correction source card overlays the same position, effectively replacing the target).
+  // This applies regardless of whether the target was selected as a whole message or as a
+  // text fragment: in either case `generateCorrectionContent` produces a complete replacement
+  // message, so the original should always be hidden.
   const correctedTargetMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
-      if (e.relationType === 'correct' && e.to.selection.kind === 'whole') ids.add(e.to.messageId);
+      if (e.relationType === 'correct') ids.add(e.to.messageId);
     }
     return ids;
   }, [edges]);

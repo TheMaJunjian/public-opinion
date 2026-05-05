@@ -299,7 +299,7 @@ export default function TopicDetailPage() {
     return () => { cancelled = true; };
   }, [topicId]);
 
-  const [relationType, setRelationType] = useState<RelationType>("annotation");
+  const [relationType, setRelationType] = useState<RelationType | null>("annotation");
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
@@ -675,6 +675,7 @@ export default function TopicDetailPage() {
     sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }) {
     if (!topicId) return;
+    if (!relationType) return;
     const { sources, label } = params;
     // Deduplicate relation-message targets: when both a whole and edge selection exist for the same
     // relation message, keep only the whole (it covers all edges, preventing duplicate
@@ -784,38 +785,49 @@ export default function TopicDetailPage() {
     setEdges(prev => [...prev, ...newEdgesList]);
   }
 
-  async function handleCreateRelation(useNewMessageAsSource: boolean) {
-    if (targetUnits.length === 0) return;
-    if (!useNewMessageAsSource && sourceUnits.length === 0) return;
-    if (useNewMessageAsSource && newMessageContent.trim().length === 0) return;
-    const labelDefault = relationTypeName(relationType);
-    const label = relationLabel.trim() || labelDefault;
-    let sources: UnitSelection[] = [];
-    if (useNewMessageAsSource) {
-      // CORRECT relation: auto-generate message content from target + replacement text
-      if (relationType === "correct" && targetUnits.length > 0) {
-        const generated = generateCorrectionContent(targetUnits, newMessageContent.trim(), msgMap);
-        const msg = await handleSendMessageOnly(generated ?? newMessageContent.trim());
-        if (!msg) return;
-        sources = [{ messageId: msg.id, selection: { kind: "whole" } }];
-      } else {
-        const msg = await handleSendMessageOnly();
-        if (!msg) return;
-        sources = [{ messageId: msg.id, selection: { kind: "whole" } }];
-      }
-    } else {
-      sources = [...sourceUnits];
-    }
-    const targets = [...targetUnits];
-    await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
-    setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-  }
-
   async function handleQuickSendAndRelateFromDraftTargets() {
+    const text = newMessageContent.trim();
+
+    // No relation type selected: just send a plain message
+    if (relationType === null) {
+      if (text.length === 0) return;
+      await handleSendMessageOnly(text);
+      setNewMessageContent("");
+      return;
+    }
+
     if (draftUnits.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isSupplement = relationType === "supplement";
-    const text = newMessageContent.trim();
+
+    // Relation target with reply/correct: no text, no source — create null-source relation
+    const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
+    const hasSecSelector = (relationType === "reply" || relationType === "correct") && hasDraftRelTarget;
+    if (hasSecSelector) {
+      if (text.length > 0 || sourceUnits.length > 0) return; // validation: state must be clean
+      const targetRefs = draftUnits.map(u => unitSelectionToTargetRef(u, msgMap));
+      const typeName = relationTypeName(relationType);
+      const newEdgesList: DemoEdge[] = [];
+      try {
+        const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
+        const relId = backendRel.id;
+        const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系（无来源消息）\n目标：${draftUnits.slice(0, 3).map(u => u.messageId).join(",") + (draftUnits.length > 3 ? "…" : "")}` };
+        setMessages(prev => [...prev, relMsg]);
+        const anonSrcId = `anon:${backendRel.id}`;
+        for (const t of draftUnits) {
+          newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: typeName } as DemoEdge);
+        }
+        if (secondaryRelationType !== "none") {
+          const secType = secondaryRelationType as RelationType;
+          for (const t of draftUnits) {
+            newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: relationTypeName(secType) } as DemoEdge);
+          }
+        }
+      } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+      setEdges(prev => [...prev, ...newEdgesList]);
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      return;
+    }
 
     if ((isAgreeDisagree || isSupplement) && text.length === 0) {
       // Pure-stance agree/disagree or no-source supplement: no text message.
@@ -955,9 +967,52 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
-  const hasSecondaryRelationSelector = relationType === "reply" || relationType === "correct";
-  // agree/disagree/supplement: text can be empty (pure stance / no-source); tag: text required; others: text required for source
-  const quickButtonEnabled = draftUnits.length > 0 && (isAgreeDisagreeType || isSupplementType || newMessageContent.trim().length > 0);
+
+  // Whether any draft unit points to a relation message (vs. text message or fragment)
+  const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
+
+  // Additional relation selector: only show when draft targets include a relation message
+  // and the primary relation type is reply or correct
+  const hasSecondaryRelationSelector =
+    (relationType === "reply" || relationType === "correct") && draftHasRelationTarget;
+
+  // Send button enabled logic (single button):
+  //   - No relation type: just send message → need text
+  //   - Relation target + reply/correct with secondary selector: text must be empty, source must be empty
+  //   - agree/disagree/supplement (pure-stance): draft not empty
+  //   - Other types: draft not empty AND text not empty
+  const singleButtonEnabled = (() => {
+    if (relationType === null) return newMessageContent.trim().length > 0;
+    if (draftHasRelationTarget && hasSecondaryRelationSelector) {
+      return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
+    }
+    if (isAgreeDisagreeType || isSupplementType) return draftUnits.length > 0;
+    return draftUnits.length > 0 && newMessageContent.trim().length > 0;
+  })();
+
+  // Dynamic label describing what the send button will do
+  const singleButtonLabel = (() => {
+    if (relationType === null) {
+      if (newMessageContent.trim().length === 0) return "请输入消息内容后发送";
+      return "仅发送这条消息（未选择关系类型）";
+    }
+    const typeName = relationTypeName(relationType);
+    if (draftHasRelationTarget && hasSecondaryRelationSelector) {
+      if (newMessageContent.trim().length > 0) return `请清空文本输入框（目标为关系消息时不应有文本）`;
+      if (sourceUnits.length > 0) return `请清空来源集合（目标为关系消息时来源必须为空）`;
+      const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
+      return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
+    }
+    if (isAgreeDisagreeType || isSupplementType) {
+      if (draftUnits.length === 0) return "请在画布中选择目标消息";
+      return newMessageContent.trim().length > 0
+        ? `发送消息并建立「${typeName}」关系（用候选作目标）`
+        : `建立纯立场「${typeName}」关系（用候选作目标，无需文本）`;
+    }
+    if (draftUnits.length === 0) return "请在画布中选择目标消息";
+    if (newMessageContent.trim().length === 0) return "请输入消息内容（将作为来源）";
+    return `发送消息并建立「${typeName}」关系（用候选作目标）`;
+  })();
 
   // Secondary relation options for CORRECT type: relations of the same PresentationKind as the targeted relation message, plus "none".
   const correctSecondaryOptions = useMemo((): string[] => {
@@ -1220,7 +1275,7 @@ export default function TopicDetailPage() {
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
-            <button key={rt} onClick={() => { setRelationType(rt); setSecondaryRelationType("none"); }}
+            <button key={rt} onClick={() => { setRelationType(prev => prev === rt ? null : rt); setSecondaryRelationType("none"); }}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
             </button>
@@ -1404,12 +1459,23 @@ export default function TopicDetailPage() {
                 </div>
               )}
               <input style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }} placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签" : "关系标签"} value={relationLabel} onChange={e => setRelationLabel(e.target.value)} />
-              <textarea style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 13, resize: "vertical" }} placeholder="输入一条新普通消息（支持自由换行）" value={newMessageContent} onChange={e => setNewMessageContent(e.target.value)} />
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-                <button onClick={() => handleSendMessageOnly()} disabled={newMessageContent.trim().length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: newMessageContent.trim().length === 0 ? "#333" : "#444", color: newMessageContent.trim().length === 0 ? "#777" : "#fff", cursor: newMessageContent.trim().length === 0 ? "default" : "pointer", fontSize: 12 }}>仅发送消息</button>
-                <button onClick={handleQuickSendAndRelateFromDraftTargets} disabled={!quickButtonEnabled} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: !quickButtonEnabled ? "#333" : "#0b84ff", color: !quickButtonEnabled ? "#777" : "#fff", cursor: !quickButtonEnabled ? "default" : "pointer", fontSize: 12 }} title={isAgreeDisagreeType || isSupplementType ? "候选区作为目标（赞同/反对/补充时文本框可为空，将自动填入标签）" : "文本框作为来源（整条），候选区作为目标"}>发送消息并建立关系（用候选作目标）</button>
-                <button onClick={() => handleCreateRelation(true)} disabled={newMessageContent.trim().length === 0 || targetUnits.length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "#333" : "#444", color: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "#777" : "#fff", cursor: newMessageContent.trim().length === 0 || targetUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>发送新消息并建立关系（Targets集合）</button>
-                <button onClick={() => handleCreateRelation(false)} disabled={sourceUnits.length === 0 || targetUnits.length === 0} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #666", background: sourceUnits.length === 0 || targetUnits.length === 0 ? "#333" : "#444", color: sourceUnits.length === 0 || targetUnits.length === 0 ? "#777" : "#fff", cursor: sourceUnits.length === 0 || targetUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>仅用已有消息建立关系（Sources/Targets集合）</button>
+              <textarea
+                style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: draftHasRelationTarget && hasSecondaryRelationSelector ? "#1a1a1a" : "#222", color: draftHasRelationTarget && hasSecondaryRelationSelector ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
+                placeholder={draftHasRelationTarget && hasSecondaryRelationSelector ? "目标为关系消息时，此处不应有内容" : "输入一条新普通消息（支持自由换行）"}
+                value={newMessageContent}
+                onChange={e => setNewMessageContent(e.target.value)}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  onClick={handleQuickSendAndRelateFromDraftTargets}
+                  disabled={!singleButtonEnabled}
+                  style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: singleButtonEnabled ? "#0b84ff" : "#333", color: singleButtonEnabled ? "#fff" : "#777", cursor: singleButtonEnabled ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}
+                >
+                  发送
+                </button>
+                <span style={{ fontSize: 11, opacity: singleButtonEnabled ? 0.9 : 0.5, color: singleButtonEnabled ? "#cce4ff" : "#999" }}>
+                  {singleButtonLabel}
+                </span>
               </div>
             </div>
           )}

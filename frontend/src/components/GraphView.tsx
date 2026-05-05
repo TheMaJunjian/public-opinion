@@ -1562,14 +1562,35 @@ export default function GraphView(props: GraphViewProps) {
           if (correctedTargetMsgIds.has(msg.id)) return null;
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
           const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
+          const corrBadges = correctionsBySourceMsgId.get(msg.id) ?? [];
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              {/* Correction badges: top-center for text messages */}
+              {msg.kind==="normal" && corrBadges.length>0 && (
+                <div style={{display:"flex",justifyContent:"center",gap:4}}>
+                  {corrBadges.map((b) => (
+                    <div key={`corr-hdr-${b.relMsgId}`}
+                      data-rel-overlay="true"
+                      onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
+                      onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
+                      title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
+                      style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                        color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                        cursor:"pointer",pointerEvents:"auto",
+                        border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                        whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
+                      ✏更正
+                    </div>
+                  ))}
+                </div>
+              )}
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div style={{display:"flex",alignItems:"center",gap:4}}>
-                  {correctionsBySourceMsgId.get(msg.id)?.map((b) => (
+                  {/* For non-text (relation) messages, keep badges left-aligned in header */}
+                  {msg.kind!=="normal" && corrBadges.map((b) => (
                     <div key={`corr-hdr-${b.relMsgId}`}
                       data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}

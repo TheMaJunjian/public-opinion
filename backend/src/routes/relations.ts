@@ -122,20 +122,15 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     // sourceMessageId must reference a text message OR a relation message in this topic
-    let sourceMessage = null;
     if (data.sourceMessageId) {
-      sourceMessage = await prisma.message.findFirst({
-        where: { id: data.sourceMessageId, topicId },
-      });
-      if (!sourceMessage) {
-        // Relation messages are also messages — allow a relation message as source
-        const sourceRelation = await prisma.relation.findFirst({
-          where: { id: data.sourceMessageId, topicId },
-        });
-        if (!sourceRelation) {
-          res.status(404).json({ error: '来源消息不存在或不属于该话题' });
-          return;
-        }
+      // Query both tables concurrently — relation messages are also messages and can be sources
+      const [sourceMessage, sourceRelation] = await Promise.all([
+        prisma.message.findFirst({ where: { id: data.sourceMessageId, topicId } }),
+        prisma.relation.findFirst({ where: { id: data.sourceMessageId, topicId } }),
+      ]);
+      if (!sourceMessage && !sourceRelation) {
+        res.status(404).json({ error: '来源消息不存在或不属于该话题' });
+        return;
       }
     }
 

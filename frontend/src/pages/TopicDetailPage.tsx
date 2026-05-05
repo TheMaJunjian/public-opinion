@@ -549,6 +549,10 @@ export default function TopicDetailPage() {
     );
     const newEdgesList: DemoEdge[] = [];
 
+    // Strip the frontend "rel:" prefix to get the backend relation ID.
+    // Relation messages are also messages and can be used as sources.
+    const toBackendId = (id: string) => id.startsWith('rel:') ? id.slice(4) : id;
+
     const buildEdges = (src: UnitSelection, tgt: UnitSelection, type: RelationType, lbl: string, relId: string) => {
       return {
         id: nextId("edge"),
@@ -566,10 +570,9 @@ export default function TopicDetailPage() {
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(fromReply.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
-        const backendSrcId = srcId.startsWith('rel:') ? srcId.slice(4) : srcId;
         const targetRefs = toReply.map(t => unitSelectionToTargetRef(t));
         try {
-          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: backendSrcId, targetRefs });
+          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: toBackendId(srcId), targetRefs });
           const relId = `rel:${backendRel.id}`;
           const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${toReply.map(t => t.messageId).join(",")}` };
           setMessages(prev => [...prev, relMsg]);
@@ -593,10 +596,9 @@ export default function TopicDetailPage() {
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       if (uniqueSources.length > 0) {
         for (const srcId of uniqueSources) {
-          const backendSrcId = srcId.startsWith('rel:') ? srcId.slice(4) : srcId;
           try {
             const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: backendSrcId, targetRefs });
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: toBackendId(srcId), targetRefs });
             const relId = `rel:${backendRel.id}`;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${uniqueTargetMids.join(",")}` };
             setMessages(prev => [...prev, relMsg]);
@@ -622,12 +624,11 @@ export default function TopicDetailPage() {
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
-        const backendSrcId = srcId.startsWith('rel:') ? srcId.slice(4) : srcId;
         const srcs = sources.filter(s => s.messageId === srcId);
         for (const srcUnit of srcs) {
           const targetRefs = targets.map(t => unitSelectionToTargetRef(t));
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: backendSrcId, targetRefs });
+            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: toBackendId(srcId), targetRefs });
             const relId = `rel:${backendRel.id}`;
             const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
             setMessages(prev => [...prev, relMsg]);

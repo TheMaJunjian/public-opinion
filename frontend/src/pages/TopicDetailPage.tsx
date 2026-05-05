@@ -57,6 +57,8 @@ function nextId(prefix: string): string {
 
 // ========================= StructureView / IncomingOutgoingList =========================
 
+const INCOMING_OUTGOING_LIST_MAX_H = 120; // max height (px) for each incoming/outgoing edge list in the structure view
+
 function fmtSel(u: UnitSelection) {
   if (u.selection.kind === "whole") return `${u.messageId}（整条消息）`;
   if (u.selection.kind === "edge") return `${u.messageId}（关系边 ${u.selection.edgeId}）`;
@@ -81,7 +83,7 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
   if (!hasAny) return <div style={{ fontSize: 12, opacity: 0.6 }}>无</div>;
   return (
     <div style={{ fontSize: 12 }}>
-      <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto" }}>
+      <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: INCOMING_OUTGOING_LIST_MAX_H, overflow: "auto" }}>
         {rows.map(r => (
           <li key={r.focusId} style={{ marginBottom: 8 }}>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{r.focusId}</div>

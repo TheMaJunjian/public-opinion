@@ -50,6 +50,7 @@ const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 // SUPPLEMENT frame constants
 const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pairs (wide enough to click)
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
+const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -927,7 +928,7 @@ export default function GraphView(props: GraphViewProps) {
     // This is needed when an edge targets a relation message (rel:...) that is itself
     // a relation whose endpoints may also be relation messages (deeply nested annotations).
     function getRelVisualBox(relId: string, depth = 0): LayoutBox | null {
-      if (depth > 10) return null; // guard against cycles
+      if (depth > MAX_RELATION_NESTING_DEPTH) return null;
       const relEdges = edgesByRelMsg.get(relId) ?? [];
       if (relEdges.length === 0) return null;
       const te0 = relEdges[0];

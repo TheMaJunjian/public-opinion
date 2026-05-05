@@ -13,6 +13,11 @@ import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relatio
 
 // ========================= Helpers =========================
 
+const ALL_RELATION_TYPES: RelationType[] = [
+  "annotation", "reference", "reply", "agree", "disagree", "tag", "supplement",
+  "correct", "classify", "merge", "summary", "recommend", "archive",
+];
+
 function selKey(u: UnitSelection): string {
   const s = u.selection;
   if (s.kind === "whole") return `${u.messageId}::whole`;
@@ -967,11 +972,7 @@ export default function TopicDetailPage() {
   function handleGroupFrameClick(e: React.MouseEvent, relMsgId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relMsgId);
-    const wholeUnit: UnitSelection = { messageId: relMsgId, selection: { kind: "whole" } };
-    setDraftUnits(prev => {
-      const exists = prev.some(u => unitEquals(u, wholeUnit));
-      return exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
-    });
+    toggleWholeUnit(relMsgId);
   }
 
   function handleGroupFrameDoubleClick(e: React.MouseEvent, relMsgId: string) {
@@ -992,17 +993,21 @@ export default function TopicDetailPage() {
   function handleInlineBadgeClick(e: React.MouseEvent, relMsgId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relMsgId);
-    const wholeUnit: UnitSelection = { messageId: relMsgId, selection: { kind: "whole" } };
-    setDraftUnits(prev => {
-      const exists = prev.some(u => unitEquals(u, wholeUnit));
-      return exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
-    });
+    toggleWholeUnit(relMsgId);
   }
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string) {
     e.stopPropagation();
     // Show operation details popup (reuse the decoration popup for now)
     setDecorationPopup({ messageId: relMsgId, kind: "agree", x: e.clientX, y: e.clientY });
+  }
+
+  function toggleWholeUnit(msgId: string) {
+    const wholeUnit: UnitSelection = { messageId: msgId, selection: { kind: "whole" } };
+    setDraftUnits(prev => {
+      const exists = prev.some(u => unitEquals(u, wholeUnit));
+      return exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
+    });
   }
 
   async function handleArchiveTopic() {
@@ -1073,7 +1078,7 @@ export default function TopicDetailPage() {
         </div>
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
-          {(["annotation", "reference", "reply", "agree", "disagree", "tag", "supplement", "correct", "classify", "merge", "summary", "recommend", "archive"] as RelationType[]).map(rt => (
+          {ALL_RELATION_TYPES.map(rt => (
             <button key={rt} onClick={() => { setRelationType(rt); setSecondaryRelationType("none"); }}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}

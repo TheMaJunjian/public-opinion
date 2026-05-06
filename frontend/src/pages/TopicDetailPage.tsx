@@ -779,6 +779,20 @@ export default function TopicDetailPage() {
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
+    } else if (relationType === "recommend" || relationType === "archive") {
+      // RECOMMEND/ARCHIVE: user-to-message relations with no source message, one per target.
+      // Source units are intentionally ignored — these relations never carry a source message.
+      const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
+      for (const targetMid of uniqueTargetMids) {
+        try {
+          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
+          const relId = backendRel.id;
+          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${targetMid}` };
+          setMessages(prev => [...prev, relMsg]);
+          const anonSrcId = `anon:${backendRel.id}`;
+          newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
+        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+      }
     } else {
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
@@ -838,6 +852,8 @@ export default function TopicDetailPage() {
     if (effectiveTargets.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isSupplement = relationType === "supplement";
+    // RECOMMEND/ARCHIVE: user-to-message relations with no source, one per target (same pattern as AGREE/DISAGREE)
+    const isInlineBadge = relationType === "recommend" || relationType === "archive";
 
     // Relation target with reply/correct: no text, no source — create null-source relation
     const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
@@ -921,10 +937,10 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if ((isAgreeDisagree || isSupplement) && text.length === 0) {
-      // Pure-stance agree/disagree or no-source supplement: no text message.
+    if ((isAgreeDisagree || isSupplement || isInlineBadge) && text.length === 0) {
+      // Pure-stance agree/disagree, no-source supplement, or inline-badge (recommend/archive): no text message.
       // Supplement: ONE relation message containing all targets in a single frame.
-      // Agree/disagree: one relation message per target (separate decoration badges).
+      // Agree/disagree/inline-badge: one relation message per target (separate decoration badges).
       // Relation messages are first-class messages — persist all of them to the backend.
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
@@ -947,7 +963,7 @@ export default function TopicDetailPage() {
           }
         } catch (e: any) { alert(`建立无来源补充关系失败: ${e?.message ?? e}`); }
       } else {
-        // Agree/disagree: one relation per target — persist to backend
+        // Agree/disagree/inline-badge (recommend/archive): one relation per target — persist to backend
         for (const tgtMid of uniqueTargetMids) {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
           try {
@@ -1062,6 +1078,8 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
+  // RECOMMEND/ARCHIVE: like AGREE/DISAGREE, they are user-to-message relations with no source message
+  const isInlineBadgeType = relationType === "recommend" || relationType === "archive";
 
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
@@ -1085,7 +1103,7 @@ export default function TopicDetailPage() {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
-    if (isAgreeDisagreeType || isSupplementType) return hasTargetsAvailable;
+    if (isAgreeDisagreeType || isSupplementType || isInlineBadgeType) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
     return hasTargetsAvailable && newMessageContent.trim().length > 0;
@@ -1106,8 +1124,11 @@ export default function TopicDetailPage() {
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     const usingDraft = draftUnits.length > 0;
-    if (isAgreeDisagreeType || isSupplementType) {
+    if (isAgreeDisagreeType || isSupplementType || isInlineBadgeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
+      if (isInlineBadgeType) {
+        return `建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+      }
       return newMessageContent.trim().length > 0
         ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
         : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;

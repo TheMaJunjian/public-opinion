@@ -850,15 +850,17 @@ export default function GraphView(props: GraphViewProps) {
     return map;
   }, [edges]);
 
-  // IDs of all targets of CORRECT relations — their cards are hidden in the non-linear view
-  // (the correction source card overlays the same position, effectively replacing the target).
-  // This applies regardless of whether the target was selected as a whole message or as a
-  // text fragment: in either case `generateCorrectionContent` produces a complete replacement
-  // message, so the original should always be hidden.
+  // IDs of all targets of CORRECT relations that have a real (non-anonymous) replacement source.
+  // Their cards are hidden in the non-linear view because the replacement source card/edge
+  // takes the same position, effectively replacing the target.
+  // Only hide when the CORRECT relation has a non-anon source — if there is no replacement
+  // (secondary type = "none", anon: source), the original remains visible with a correction badge.
   const correctedTargetMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
-      if (e.relationType === 'correct') ids.add(e.to.messageId);
+      if (e.relationType === 'correct' && !e.from.messageId.startsWith('anon:')) {
+        ids.add(e.to.messageId);
+      }
     }
     return ids;
   }, [edges]);
@@ -1610,23 +1612,51 @@ export default function GraphView(props: GraphViewProps) {
                   ))}
                   <span>{msg.author}</span>
                 </div>
-                {/* For text messages, correction badges are centered between author and msgId */}
+                {/* For text messages, correction badges are centered between author and msgId,
+                    with AGREE/DISAGREE mini-badges rendered inline to the right of each correction badge. */}
                 {msg.kind==="normal" && corrBadges.length>0 && (
-                  <div style={{flex:1,display:"flex",justifyContent:"center",gap:4}}>
-                    {corrBadges.map((b) => (
-                      <div key={`corr-hdr-${b.relMsgId}`}
-                        data-rel-overlay="true"
-                        onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
-                        onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                        title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
-                        style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
-                          color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
-                          cursor:"pointer",pointerEvents:"auto",
-                          border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                          whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                        ✏更正
-                      </div>
-                    ))}
+                  <div style={{flex:1,display:"flex",justifyContent:"center",gap:4,flexWrap:"wrap"}}>
+                    {corrBadges.map((b) => {
+                      const corrDec=relDecByRelMsgState?.get(b.relMsgId);
+                      return (
+                        <React.Fragment key={`corr-hdr-${b.relMsgId}`}>
+                          <div
+                            data-rel-overlay="true"
+                            onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
+                            onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
+                            title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
+                            style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                              color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                              cursor:"pointer",pointerEvents:"auto",
+                              border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                              whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
+                            ✏更正
+                          </div>
+                          {corrDec && corrDec.agreeCount>0 && (
+                            <div data-rel-overlay="true"
+                              onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,b.relMsgId,"agree");}}
+                              onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,b.relMsgId,"agree");}}
+                              title={`赞同更正：${b.relMsgId}；单击选中，双击展开详情`}
+                              style={{background:"rgba(2,150,80,0.9)",color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",
+                                fontWeight:600,cursor:"pointer",pointerEvents:"auto",border:"1px solid rgba(255,255,255,0.15)",
+                                whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
+                              👍{corrDec.agreeCount}
+                            </div>
+                          )}
+                          {corrDec && corrDec.disagreeCount>0 && (
+                            <div data-rel-overlay="true"
+                              onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,b.relMsgId,"disagree");}}
+                              onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,b.relMsgId,"disagree");}}
+                              title={`反对更正：${b.relMsgId}；单击选中，双击展开详情`}
+                              style={{background:"rgba(200,40,40,0.9)",color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",
+                                fontWeight:600,cursor:"pointer",pointerEvents:"auto",border:"1px solid rgba(255,255,255,0.15)",
+                                whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
+                              👎{corrDec.disagreeCount}
+                            </div>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </div>
                 )}
                 <div style={{flex:1,display:"flex",justifyContent:"flex-end"}}>
@@ -1818,6 +1848,61 @@ export default function GraphView(props: GraphViewProps) {
               </div>
             );
             decTop+=TAG_H+TAG_V_GAP;
+          }
+        }
+        return items;
+      })()}
+
+      {/* Correction-badge AGREE/DISAGREE decoration badges — shown to the RIGHT of the edge label
+          for the replacement relation (R2) that carries a correction badge (✏更正).
+          These decorations target the CORRECT relation message (R_correct) itself, shown next to
+          the correction badge consistent with how text-message correction decorations are displayed. */}
+      {(()=>{
+        const corrDecRendered=new Set<string>();
+        const items: React.ReactNode[]=[];
+        for (const pe of positionedEdges) {
+          const relId=pe.edge.relationMessageId;
+          const bb=labelBboxes[pe.drawId]; if (!bb) continue;
+          // Only process edge labels that ARE the replacement (correctionSrcByNewRelMsg maps R2 → correction info)
+          const newCorrInfo=correctionSrcByNewRelMsg.get(relId);
+          if (!newCorrInfo?.length) continue;
+          if (corrDecRendered.has(relId)) continue;
+          corrDecRendered.add(relId);
+          const decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
+          // Start below any R2-targeting agree/disagree decorations already placed at this position
+          const r2Dec=relDecByRelMsgState.get(relId);
+          const r2Lines=((r2Dec?.agreeCount??0)>0?1:0)+((r2Dec?.disagreeCount??0)>0?1:0);
+          let decTop=bb.y+Math.floor((bb.height-DEC_H)/2)+r2Lines*(DEC_H+DEC_GAP);
+          for (const ci of newCorrInfo) {
+            const dec=relDecByRelMsgState.get(ci.corrRelMsgId);
+            if (!dec||(dec.agreeCount===0&&dec.disagreeCount===0)) continue;
+            for (const kind of ["agree","disagree"] as const) {
+              const count=kind==="agree"?dec.agreeCount:dec.disagreeCount;
+              if (count<=0) continue;
+              const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+              const icon=kind==="agree"?"👍":"👎";
+              const label=kind==="agree"?"赞":"反";
+              items.push(
+                <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                  onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,ci.corrRelMsgId,kind);}}
+                  title={`${kind==="agree"?"赞同":"反对"}更正：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+                  style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:5,
+                    background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                    fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                    overflow:"hidden"}}>
+                  <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(ci.corrRelMsgId,kind);}}
+                    style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                      cursor:"pointer",flexShrink:0,background:"rgba(0,0,0,0.15)",fontSize:12}}
+                    title={`点击：快速发送${kind==="agree"?"赞同":"反对"}`}>{icon}</div>
+                  <div onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,ci.corrRelMsgId,kind);}}
+                    style={{flex:1,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:2,cursor:"pointer"}}>
+                    <span style={{fontWeight:700}}>{count}</span>
+                    <span style={{fontSize:9,opacity:0.85}}>{label}</span>
+                  </div>
+                </div>
+              );
+              decTop+=DEC_H+DEC_GAP;
+            }
           }
         }
         return items;

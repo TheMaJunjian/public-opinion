@@ -216,7 +216,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       relationType: message.relationType!,
       sourceMessageId: message.relSourceId ?? null,
       targetRefs: message.targetRefs,
-      tagLabel: message.content ?? undefined,
+      tagLabel: message.relationType === 'TAG' ? (message.content ?? undefined) : undefined,
       createdAt: message.createdAt,
       createdBy: message.createdBy,
     });

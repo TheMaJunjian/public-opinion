@@ -384,11 +384,12 @@ export default function TopicDetailPage() {
     const hiddenTagSourceIds = new Set<string>();
     const shouldKeepVisible = new Set<string>();
     for (const e of edges) {
-      if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+      const fromKind = msgMap.get(e.from.messageId)?.kind;
+      if (e.relationType === "tag" && fromKind === "normal") {
         hiddenTagSourceIds.add(e.from.messageId);
       }
       if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
-      if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+      if (e.relationType !== "tag" && fromKind === "normal") {
         shouldKeepVisible.add(e.from.messageId);
       }
     }
@@ -738,6 +739,28 @@ export default function TopicDetailPage() {
     });
   }
 
+  /**
+   * Create a single TAG relation for `targetMid` with the given label, register the
+   * new relation message in state, and return a DemoEdge for the caller to append.
+   * Returns null if the API call fails (error is shown via alert).
+   */
+  async function sendTagRelation(targetMid: string, tagLabel: string): Promise<DemoEdge | null> {
+    if (!topicId) return null;
+    const typeName = relationTypeName("tag");
+    const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
+    try {
+      const backendRel = await api.createRelation(topicId, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
+      const relId = backendRel.id;
+      const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${targetMid}` };
+      setMessages(prev => [...prev, relMsg]);
+      const anonSrcId = `anon:${relId}`;
+      return { id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge;
+    } catch (e: any) {
+      alert(`建立标注关系失败: ${e?.message ?? e}`);
+      return null;
+    }
+  }
+
   async function handleCreateRelationWithSourcesAndTargets(params: {
     sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }) {
@@ -843,17 +866,9 @@ export default function TopicDetailPage() {
       // Source units are intentionally ignored — TAG never uses a source text message.
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       const tagLabel = label;
-      const typeName = relationTypeName("tag");
       for (const targetMid of uniqueTargetMids) {
-        try {
-          const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
-          const backendRel = await api.createRelation(topicId, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
-          const relId = backendRel.id;
-          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${targetMid}` };
-          setMessages(prev => [...prev, relMsg]);
-          const anonSrcId = `anon:${relId}`;
-          newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, tagLabel, relId));
-        } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+        const edge = await sendTagRelation(targetMid, tagLabel);
+        if (edge) newEdgesList.push(edge);
       }
     } else {
       // Relation messages are also messages — include relation-message sources
@@ -940,18 +955,10 @@ export default function TopicDetailPage() {
         // Existing tag label selected: create TAG relation directly without a source message.
         // The label text is stored in tagLabel on the relation itself.
         const tagLabel = secType;
-        const typeName = relationTypeName("tag");
         const newTagEdges: DemoEdge[] = [];
         for (const tgtMid of uniqueTargetMids) {
-          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
-          try {
-            const backendRel = await api.createRelation(topicId!, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
-            const relId = backendRel.id;
-            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${tgtMid}` };
-            setMessages(prev => [...prev, relMsg]);
-            const anonSrcId = `anon:${relId}`;
-            newTagEdges.push({ id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge);
-          } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+          const edge = await sendTagRelation(tgtMid, tagLabel);
+          if (edge) newTagEdges.push(edge);
         }
         setEdges(prev => [...prev, ...newTagEdges]);
       }
@@ -1176,18 +1183,10 @@ export default function TopicDetailPage() {
     if (relationType === "tag") {
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       const tagLabel = text;
-      const typeName = relationTypeName("tag");
       const newTagEdges: DemoEdge[] = [];
       for (const tgtMid of uniqueTargetMids) {
-        const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
-        try {
-          const backendRel = await api.createRelation(topicId!, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
-          const relId = backendRel.id;
-          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${tgtMid}` };
-          setMessages(prev => [...prev, relMsg]);
-          const anonSrcId = `anon:${relId}`;
-          newTagEdges.push({ id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge);
-        } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+        const edge = await sendTagRelation(tgtMid, tagLabel);
+        if (edge) newTagEdges.push(edge);
       }
       setEdges(prev => [...prev, ...newTagEdges]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();

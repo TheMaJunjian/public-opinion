@@ -105,11 +105,7 @@ export function convertMessagesToDemoModel(
     // (legacy TAG relations that used a source text message to carry the label).
     let tagLabel: string | undefined;
     if (relType === 'tag') {
-      if (rel.tagLabel) {
-        tagLabel = rel.tagLabel;
-      } else if (rel.sourceMessageId) {
-        tagLabel = msgContentMap.get(rel.sourceMessageId) ?? undefined;
-      }
+      tagLabel = rel.tagLabel ?? msgContentMap.get(rel.sourceMessageId ?? '') ?? undefined;
     }
 
     if (!seenRelMsgIds.has(relMsgId)) {
@@ -226,9 +222,9 @@ export function unitSelectionToTargetRef(
 export function computeCorrectedEdgeMap(edges: DemoEdge[]): Map<string, Set<string>> {
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   for (const e of edges) {
-    const arr = edgesByRelMsg.get(e.relationMessageId) ?? [];
+    let arr = edgesByRelMsg.get(e.relationMessageId);
+    if (!arr) { arr = []; edgesByRelMsg.set(e.relationMessageId, arr); }
     arr.push(e);
-    edgesByRelMsg.set(e.relationMessageId, arr);
   }
 
   const result = new Map<string, Set<string>>();
@@ -244,17 +240,17 @@ export function computeCorrectedEdgeMap(edges: DemoEdge[]): Map<string, Set<stri
     // Index old edges by their target message ID for O(1) lookup.
     const oldEdgesByTarget = new Map<string, string[]>();
     for (const oe of oldEdges) {
-      const arr = oldEdgesByTarget.get(oe.to.messageId) ?? [];
+      let arr = oldEdgesByTarget.get(oe.to.messageId);
+      if (!arr) { arr = []; oldEdgesByTarget.set(oe.to.messageId, arr); }
       arr.push(oe.id);
-      oldEdgesByTarget.set(oe.to.messageId, arr);
     }
     // For each new (replacement) edge, mark the matching old edge(s) as corrected.
     for (const ne of newEdges) {
       const matchingOldIds = oldEdgesByTarget.get(ne.to.messageId) ?? [];
       for (const oldId of matchingOldIds) {
-        const set = result.get(oldRelMsgId) ?? new Set<string>();
+        let set = result.get(oldRelMsgId);
+        if (!set) { set = new Set<string>(); result.set(oldRelMsgId, set); }
         set.add(oldId);
-        result.set(oldRelMsgId, set);
       }
     }
   }

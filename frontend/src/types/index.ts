@@ -104,9 +104,15 @@ export interface Relation {
   /**
    * ID of the text message that "sends" / authors this relation.
    * Nullable for AGREE/DISAGREE pure-stance relations (no attached text message).
+   * Also null for TAG relations (which use tagLabel instead).
    */
   sourceMessageId: string | null;
   targetRefs: TargetRef[];
+  /**
+   * Label text for TAG relations. Stored directly on the relation instead of a source message.
+   * Undefined for all non-TAG relation types.
+   */
+  tagLabel?: string;
   createdAt: string;
   createdBy: User;
 }

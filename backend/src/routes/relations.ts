@@ -51,6 +51,9 @@ const createRelationSchema = z.object({
   // (which may be pure stance declarations without an attached text message).
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
   targetRefs: z.array(targetRefSchema).min(1, '至少需要一个目标引用').max(20),
+  // tagLabel: optional label text for TAG relations (stored in place of a source message).
+  // When provided, the TAG relation is a user-to-message relation without a source text message.
+  tagLabel: z.string().max(200).optional(),
 });
 
 const paginationSchema = z.object({
@@ -94,6 +97,7 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
       relationType: m.relationType!,
       sourceMessageId: m.relSourceId ?? null,
       targetRefs: m.targetRefs,
+      tagLabel: m.relationType === 'TAG' ? (m.content ?? undefined) : undefined,
       createdAt: m.createdAt,
       createdBy: m.createdBy,
     }));
@@ -128,7 +132,8 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     // SUPPLEMENT: optional (no-source form wraps target messages in a frame without a source text)
     // CORRECT: optional (can be used to mark a relation message as needing correction without a source text)
     // REPLY: optional (can express a pure-stance reply to a relation message without source text)
-    const requiresSource = data.relationType !== 'AGREE' && data.relationType !== 'DISAGREE' && data.relationType !== 'SUPPLEMENT' && data.relationType !== 'CORRECT' && data.relationType !== 'REPLY';
+    // TAG: optional (user-to-message relation; label text is stored in tagLabel instead of sourceMessageId)
+    const requiresSource = data.relationType !== 'AGREE' && data.relationType !== 'DISAGREE' && data.relationType !== 'SUPPLEMENT' && data.relationType !== 'CORRECT' && data.relationType !== 'REPLY' && data.relationType !== 'TAG';
 
     if (requiresSource && !data.sourceMessageId) {
       res.status(400).json({ error: '该关系类型需要提供来源消息 ID' });
@@ -190,6 +195,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     // Create the relation as a RELATION-kind message in the unified Message table.
+    // For TAG relations, tagLabel is stored in the content field so it survives round-trips.
     const message = await prisma.message.create({
       data: {
         topicId,
@@ -198,6 +204,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         relationType: data.relationType,
         relSourceId: data.sourceMessageId ?? null,
         targetRefs: data.targetRefs,
+        content: data.relationType === 'TAG' ? (data.tagLabel ?? null) : null,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     });
@@ -209,6 +216,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       relationType: message.relationType!,
       sourceMessageId: message.relSourceId ?? null,
       targetRefs: message.targetRefs,
+      tagLabel: message.relationType === 'TAG' ? (message.content ?? undefined) : undefined,
       createdAt: message.createdAt,
       createdBy: message.createdBy,
     });

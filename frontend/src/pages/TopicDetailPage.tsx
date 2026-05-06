@@ -818,6 +818,11 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
+    // This lets users either click on the canvas to pick draft candidates (quick path) or
+    // explicitly commit messages to the target collection via "加入目标集合".
+    const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+
     // Scenario: source collection + target collection explicitly committed (no draft candidates).
     // Build the relation directly without creating a new text message.
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
@@ -829,11 +834,6 @@ export default function TopicDetailPage() {
       setRelationType(null); setSecondaryRelationType("none");
       return;
     }
-
-    // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
-    // This lets users either click on the canvas to pick draft candidates (quick path) or
-    // explicitly commit messages to the target collection via "加入目标集合".
-    const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
 
     if (effectiveTargets.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
@@ -1084,11 +1084,11 @@ export default function TopicDetailPage() {
     if (draftHasRelationTarget && hasSecondaryRelationSelector) {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
-    const effectiveHasTargets = draftUnits.length > 0 || targetUnits.length > 0;
-    if (isAgreeDisagreeType || isSupplementType) return effectiveHasTargets;
+    const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
+    if (isAgreeDisagreeType || isSupplementType) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
-    return effectiveHasTargets && newMessageContent.trim().length > 0;
+    return hasTargetsAvailable && newMessageContent.trim().length > 0;
   })();
 
   // Dynamic label describing what the send button will do
@@ -1104,10 +1104,10 @@ export default function TopicDetailPage() {
       const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
       return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
     }
-    const effectiveHasTargets = draftUnits.length > 0 || targetUnits.length > 0;
+    const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     const usingDraft = draftUnits.length > 0;
     if (isAgreeDisagreeType || isSupplementType) {
-      if (!effectiveHasTargets) return "请在画布中选择目标消息";
+      if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       return newMessageContent.trim().length > 0
         ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
         : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
@@ -1115,7 +1115,7 @@ export default function TopicDetailPage() {
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
       return `建立「${typeName}」关系（来源集合 → 目标集合）`;
     }
-    if (!effectiveHasTargets) return "请在画布中选择目标消息";
+    if (!hasTargetsAvailable) return "请在画布中选择目标消息";
     if (newMessageContent.trim().length === 0) return "请输入消息内容（将作为来源）";
     return `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`;
   })();

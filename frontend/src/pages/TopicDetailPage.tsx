@@ -1276,24 +1276,24 @@ export default function TopicDetailPage() {
     // For CORRECT relations whose source/target are also relation messages, we recursively
     // resolve through the chain until we reach normal text messages.
     const effectiveStartIds = new Set<string>();
-    function collectNormalMsgsForRel(relId: string, seen: Set<string>): void {
+    function collectNormalMessagesForRelation(relId: string, seen: Set<string>): void {
       if (seen.has(relId)) return;
       seen.add(relId);
       for (const e of edges) {
         if (e.relationMessageId !== relId) continue;
         const mf = msgMap.get(e.from.messageId);
         if (mf?.kind === "normal") effectiveStartIds.add(e.from.messageId);
-        else if (mf?.kind === "relation") collectNormalMsgsForRel(e.from.messageId, seen);
+        else if (mf?.kind === "relation") collectNormalMessagesForRelation(e.from.messageId, seen);
         const mt = msgMap.get(e.to.messageId);
         if (mt?.kind === "normal") effectiveStartIds.add(e.to.messageId);
-        else if (mt?.kind === "relation") collectNormalMsgsForRel(e.to.messageId, seen);
+        else if (mt?.kind === "relation") collectNormalMessagesForRelation(e.to.messageId, seen);
       }
     }
     for (const id of startIds) {
       const m = msgMap.get(id);
       if (m && m.kind === "relation") {
         const sizeBefore = effectiveStartIds.size;
-        collectNormalMsgsForRel(id, new Set<string>());
+        collectNormalMessagesForRelation(id, new Set<string>());
         // Fallback: relation has no connected normal messages (e.g. pure-stance with anon source);
         // keep the relation message itself as BFS root so focus mode still shows something.
         if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);

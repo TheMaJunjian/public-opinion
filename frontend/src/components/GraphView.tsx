@@ -1591,7 +1591,7 @@ export default function GraphView(props: GraphViewProps) {
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
               {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
-              <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center"}}>
+              <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
                   {msg.kind!=="normal" && corrBadges.map((b) => (
@@ -1718,13 +1718,16 @@ export default function GraphView(props: GraphViewProps) {
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{
                 // Prefer newCorrInfo (this relation IS the replacement) over corrInfo (this relation was corrected)
-                const corrItem = newCorrInfo?.length ? { corrRelMsgId: newCorrInfo[0].corrRelMsgId } : corrInfo![0];
-                const isCorrSel=isRelWholeSel(corrItem.corrRelMsgId);
+                const corrRelMsgId = newCorrInfo?.length
+                  ? newCorrInfo[0].corrRelMsgId
+                  : corrInfo?.length ? corrInfo[0].corrRelMsgId : null;
+                if (!corrRelMsgId) return null;
+                const isCorrSel=isRelWholeSel(corrRelMsgId);
                 return (
-                  <div key={`corr-edge-${corrItem.corrRelMsgId}`}
-                    onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,corrItem.corrRelMsgId);}}
-                    onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,corrItem.corrRelMsgId);}}
-                    title={`更正关系：${corrItem.corrRelMsgId}；单击选中，双击查看历史`}
+                  <div key={`corr-edge-${corrRelMsgId}`}
+                    onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,corrRelMsgId);}}
+                    onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,corrRelMsgId);}}
+                    title={`更正关系：${corrRelMsgId}；单击选中，双击查看历史`}
                     style={{position:"absolute",left:2,top:"50%",transform:"translateY(-50%)",
                       width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
                       color:"#fff",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,

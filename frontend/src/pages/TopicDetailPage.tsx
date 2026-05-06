@@ -820,7 +820,6 @@ export default function TopicDetailPage() {
       return;
     }
 
-
     if (draftUnits.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isSupplement = relationType === "supplement";

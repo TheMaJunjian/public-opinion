@@ -912,8 +912,13 @@ export default function TopicDetailPage() {
       // CORRECT targeting a relation message with a secondary relation type:
       // Create a new relation of the secondary type (with the same endpoints as the old relation),
       // then create a CORRECT relation pointing from the new relation to the old relation.
-      if (relationType === "correct" && secondaryRelationType !== "none" && draftUnits.length === 1) {
-        const targetRelMsgId = draftUnits[0].messageId;
+      // A double-click on an edge label adds both a "whole" unit and one or more "edge" units for
+      // the same relation message, so we count unique relation-message IDs rather than raw units.
+      const relDraftMsgIds = Array.from(new Set(
+        draftUnits.filter(u => msgMap.get(u.messageId)?.kind === 'relation').map(u => u.messageId)
+      ));
+      if (relationType === "correct" && secondaryRelationType !== "none" && relDraftMsgIds.length === 1) {
+        const targetRelMsgId = relDraftMsgIds[0];
         const oldRelEdges = edges.filter(e => e.relationMessageId === targetRelMsgId);
         if (oldRelEdges.length === 0) {
           alert(`无法找到目标关系消息的边（ID：${targetRelMsgId}），无法创建更正关系`);
@@ -1823,19 +1828,22 @@ export default function TopicDetailPage() {
       const relType = relEdges[0]?.relationType ?? "";
 
       // CORRECT relation: side-by-side comparison with highlighting
-      if (relType === "correct" && targetMsgs.length > 0 && sourceMsg) {
+      if (relType === "correct" && targetMsgs.length > 0) {
         const origMsg = targetMsgs[0];
 
-        // Relation-message correction: show structured relation summary instead of text diff
-        if (origMsg.kind === "relation" && sourceMsg.kind === "relation") {
+        // Relation-message correction: show structured relation summary instead of text diff.
+        // sourceMsg may be null when secondary relation is "none" (no replacement relation).
+        if (origMsg.kind === "relation") {
           // Edges belonging to the old relation (not the CORRECT edge itself)
           const oldRelEdges = edges.filter(e => e.relationMessageId === origMsg.id);
-          // Edges belonging to the new relation, excluding the CORRECT edge
-          const newRelEdges = edges.filter(e => e.relationMessageId === sourceMsg.id && e.relationType !== 'correct');
+          // Edges belonging to the new relation, excluding the CORRECT edge (empty when no replacement)
+          const newRelEdges = sourceMsg
+            ? edges.filter(e => e.relationMessageId === sourceMsg.id && e.relationType !== 'correct')
+            : [];
           const oldType = oldRelEdges[0]?.relationType ?? "";
           const newType = newRelEdges[0]?.relationType ?? "";
           const oldTypeName = relationTypeName(oldType as RelationType);
-          const newTypeName = relationTypeName(newType as RelationType);
+          const newTypeName = newType ? relationTypeName(newType as RelationType) : "";
           const oldSrcRaw = oldRelEdges[0]?.from.messageId ?? "";
           const newSrcRaw = newRelEdges[0]?.from.messageId ?? "";
           const oldSrc = oldSrcRaw.startsWith('anon:') ? null : oldSrcRaw;
@@ -1869,18 +1877,20 @@ export default function TopicDetailPage() {
                       </span>
                     </div>
                   </div>
-                  {/* Right: new relation */}
+                  {/* Right: new relation — blank when secondary is "none" (no replacement relation) */}
                   <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #255",background:"#14201e",padding:10}}>
                     <div style={{fontSize:11,marginBottom:6}}>
                       <span style={{fontWeight:600}}>更正后</span>
-                      <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>
+                      {sourceMsg && <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>}
                     </div>
-                    <div style={{fontSize:13,fontFamily:"monospace",lineHeight:1.8}}>
-                      <span style={{color:"#44ddaa",fontWeight:700}}>{newTypeName}</span>
-                      <span style={{color:"#ddd"}}>
-                        {newSrc ? `: ${newSrc} → ${newTargetStr}` : `: ${newTargetStr}`}
-                      </span>
-                    </div>
+                    {sourceMsg && (
+                      <div style={{fontSize:13,fontFamily:"monospace",lineHeight:1.8}}>
+                        <span style={{color:"#44ddaa",fontWeight:700}}>{newTypeName}</span>
+                        <span style={{color:"#ddd"}}>
+                          {newSrc ? `: ${newSrc} → ${newTargetStr}` : `: ${newTargetStr}`}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div style={{marginTop:12,textAlign:"right"}}>
@@ -1894,6 +1904,8 @@ export default function TopicDetailPage() {
           );
         }
 
+        // Text correction requires a real source message
+        if (sourceMsg) {
         // Prefer precise position-based highlighting for single-fragment corrections:
         // The correction edge carries the exact text selection (start + len) in the
         // original message, so we can pinpoint the changed region without the LCS
@@ -1977,6 +1989,7 @@ export default function TopicDetailPage() {
             </div>
           </div>
         );
+        } // end if (sourceMsg)
       }
 
       return (

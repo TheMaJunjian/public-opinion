@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType,
@@ -363,6 +363,28 @@ export default function TopicDetailPage() {
   const currentFocusIds = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].ids : null;
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
 
+  // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
+  // Used to skip corrected fragments when double-clicking to select all fragments.
+  const correctedEdgeMap = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
+
+  // TAG-only source messages in the linear list view: messages used exclusively as old-style
+  // TAG relation sources should not appear as list items (their label is shown on the tag badge).
+  const tagSourceIdsForList = useMemo(() => {
+    const isTagSource = new Set<string>();
+    const shouldKeepVisible = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+        isTagSource.add(e.from.messageId);
+      }
+      if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
+      if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+        shouldKeepVisible.add(e.from.messageId);
+      }
+    }
+    for (const id of shouldKeepVisible) isTagSource.delete(id);
+    return isTagSource;
+  }, [edges, msgMap]);
+
   const voteStats = useMemo(() => {
     const res: Record<string, { agreeCount: number; disagreeCount: number; agreeKey: string; disagreeKey: string }> = {};
     for (const e of edges) {
@@ -660,7 +682,8 @@ export default function TopicDetailPage() {
   }
 
   function relationAllFragmentsSelected(relationMessageId: string, units: UnitSelection[]) {
-    const edgeIds = getEdgeIdsForRelation(relationMessageId);
+    const correctedIds = correctedEdgeMap.get(relationMessageId);
+    const edgeIds = getEdgeIdsForRelation(relationMessageId).filter(id => !correctedIds?.has(id));
     if (edgeIds.length === 0) return units.some(u => u.messageId === relationMessageId && u.selection.kind === "whole");
     const have = new Set(units.filter(u => u.messageId === relationMessageId && u.selection.kind === "edge").map(u => (u.selection as any).edgeId));
     return edgeIds.every(id => have.has(id));
@@ -694,7 +717,8 @@ export default function TopicDetailPage() {
     e.stopPropagation();
     setLastClickedMessageId(relationMessageId);
     const wholeUnit: UnitSelection = { messageId: relationMessageId, selection: { kind: "whole" } };
-    const edgeIds = getEdgeIdsForRelation(relationMessageId);
+    const correctedIds = correctedEdgeMap.get(relationMessageId);
+    const edgeIds = getEdgeIdsForRelation(relationMessageId).filter(id => !correctedIds?.has(id));
     const edgeUnits = edgeIds.map(id => ({ messageId: relationMessageId, selection: { kind: "edge", edgeId: id } as Selection }));
     setDraftUnits(prev => {
       const hasWhole = prev.some(u => unitEquals(u, wholeUnit));
@@ -805,6 +829,23 @@ export default function TopicDetailPage() {
           newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       }
+    } else if (relationType === "tag") {
+      // TAG: user-to-message relation with no source message; label stored as tagLabel.
+      // Source units are intentionally ignored — TAG never uses a source text message.
+      const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
+      const tagLabel = label;
+      const typeName = relationTypeName("tag");
+      for (const targetMid of uniqueTargetMids) {
+        try {
+          const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
+          const backendRel = await api.createRelation(topicId, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
+          const relId = backendRel.id;
+          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${targetMid}` };
+          setMessages(prev => [...prev, relMsg]);
+          const anonSrcId = `anon:${relId}`;
+          newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, tagLabel, relId));
+        } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+      }
     } else {
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
@@ -887,16 +928,23 @@ export default function TopicDetailPage() {
         }
         setEdges(prev => [...prev, ...newEdgesList]);
       } else {
-        // Existing tag label selected: create TAG relation with that label as source-message content
+        // Existing tag label selected: create TAG relation directly without a source message.
+        // The label text is stored in tagLabel on the relation itself.
         const tagLabel = secType;
-        try {
-          const msg = await handleSendMessageOnly(tagLabel);
-          if (msg) {
-            const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-            const targets: UnitSelection[] = uniqueTargetMids.map(mid => ({ messageId: mid, selection: { kind: "whole" as const } }));
-            await handleCreateRelationWithSourcesAndTargets({ sources, targets, label: "" });
-          }
-        } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+        const typeName = relationTypeName("tag");
+        const newTagEdges: DemoEdge[] = [];
+        for (const tgtMid of uniqueTargetMids) {
+          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
+          try {
+            const backendRel = await api.createRelation(topicId!, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
+            const relId = backendRel.id;
+            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${tgtMid}` };
+            setMessages(prev => [...prev, relMsg]);
+            const anonSrcId = `anon:${relId}`;
+            newTagEdges.push({ id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge);
+          } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+        }
+        setEdges(prev => [...prev, ...newTagEdges]);
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setRelationType(null); setSecondaryRelationType("none");
@@ -1114,6 +1162,31 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // TAG relation: do NOT create a text message. Store the label as tagLabel on the relation,
+    // making it a pure user-to-message relation without a source text message.
+    if (relationType === "tag") {
+      const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
+      const tagLabel = text;
+      const typeName = relationTypeName("tag");
+      const newTagEdges: DemoEdge[] = [];
+      for (const tgtMid of uniqueTargetMids) {
+        const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
+        try {
+          const backendRel = await api.createRelation(topicId!, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
+          const relId = backendRel.id;
+          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${tgtMid}` };
+          setMessages(prev => [...prev, relMsg]);
+          const anonSrcId = `anon:${relId}`;
+          newTagEdges.push({ id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge);
+        } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+      }
+      setEdges(prev => [...prev, ...newTagEdges]);
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
@@ -1277,15 +1350,15 @@ export default function TopicDetailPage() {
     for (const mid of targetMids) {
       for (const e of edges) {
         if (e.relationType === 'tag' && e.to.messageId === mid && e.to.selection.kind === 'whole') {
-          const fromMsg = msgMap.get(e.from.messageId);
-          if (fromMsg?.kind === 'normal' && fromMsg.content) {
-            existingTagLabels.add(fromMsg.content.slice(0, MAX_TAG_LABEL_DISPLAY_LENGTH));
-          }
+          // Use relationLabel which holds the actual tag text (works for both new-style tags
+          // stored in tagLabel and legacy tags read from source message content).
+          const label = (e.relationLabel && e.relationLabel !== 'tag') ? e.relationLabel : null;
+          if (label) existingTagLabels.add(label.slice(0, MAX_TAG_LABEL_DISPLAY_LENGTH));
         }
       }
     }
     return ['none', 'recommend', 'archive', ...Array.from(existingTagLabels)];
-  }, [relationType, draftUnits, targetUnits, edges, msgMap]);
+  }, [relationType, draftUnits, targetUnits, edges]);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
@@ -1587,7 +1660,7 @@ export default function TopicDetailPage() {
           <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}>
             {viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {messagesToRender.map(msg => {
+                {messagesToRender.filter(msg => !tagSourceIdsForList.has(msg.id)).map(msg => {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
                   const isActiveText = activeTextSelectId === msg.id;
                   return (

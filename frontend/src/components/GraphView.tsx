@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec } from '../types';
+import { computeCorrectedEdgeMap } from '../utils/modelBridge';
 import type { PresentationKind } from '../types';
 
 // ========================= Layout types =========================
@@ -792,8 +793,12 @@ export default function GraphView(props: GraphViewProps) {
   const textRefs = useRef<Record<string,SVGTextElement|null>>({});
 
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id,m])), [messages]);
+  // Per-edge corrected index: map from old relation-message ID → set of edge IDs that are
+  // individually corrected (have a replacement edge in the new relation).
+  // Used for fragment-level correction: only the matched fragments are hidden.
+  const correctedEdgeIdsByRelMsg = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
   // TAG-only source messages: normal messages used exclusively as TAG relation sources.
-  // They should not appear as graph cards — their label text is accessible via msgMap.
+  // They should not appear as graph cards — their label text is accessible via e.relationLabel.
   const tagSourceIds = useMemo(() => {
     const isTagSource = new Set<string>();
     const shouldKeepVisible = new Set<string>();
@@ -831,17 +836,20 @@ export default function GraphView(props: GraphViewProps) {
   const [decorationsByMsgState, setDecorationsByMsgState] = useState<Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>|null>(null);
   // TAG decorations: aggregated by label text — map from messageId → list of {label, relMsgIds, rect, relAgreeCount, relDisagreeCount, relAgreeMsgIds, relDisagreeMsgIds}
   const [tagDecorationsByMsg, setTagDecorationsByMsg] = useState<Record<string,{label:string;relMsgIds:string[];rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>>({});
-  // SUPPLEMENT frames: list of {targetId, sourceId, frame rect, relAgreeCount, relDisagreeCount, relAgreeMsgIds, relDisagreeMsgIds}
-  const [supplementFrames, setSupplementFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
+  // SUPPLEMENT frames: list of {targetId, sourceId, frame rect, isBlankCorrected, relAgreeCount, ...}
+  // isBlankCorrected: true when the supplement is targeted by a CORRECT with no replacement (anon source) —
+  // the SVG frame border is hidden but the correction badge remains visible.
+  const [supplementFrames, setSupplementFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // GROUP frames: frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY) — same visual structure as supplement frames
   // relKind field distinguishes supplement-frame / frame-group / replace-overlay for styling
-  const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
+  // isBlankCorrected: same semantics as for supplementFrames above.
+  const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
   const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
   const [relDecByRelMsgState, setRelDecByRelMsgState] = useState<Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>>(new Map());
   // TAG relations targeting relation messages — for rendering next to edge labels / supplement frames
-  const [tagsByRelMsgState, setTagsByRelMsgState] = useState<Map<string,Array<{fromMsgId:string;relMsgId:string}>>>(new Map());
+  const [tagsByRelMsgState, setTagsByRelMsgState] = useState<Map<string,Array<{label:string;relMsgId:string}>>>(new Map());
 
   const canvasWidth = GRID_LEFT + (maxCol+1)*CARD_W + maxCol*COL_GAP + CANVAS_RIGHT_PAD;
   const edgesByRelMsg = useMemo(() => {
@@ -1080,8 +1088,11 @@ export default function GraphView(props: GraphViewProps) {
       if (e.to.selection.kind!=="whole") continue;
       const mid=e.to.messageId;
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
-      const fromMsg=msgMap.get(e.from.messageId);
-      const label=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
+      // Use e.relationLabel which carries the actual tag text (set in modelBridge for new-style tags,
+      // or derived from source message content for legacy tags).
+      const label=(e.relationLabel && e.relationLabel !== 'tag')
+        ? e.relationLabel.slice(0,TAG_MAX_LABEL_CHARS)
+        : (msgMap.get(e.from.messageId)?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注");
       if (!newTagDecorationsByMsg[mid]) newTagDecorationsByMsg[mid]=[];
       // Find existing group for this label (aggregate same-text tags)
       const existing=newTagDecorationsByMsg[mid].find(g=>g.label===label);
@@ -1102,16 +1113,16 @@ export default function GraphView(props: GraphViewProps) {
 
     // Compute SUPPLEMENT frames — one frame per relation message (relMsgId), wrapping all target
     // messages and the source message (if any) within a single border frame.
-    const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
+    const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
     // Compute GROUP frames — frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY).
     // Same structure as supplement frames; relKind/relLabel/relColor distinguish them for styling.
     // Note: CORRECT uses correction-badge kind (not replace-overlay) — no frame, badge only.
-    const newGroupFrames: {targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
+    const newGroupFrames: {targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
 
     // Generic frame computation — shared logic for supplement, frame-group, replace-overlay.
     function computeFramesForRelType(
       filterFn: (relType: string) => boolean,
-      appendFn: (f: {targetId:string;sourceId:string;relMsgId:string;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}) => void
+      appendFn: (f: {targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}) => void
     ) {
       const frameEdgesByRelMsg = new Map<string, DemoEdge[]>();
       for (const e of edges) {
@@ -1123,9 +1134,11 @@ export default function GraphView(props: GraphViewProps) {
       }
       for (const [relMsgId, frameEdges] of frameEdgesByRelMsg) {
         if (frameEdges.length === 0) continue;
-        // Skip frames for relation messages that have been replaced by a correction,
-        // or blank-corrected (CORRECT with no replacement, secondary="none").
-        if (correctedTargetMsgIds.has(relMsgId) || anonCorrectedRelMsgIds.has(relMsgId)) continue;
+        // Skip frames replaced by a non-blank correction (source is a real new relation).
+        // Blank-corrected frames (CORRECT with anon source / secondary="none") are included
+        // but marked so their SVG border is hidden while the correction badge remains visible.
+        if (correctedTargetMsgIds.has(relMsgId)) continue;
+        const isBlankCorrected = anonCorrectedRelMsgIds.has(relMsgId);
         const relType = frameEdges[0].relationType;
         const spec = getPresentationSpec(relType);
         const sourceId = frameEdges[0].from.messageId;
@@ -1152,11 +1165,11 @@ export default function GraphView(props: GraphViewProps) {
           width: maxX - minX + SUPP_FRAME_PAD * 2, height: maxY - minY + SUPP_FRAME_PAD * 2,
         };
         const targetId = frameEdges[0].to.messageId;
-        appendFn({ targetId, sourceId, relMsgId, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[] });
+        appendFn({ targetId, sourceId, relMsgId, isBlankCorrected, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[] });
       }
     }
 
-    computeFramesForRelType(isSuppFrameRel, f => newSupplementFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
+    computeFramesForRelType(isSuppFrameRel, f => newSupplementFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
     computeFramesForRelType(t => !isSuppFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
 
     // Compute INLINE BADGES — RECOMMEND / ARCHIVE: small badge anchored to target message card
@@ -1216,14 +1229,17 @@ export default function GraphView(props: GraphViewProps) {
     setInlineBadgesByMsg(newInlineBadgesByMsg);
 
     // Collect TAG relations targeting relation messages (for display next to edge labels / frames)
-    const newTagsByRelMsg = new Map<string,Array<{fromMsgId:string;relMsgId:string}>>();
+    const newTagsByRelMsg = new Map<string,Array<{label:string;relMsgId:string}>>();
     for (const e of edges) {
       if (e.relationType!=="tag") continue;
       if (e.to.selection.kind!=="whole") continue;
       const toId=e.to.messageId;
       if (msgMap.get(toId)?.kind !== "relation") continue;
+      const label=(e.relationLabel && e.relationLabel !== 'tag')
+        ? e.relationLabel.slice(0,TAG_MAX_LABEL_CHARS)
+        : (msgMap.get(e.from.messageId)?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注");
       const arr=newTagsByRelMsg.get(toId)??[];
-      arr.push({fromMsgId:e.from.messageId,relMsgId:e.relationMessageId});
+      arr.push({label,relMsgId:e.relationMessageId});
       newTagsByRelMsg.set(toId,arr);
     }
     setTagsByRelMsgState(newTagsByRelMsg);
@@ -1352,9 +1368,9 @@ export default function GraphView(props: GraphViewProps) {
       // frame-group, replace-overlay, and correction-badge relations are rendered as frames/badges, not arrows
       const eSpec = getPresentationSpec(e.relationType);
       if (eSpec.kind === 'frame-group' || eSpec.kind === 'replace-overlay' || eSpec.kind === 'correction-badge') continue;
-      // Skip edges for relation messages that have been replaced by a correction:
-      // the old relation is hidden and its edges should not be rendered as edge labels.
-      if (correctedTargetMsgIds.has(e.relationMessageId)) continue;
+      // Skip edges for relation messages that have been corrected at the fragment level:
+      // only the individually corrected edge fragments are hidden; uncorrected fragments remain visible.
+      if (correctedEdgeIdsByRelMsg.get(e.relationMessageId)?.has(e.id)) continue;
       if (e.relationType==="agree"||e.relationType==="disagree") {
         if (e.from.messageId.startsWith("anon:")) continue; // pure-stance, decoration only
         // Has source message: render directed arrow.
@@ -1559,7 +1575,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedTargetMsgIds]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -1706,8 +1722,9 @@ export default function GraphView(props: GraphViewProps) {
           Gate on either having edges or frames so frames render even with no other edges. */}
       {(positionedEdges.length>0||supplementFrames.length>0||groupFrames.length>0)&&(
         <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:3,pointerEvents:"none"}}>
-          {/* SUPPLEMENT frames — stroke and fill reflect selection state */}
+          {/* SUPPLEMENT frames — stroke and fill reflect selection state; hidden when blank-corrected */}
           {supplementFrames.map(sf=>{
+            if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
               <rect key={`supp-frame-${sf.relMsgId}`} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
@@ -1717,8 +1734,9 @@ export default function GraphView(props: GraphViewProps) {
                 strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
             );
           })}
-          {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY) */}
+          {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY); hidden when blank-corrected */}
           {groupFrames.map(gf=>{
+            if (gf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(gf.relMsgId);
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
             const strokeColor = isWhole
@@ -1854,12 +1872,10 @@ export default function GraphView(props: GraphViewProps) {
           }
           // TAG badges on this relation message — aggregated by label text
           const tagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
-          for (const {fromMsgId,relMsgId:tagRelMsgId} of tagItems) {
-            const fromMsg=msgMap.get(fromMsgId);
-            const label=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
-            const existing=tagGroupMap.get(label);
+          for (const {label:itemLabel,relMsgId:tagRelMsgId} of tagItems) {
+            const existing=tagGroupMap.get(itemLabel);
             if (existing) { existing.relMsgIds.push(tagRelMsgId); }
-            else { tagGroupMap.set(label,{label,relMsgIds:[tagRelMsgId]}); }
+            else { tagGroupMap.set(itemLabel,{label:itemLabel,relMsgIds:[tagRelMsgId]}); }
           }
           for (const {label:tagLabel,relMsgIds} of tagGroupMap.values()) {
             const count=relMsgIds.length;
@@ -1945,7 +1961,9 @@ export default function GraphView(props: GraphViewProps) {
           one strip per side.  Each strip is SUPP_FRAME_PAD wide (half inside, half outside the rect),
           so it exactly covers the padding zone between the visible SVG border and the message cards.
           Supplement relation messages are treated as first-class messages: single-click toggles whole
-          selection (like a normal message card), double-click uses the message double-click handler. */}
+          selection (like a normal message card), double-click uses the message double-click handler.
+          When isBlankCorrected, the frame border is invisible so border strips are omitted; only the
+          correction badge is rendered so users can interact with the correction. */}
       {supplementFrames.map(sf=>{
         const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageClick(e,sf.relMsgId);};
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageDoubleClick(e,sf.relMsgId);};
@@ -1956,18 +1974,21 @@ export default function GraphView(props: GraphViewProps) {
         const sfCorrInfo=correctedRelMsgTargets.get(sf.relMsgId);
         return (
           <React.Fragment key={`supp-hit-${sf.relMsgId}`}>
-            {/* Top strip — full width including corners */}
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
-            {/* Bottom strip — full width including corners */}
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
-            {/* Left strip — between top and bottom strips */}
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
-            {/* Right strip — between top and bottom strips */}
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+            {/* Border strips — omitted when blank-corrected (no visible frame border) */}
+            {!sf.isBlankCorrected&&<>
+              {/* Top strip — full width including corners */}
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
+              {/* Bottom strip — full width including corners */}
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
+              {/* Left strip — between top and bottom strips */}
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+              {/* Right strip — between top and bottom strips */}
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+            </>}
             {/* Correction badge — embedded in frame top border when this supplement is a CORRECT target */}
             {sfCorrInfo&&(()=>{
               const ci=sfCorrInfo[0];
@@ -2003,14 +2024,17 @@ export default function GraphView(props: GraphViewProps) {
         const gfCorrInfo=correctedRelMsgTargets.get(gf.relMsgId);
         return (
           <React.Fragment key={`gf-hit-${gf.relMsgId}`}>
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
-            <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
-              style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+            {/* Border strips — omitted when blank-corrected (no visible frame border) */}
+            {!gf.isBlankCorrected&&<>
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+                style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
+            </>}
             {/* Correction badge — embedded in frame top border when this group frame is a CORRECT target */}
             {gfCorrInfo&&(()=>{
               const ci=gfCorrInfo[0];
@@ -2074,12 +2098,10 @@ export default function GraphView(props: GraphViewProps) {
         }
         // TAG badges on this supplement relation message — aggregated by label text
         const sfTagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
-        for (const {fromMsgId,relMsgId:tagRelMsgId} of sfTagItems) {
-          const fromMsg=msgMap.get(fromMsgId);
-          const label=fromMsg?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注";
-          const existing=sfTagGroupMap.get(label);
+        for (const {label:itemLabel,relMsgId:tagRelMsgId} of sfTagItems) {
+          const existing=sfTagGroupMap.get(itemLabel);
           if (existing) { existing.relMsgIds.push(tagRelMsgId); }
-          else { sfTagGroupMap.set(label,{label,relMsgIds:[tagRelMsgId]}); }
+          else { sfTagGroupMap.set(itemLabel,{label:itemLabel,relMsgIds:[tagRelMsgId]}); }
         }
         for (const {label:tagLabel,relMsgIds} of sfTagGroupMap.values()) {
           const count=relMsgIds.length;

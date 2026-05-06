@@ -92,6 +92,8 @@ export function createRelation(topicId: string, data: {
   relationType: string;
   sourceMessageId?: string | null;
   targetRefs: import('../types').TargetRef[];
+  /** Label text for TAG relations (replaces source message). */
+  tagLabel?: string;
 }) {
   return request<import('../types').Relation>(`/topics/${topicId}/relations`, {
     method: 'POST',

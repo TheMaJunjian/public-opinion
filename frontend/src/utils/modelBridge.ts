@@ -100,16 +100,30 @@ export function convertMessagesToDemoModel(
     const relMsgId = rel.id;
     const relType = rel.relationType.toLowerCase() as RelationType;
 
+    // Resolve the effective tag label for TAG relations:
+    // prefer the dedicated tagLabel field; fall back to the source message's content
+    // (for tag relations created with the old behaviour that used a source text message).
+    const tagLabel: string | undefined =
+      relType === 'tag'
+        ? (rel.tagLabel ?? (rel.sourceMessageId ? (msgContentMap.get(rel.sourceMessageId) ?? undefined) : undefined))
+        : undefined;
+
     if (!seenRelMsgIds.has(relMsgId)) {
       seenRelMsgIds.add(relMsgId);
       const typeName = relationTypeName(rel.relationType);
+      let content: string;
+      if (relType === 'tag' && tagLabel) {
+        content = `建立${typeName}关系「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
+      } else if (rel.sourceMessageId) {
+        content = `建立${typeName}关系\n来源：${rel.sourceMessageId}\n目标：${targetRefsSummary(rel.targetRefs)}`;
+      } else {
+        content = `建立${typeName}关系（无来源消息）\n目标：${targetRefsSummary(rel.targetRefs)}`;
+      }
       demoMessages.push({
         id: relMsgId,
         author: rel.createdBy.username,
         createdAt: rel.createdAt,
-        content: rel.sourceMessageId
-          ? `建立${typeName}关系\n来源：${rel.sourceMessageId}\n目标：${targetRefsSummary(rel.targetRefs)}`
-          : `建立${typeName}关系（无来源消息）\n目标：${targetRefsSummary(rel.targetRefs)}`,
+        content,
         kind: "relation",
       });
     }
@@ -122,6 +136,11 @@ export function convertMessagesToDemoModel(
           ? rel.sourceMessageId
           : rel.sourceMessageId)
       : `anon:${rel.id}`;
+
+    // For TAG relations, relationLabel carries the human-readable tag label text
+    // rather than the bare type string, so all consumers can use it directly.
+    const relationLabel: string =
+      relType === 'tag' ? (tagLabel ?? getPresentationSpec('tag').label) : relType;
 
     // Deduplicate relation-type targetRefs by relationId to prevent duplicate arrows.
     const seenRelationTargetIds = new Set<string>();
@@ -152,7 +171,7 @@ export function convertMessagesToDemoModel(
         relationType: relType,
         from: { messageId: fromMessageId, selection: { kind: "whole" } },
         to: toUnit,
-        relationLabel: relType,
+        relationLabel,
       });
     });
   }
@@ -186,5 +205,55 @@ export function unitSelectionToTargetRef(
   }
   // edge selection always targets a relation message's label/edge part
   return { kind: 'relation', relationId: unit.messageId, part: 'label' };
+}
+
+/**
+ * Build a map from old relation-message ID → set of edge IDs that have been
+ * corrected by a replacement relation (CORRECT with a non-anon source).
+ *
+ * Each CORRECT edge whose source is a real relation message (not anon:…) represents
+ * a fragment-level or whole-relation correction.  The function matches each edge of
+ * the new (replacement) relation to the corresponding edge of the old relation by
+ * comparing their `to.messageId`, then records the old edge's ID as corrected.
+ *
+ * Used to hide only the corrected fragments while leaving uncorrected fragments of
+ * the same relation message visible in the graph view.
+ */
+export function computeCorrectedEdgeMap(edges: DemoEdge[]): Map<string, Set<string>> {
+  const edgesByRelMsg = new Map<string, DemoEdge[]>();
+  for (const e of edges) {
+    const arr = edgesByRelMsg.get(e.relationMessageId) ?? [];
+    arr.push(e);
+    edgesByRelMsg.set(e.relationMessageId, arr);
+  }
+
+  const result = new Map<string, Set<string>>();
+  for (const e of edges) {
+    if (e.relationType !== 'correct') continue;
+    if (e.from.messageId.startsWith('anon:')) continue;
+    // e.from.messageId = new (replacement) relation message
+    // e.to.messageId   = old (corrected) relation message
+    const newRelMsgId = e.from.messageId;
+    const oldRelMsgId = e.to.messageId;
+    const newEdges = edgesByRelMsg.get(newRelMsgId) ?? [];
+    const oldEdges = edgesByRelMsg.get(oldRelMsgId) ?? [];
+    // Index old edges by their target message ID for O(1) lookup.
+    const oldEdgesByTarget = new Map<string, string[]>();
+    for (const oe of oldEdges) {
+      const arr = oldEdgesByTarget.get(oe.to.messageId) ?? [];
+      arr.push(oe.id);
+      oldEdgesByTarget.set(oe.to.messageId, arr);
+    }
+    // For each new (replacement) edge, mark the matching old edge(s) as corrected.
+    for (const ne of newEdges) {
+      const matchingOldIds = oldEdgesByTarget.get(ne.to.messageId) ?? [];
+      for (const oldId of matchingOldIds) {
+        const set = result.get(oldRelMsgId) ?? new Set<string>();
+        set.add(oldId);
+        result.set(oldRelMsgId, set);
+      }
+    }
+  }
+  return result;
 }
 

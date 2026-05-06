@@ -56,9 +56,33 @@ function describeUnit(u: UnitSelection): string {
   return `消息 ${u.messageId} 的片段(start=${s.start}, len=${s.len})「${s.text}」`;
 }
 
+import type { TargetRef } from '../types';
+
 let _nextIdCounter = 1;
 function nextId(prefix: string): string {
   return `${prefix}-local-${Date.now()}-${_nextIdCounter++}`;
+}
+
+/** Extract a short display ID from a TargetRef for use in relation message content strings. */
+function targetRefDisplayId(r: TargetRef): string {
+  if (r.kind === 'message' || r.kind === 'text-fragment') return r.messageId;
+  return r.relationId;
+}
+
+/** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
+function uniqueTargetRefsFromEdges(
+  relEdges: import('../utils/modelBridge').DemoEdge[],
+  msgMap: Map<string, DemoMessage>
+): TargetRef[] {
+  const seen = new Set<string>();
+  const refs: TargetRef[] = [];
+  for (const e of relEdges) {
+    const key = e.to.messageId + '::' + e.to.selection.kind;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push(unitSelectionToTargetRef(e.to, msgMap));
+  }
+  return refs;
 }
 
 // ========================= Correction content generation =========================
@@ -814,7 +838,7 @@ export default function TopicDetailPage() {
         const targetRelMsgId = draftUnits[0].messageId;
         const oldRelEdges = edges.filter(e => e.relationMessageId === targetRelMsgId);
         if (oldRelEdges.length === 0) {
-          alert("无法找到目标关系消息的边");
+          alert("无法找到目标关系消息的边，无法创建更正关系");
           return;
         }
         const secType = secondaryRelationType as RelationType;
@@ -822,20 +846,18 @@ export default function TopicDetailPage() {
         const oldSourceId = oldRelEdges[0].from.messageId;
         const newSourceId = oldSourceId.startsWith('anon:') ? null : oldSourceId;
         // Collect all unique target refs from the old relation's edges
-        const seenTargetKeys = new Set<string>();
-        const newTargetRefs = oldRelEdges
-          .filter(e => { const k = e.to.messageId + '::' + e.to.selection.kind; if (seenTargetKeys.has(k)) return false; seenTargetKeys.add(k); return true; })
-          .map(e => unitSelectionToTargetRef(e.to, msgMap));
+        const newTargetRefs = uniqueTargetRefsFromEdges(oldRelEdges, msgMap);
         const newEdgesList: DemoEdge[] = [];
         try {
           // Step 1: Create the new relation of secondary type with the same endpoints
           const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
           const newRelId = newRelBackend.id;
+          const targetDisplayIds = newTargetRefs.map(targetRefDisplayId).join(",");
           const newRelMsg: DemoMessage = {
             id: newRelId, author: newRelBackend.createdBy.username, createdAt: newRelBackend.createdAt, kind: "relation",
             content: newSourceId
-              ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${newTargetRefs.map(r => r.kind === 'message' ? r.messageId : r.kind === 'relation' ? r.relationId : r.messageId).join(",")}`
-              : `建立${secTypeName}关系（无来源消息）\n目标：${newTargetRefs.map(r => r.kind === 'message' ? r.messageId : r.kind === 'relation' ? r.relationId : r.messageId).join(",")}`,
+              ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${targetDisplayIds}`
+              : `建立${secTypeName}关系（无来源消息）\n目标：${targetDisplayIds}`,
           };
           setMessages(prev => [...prev, newRelMsg]);
           const newFromId = newSourceId ?? `anon:${newRelId}`;

@@ -1790,9 +1790,14 @@ export default function GraphView(props: GraphViewProps) {
           // A correction badge is shown either when this relation's edge label has been corrected
           // (correctedRelMsgTargets: R1 is corrected) OR when this relation IS the replacement
           // (correctionSrcByNewRelMsg: R2 replaced R1).
+          // For corrInfo: only show the badge if NO specific edge fragments were individually corrected
+          // (i.e., the correction is whole-relation, not partial/fragment-level).  When specific edges
+          // are marked in correctedEdgeIdsByRelMsg, those edges are already hidden from positionedEdges;
+          // the remaining edges are uncorrected fragments and must NOT show the correction badge.
           const corrInfo=correctedRelMsgTargets.get(relId);
           const newCorrInfo=correctionSrcByNewRelMsg.get(relId);
-          const showCorrBadge=(!!corrInfo?.length||!!newCorrInfo?.length)&&!corrRendered.has(relId);
+          const hasCorrectedFragments=(correctedEdgeIdsByRelMsg.get(relId)?.size??0)>0;
+          const showCorrBadge=((!!corrInfo?.length&&!hasCorrectedFragments)||!!newCorrInfo?.length)&&!corrRendered.has(relId);
           if (showCorrBadge) corrRendered.add(relId);
           const padX=8,padY=6;
           const extraLeft=showCorrBadge?CORR_BADGE_W_EDGE+4:0;

@@ -19,6 +19,17 @@ const ALL_RELATION_TYPES: RelationType[] = [
   // "recommend" and "archive" are now accessible via TAG's secondary relation selector
 ];
 
+/** Max characters to display for an existing tag label in the secondary relation selector. */
+const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
+
+/** Return the display label for a secondary relation option button. */
+function secondaryRelationLabel(t: string): string {
+  if (t === "none") return "无";
+  if (t === "recommend" || t === "archive") return relationTypeName(t);
+  if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
+  return t; // existing tag label text
+}
+
 function selKey(u: UnitSelection): string {
   const s = u.selection;
   if (s.kind === "whole") return `${u.messageId}::whole`;
@@ -878,12 +889,14 @@ export default function TopicDetailPage() {
       } else {
         // Existing tag label selected: create TAG relation with that label as source-message content
         const tagLabel = secType;
-        const msg = await handleSendMessageOnly(tagLabel);
-        if (msg) {
-          const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-          const targets: UnitSelection[] = uniqueTargetMids.map(mid => ({ messageId: mid, selection: { kind: "whole" as const } }));
-          await handleCreateRelationWithSourcesAndTargets({ sources, targets, label: "" });
-        }
+        try {
+          const msg = await handleSendMessageOnly(tagLabel);
+          if (msg) {
+            const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
+            const targets: UnitSelection[] = uniqueTargetMids.map(mid => ({ messageId: mid, selection: { kind: "whole" as const } }));
+            await handleCreateRelationWithSourcesAndTargets({ sources, targets, label: "" });
+          }
+        } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setRelationType(null); setSecondaryRelationType("none");
@@ -1214,7 +1227,7 @@ export default function TopicDetailPage() {
         if (e.relationType === 'tag' && e.to.messageId === mid && e.to.selection.kind === 'whole') {
           const fromMsg = msgMap.get(e.from.messageId);
           if (fromMsg?.kind === 'normal' && fromMsg.content) {
-            existingTagLabels.add(fromMsg.content.slice(0, 20));
+            existingTagLabels.add(fromMsg.content.slice(0, MAX_TAG_LABEL_DISPLAY_LENGTH));
           }
         }
       }
@@ -1666,7 +1679,7 @@ export default function TopicDetailPage() {
                     {opts.map(t => (
                       <button key={t} onClick={() => setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t)}
                         style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
-                        {t === "none" ? "无" : (t === "recommend" || t === "archive") ? relationTypeName(t) : (ALL_RELATION_TYPES.includes(t as RelationType) ? relationTypeName(t as RelationType) : t)}
+                        {secondaryRelationLabel(t)}
                       </button>
                     ))}
                   </div>

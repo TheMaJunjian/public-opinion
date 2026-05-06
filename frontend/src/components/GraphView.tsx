@@ -1123,6 +1123,8 @@ export default function GraphView(props: GraphViewProps) {
       }
       for (const [relMsgId, frameEdges] of frameEdgesByRelMsg) {
         if (frameEdges.length === 0) continue;
+        // Skip frames for relation messages that have been replaced by a correction.
+        if (correctedTargetMsgIds.has(relMsgId)) continue;
         const relType = frameEdges[0].relationType;
         const spec = getPresentationSpec(relType);
         const sourceId = frameEdges[0].from.messageId;

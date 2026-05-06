@@ -1217,7 +1217,7 @@ export default function TopicDetailPage() {
     // and therefore have identical relationType. Using the first edge is sufficient.
     const targetRelType = relEdgesForTarget[0].relationType;
     const targetSpec = getPresentationSpec(targetRelType);
-    const sameKindTypes = ALL_RELATION_TYPES.filter(rt => getPresentationSpec(rt).kind === targetSpec.kind);
+    const sameKindTypes = ALL_RELATION_TYPES.filter(rt => getPresentationSpec(rt).kind === targetSpec.kind && rt !== targetRelType);
     return ['none', ...sameKindTypes];
   }, [relationType, draftUnits, targetUnits, edges, msgMap]);
 
@@ -1262,25 +1262,41 @@ export default function TopicDetailPage() {
       adj.get(a)!.add(b); adj.get(b)!.add(a);
     }
     for (const e of edges) {
-      addEdgeAdj(e.from.messageId, e.to.messageId); addEdgeAdj(e.relationMessageId, e.from.messageId); addEdgeAdj(e.relationMessageId, e.to.messageId);
+      // Only add a direct from↔to hop if at least one endpoint is a normal text message.
+      // Relation-to-relation connections (e.g. a CORRECT relation linking two relation messages)
+      // should not count as focus-distance hops.
+      const fromIsNormal = msgMap.get(e.from.messageId)?.kind === "normal";
+      const toIsNormal = msgMap.get(e.to.messageId)?.kind === "normal";
+      if (fromIsNormal || toIsNormal) addEdgeAdj(e.from.messageId, e.to.messageId);
+      addEdgeAdj(e.relationMessageId, e.from.messageId); addEdgeAdj(e.relationMessageId, e.to.messageId);
     }
     // When a relation message is the focus, use its connected normal (text) messages as BFS roots.
     // This ensures focusHop correctly measures distance from the relation's text messages,
     // so hop=0 shows only those text messages and hop=1 shows their 1-hop neighbors.
+    // For CORRECT relations whose source/target are also relation messages, we recursively
+    // resolve through the chain until we reach normal text messages.
     const effectiveStartIds = new Set<string>();
+    function collectNormalMessagesForRelation(relId: string, seen: Set<string>): void {
+      if (seen.has(relId)) return;
+      seen.add(relId);
+      for (const e of edges) {
+        if (e.relationMessageId !== relId) continue;
+        const mf = msgMap.get(e.from.messageId);
+        if (mf?.kind === "normal") effectiveStartIds.add(e.from.messageId);
+        else if (mf?.kind === "relation") collectNormalMessagesForRelation(e.from.messageId, seen);
+        const mt = msgMap.get(e.to.messageId);
+        if (mt?.kind === "normal") effectiveStartIds.add(e.to.messageId);
+        else if (mt?.kind === "relation") collectNormalMessagesForRelation(e.to.messageId, seen);
+      }
+    }
     for (const id of startIds) {
       const m = msgMap.get(id);
       if (m && m.kind === "relation") {
-        let foundNormal = false;
-        for (const e of edges) {
-          if (e.relationMessageId !== id) continue;
-          const mf = msgMap.get(e.from.messageId), mt = msgMap.get(e.to.messageId);
-          if (mf && mf.kind === "normal") { effectiveStartIds.add(e.from.messageId); foundNormal = true; }
-          if (mt && mt.kind === "normal") { effectiveStartIds.add(e.to.messageId); foundNormal = true; }
-        }
+        const sizeBefore = effectiveStartIds.size;
+        collectNormalMessagesForRelation(id, new Set<string>());
         // Fallback: relation has no connected normal messages (e.g. pure-stance with anon source);
         // keep the relation message itself as BFS root so focus mode still shows something.
-        if (!foundNormal) effectiveStartIds.add(id);
+        if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);
       } else {
         effectiveStartIds.add(id);
       }

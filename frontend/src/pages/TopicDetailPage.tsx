@@ -15,8 +15,20 @@ import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relatio
 
 const ALL_RELATION_TYPES: RelationType[] = [
   "annotation", "reference", "reply", "agree", "disagree", "tag", "supplement",
-  "correct", "classify", "merge", "summary", "recommend", "archive",
+  "correct", "classify", "merge", "summary",
+  // "recommend" and "archive" are now accessible via TAG's secondary relation selector
 ];
+
+/** Max characters to display for an existing tag label in the secondary relation selector. */
+const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
+
+/** Return the display label for a secondary relation option button. */
+function secondaryRelationLabel(t: string): string {
+  if (t === "none") return "无";
+  if (t === "recommend" || t === "archive") return relationTypeName(t);
+  if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
+  return t; // existing tag label text
+}
 
 function selKey(u: UnitSelection): string {
   const s = u.selection;
@@ -852,8 +864,44 @@ export default function TopicDetailPage() {
     if (effectiveTargets.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isSupplement = relationType === "supplement";
-    // RECOMMEND/ARCHIVE: user-to-message relations with no source, one per target (same pattern as AGREE/DISAGREE)
-    const isInlineBadge = relationType === "recommend" || relationType === "archive";
+    // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
+    const isInlineBadge = false;
+
+    // TAG + secondary relation: create RECOMMEND/ARCHIVE or quick-annotate TAG with label from secondary
+    if (relationType === "tag" && secondaryRelationType !== "none") {
+      const secType = secondaryRelationType;
+      const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
+      const newEdgesList: DemoEdge[] = [];
+      if (secType === "recommend" || secType === "archive") {
+        // Create inline badge relation (no source message), one per target
+        for (const tgtMid of uniqueTargetMids) {
+          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
+          try {
+            const backendRel = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+            const relId = backendRel.id;
+            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${secType}: (无来源消息) → ${tgtMid}` };
+            setMessages(prev => [...prev, relMsg]);
+            const anonSrcId = `anon:${backendRel.id}`;
+            newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
+          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        }
+        setEdges(prev => [...prev, ...newEdgesList]);
+      } else {
+        // Existing tag label selected: create TAG relation with that label as source-message content
+        const tagLabel = secType;
+        try {
+          const msg = await handleSendMessageOnly(tagLabel);
+          if (msg) {
+            const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
+            const targets: UnitSelection[] = uniqueTargetMids.map(mid => ({ messageId: mid, selection: { kind: "whole" as const } }));
+            await handleCreateRelationWithSourcesAndTargets({ sources, targets, label: "" });
+          }
+        } catch (e: any) { alert(`建立标注关系失败: ${e?.message ?? e}`); }
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
 
     // Relation target with reply/correct: no text, no source — create null-source relation
     const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
@@ -938,7 +986,6 @@ export default function TopicDetailPage() {
     }
 
     if ((isAgreeDisagree || isSupplement || isInlineBadge) && text.length === 0) {
-      // Pure-stance agree/disagree, no-source supplement, or inline-badge (recommend/archive): no text message.
       // Supplement: ONE relation message containing all targets in a single frame.
       // Agree/disagree/inline-badge: one relation message per target (separate decoration badges).
       // Relation messages are first-class messages — persist all of them to the backend.
@@ -1078,16 +1125,18 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
-  // RECOMMEND/ARCHIVE: like AGREE/DISAGREE, they are user-to-message relations with no source message
-  const isInlineBadgeType = relationType === "recommend" || relationType === "archive";
+  // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
+  const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
+  const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
 
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
 
-  // Additional relation selector: only show when draft targets include a relation message
-  // and the primary relation type is reply or correct
+  // Additional relation selector: show when draft targets include a relation message for reply/correct,
+  // or whenever TAG type is selected (to offer none/recommend/archive/existing-tag shortcuts).
   const hasSecondaryRelationSelector =
-    (relationType === "reply" || relationType === "correct") && draftHasRelationTarget;
+    ((relationType === "reply" || relationType === "correct") && draftHasRelationTarget)
+    || relationType === "tag";
 
   // Send button enabled logic (single button):
   //   - No relation type: just send message → need text
@@ -1099,11 +1148,13 @@ export default function TopicDetailPage() {
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
   const singleButtonEnabled = (() => {
     if (relationType === null) return newMessageContent.trim().length > 0;
-    if (draftHasRelationTarget && hasSecondaryRelationSelector) {
+    // reply/correct targeting a relation message: special mode (no text, no source, use secondary selector)
+    if (draftHasRelationTarget && (relationType === "reply" || relationType === "correct")) {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
-    if (isAgreeDisagreeType || isSupplementType || isInlineBadgeType) return hasTargetsAvailable;
+    // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
+    if (isAgreeDisagreeType || isSupplementType || isTagWithQuickAnnotate) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
     return hasTargetsAvailable && newMessageContent.trim().length > 0;
@@ -1116,7 +1167,7 @@ export default function TopicDetailPage() {
       return "仅发送这条消息（未选择关系类型）";
     }
     const typeName = relationTypeName(relationType);
-    if (draftHasRelationTarget && hasSecondaryRelationSelector) {
+    if (draftHasRelationTarget && (relationType === "reply" || relationType === "correct")) {
       if (newMessageContent.trim().length > 0) return `请清空文本输入框（目标为关系消息时不应有文本）`;
       if (sourceUnits.length > 0) return `请清空来源集合（目标为关系消息时来源必须为空）`;
       const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
@@ -1124,14 +1175,22 @@ export default function TopicDetailPage() {
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     const usingDraft = draftUnits.length > 0;
-    if (isAgreeDisagreeType || isSupplementType || isInlineBadgeType) {
+    if (isAgreeDisagreeType || isSupplementType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
-      if (isInlineBadgeType) {
-        return `建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
-      }
       return newMessageContent.trim().length > 0
         ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
         : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    }
+    // TAG + secondary = recommend/archive: quick inline-badge shortcut
+    if (isTagWithInlineBadge) {
+      if (!hasTargetsAvailable) return "请在画布中选择目标消息";
+      const secName = relationTypeName(secondaryRelationType as RelationType);
+      return `建立「${secName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    }
+    // TAG + secondary = existing tag label: quick re-annotation shortcut
+    if (isTagWithQuickAnnotate) {
+      if (!hasTargetsAvailable) return "请在画布中选择目标消息";
+      return `快速标注「${secondaryRelationType}」（用${usingDraft ? "候选" : "目标集合"}作目标）`;
     }
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
       return `建立「${typeName}」关系（来源集合 → 目标集合）`;
@@ -1155,6 +1214,25 @@ export default function TopicDetailPage() {
     const targetSpec = getPresentationSpec(targetRelType);
     const sameKindTypes = ALL_RELATION_TYPES.filter(rt => getPresentationSpec(rt).kind === targetSpec.kind);
     return ['none', ...sameKindTypes];
+  }, [relationType, draftUnits, targetUnits, edges, msgMap]);
+
+  // Secondary relation options for TAG type: none, recommend, archive, plus existing tags on target messages.
+  const tagSecondaryOptions = useMemo((): string[] => {
+    if (relationType !== 'tag') return ['none'];
+    const allUnits = [...draftUnits, ...targetUnits];
+    const targetMids = Array.from(new Set(allUnits.map(u => u.messageId)));
+    const existingTagLabels = new Set<string>();
+    for (const mid of targetMids) {
+      for (const e of edges) {
+        if (e.relationType === 'tag' && e.to.messageId === mid && e.to.selection.kind === 'whole') {
+          const fromMsg = msgMap.get(e.from.messageId);
+          if (fromMsg?.kind === 'normal' && fromMsg.content) {
+            existingTagLabels.add(fromMsg.content.slice(0, MAX_TAG_LABEL_DISPLAY_LENGTH));
+          }
+        }
+      }
+    }
+    return ['none', 'recommend', 'archive', ...Array.from(existingTagLabels)];
   }, [relationType, draftUnits, targetUnits, edges, msgMap]);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
@@ -1321,8 +1399,22 @@ export default function TopicDetailPage() {
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string) {
     e.stopPropagation();
-    // Show operation details popup (reuse the comparison popup to show who operated, when, etc.)
-    setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
+    // Recommend/archive: show who recommended/archived (tag-style popup, same as annotation double-click)
+    const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
+    const relType = relEdges[0]?.relationType;
+    if (relType === 'recommend' || relType === 'archive') {
+      const targetMid = relEdges[0]?.to.messageId;
+      if (!targetMid) return;
+      const typeName = relationTypeName(relType);
+      const allRelMsgIds = Array.from(new Set(
+        edges.filter(ed => ed.relationType === relType && ed.to.messageId === targetMid && ed.to.selection.kind === 'whole')
+          .map(ed => ed.relationMessageId)
+      ));
+      setTagPopup({ messageId: targetMid, tagLabel: typeName, relMsgIds: allRelMsgIds, x: e.clientX, y: e.clientY });
+    } else {
+      // Correction badge and other inline badges: show comparison popup
+      setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
+    }
   }
 
   function toggleWholeUnit(msgId: string) {
@@ -1575,23 +1667,39 @@ export default function TopicDetailPage() {
           {user && (
             <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ fontWeight: 600 }}>关系标签与消息文本</div>
-              {hasSecondaryRelationSelector && (
-                <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
-                  <span style={{ opacity: 0.85 }}>附加关系：</span>
-                  {(relationType === "reply" ? ["none", "annotation", "reference"] : correctSecondaryOptions).map(t => (
-                    <button key={t} onClick={() => setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
-                      {t === "none" ? "无" : relationTypeName(t)}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {hasSecondaryRelationSelector && (() => {
+                const opts = relationType === "reply"
+                  ? ["none", "annotation", "reference"]
+                  : relationType === "tag"
+                    ? tagSecondaryOptions
+                    : correctSecondaryOptions;
+                return (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
+                    <span style={{ opacity: 0.85 }}>附加关系：</span>
+                    {opts.map(t => (
+                      <button key={t} onClick={() => setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t)}
+                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                        {secondaryRelationLabel(t)}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
               <input style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }} placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签" : "关系标签"} value={relationLabel} onChange={e => setRelationLabel(e.target.value)} />
-              <textarea
-                style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: draftHasRelationTarget && hasSecondaryRelationSelector ? "#1a1a1a" : "#222", color: draftHasRelationTarget && hasSecondaryRelationSelector ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                placeholder={draftHasRelationTarget && hasSecondaryRelationSelector ? "目标为关系消息时，此处不应有内容" : "输入一条新普通消息（支持自由换行）"}
-                value={newMessageContent}
-                onChange={e => setNewMessageContent(e.target.value)}
-              />
+              {(() => {
+                const textAreaDisabled =
+                  (draftHasRelationTarget && (relationType === "reply" || relationType === "correct"))
+                  || isTagWithQuickAnnotate;
+                return (
+                  <textarea
+                    style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
+                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : "目标为关系消息时，此处不应有内容") : "输入一条新普通消息（支持自由换行）"}
+                    value={newMessageContent}
+                    readOnly={textAreaDisabled}
+                    onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}
+                  />
+                );
+              })()}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button
                   onClick={handleQuickSendAndRelateFromDraftTargets}

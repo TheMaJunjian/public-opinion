@@ -896,6 +896,21 @@ export default function GraphView(props: GraphViewProps) {
     return map;
   }, [edges, msgMap]);
 
+  // Set of relation-message IDs that are targeted by a CORRECT relation with an anon: source
+  // (i.e. correction with no replacement relation). These are displayed as a blank label with
+  // only the correction badge visible — the original arrow and text are hidden.
+  const anonCorrectedRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === 'correct' && e.from.messageId.startsWith('anon:')) {
+        if (msgMap.get(e.to.messageId)?.kind === 'relation') {
+          ids.add(e.to.messageId);
+        }
+      }
+    }
+    return ids;
+  }, [edges, msgMap]);
+
   // Map: new relation-message ID (source of CORRECT) → [{corrRelMsgId, targetRelMsgId}]
   // for CORRECT relations where both source and target are relation messages.
   // Used to show a correction badge on the replacement relation's edge label.
@@ -1711,11 +1726,14 @@ export default function GraphView(props: GraphViewProps) {
             const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
             const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
             const labelStroke=isWhole||isFrag?"rgba(11,132,255,0.95)":"rgba(0,0,0,0.85)";
+            // Blank-corrected: anon-source CORRECT targets a relation message → hide arrow/text, keep bbox for badge
+            const isBlankCorrected=anonCorrectedRelMsgIds.has(relId);
             return (
               <g key={pe.drawId}>
-                <path d={path} stroke={color} strokeWidth={edge.relationType==="reply"?1.0:1.2} fill="none"/>
-                <path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>
-                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:isWhole||isFrag?3:2} as any}>
+                {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edge.relationType==="reply"?1.0:1.2} fill="none"/>}
+                {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
+                {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
+                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:isWhole||isFrag?3:2} as any}>
                   {edgeLabelText}
                 </text>
               </g>

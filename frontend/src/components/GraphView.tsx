@@ -71,6 +71,11 @@ const INLINE_BADGE_COLOR: Record<string,string> = {
   slate: 'rgba(80,90,100,0.9)',
 };
 
+/** True when a TAG edge's relationLabel carries actual user-entered label text (not the bare type name). */
+function isValidTagLabel(label: string | undefined): label is string {
+  return !!label && label !== 'tag';
+}
+
 function colX(col: number) {
   return GRID_LEFT + col * (CARD_W + COL_GAP);
 }
@@ -1090,7 +1095,7 @@ export default function GraphView(props: GraphViewProps) {
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
       // Use e.relationLabel which carries the actual tag text (set in modelBridge for new-style tags,
       // or derived from source message content for legacy tags).
-      const label=(e.relationLabel && e.relationLabel !== 'tag')
+      const label=isValidTagLabel(e.relationLabel)
         ? e.relationLabel.slice(0,TAG_MAX_LABEL_CHARS)
         : (msgMap.get(e.from.messageId)?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注");
       if (!newTagDecorationsByMsg[mid]) newTagDecorationsByMsg[mid]=[];
@@ -1235,7 +1240,7 @@ export default function GraphView(props: GraphViewProps) {
       if (e.to.selection.kind!=="whole") continue;
       const toId=e.to.messageId;
       if (msgMap.get(toId)?.kind !== "relation") continue;
-      const label=(e.relationLabel && e.relationLabel !== 'tag')
+      const label=isValidTagLabel(e.relationLabel)
         ? e.relationLabel.slice(0,TAG_MAX_LABEL_CHARS)
         : (msgMap.get(e.from.messageId)?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注");
       const arr=newTagsByRelMsg.get(toId)??[];

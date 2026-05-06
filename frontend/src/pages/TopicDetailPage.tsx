@@ -30,6 +30,11 @@ function secondaryRelationLabel(t: string): string {
   return t; // existing tag label text
 }
 
+/** True when a TAG edge's relationLabel carries actual user-entered label text (not the bare type name). */
+function isValidTagLabel(label: string | undefined): label is string {
+  return !!label && label !== 'tag';
+}
+
 function selKey(u: UnitSelection): string {
   const s = u.selection;
   if (s.kind === "whole") return `${u.messageId}::whole`;
@@ -367,22 +372,28 @@ export default function TopicDetailPage() {
   // Used to skip corrected fragments when double-clicking to select all fragments.
   const correctedEdgeMap = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
 
+  /** Returns edge IDs for a relation message, excluding any that have been individually corrected. */
+  function getUncorrectedEdgeIds(relationMessageId: string): string[] {
+    const correctedIds = correctedEdgeMap.get(relationMessageId);
+    return getEdgeIdsForRelation(relationMessageId).filter(id => !correctedIds?.has(id));
+  }
+
   // TAG-only source messages in the linear list view: messages used exclusively as old-style
   // TAG relation sources should not appear as list items (their label is shown on the tag badge).
   const tagSourceIdsForList = useMemo(() => {
-    const isTagSource = new Set<string>();
+    const hiddenTagSourceIds = new Set<string>();
     const shouldKeepVisible = new Set<string>();
     for (const e of edges) {
       if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
-        isTagSource.add(e.from.messageId);
+        hiddenTagSourceIds.add(e.from.messageId);
       }
       if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
       if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
         shouldKeepVisible.add(e.from.messageId);
       }
     }
-    for (const id of shouldKeepVisible) isTagSource.delete(id);
-    return isTagSource;
+    for (const id of shouldKeepVisible) hiddenTagSourceIds.delete(id);
+    return hiddenTagSourceIds;
   }, [edges, msgMap]);
 
   const voteStats = useMemo(() => {
@@ -682,8 +693,7 @@ export default function TopicDetailPage() {
   }
 
   function relationAllFragmentsSelected(relationMessageId: string, units: UnitSelection[]) {
-    const correctedIds = correctedEdgeMap.get(relationMessageId);
-    const edgeIds = getEdgeIdsForRelation(relationMessageId).filter(id => !correctedIds?.has(id));
+    const edgeIds = getUncorrectedEdgeIds(relationMessageId);
     if (edgeIds.length === 0) return units.some(u => u.messageId === relationMessageId && u.selection.kind === "whole");
     const have = new Set(units.filter(u => u.messageId === relationMessageId && u.selection.kind === "edge").map(u => (u.selection as any).edgeId));
     return edgeIds.every(id => have.has(id));
@@ -717,8 +727,7 @@ export default function TopicDetailPage() {
     e.stopPropagation();
     setLastClickedMessageId(relationMessageId);
     const wholeUnit: UnitSelection = { messageId: relationMessageId, selection: { kind: "whole" } };
-    const correctedIds = correctedEdgeMap.get(relationMessageId);
-    const edgeIds = getEdgeIdsForRelation(relationMessageId).filter(id => !correctedIds?.has(id));
+    const edgeIds = getUncorrectedEdgeIds(relationMessageId);
     const edgeUnits = edgeIds.map(id => ({ messageId: relationMessageId, selection: { kind: "edge", edgeId: id } as Selection }));
     setDraftUnits(prev => {
       const hasWhole = prev.some(u => unitEquals(u, wholeUnit));
@@ -1350,9 +1359,7 @@ export default function TopicDetailPage() {
     for (const mid of targetMids) {
       for (const e of edges) {
         if (e.relationType === 'tag' && e.to.messageId === mid && e.to.selection.kind === 'whole') {
-          // Use relationLabel which holds the actual tag text (works for both new-style tags
-          // stored in tagLabel and legacy tags read from source message content).
-          const label = (e.relationLabel && e.relationLabel !== 'tag') ? e.relationLabel : null;
+          const label = isValidTagLabel(e.relationLabel) ? e.relationLabel : null;
           if (label) existingTagLabels.add(label.slice(0, MAX_TAG_LABEL_DISPLAY_LENGTH));
         }
       }

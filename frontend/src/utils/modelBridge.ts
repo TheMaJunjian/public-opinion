@@ -100,13 +100,17 @@ export function convertMessagesToDemoModel(
     const relMsgId = rel.id;
     const relType = rel.relationType.toLowerCase() as RelationType;
 
-    // Resolve the effective tag label for TAG relations:
-    // prefer the dedicated tagLabel field; fall back to the source message's content
-    // (for tag relations created with the old behaviour that used a source text message).
-    const tagLabel: string | undefined =
-      relType === 'tag'
-        ? (rel.tagLabel ?? (rel.sourceMessageId ? (msgContentMap.get(rel.sourceMessageId) ?? undefined) : undefined))
-        : undefined;
+    // Resolve the effective tag label for TAG relations.
+    // Prefer the dedicated tagLabel field (new-style); fall back to the source message's content
+    // (legacy TAG relations that used a source text message to carry the label).
+    let tagLabel: string | undefined;
+    if (relType === 'tag') {
+      if (rel.tagLabel) {
+        tagLabel = rel.tagLabel;
+      } else if (rel.sourceMessageId) {
+        tagLabel = msgContentMap.get(rel.sourceMessageId) ?? undefined;
+      }
+    }
 
     if (!seenRelMsgIds.has(relMsgId)) {
       seenRelMsgIds.add(relMsgId);

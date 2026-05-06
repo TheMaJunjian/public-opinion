@@ -894,6 +894,25 @@ export default function GraphView(props: GraphViewProps) {
     return map;
   }, [edges, msgMap]);
 
+  // Map: new relation-message ID (source of CORRECT) → [{corrRelMsgId, targetRelMsgId}]
+  // for CORRECT relations where both source and target are relation messages.
+  // Used to show a correction badge on the replacement relation's edge label.
+  const correctionSrcByNewRelMsg = useMemo(() => {
+    const map = new Map<string, Array<{corrRelMsgId: string; targetRelMsgId: string}>>();
+    for (const e of edges) {
+      if (e.relationType !== 'correct') continue;
+      const srcId = e.from.messageId;
+      if (srcId.startsWith('anon:')) continue;
+      if (msgMap.get(srcId)?.kind !== 'relation') continue;
+      const targetId = e.to.messageId;
+      if (msgMap.get(targetId)?.kind !== 'relation') continue;
+      const arr = map.get(srcId) ?? [];
+      arr.push({ corrRelMsgId: e.relationMessageId, targetRelMsgId: targetId });
+      map.set(srcId, arr);
+    }
+    return map;
+  }, [edges, msgMap]);
+
   useEffect(() => {
     const ro = new ResizeObserver(entries => {
       const next: Record<string,number> = {};
@@ -1302,6 +1321,9 @@ export default function GraphView(props: GraphViewProps) {
       // frame-group, replace-overlay, and correction-badge relations are rendered as frames/badges, not arrows
       const eSpec = getPresentationSpec(e.relationType);
       if (eSpec.kind === 'frame-group' || eSpec.kind === 'replace-overlay' || eSpec.kind === 'correction-badge') continue;
+      // Skip edges for relation messages that have been replaced by a correction:
+      // the old relation is hidden and its edges should not be rendered as edge labels.
+      if (correctedTargetMsgIds.has(e.relationMessageId)) continue;
       if (e.relationType==="agree"||e.relationType==="disagree") {
         if (e.from.messageId.startsWith("anon:")) continue; // pure-stance, decoration only
         // Has source message: render directed arrow.
@@ -1506,7 +1528,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedTargetMsgIds]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -1568,27 +1590,9 @@ export default function GraphView(props: GraphViewProps) {
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
-              {/* Correction badges: top-center for text messages */}
-              {msg.kind==="normal" && corrBadges.length>0 && (
-                <div style={{display:"flex",justifyContent:"center",gap:4}}>
-                  {corrBadges.map((b) => (
-                    <div key={`corr-hdr-${b.relMsgId}`}
-                      data-rel-overlay="true"
-                      onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
-                      onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                      title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
-                      style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
-                        color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
-                        cursor:"pointer",pointerEvents:"auto",
-                        border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                        whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                      ✏更正
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{display:"flex",alignItems:"center",gap:4}}>
+              {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
+              <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center"}}>
+                <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
                   {msg.kind!=="normal" && corrBadges.map((b) => (
                     <div key={`corr-hdr-${b.relMsgId}`}
@@ -1606,7 +1610,28 @@ export default function GraphView(props: GraphViewProps) {
                   ))}
                   <span>{msg.author}</span>
                 </div>
-                <span style={{opacity:0.7}}>{msg.id}</span>
+                {/* For text messages, correction badges are centered between author and msgId */}
+                {msg.kind==="normal" && corrBadges.length>0 && (
+                  <div style={{flex:1,display:"flex",justifyContent:"center",gap:4}}>
+                    {corrBadges.map((b) => (
+                      <div key={`corr-hdr-${b.relMsgId}`}
+                        data-rel-overlay="true"
+                        onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
+                        onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
+                        title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
+                        style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                          color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                          cursor:"pointer",pointerEvents:"auto",
+                          border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                          whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
+                        ✏更正
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{flex:1,display:"flex",justifyContent:"flex-end"}}>
+                  <span style={{opacity:0.7}}>{msg.id}</span>
+                </div>
               </div>
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
@@ -1676,8 +1701,12 @@ export default function GraphView(props: GraphViewProps) {
           const bb=labelBboxes[pe.drawId]; if (!bb) return null;
           const CORR_BADGE_W_EDGE=44;
           const relId=pe.edge.relationMessageId;
+          // A correction badge is shown either when this relation's edge label has been corrected
+          // (correctedRelMsgTargets: R1 is corrected) OR when this relation IS the replacement
+          // (correctionSrcByNewRelMsg: R2 replaced R1).
           const corrInfo=correctedRelMsgTargets.get(relId);
-          const showCorrBadge=corrInfo&&corrInfo.length>0&&!corrRendered.has(relId);
+          const newCorrInfo=correctionSrcByNewRelMsg.get(relId);
+          const showCorrBadge=(!!corrInfo?.length||!!newCorrInfo?.length)&&!corrRendered.has(relId);
           if (showCorrBadge) corrRendered.add(relId);
           const padX=8,padY=6;
           const extraLeft=showCorrBadge?CORR_BADGE_W_EDGE+4:0;
@@ -1688,7 +1717,8 @@ export default function GraphView(props: GraphViewProps) {
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{
-                const corrItem=corrInfo![0];
+                // Prefer newCorrInfo (this relation IS the replacement) over corrInfo (this relation was corrected)
+                const corrItem = newCorrInfo?.length ? { corrRelMsgId: newCorrInfo[0].corrRelMsgId } : corrInfo![0];
                 const isCorrSel=isRelWholeSel(corrItem.corrRelMsgId);
                 return (
                   <div key={`corr-edge-${corrItem.corrRelMsgId}`}

@@ -299,7 +299,7 @@ export default function TopicDetailPage() {
     return () => { cancelled = true; };
   }, [topicId]);
 
-  const [relationType, setRelationType] = useState<RelationType | null>("annotation");
+  const [relationType, setRelationType] = useState<RelationType | null>(null);
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
@@ -796,6 +796,7 @@ export default function TopicDetailPage() {
       return;
     }
 
+
     if (draftUnits.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isSupplement = relationType === "supplement";
@@ -805,6 +806,60 @@ export default function TopicDetailPage() {
     const hasSecSelector = (relationType === "reply" || relationType === "correct") && hasDraftRelTarget;
     if (hasSecSelector) {
       if (text.length > 0 || sourceUnits.length > 0) return; // validation: state must be clean
+
+      // CORRECT targeting a relation message with a secondary relation type:
+      // Create a new relation of the secondary type (with the same endpoints as the old relation),
+      // then create a CORRECT relation pointing from the new relation to the old relation.
+      if (relationType === "correct" && secondaryRelationType !== "none" && draftUnits.length === 1) {
+        const targetRelMsgId = draftUnits[0].messageId;
+        const oldRelEdges = edges.filter(e => e.relationMessageId === targetRelMsgId);
+        if (oldRelEdges.length === 0) {
+          alert("无法找到目标关系消息的边");
+          return;
+        }
+        const secType = secondaryRelationType as RelationType;
+        const secTypeName = relationTypeName(secType);
+        const oldSourceId = oldRelEdges[0].from.messageId;
+        const newSourceId = oldSourceId.startsWith('anon:') ? null : oldSourceId;
+        // Collect all unique target refs from the old relation's edges
+        const seenTargetKeys = new Set<string>();
+        const newTargetRefs = oldRelEdges
+          .filter(e => { const k = e.to.messageId + '::' + e.to.selection.kind; if (seenTargetKeys.has(k)) return false; seenTargetKeys.add(k); return true; })
+          .map(e => unitSelectionToTargetRef(e.to, msgMap));
+        const newEdgesList: DemoEdge[] = [];
+        try {
+          // Step 1: Create the new relation of secondary type with the same endpoints
+          const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
+          const newRelId = newRelBackend.id;
+          const newRelMsg: DemoMessage = {
+            id: newRelId, author: newRelBackend.createdBy.username, createdAt: newRelBackend.createdAt, kind: "relation",
+            content: newSourceId
+              ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${newTargetRefs.map(r => r.kind === 'message' ? r.messageId : r.kind === 'relation' ? r.relationId : r.messageId).join(",")}`
+              : `建立${secTypeName}关系（无来源消息）\n目标：${newTargetRefs.map(r => r.kind === 'message' ? r.messageId : r.kind === 'relation' ? r.relationId : r.messageId).join(",")}`,
+          };
+          setMessages(prev => [...prev, newRelMsg]);
+          const newFromId = newSourceId ?? `anon:${newRelId}`;
+          for (const e of oldRelEdges) {
+            newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
+          }
+          // Step 2: Create the CORRECT relation with the new relation as source, old relation as target
+          const corrTypeName = relationTypeName("correct");
+          const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
+          const corrRelId = corrBackendRel.id;
+          const corrRelMsg: DemoMessage = {
+            id: corrRelId, author: corrBackendRel.createdBy.username, createdAt: corrBackendRel.createdAt, kind: "relation",
+            content: `建立${corrTypeName}关系\n来源：${newRelId}\n目标：关系 ${targetRelMsgId}`,
+          };
+          setMessages(prev => [...prev, corrRelMsg]);
+          newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
+        } catch (e: any) { alert(`建立更正关系失败: ${e?.message ?? e}`); }
+        setEdges(prev => [...prev, ...newEdgesList]);
+        setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+        setRelationType(null); setSecondaryRelationType("none");
+        return;
+      }
+
+      // REPLY or CORRECT (no secondary) targeting a relation message: create null-source relation
       const targetRefs = draftUnits.map(u => unitSelectionToTargetRef(u, msgMap));
       const typeName = relationTypeName(relationType);
       const newEdgesList: DemoEdge[] = [];
@@ -826,6 +881,7 @@ export default function TopicDetailPage() {
       } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setRelationType(null); setSecondaryRelationType("none");
       return;
     }
 
@@ -875,6 +931,7 @@ export default function TopicDetailPage() {
       }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setRelationType(null); setSecondaryRelationType("none");
       return;
     }
 
@@ -902,6 +959,7 @@ export default function TopicDetailPage() {
       await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
       return;
     }
 
@@ -912,6 +970,7 @@ export default function TopicDetailPage() {
     await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
     setNewMessageContent("");
+    setRelationType(null); setSecondaryRelationType("none");
   }
 
   type DraftGroup = { messageId: string; wholeSelected: boolean; fragments: UnitSelection[] };

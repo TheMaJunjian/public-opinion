@@ -7,7 +7,7 @@ import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType,
 } from '../utils/modelBridge';
-import type { Topic } from '../types';
+import type { Topic, TargetRef } from '../types';
 import { getPresentationSpec } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 
@@ -56,8 +56,6 @@ function describeUnit(u: UnitSelection): string {
   return `消息 ${u.messageId} 的片段(start=${s.start}, len=${s.len})「${s.text}」`;
 }
 
-import type { TargetRef } from '../types';
-
 let _nextIdCounter = 1;
 function nextId(prefix: string): string {
   return `${prefix}-local-${Date.now()}-${_nextIdCounter++}`;
@@ -71,7 +69,7 @@ function targetRefDisplayId(r: TargetRef): string {
 
 /** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
 function uniqueTargetRefsFromEdges(
-  relEdges: import('../utils/modelBridge').DemoEdge[],
+  relEdges: DemoEdge[],
   msgMap: Map<string, DemoMessage>
 ): TargetRef[] {
   const seen = new Set<string>();
@@ -837,7 +835,7 @@ export default function TopicDetailPage() {
         const targetRelMsgId = draftUnits[0].messageId;
         const oldRelEdges = edges.filter(e => e.relationMessageId === targetRelMsgId);
         if (oldRelEdges.length === 0) {
-          alert("无法找到目标关系消息的边，无法创建更正关系");
+          alert(`无法找到目标关系消息的边（ID：${targetRelMsgId}），无法创建更正关系`);
           return;
         }
         const secType = secondaryRelationType as RelationType;

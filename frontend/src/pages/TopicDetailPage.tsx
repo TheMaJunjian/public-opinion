@@ -928,35 +928,82 @@ export default function TopicDetailPage() {
         const secTypeName = relationTypeName(secType);
         const oldSourceId = oldRelEdges[0].from.messageId;
         const newSourceId = oldSourceId.startsWith('anon:') ? null : oldSourceId;
-        // Collect all unique target refs from the old relation's edges
-        const newTargetRefs = uniqueTargetRefsFromEdges(oldRelEdges, msgMap);
+        const corrTypeName = relationTypeName("correct");
+
+        // Determine which edges the user selected:
+        // "whole" means the user selected the entire relation (all edges) → one combined correction.
+        // Specific "edge" selections (no "whole") → one separate correction per selected fragment.
+        const wholeSelected = draftUnits.some(u => u.messageId === targetRelMsgId && u.selection.kind === "whole");
+        const selectedEdgeIds = new Set(
+          draftUnits
+            .filter(u => u.messageId === targetRelMsgId && u.selection.kind === "edge")
+            .map(u => (u.selection as { kind: "edge"; edgeId: string }).edgeId)
+        );
+        const edgesToCorrect = wholeSelected
+          ? oldRelEdges
+          : oldRelEdges.filter(e => selectedEdgeIds.has(e.id));
+        if (edgesToCorrect.length === 0) {
+          alert(`没有选中的片段，无法创建更正关系`);
+          return;
+        }
+
         const newEdgesList: DemoEdge[] = [];
         try {
-          // Step 1: Create the new relation of secondary type with the same endpoints
-          const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
-          const newRelId = newRelBackend.id;
-          const targetDisplayIds = newTargetRefs.map(targetRefDisplayId).join(",");
-          const newRelMsg: DemoMessage = {
-            id: newRelId, author: newRelBackend.createdBy.username, createdAt: newRelBackend.createdAt, kind: "relation",
-            content: newSourceId
-              ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${targetDisplayIds}`
-              : `建立${secTypeName}关系（无来源消息）\n目标：${targetDisplayIds}`,
-          };
-          setMessages(prev => [...prev, newRelMsg]);
-          const newFromId = newSourceId ?? `anon:${newRelId}`;
-          for (const e of oldRelEdges) {
-            newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
+          if (wholeSelected) {
+            // Whole selected: one combined correction covering all edges (original behavior)
+            const newTargetRefs = uniqueTargetRefsFromEdges(edgesToCorrect, msgMap);
+            const targetDisplayIds = newTargetRefs.map(targetRefDisplayId).join(",");
+            // Step 1: Create the new relation of secondary type with the same endpoints
+            const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
+            const newRelId = newRelBackend.id;
+            const newRelMsg: DemoMessage = {
+              id: newRelId, author: newRelBackend.createdBy.username, createdAt: newRelBackend.createdAt, kind: "relation",
+              content: newSourceId
+                ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${targetDisplayIds}`
+                : `建立${secTypeName}关系（无来源消息）\n目标：${targetDisplayIds}`,
+            };
+            setMessages(prev => [...prev, newRelMsg]);
+            const newFromId = newSourceId ?? `anon:${newRelId}`;
+            for (const e of edgesToCorrect) {
+              newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
+            }
+            // Step 2: Create the CORRECT relation with the new relation as source, old relation as target
+            const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
+            const corrRelId = corrBackendRel.id;
+            const corrRelMsg: DemoMessage = {
+              id: corrRelId, author: corrBackendRel.createdBy.username, createdAt: corrBackendRel.createdAt, kind: "relation",
+              content: `建立${corrTypeName}关系\n来源：${newRelId}\n目标：关系 ${targetRelMsgId}`,
+            };
+            setMessages(prev => [...prev, corrRelMsg]);
+            newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
+          } else {
+            // Specific fragments selected: one separate correction per selected edge fragment
+            for (const edge of edgesToCorrect) {
+              const newTargetRefs = uniqueTargetRefsFromEdges([edge], msgMap);
+              const targetDisplayIds = newTargetRefs.map(targetRefDisplayId).join(",");
+              // Step 1: Create a new relation of secondary type for this fragment only
+              const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
+              const newRelId = newRelBackend.id;
+              const newRelMsg: DemoMessage = {
+                id: newRelId, author: newRelBackend.createdBy.username, createdAt: newRelBackend.createdAt, kind: "relation",
+                content: newSourceId
+                  ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${targetDisplayIds}`
+                  : `建立${secTypeName}关系（无来源消息）\n目标：${targetDisplayIds}`,
+              };
+              setMessages(prev => [...prev, newRelMsg]);
+              const newFromId = newSourceId ?? `anon:${newRelId}`;
+              newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...edge.to }, relationLabel: secTypeName } as DemoEdge);
+              // Step 2: Create the CORRECT relation for this fragment
+              const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
+              const corrRelId = corrBackendRel.id;
+              const corrRelMsg: DemoMessage = {
+                id: corrRelId, author: corrBackendRel.createdBy.username, createdAt: corrBackendRel.createdAt, kind: "relation",
+                content: `建立${corrTypeName}关系\n来源：${newRelId}\n目标：关系 ${targetRelMsgId}`,
+              };
+              setMessages(prev => [...prev, corrRelMsg]);
+              newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
+            }
           }
-          // Step 2: Create the CORRECT relation with the new relation as source, old relation as target
-          const corrTypeName = relationTypeName("correct");
-          const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
-          const corrRelId = corrBackendRel.id;
-          const corrRelMsg: DemoMessage = {
-            id: corrRelId, author: corrBackendRel.createdBy.username, createdAt: corrBackendRel.createdAt, kind: "relation",
-            content: `建立${corrTypeName}关系\n来源：${newRelId}\n目标：关系 ${targetRelMsgId}`,
-          };
-          setMessages(prev => [...prev, corrRelMsg]);
-          newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
         } catch (e: any) { alert(`建立更正关系失败: ${e?.message ?? e}`); }
         setEdges(prev => [...prev, ...newEdgesList]);
         setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();

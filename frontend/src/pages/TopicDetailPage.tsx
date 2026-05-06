@@ -820,7 +820,7 @@ export default function TopicDetailPage() {
             for (const t of targets) {
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, relationType, label, relId));
             }
-            if (secondaryRelationType !== "none") {
+            if (secondaryRelationType !== "none" && relationType === "correct") {
               const secType = secondaryRelationType as RelationType;
               for (const t of targets) {
                 newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, secType, label, relId));
@@ -1825,6 +1825,75 @@ export default function TopicDetailPage() {
       // CORRECT relation: side-by-side comparison with highlighting
       if (relType === "correct" && targetMsgs.length > 0 && sourceMsg) {
         const origMsg = targetMsgs[0];
+
+        // Relation-message correction: show structured relation summary instead of text diff
+        if (origMsg.kind === "relation" && sourceMsg.kind === "relation") {
+          // Edges belonging to the old relation (not the CORRECT edge itself)
+          const oldRelEdges = edges.filter(e => e.relationMessageId === origMsg.id);
+          // Edges belonging to the new relation, excluding the CORRECT edge
+          const newRelEdges = edges.filter(e => e.relationMessageId === sourceMsg.id && e.relationType !== 'correct');
+          const oldType = oldRelEdges[0]?.relationType ?? "";
+          const newType = newRelEdges[0]?.relationType ?? "";
+          const oldTypeName = relationTypeName(oldType as RelationType);
+          const newTypeName = relationTypeName(newType as RelationType);
+          const oldSrcRaw = oldRelEdges[0]?.from.messageId ?? "";
+          const newSrcRaw = newRelEdges[0]?.from.messageId ?? "";
+          const oldSrc = oldSrcRaw.startsWith('anon:') ? null : oldSrcRaw;
+          const newSrc = newSrcRaw.startsWith('anon:') ? null : newSrcRaw;
+          const oldTargets = Array.from(new Set(oldRelEdges.map(e => e.to.messageId)));
+          const newTargets = Array.from(new Set(newRelEdges.map(e => e.to.messageId)));
+          const oldTargetStr = oldTargets.join(",");
+          const newTargetStr = newTargets.join(",");
+          const popupW = Math.min(700, window.innerWidth - 32);
+          const left = Math.min(Math.max(comparisonPopup.x - popupW / 2, 8), window.innerWidth - popupW - 8);
+          const top = Math.min(comparisonPopup.y + 8, window.innerHeight - 400);
+          return (
+            <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
+              onClick={()=>setComparisonPopup(null)}>
+              <div style={{position:"fixed",left:left,top:top,zIndex:201,background:"#1e1e1e",
+                border:"1px solid #555",borderRadius:8,padding:16,width:popupW,maxHeight:"80vh",
+                overflow:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.8)",color:"#eee"}}
+                onClick={e=>e.stopPropagation()}>
+                <div style={{fontWeight:700,marginBottom:12,fontSize:14}}>✏ 更正对比（关系消息）</div>
+                <div style={{display:"flex",gap:10}}>
+                  {/* Left: old relation */}
+                  <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #554",background:"#211e14",padding:10}}>
+                    <div style={{fontSize:11,marginBottom:6}}>
+                      <span style={{fontWeight:600}}>原关系</span>
+                      <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{origMsg.id}</span>
+                    </div>
+                    <div style={{fontSize:13,fontFamily:"monospace",lineHeight:1.8}}>
+                      <span style={{color:"#ff9944",fontWeight:700}}>{oldTypeName}</span>
+                      <span style={{color:"#ddd"}}>
+                        {oldSrc ? `: ${oldSrc} → ${oldTargetStr}` : `: ${oldTargetStr}`}
+                      </span>
+                    </div>
+                  </div>
+                  {/* Right: new relation */}
+                  <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #255",background:"#14201e",padding:10}}>
+                    <div style={{fontSize:11,marginBottom:6}}>
+                      <span style={{fontWeight:600}}>更正后</span>
+                      <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>
+                    </div>
+                    <div style={{fontSize:13,fontFamily:"monospace",lineHeight:1.8}}>
+                      <span style={{color:"#44ddaa",fontWeight:700}}>{newTypeName}</span>
+                      <span style={{color:"#ddd"}}>
+                        {newSrc ? `: ${newSrc} → ${newTargetStr}` : `: ${newTargetStr}`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div style={{marginTop:12,textAlign:"right"}}>
+                  <button onClick={()=>setComparisonPopup(null)}
+                    style={{padding:"4px 12px",borderRadius:4,border:"1px solid #555",background:"#333",color:"#eee",cursor:"pointer",fontSize:12}}>
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         // Prefer precise position-based highlighting for single-fragment corrections:
         // The correction edge carries the exact text selection (start + len) in the
         // original message, so we can pinpoint the changed region without the LCS

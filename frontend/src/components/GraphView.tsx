@@ -881,6 +881,17 @@ export default function GraphView(props: GraphViewProps) {
     return map;
   }, [edges, msgMap]);
 
+  // Corrected-target IDs that are NOT themselves correction sources.
+  // A message that corrects another while also being corrected (chained correction) must
+  // remain visible so its own correction badge is not lost.
+  const hiddenCorrectedTargetIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of correctedTargetMsgIds) {
+      if (!correctionsBySourceMsgId.has(id)) ids.add(id);
+    }
+    return ids;
+  }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
+
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
   // Used to embed correction badge in the target relation's hit area.
   const correctedRelMsgTargets = useMemo(() => {
@@ -954,9 +965,9 @@ export default function GraphView(props: GraphViewProps) {
   }, [normals, layout]);
 
   useEffect(() => {
-    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: correctedTargetMsgIds });
+    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: hiddenCorrectedTargetIds });
     setLayout(nl); setCanvasHeight(h);
-  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget, correctedTargetMsgIds]);
+  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget, hiddenCorrectedTargetIds]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
@@ -1597,8 +1608,9 @@ export default function GraphView(props: GraphViewProps) {
       onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
-          // Corrected targets are invisible (replaced by the correction source card)
-          if (correctedTargetMsgIds.has(msg.id)) return null;
+          // Corrected targets that are not themselves a correction source are invisible (replaced by the correction source card).
+          // Chained correction sources remain visible so their own correction badge is preserved.
+          if (hiddenCorrectedTargetIds.has(msg.id)) return null;
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
           const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
           const corrBadges = correctionsBySourceMsgId.get(msg.id) ?? [];

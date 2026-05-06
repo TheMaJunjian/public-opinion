@@ -818,7 +818,24 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if (draftUnits.length === 0) return;
+    // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
+    // This lets users either click on the canvas to pick draft candidates (quick path) or
+    // explicitly commit messages to the target collection via "加入目标集合".
+    const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+
+    // Scenario: source collection + target collection explicitly committed (no draft candidates).
+    // Build the relation directly without creating a new text message.
+    if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
+      const labelDefault = relationTypeName(relationType);
+      const label = relationLabel.trim() || labelDefault;
+      await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
+    if (effectiveTargets.length === 0) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isSupplement = relationType === "supplement";
 
@@ -910,7 +927,7 @@ export default function TopicDetailPage() {
       // Agree/disagree: one relation message per target (separate decoration badges).
       // Relation messages are first-class messages — persist all of them to the backend.
       const newEdgesList: DemoEdge[] = [];
-      const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
+      const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       if (isSupplement) {
         const targetRefs = uniqueTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
         try {
@@ -961,12 +978,12 @@ export default function TopicDetailPage() {
     // CORRECT relation: auto-generate the new message content by applying the replacement
     // (text box content) to the selected fragment(s) or whole of the target message.
     if (relationType === "correct") {
-      const uniqueTargetMids = Array.from(new Set(draftUnits.map(u => u.messageId)));
+      const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       if (uniqueTargetMids.length !== 1) {
         alert("更正关系目前仅支持单个目标消息");
         return;
       }
-      const generated = generateCorrectionContent(draftUnits, text, msgMap);
+      const generated = generateCorrectionContent(effectiveTargets, text, msgMap);
       if (generated === null) {
         alert("更正关系目标必须是普通文本消息");
         return;
@@ -974,7 +991,7 @@ export default function TopicDetailPage() {
       const msg = await handleSendMessageOnly(generated);
       if (!msg) return;
       const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-      const targets: UnitSelection[] = [...draftUnits];
+      const targets: UnitSelection[] = [...effectiveTargets];
       await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
@@ -985,7 +1002,7 @@ export default function TopicDetailPage() {
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-    const targets: UnitSelection[] = [...draftUnits];
+    const targets: UnitSelection[] = [...effectiveTargets];
     await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
     setNewMessageContent("");
@@ -1057,15 +1074,21 @@ export default function TopicDetailPage() {
   // Send button enabled logic (single button):
   //   - No relation type: just send message → need text
   //   - Relation target + reply/correct with secondary selector: text must be empty, source must be empty
-  //   - agree/disagree/supplement (pure-stance): draft not empty
-  //   - Other types: draft not empty AND text not empty
+  //   - agree/disagree/supplement (pure-stance): draft or target collection not empty
+  //   - sourceUnits + targetUnits explicitly set (draft empty): can build relation without new text
+  //   - Other types: (draft or target collection) not empty AND text not empty
+  // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
+  // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
   const singleButtonEnabled = (() => {
     if (relationType === null) return newMessageContent.trim().length > 0;
     if (draftHasRelationTarget && hasSecondaryRelationSelector) {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
-    if (isAgreeDisagreeType || isSupplementType) return draftUnits.length > 0;
-    return draftUnits.length > 0 && newMessageContent.trim().length > 0;
+    const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
+    if (isAgreeDisagreeType || isSupplementType) return hasTargetsAvailable;
+    // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
+    if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
+    return hasTargetsAvailable && newMessageContent.trim().length > 0;
   })();
 
   // Dynamic label describing what the send button will do
@@ -1081,15 +1104,20 @@ export default function TopicDetailPage() {
       const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
       return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
     }
+    const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
+    const usingDraft = draftUnits.length > 0;
     if (isAgreeDisagreeType || isSupplementType) {
-      if (draftUnits.length === 0) return "请在画布中选择目标消息";
+      if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       return newMessageContent.trim().length > 0
-        ? `发送消息并建立「${typeName}」关系（用候选作目标）`
-        : `建立纯立场「${typeName}」关系（用候选作目标，无需文本）`;
+        ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
+        : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
-    if (draftUnits.length === 0) return "请在画布中选择目标消息";
+    if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
+      return `建立「${typeName}」关系（来源集合 → 目标集合）`;
+    }
+    if (!hasTargetsAvailable) return "请在画布中选择目标消息";
     if (newMessageContent.trim().length === 0) return "请输入消息内容（将作为来源）";
-    return `发送消息并建立「${typeName}」关系（用候选作目标）`;
+    return `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`;
   })();
 
   // Secondary relation options for CORRECT type: relations of the same PresentationKind as the targeted relation message, plus "none".

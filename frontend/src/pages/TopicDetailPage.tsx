@@ -10,6 +10,7 @@ import type {
 import type { Topic, TargetRef } from '../types';
 import { getPresentationSpec } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
+import { extractClassifyTopicTitle } from '../utils/classifyTopic';
 
 // ========================= Helpers =========================
 
@@ -430,6 +431,13 @@ export default function TopicDetailPage() {
     }
     return res;
   }, [edges]);
+  const relationTypeByRelMsgId = useMemo(() => {
+    const map = new Map<string, RelationType>();
+    for (const e of edges) {
+      if (!map.has(e.relationMessageId)) map.set(e.relationMessageId, e.relationType);
+    }
+    return map;
+  }, [edges]);
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
@@ -645,6 +653,20 @@ export default function TopicDetailPage() {
     setLastClickedMessageId(messageId);
     const currentlyActive = activeTextSelectId === messageId;
     if (m?.kind === "relation") {
+      const relType = relationTypeByRelMsgId.get(messageId);
+      if (relType === "classify") {
+        const targetTextIds = getClassifyTargetTextMessageIds(
+          edges
+            .filter(ed => ed.relationMessageId === messageId)
+            .map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
+        );
+        if (targetTextIds.length > 0) {
+          enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: messageId });
+          setFocusHop(0);
+        }
+        if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+        return;
+      }
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
       return;
     }
@@ -1178,6 +1200,7 @@ export default function TopicDetailPage() {
         alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
         return;
       }
+      const classifyTitle = newMessageContent.trim() || `分类话题（${targetTextIds.length}）`;
       const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
       try {
         const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs });
@@ -1187,7 +1210,7 @@ export default function TopicDetailPage() {
           author: backendRel.createdBy.username,
           createdAt: backendRel.createdAt,
           kind: "relation",
-          content: `建立分类话题\n目标：${targetTextIds.join(",")}`,
+          content: `话题：${classifyTitle}\n目标：${targetTextIds.join(",")}`,
         };
         setMessages(prev => [...prev, relMsg]);
         const anonSrcId = `anon:${backendRel.id}`;
@@ -1747,16 +1770,59 @@ export default function TopicDetailPage() {
                 {messagesToRender.filter(msg => !tagSourceIdsForList.has(msg.id)).map(msg => {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
                   const isActiveText = activeTextSelectId === msg.id;
+                  const relType = msg.kind === "relation" ? relationTypeByRelMsgId.get(msg.id) : null;
+                  const isClassifyTopicMsg = relType === "classify";
+                  const classifyTargetCount = isClassifyTopicMsg
+                    ? getClassifyTargetTextMessageIds(
+                        edges
+                          .filter(ed => ed.relationMessageId === msg.id)
+                          .map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
+                      ).length
+                    : 0;
+                  const classifyTitle = isClassifyTopicMsg ? extractClassifyTopicTitle(msg.content, classifyTargetCount) : "";
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
-                      style={{ borderRadius: 6, border: msg.kind === "relation" ? "1px solid #886400" : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444", background: msg.kind === "relation" ? "#232018" : "#1f1f1f", padding: "10px 14px", cursor: "pointer", fontSize: 13, outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none", userSelect: isActiveText ? "text" : "auto" }}>
+                      style={{
+                        borderRadius: isClassifyTopicMsg ? 10 : 6,
+                        border: isClassifyTopicMsg
+                          ? "1px solid #e5e7eb"
+                          : msg.kind === "relation" ? "1px solid #886400" : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444",
+                        background: isClassifyTopicMsg ? "#ffffff" : msg.kind === "relation" ? "#232018" : "#1f1f1f",
+                        color: isClassifyTopicMsg ? "#111827" : undefined,
+                        padding: isClassifyTopicMsg ? "10px 12px" : "10px 14px",
+                        cursor: "pointer",
+                        fontSize: 13,
+                        boxShadow: isClassifyTopicMsg ? "0 4px 12px rgba(0,0,0,0.2)" : undefined,
+                        outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none",
+                        userSelect: isActiveText ? "text" : "auto"
+                      }}>
                       <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
-                        <span>{msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
-                        <span>作者：{msg.author}</span>
+                        <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
+                        <span>{isClassifyTopicMsg ? "双击进入会话" : `作者：${msg.author}`}</span>
                       </div>
+                      {isClassifyTopicMsg && (
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                          <div style={{ fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {classifyTitle}
+                          </div>
+                          <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d" }}>
+                            进行中
+                          </span>
+                        </div>
+                      )}
                       {isActiveText && msg.kind === "normal" && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
                       <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => msg.kind === "normal" && handleTextMouseUp(e, msg.id)}>
-                        {msg.kind === "normal" ? renderMessageContentWithAnchorsForList(msg) : <div style={{ whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 12 }}>{msg.content}</div>}
+                        {msg.kind === "normal"
+                          ? renderMessageContentWithAnchorsForList(msg)
+                          : isClassifyTopicMsg
+                            ? (
+                              <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                                <span>由 <span style={{ fontWeight: 600, color: "#4b5563" }}>{msg.author}</span> 发起</span>
+                                <span>💬 {classifyTargetCount} 条观点</span>
+                                <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
+                              </div>
+                            )
+                            : <div style={{ whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 12 }}>{msg.content}</div>}
                       </div>
                     </div>
                   );

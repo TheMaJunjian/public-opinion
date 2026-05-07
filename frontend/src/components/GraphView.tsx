@@ -3,6 +3,7 @@ import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } fr
 import { getPresentationSpec } from '../types';
 import { computeCorrectedEdgeMap } from '../utils/modelBridge';
 import type { PresentationKind } from '../types';
+import { extractClassifyTopicTitle } from '../utils/classifyTopic';
 
 // ========================= Layout types =========================
 
@@ -2075,19 +2076,46 @@ export default function GraphView(props: GraphViewProps) {
                 style={{
                   position: "absolute",
                   left: x + 6,
-                  top: y - HH - 2,
+                  // Keep the card slightly above the frame; tie offset to HH so spacing scales with frame strip size.
+                  top: y - HH - Math.max(4, Math.round(HH / 2)),
                   zIndex: 5,
-                  background: "rgba(70,70,80,0.92)",
-                  color: "#fff",
-                  borderRadius: 4,
-                  border: "1px solid rgba(255,255,255,0.2)",
-                  fontSize: 10,
-                  padding: "1px 6px",
+                  width: Math.min(280, Math.max(180, width - 24)),
+                  background: "#ffffff",
+                  color: "#111827",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  boxShadow: "0 6px 14px rgba(0,0,0,0.22)",
+                  padding: "8px 10px",
                   cursor: "pointer",
                   pointerEvents: "auto",
                   userSelect: "none",
                 }}>
-                话题
+                {(() => {
+                  const relMsg = msgMap.get(gf.relMsgId);
+                  const targetTextIds = Array.from(new Set(
+                    (edgesByRelMsg.get(gf.relMsgId) ?? [])
+                      .filter(ed => msgMap.get(ed.to.messageId)?.kind === "normal")
+                      .map(ed => ed.to.messageId)
+                  ));
+                  const topicTitle = extractClassifyTopicTitle(relMsg?.content, targetTextIds.length);
+                  return (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {topicTitle}
+                        </span>
+                        <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 999, background: "#dcfce7", color: "#15803d" }}>
+                          进行中
+                        </span>
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 10, color: "#6b7280", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>由 {relMsg?.author ?? "系统"} 发起</span>
+                        <span style={{ flexShrink: 0 }}>💬 {targetTextIds.length}</span>
+                        <span style={{ flexShrink: 0 }}>{relMsg ? new Date(relMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
           </React.Fragment>

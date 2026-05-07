@@ -438,6 +438,14 @@ export default function TopicDetailPage() {
     }
     return map;
   }, [edges]);
+  const classifiedTargetTextIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType !== "classify") continue;
+      if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
+    }
+    return ids;
+  }, [edges, msgMap]);
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
@@ -1200,10 +1208,14 @@ export default function TopicDetailPage() {
         alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
         return;
       }
-      const classifyTitle = newMessageContent.trim() || `分类话题（${targetTextIds.length}）`;
+      const classifyTitle = newMessageContent.trim();
+      if (!classifyTitle) {
+        alert("请在文本输入框中输入话题名称");
+        return;
+      }
       const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
       try {
-        const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs });
+        const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs, classifyTitle });
         const relId = backendRel.id;
         const relMsg: DemoMessage = {
           id: relId,
@@ -1543,6 +1555,7 @@ export default function TopicDetailPage() {
   const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitFocus = focusEntries.length > 0;
   const isTopicFocus = currentFocusEntry?.mode === "topic";
+  const hideClassifiedInCurrentCanvas = !isTopicFocus;
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -1767,7 +1780,10 @@ export default function TopicDetailPage() {
           <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}>
             {viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {messagesToRender.filter(msg => !tagSourceIdsForList.has(msg.id)).map(msg => {
+                {messagesToRender
+                  .filter(msg => !tagSourceIdsForList.has(msg.id))
+                  .filter(msg => !(hideClassifiedInCurrentCanvas && msg.kind === "normal" && classifiedTargetTextIds.has(msg.id)))
+                  .map(msg => {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
                   const isActiveText = activeTextSelectId === msg.id;
                   const relType = msg.kind === "relation" ? relationTypeByRelMsgId.get(msg.id) : null;
@@ -1847,6 +1863,7 @@ export default function TopicDetailPage() {
                   onGroupFrameDoubleClick={handleGroupFrameDoubleClick}
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
+                  hideMessageIds={hideClassifiedInCurrentCanvas ? classifiedTargetTextIds : undefined}
                 />
             )}
           </div>

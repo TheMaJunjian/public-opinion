@@ -94,10 +94,11 @@ export function createRelation(topicId: string, data: {
   targetRefs: import('../types').TargetRef[];
   /** Label text for TAG relations (replaces source message). */
   tagLabel?: string;
+  /** Topic title for CLASSIFY relations. */
+  classifyTitle?: string;
 }) {
   return request<import('../types').Relation>(`/topics/${topicId}/relations`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
-

@@ -776,6 +776,8 @@ export interface GraphViewProps {
    * (who operated, when, etc.).  Falls back to onMessageDoubleClick if not provided.
    */
   onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
+  hideMessageIds?: Set<string>;
 }
 
 export default function GraphView(props: GraphViewProps) {
@@ -789,6 +791,7 @@ export default function GraphView(props: GraphViewProps) {
     onTagBodyClick, onTagDoubleClick,
     onGroupFrameClick, onGroupFrameDoubleClick,
     onInlineBadgeClick, onInlineBadgeDoubleClick,
+    hideMessageIds,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
@@ -1633,6 +1636,7 @@ export default function GraphView(props: GraphViewProps) {
       onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
+          if (hideMessageIds?.has(msg.id)) return null;
           // Corrected targets that are not themselves a correction source are invisible (replaced by the correction source card).
           // Chained correction sources remain visible so their own correction badge is preserved.
           if (hiddenCorrectedTargetIds.has(msg.id)) return null;

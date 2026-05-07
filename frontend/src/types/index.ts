@@ -113,6 +113,11 @@ export interface Relation {
    * Undefined for all non-TAG relation types.
    */
   tagLabel?: string;
+  /**
+   * Topic title for CLASSIFY relations. Stored directly on the relation.
+   * Undefined for all non-CLASSIFY relation types.
+   */
+  classifyTitle?: string;
   createdAt: string;
   createdBy: User;
 }

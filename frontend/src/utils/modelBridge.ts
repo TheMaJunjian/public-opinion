@@ -113,7 +113,8 @@ export function convertMessagesToDemoModel(
       const typeName = relationTypeName(rel.relationType);
       let content: string;
       if (relType === 'classify') {
-        content = `话题：分类话题（${rel.targetRefs.length}）\n目标：${targetRefsSummary(rel.targetRefs)}`;
+        const classifyTitle = rel.classifyTitle?.trim() || `分类话题（${rel.targetRefs.length}）`;
+        content = `话题：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'tag' && tagLabel) {
         content = `建立${typeName}关系「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (rel.sourceMessageId) {

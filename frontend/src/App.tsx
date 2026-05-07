@@ -3,7 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import Navbar from './components/Navbar';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
-import TopicListPage from './pages/TopicListPage';
+import HomePage from './pages/HomePage';
 import TopicDetailPage from './pages/TopicDetailPage';
 export default function App() {
   return (
@@ -15,7 +15,7 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
-              <Route path="/" element={<TopicListPage />} />
+              <Route path="/" element={<HomePage />} />
               <Route path="/topics/:topicId" element={<TopicDetailPage />} />
             </Routes>
           </main>

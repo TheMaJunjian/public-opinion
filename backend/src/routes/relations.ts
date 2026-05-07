@@ -56,6 +56,8 @@ const createRelationSchema = z.object({
   tagLabel: z.string().max(200).optional(),
 });
 
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY']);
+
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
@@ -133,13 +135,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     // CORRECT: optional (can be used to mark a relation message as needing correction without a source text)
     // REPLY: optional (can express a pure-stance reply to a relation message without source text)
     // TAG: optional (user-to-message relation; label text is stored in tagLabel instead of sourceMessageId)
-    const requiresSource = data.relationType !== 'AGREE'
-      && data.relationType !== 'DISAGREE'
-      && data.relationType !== 'SUPPLEMENT'
-      && data.relationType !== 'CORRECT'
-      && data.relationType !== 'REPLY'
-      && data.relationType !== 'TAG'
-      && data.relationType !== 'CLASSIFY';
+    const requiresSource = !SOURCE_OPTIONAL_RELATION_TYPES.has(data.relationType);
 
     if (requiresSource && !data.sourceMessageId) {
       res.status(400).json({ error: '该关系类型需要提供来源消息 ID' });
@@ -150,6 +146,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     // targets must be one or more text messages.
     if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
       res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
+
       return;
     }
 

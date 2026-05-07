@@ -21,6 +21,7 @@ const ALL_RELATION_TYPES: RelationType[] = [
 
 /** Max characters to display for an existing tag label in the secondary relation selector. */
 const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
+const CLASSIFY_TEXT_TARGET_HINT = "文本消息（普通消息，不能是关系消息）";
 
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
@@ -1219,7 +1220,7 @@ export default function TopicDetailPage() {
     if (relationType === "classify") {
       const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
       if (targetTextIds.length === 0) {
-        alert("分类关系至少需要一个文本目标消息（普通消息，不能是关系消息）");
+        alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
         return;
       }
       const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
@@ -1372,7 +1373,7 @@ export default function TopicDetailPage() {
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
       const targetCount = getClassifyTargetTextMessageIds(usingDraft ? draftUnits : targetUnits).length;
-      if (targetCount === 0) return "请至少选择一个文本消息（普通消息，不能是关系消息）作为分类话题目标";
+      if (targetCount === 0) return `请至少选择一个${CLASSIFY_TEXT_TARGET_HINT}作为分类话题目标`;
       return `建立分类话题（${targetCount} 个文本目标，自动包含其关系消息）`;
     }
     if (isAgreeDisagreeType || isSupplementType) {

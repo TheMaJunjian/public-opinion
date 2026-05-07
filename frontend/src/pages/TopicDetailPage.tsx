@@ -10,6 +10,7 @@ import type {
 import type { Topic, TargetRef } from '../types';
 import { getPresentationSpec } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
+import { extractClassifyTopicTitle } from '../utils/classifyTopic';
 
 // ========================= Helpers =========================
 
@@ -83,20 +84,6 @@ function nextId(prefix: string): string {
 function targetRefDisplayId(r: TargetRef): string {
   if (r.kind === 'message' || r.kind === 'text-fragment') return r.messageId;
   return r.relationId;
-}
-
-/** Extract classify topic title from relation message content with a safe fallback. */
-function extractClassifyTopicTitle(content: string | undefined, fallbackTargetCount: number): string {
-  if (!content) return `分类话题（${fallbackTargetCount}）`;
-  const firstLine = content.split('\n')[0]?.trim() ?? '';
-  if (!firstLine) return `分类话题（${fallbackTargetCount}）`;
-  const stripped = firstLine
-    .replace(/^话题[:：]\s*/u, '')
-    .replace(/^分类话题[:：]\s*/u, '')
-    .replace(/^建立分类话题[:：]?\s*/u, '')
-    .replace(/^建立分类关系（无来源消息）[:：]?\s*/u, '')
-    .trim();
-  return stripped || `分类话题（${fallbackTargetCount}）`;
 }
 
 /** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
@@ -677,6 +664,8 @@ export default function TopicDetailPage() {
           enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: messageId });
           setFocusHop(0);
         }
+        if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+        return;
       }
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
       return;

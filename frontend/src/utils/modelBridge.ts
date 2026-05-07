@@ -113,6 +113,7 @@ export function convertMessagesToDemoModel(
       const typeName = relationTypeName(rel.relationType);
       let content: string;
       if (relType === 'classify') {
+        // Backward compatibility: historical CLASSIFY relations may not have persisted titles.
         const classifyTitle = rel.classifyTitle?.trim() || `分类话题（${rel.targetRefs.length}）`;
         content = `话题：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'tag' && tagLabel) {

@@ -56,6 +56,14 @@ const createRelationSchema = z.object({
   tagLabel: z.string().max(200).optional(),
   // classifyTitle: optional topic title for CLASSIFY relations (stored in relation content).
   classifyTitle: z.string().trim().min(1).max(200).optional(),
+}).superRefine((data, ctx) => {
+  if (data.relationType === 'CLASSIFY' && !data.classifyTitle) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '分类关系需要提供话题名称',
+      path: ['classifyTitle'],
+    });
+  }
 });
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY']);

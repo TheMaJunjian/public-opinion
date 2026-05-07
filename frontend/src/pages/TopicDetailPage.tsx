@@ -1210,7 +1210,7 @@ export default function TopicDetailPage() {
       }
       const classifyTitle = newMessageContent.trim();
       if (!classifyTitle) {
-        alert("请在文本输入框中输入话题名称");
+        alert("话题名称不能为空");
         return;
       }
       const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));

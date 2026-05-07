@@ -1084,10 +1084,6 @@ export default function TopicDetailPage() {
 
   async function handleQuickSendAndRelateFromDraftTargets() {
     const text = newMessageContent.trim();
-    if (hasCrossClassifyNonReferenceLink) {
-      alert("存在“已分类/未分类”消息之间的非引用关系，请先调整关系后再发送。");
-      return;
-    }
 
     // No relation type selected: just send a plain message
     if (relationType === null) {
@@ -1532,7 +1528,6 @@ export default function TopicDetailPage() {
   // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
   const singleButtonEnabled = (() => {
-    if (hasCrossClassifyNonReferenceLink) return false;
     if (relationType === null) return newMessageContent.trim().length > 0;
     // reply/correct targeting a relation message: special mode (no text, no source, use secondary selector)
     if (draftHasRelationTarget && (relationType === "reply" || relationType === "correct")) {
@@ -1550,9 +1545,6 @@ export default function TopicDetailPage() {
 
   // Dynamic label describing what the send button will do
   const singleButtonLabel = (() => {
-    if (hasCrossClassifyNonReferenceLink) {
-      return "存在“已分类/未分类”消息之间的非引用关系，请先调整关系后再发送";
-    }
     if (relationType === null) {
       if (newMessageContent.trim().length === 0) return "请输入消息内容后发送";
       return "仅发送这条消息（未选择关系类型）";
@@ -1745,6 +1737,7 @@ export default function TopicDetailPage() {
     // connected to classified text messages (they "belong" to the topic view).
     const filteredMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
+      if (m.kind === "relation" && relationTypeByRelMsgId.get(m.id) === "classify") return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
       return true;

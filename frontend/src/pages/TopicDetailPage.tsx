@@ -447,6 +447,29 @@ export default function TopicDetailPage() {
     return ids;
   }, [edges, msgMap]);
 
+  // Non-classify relation messages whose ALL text-message endpoints are classified.
+  // These are also hidden from the main canvas (they "belong" to the topic).
+  const classifiedExclusiveRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    const edgesByRel = new Map<string, DemoEdge[]>();
+    for (const e of edges) {
+      const arr = edgesByRel.get(e.relationMessageId) ?? [];
+      arr.push(e);
+      edgesByRel.set(e.relationMessageId, arr);
+    }
+    for (const [relMsgId, relEdges] of edgesByRel) {
+      if (relEdges[0]?.relationType === 'classify') continue;
+      const textEndpoints = relEdges
+        .flatMap(e => [e.from.messageId, e.to.messageId])
+        .filter(mid => msgMap.get(mid)?.kind === 'normal');
+      if (textEndpoints.length === 0) continue;
+      if (textEndpoints.every(mid => classifiedTargetTextIds.has(mid))) {
+        ids.add(relMsgId);
+      }
+    }
+    return ids;
+  }, [edges, msgMap, classifiedTargetTextIds]);
+
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusLenRef = useRef(0);
@@ -1555,7 +1578,26 @@ export default function TopicDetailPage() {
   const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitFocus = focusEntries.length > 0;
   const isTopicFocus = currentFocusEntry?.mode === "topic";
-  const hideClassifiedInCurrentCanvas = !isTopicFocus;
+
+  // Messages and edges to pass to the canvas views, with classified text messages (and their
+  // exclusively-classified related relation messages) hidden when not in topic-focus mode.
+  // The CLASSIFY relation messages themselves remain visible as topic cards on the main canvas.
+  const { messagesToRenderFiltered, edgesToRenderFiltered } = useMemo(() => {
+    const baseMessages = focusEntries.length > 0 ? messagesToShow : messages;
+    const baseEdges = focusEntries.length > 0 ? edgesToShow : edges;
+    if (isTopicFocus) {
+      return { messagesToRenderFiltered: baseMessages, edgesToRenderFiltered: baseEdges };
+    }
+    // Main canvas: remove classified text messages and relation messages that are exclusively
+    // connected to classified text messages (they "belong" to the topic view).
+    const filteredMessages = baseMessages.filter(m => {
+      if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
+      if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
+      return true;
+    });
+    const filteredEdges = baseEdges.filter(e => !classifiedExclusiveRelMsgIds.has(e.relationMessageId));
+    return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
+  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, classifiedTargetTextIds, classifiedExclusiveRelMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -1734,8 +1776,8 @@ export default function TopicDetailPage() {
     );
   }
 
-  const messagesToRender = focusEntries.length > 0 ? messagesToShow : messages;
-  const edgesToRender = focusEntries.length > 0 ? edgesToShow : edges;
+  const messagesToRender = messagesToRenderFiltered;
+  const edgesToRender = edgesToRenderFiltered;
   const isOwner = user && topic && (topic as any).author?.id === user.id;
 
   return (
@@ -1782,7 +1824,6 @@ export default function TopicDetailPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {messagesToRender
                   .filter(msg => !tagSourceIdsForList.has(msg.id))
-                  .filter(msg => !(hideClassifiedInCurrentCanvas && msg.kind === "normal" && classifiedTargetTextIds.has(msg.id)))
                   .map(msg => {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
                   const isActiveText = activeTextSelectId === msg.id;
@@ -1814,7 +1855,7 @@ export default function TopicDetailPage() {
                       }}>
                       <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
                         <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
-                        <span>{isClassifyTopicMsg ? "双击进入会话" : `作者：${msg.author}`}</span>
+                        <span>{isClassifyTopicMsg ? "双击进入话题" : `作者：${msg.author}`}</span>
                       </div>
                       {isClassifyTopicMsg && (
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
@@ -1863,7 +1904,6 @@ export default function TopicDetailPage() {
                   onGroupFrameDoubleClick={handleGroupFrameDoubleClick}
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
-                  hideMessageIds={hideClassifiedInCurrentCanvas ? classifiedTargetTextIds : undefined}
                 />
             )}
           </div>

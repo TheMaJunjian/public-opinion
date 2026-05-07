@@ -53,6 +53,8 @@ const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 // SUPPLEMENT frame constants
 const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pairs (wide enough to click)
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
+// CLASSIFY topic card sits slightly above the frame border so the border remains clickable and visible.
+const CLASSIFY_TOPIC_CARD_TOP_OFFSET = 6;
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
 
@@ -82,6 +84,7 @@ function extractClassifyTopicTitle(content: string | undefined, fallbackTargetCo
   const firstLine = content.split('\n')[0]?.trim() ?? '';
   if (!firstLine) return `分类话题（${fallbackTargetCount}）`;
   const stripped = firstLine
+    .replace(/^话题[:：]\s*/u, '')
     .replace(/^分类话题[:：]\s*/u, '')
     .replace(/^建立分类话题[:：]?\s*/u, '')
     .replace(/^建立分类关系（无来源消息）[:：]?\s*/u, '')
@@ -2088,7 +2091,7 @@ export default function GraphView(props: GraphViewProps) {
                 style={{
                   position: "absolute",
                   left: x + 6,
-                  top: y - HH - 6,
+                  top: y - HH - CLASSIFY_TOPIC_CARD_TOP_OFFSET,
                   zIndex: 5,
                   width: Math.min(280, Math.max(180, width - 24)),
                   background: "#ffffff",

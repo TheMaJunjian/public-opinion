@@ -91,6 +91,7 @@ function extractClassifyTopicTitle(content: string | undefined, fallbackTargetCo
   const firstLine = content.split('\n')[0]?.trim() ?? '';
   if (!firstLine) return `分类话题（${fallbackTargetCount}）`;
   const stripped = firstLine
+    .replace(/^话题[:：]\s*/u, '')
     .replace(/^分类话题[:：]\s*/u, '')
     .replace(/^建立分类话题[:：]?\s*/u, '')
     .replace(/^建立分类关系（无来源消息）[:：]?\s*/u, '')
@@ -1220,7 +1221,7 @@ export default function TopicDetailPage() {
           author: backendRel.createdBy.username,
           createdAt: backendRel.createdAt,
           kind: "relation",
-          content: `分类话题：${classifyTitle}\n目标：${targetTextIds.join(",")}`,
+          content: `话题：${classifyTitle}\n目标：${targetTextIds.join(",")}`,
         };
         setMessages(prev => [...prev, relMsg]);
         const anonSrcId = `anon:${backendRel.id}`;

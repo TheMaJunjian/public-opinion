@@ -189,12 +189,12 @@ function applyTextCorrectionInheritance(
           from: { ...e.from, messageId: mappedFrom },
           to: { ...e.to, messageId: mappedTo },
         };
-    const k = `${updated.relationMessageId}::${updated.relationType}::${selKey(updated.from)}::${selKey(updated.to)}::${updated.relationLabel}`;
-    if (seen.has(k)) {
+    const edgeKey = `${updated.relationMessageId}::${updated.relationType}::${selKey(updated.from)}::${selKey(updated.to)}::${updated.relationLabel}`;
+    if (seen.has(edgeKey)) {
       changed = true;
       continue;
     }
-    seen.add(k);
+    seen.add(edgeKey);
     if (updated !== e) changed = true;
     next.push(updated);
   }
@@ -447,11 +447,22 @@ export default function TopicDetailPage() {
   // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
   // Used to skip corrected fragments when double-clicking to select all fragments.
   const correctedEdgeMap = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
+  const lastInheritedEdgeSignatureRef = useRef<string>('');
 
   useEffect(() => {
     if (edges.length === 0) return;
     const inherited = applyTextCorrectionInheritance(edges, msgMap);
-    if (inherited !== edges) setEdges(inherited);
+    const signature = inherited.map(e =>
+      `${e.id}::${e.relationMessageId}::${e.relationType}::${selKey(e.from)}::${selKey(e.to)}::${e.relationLabel}`
+    ).join('|');
+    if (inherited !== edges && signature !== lastInheritedEdgeSignatureRef.current) {
+      lastInheritedEdgeSignatureRef.current = signature;
+      setEdges(inherited);
+      return;
+    }
+    if (inherited === edges) {
+      lastInheritedEdgeSignatureRef.current = signature;
+    }
   }, [edges, msgMap, setEdges]);
 
   /** Returns edge IDs for a relation message, excluding any that have been individually corrected. */
@@ -1344,12 +1355,12 @@ export default function TopicDetailPage() {
         arr.push(e.to.messageId);
         supplementTargetsByRelMsg.set(e.relationMessageId, arr);
       }
-      for (const [suppRelMsgId, mids] of supplementTargetsByRelMsg) {
+      for (const [, mids] of supplementTargetsByRelMsg) {
         const uniqueMids = Array.from(new Set(mids));
         if (uniqueMids.length <= 1) continue;
         const selectedCount = uniqueMids.filter(mid => selectedSet.has(mid)).length;
         if (selectedCount > 0 && selectedCount < uniqueMids.length) {
-          alert(`补充关系 ${suppRelMsgId} 关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
+          alert(`同一条补充关系关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
           return;
         }
       }

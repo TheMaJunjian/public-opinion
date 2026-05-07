@@ -196,7 +196,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('分类关系');
   });
 
-  it('rejects CLASSIFY relation targets', async () => {
+  it('rejects CLASSIFY with relation message targets', async () => {
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')

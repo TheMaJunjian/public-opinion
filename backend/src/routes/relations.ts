@@ -146,7 +146,6 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     // targets must be one or more text messages.
     if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
       res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
-
       return;
     }
 

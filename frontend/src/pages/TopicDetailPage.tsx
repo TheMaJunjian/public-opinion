@@ -1930,8 +1930,7 @@ export default function TopicDetailPage() {
     <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontWeight: 600 }}>{isTopicFocus ? "分类关系视图" : (topic?.title ?? "加载中…")}</span>
-          {topic && <span style={{ fontSize: 11, opacity: 0.7, border: "1px solid #444", borderRadius: 4, padding: "1px 6px" }}>{topic.status}</span>}
+          <span style={{ fontWeight: 600 }}>分类关系视图</span>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
               {topic?.status === 'ARCHIVED' ? '重新开放' : '归档'}

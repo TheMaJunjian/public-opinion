@@ -824,9 +824,23 @@ export default function GraphView(props: GraphViewProps) {
     for (const id of shouldKeepVisible) isTagSource.delete(id);
     return isTagSource;
   }, [edges, msgMap]);
-  const normals = useMemo(() => messages.filter(m => m.kind === "normal" && !tagSourceIds.has(m.id)), [messages, tagSourceIds]);
+  // CLASSIFY relation messages are displayed as topic cards on the main canvas (not as SVG frames),
+  // so they participate in the normals layout like regular text messages.
+  const classifyRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === 'classify') ids.add(e.relationMessageId);
+    }
+    return ids;
+  }, [edges]);
+  const normals = useMemo(() => messages.filter(m =>
+    (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
+    (m.kind === "relation" && classifyRelMsgIds.has(m.id))
+  ), [messages, tagSourceIds, classifyRelMsgIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
-  const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation").map(m => m.id)), [messages]);
+  // Exclude CLASSIFY messages from relIds — they are now in normals and should not be
+  // treated as relation-message endpoints for edge-routing constraint algorithms.
+  const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation" && !classifyRelMsgIds.has(m.id)).map(m => m.id)), [messages, classifyRelMsgIds]);
 
   const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges, relIds), [normalIds, edges, relIds]);
   const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol, relIds }), [normals, edges, baseCol, baseMaxCol, relIds]);
@@ -992,7 +1006,9 @@ export default function GraphView(props: GraphViewProps) {
     const normalSet = new Set(normalIds);
 
     function endpointBoxForNormal(id: string): {box:LayoutBox;col:number}|null {
-      const m = msgMap.get(id); if (!m||m.kind!=="normal") return null;
+      const m = msgMap.get(id);
+      // Accept both normal text messages and CLASSIFY relation messages (shown as cards)
+      if (!m || (m.kind !== "normal" && !classifyRelMsgIds.has(id))) return null;
       const cardEl = cardRefs.current[id];
       if (cardEl) {
         const r = cardEl.getBoundingClientRect();
@@ -1584,7 +1600,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, classifyRelMsgIds]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -1640,6 +1656,44 @@ export default function GraphView(props: GraphViewProps) {
           // Corrected targets that are not themselves a correction source are invisible (replaced by the correction source card).
           // Chained correction sources remain visible so their own correction badge is preserved.
           if (hiddenCorrectedTargetIds.has(msg.id)) return null;
+
+          // CLASSIFY relation messages are shown as topic cards (matching the list-view style).
+          if (msg.kind === "relation" && classifyRelMsgIds.has(msg.id)) {
+            const relEdgesForMsg = edges.filter(e => e.relationMessageId === msg.id);
+            const targetCount = relEdgesForMsg.filter(e => !e.to.messageId.startsWith('anon:')).length;
+            const classifyTitle = extractClassifyTopicTitle(msg.content, targetCount);
+            const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
+            return (
+              <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
+                onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
+                onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
+                style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#ffffff",borderRadius:10,
+                  border:isWhole?"2px solid #0b84ff":"1px solid #e5e7eb",
+                  padding:"10px 12px",boxShadow:"0 4px 12px rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",
+                  gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:"auto",color:"#111827"}}>
+                <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.8,display:"flex",justifyContent:"space-between"}}>
+                  <span>{`分类话题 ${msg.id}`}</span>
+                  <span>{"双击进入话题"}</span>
+                </div>
+                <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                    <div style={{fontWeight:600,color:"#111827",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {classifyTitle}
+                    </div>
+                    <span style={{fontSize:11,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"#dcfce7",color:"#15803d",flexShrink:0}}>
+                      进行中
+                    </span>
+                  </div>
+                  <div style={{fontSize:12,color:"#6b7280",display:"flex",gap:12,flexWrap:"wrap"}}>
+                    <span>由 <span style={{fontWeight:600,color:"#4b5563"}}>{msg.author}</span> 发起</span>
+                    <span>💬 {targetCount} 条观点</span>
+                    <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
           const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
           const corrBadges = correctionsBySourceMsgId.get(msg.id) ?? [];

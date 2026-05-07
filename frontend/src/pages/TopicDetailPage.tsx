@@ -1170,6 +1170,46 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // CLASSIFY relation: user-to-message relation with no source message.
+    // Only text-message targets are accepted.
+    if (relationType === "classify") {
+      const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
+      if (targetTextIds.length === 0) {
+        alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
+        return;
+      }
+      const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
+      try {
+        const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs });
+        const relId = backendRel.id;
+        const relMsg: DemoMessage = {
+          id: relId,
+          author: backendRel.createdBy.username,
+          createdAt: backendRel.createdAt,
+          kind: "relation",
+          content: `建立分类话题\n目标：${targetTextIds.join(",")}`,
+        };
+        setMessages(prev => [...prev, relMsg]);
+        const anonSrcId = `anon:${backendRel.id}`;
+        const newEdges = targetTextIds.map(targetMid => ({
+          id: nextId("edge"),
+          relationMessageId: relId,
+          relationType: "classify" as RelationType,
+          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+          to: { messageId: targetMid, selection: { kind: "whole" as const } },
+          relationLabel: relationTypeName("classify"),
+        }));
+        setEdges(prev => [...prev, ...newEdges]);
+      } catch (e: any) {
+        alert(`建立关系失败: ${e?.message ?? e}`);
+        return;
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
     if (text.length === 0) return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
@@ -1209,46 +1249,6 @@ export default function TopicDetailPage() {
         if (edge) newTagEdges.push(edge);
       }
       setEdges(prev => [...prev, ...newTagEdges]);
-      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setNewMessageContent("");
-      setRelationType(null); setSecondaryRelationType("none");
-      return;
-    }
-
-    // CLASSIFY relation: user-to-message relation with no source message.
-    // Only text-message targets are accepted.
-    if (relationType === "classify") {
-      const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
-      if (targetTextIds.length === 0) {
-        alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
-        return;
-      }
-      const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
-      try {
-        const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs });
-        const relId = backendRel.id;
-        const relMsg: DemoMessage = {
-          id: relId,
-          author: backendRel.createdBy.username,
-          createdAt: backendRel.createdAt,
-          kind: "relation",
-          content: `建立分类话题\n目标：${targetTextIds.join(",")}`,
-        };
-        setMessages(prev => [...prev, relMsg]);
-        const anonSrcId = `anon:${backendRel.id}`;
-        const newEdges = targetTextIds.map(targetMid => ({
-          id: nextId("edge"),
-          relationMessageId: relId,
-          relationType: "classify" as RelationType,
-          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
-          to: { messageId: targetMid, selection: { kind: "whole" as const } },
-          relationLabel: relationTypeName("classify"),
-        }));
-        setEdges(prev => [...prev, ...newEdges]);
-      } catch (e: any) {
-        alert(`建立关系失败: ${e?.message ?? e}`);
-        return;
-      }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
       setRelationType(null); setSecondaryRelationType("none");
@@ -1795,6 +1795,19 @@ export default function TopicDetailPage() {
         />
 
         <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
+          {isTopicFocus && (
+            <div style={{ border: "1px solid #4b5f7a", borderRadius: 6, padding: 8, background: "#162033", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>正在显示分类话题</div>
+                <div style={{ fontSize: 12, opacity: 0.8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  关系消息：{currentFocusEntry?.topicRelMsgId ?? "（未知）"}
+                </div>
+              </div>
+              <button onClick={exitFocus} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #6f8fbd", background: "#223a5f", color: "#fff", cursor: "pointer", flexShrink: 0 }}>
+                退出话题
+              </button>
+            </div>
+          )}
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
               <div style={{ fontWeight: 600 }}>候选区（Draft）</div>

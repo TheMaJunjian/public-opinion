@@ -469,6 +469,17 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [edges, msgMap, classifiedTargetTextIds]);
+  const hasCrossClassifyNonReferenceLink = useMemo(() => {
+    for (const e of edges) {
+      if (e.relationType === "reference") continue;
+      if (msgMap.get(e.from.messageId)?.kind !== "normal") continue;
+      if (msgMap.get(e.to.messageId)?.kind !== "normal") continue;
+      const fromClassified = classifiedTargetTextIds.has(e.from.messageId);
+      const toClassified = classifiedTargetTextIds.has(e.to.messageId);
+      if (fromClassified !== toClassified) return true;
+    }
+    return false;
+  }, [edges, msgMap, classifiedTargetTextIds]);
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
@@ -980,6 +991,10 @@ export default function TopicDetailPage() {
 
   async function handleQuickSendAndRelateFromDraftTargets() {
     const text = newMessageContent.trim();
+    if (hasCrossClassifyNonReferenceLink) {
+      alert("存在“已分类/未分类”消息之间的非引用关系，请先调整关系后再发送。");
+      return;
+    }
 
     // No relation type selected: just send a plain message
     if (relationType === null) {
@@ -1406,6 +1421,7 @@ export default function TopicDetailPage() {
   // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
   const singleButtonEnabled = (() => {
+    if (hasCrossClassifyNonReferenceLink) return false;
     if (relationType === null) return newMessageContent.trim().length > 0;
     // reply/correct targeting a relation message: special mode (no text, no source, use secondary selector)
     if (draftHasRelationTarget && (relationType === "reply" || relationType === "correct")) {
@@ -1423,6 +1439,9 @@ export default function TopicDetailPage() {
 
   // Dynamic label describing what the send button will do
   const singleButtonLabel = (() => {
+    if (hasCrossClassifyNonReferenceLink) {
+      return "存在“已分类/未分类”消息之间的非引用关系，请先调整关系后再发送";
+    }
     if (relationType === null) {
       if (newMessageContent.trim().length === 0) return "请输入消息内容后发送";
       return "仅发送这条消息（未选择关系类型）";
@@ -1598,11 +1617,6 @@ export default function TopicDetailPage() {
     () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,
     [topicFocusRelMsgId, msgMap]
   );
-  const topicFocusTitle = useMemo(
-    () => topicFocusRelMsgId ? extractClassifyTopicTitle(topicFocusRelMsg?.content, topicFocusTargetCount) : "",
-    [topicFocusRelMsgId, topicFocusRelMsg, topicFocusTargetCount]
-  );
-
   // Messages and edges to pass to the canvas views, with classified text messages (and their
   // exclusively-classified related relation messages) hidden when not in topic-focus mode.
   // The CLASSIFY relation messages themselves remain visible as topic cards on the main canvas.
@@ -1808,7 +1822,7 @@ export default function TopicDetailPage() {
     <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontWeight: 600 }}>{topic?.title ?? "加载中…"}</span>
+          <span style={{ fontWeight: 600 }}>{isTopicFocus ? "分类关系视图" : (topic?.title ?? "加载中…")}</span>
           {topic && <span style={{ fontSize: 11, opacity: 0.7, border: "1px solid #444", borderRadius: 4, padding: "1px 6px" }}>{topic.status}</span>}
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
@@ -1842,13 +1856,11 @@ export default function TopicDetailPage() {
             </div>
           </div>
           {isTopicFocus && (
-            <div style={{ flex: "0 0 auto", padding: "8px 8px 0 8px", background: "#101010" }}>
+            <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
               <div style={{ border: "1px solid #4b5f7a", borderRadius: 10, padding: "8px 10px", background: "#ffffff", color: "#111827", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {topicFocusTitle || "分类话题"}
-                    </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <div style={{ fontWeight: 600 }}>分类话题</div>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d", flexShrink: 0 }}>
                       进行中
                     </span>

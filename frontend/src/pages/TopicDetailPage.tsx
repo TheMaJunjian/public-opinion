@@ -686,15 +686,7 @@ export default function TopicDetailPage() {
     if (m?.kind === "relation") {
       const relType = relationTypeByRelMsgId.get(messageId);
       if (relType === "classify") {
-        const targetTextIds = getClassifyTargetTextMessageIds(
-          edges
-            .filter(ed => ed.relationMessageId === messageId)
-            .map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
-        );
-        if (targetTextIds.length > 0) {
-          enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: messageId });
-          setFocusHop(0);
-        }
+        enterClassifyTopic(messageId);
         if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
         return;
       }
@@ -760,6 +752,21 @@ export default function TopicDetailPage() {
         .map(u => u.messageId)
         .filter(mid => msgMap.get(mid)?.kind === "normal")
     ));
+  }
+
+  function getClassifyTargetTextIdsByRelMsgId(relMsgId: string): string[] {
+    return getClassifyTargetTextMessageIds(
+      edges
+        .filter(ed => ed.relationMessageId === relMsgId)
+        .map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
+    );
+  }
+
+  function enterClassifyTopic(relMsgId: string) {
+    const targetTextIds = getClassifyTargetTextIdsByRelMsgId(relMsgId);
+    if (targetTextIds.length === 0) return;
+    enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: relMsgId });
+    setFocusHop(0);
   }
 
   function getEdgeIdsForRelation(relationMessageId: string) {
@@ -1578,6 +1585,19 @@ export default function TopicDetailPage() {
   const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitFocus = focusEntries.length > 0;
   const isTopicFocus = currentFocusEntry?.mode === "topic";
+  const topicFocusRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
+  const topicFocusTargetCount = useMemo(
+    () => topicFocusRelMsgId ? getClassifyTargetTextIdsByRelMsgId(topicFocusRelMsgId).length : 0,
+    [topicFocusRelMsgId, edges]
+  );
+  const topicFocusRelMsg = useMemo(
+    () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,
+    [topicFocusRelMsgId, msgMap]
+  );
+  const topicFocusTitle = useMemo(
+    () => topicFocusRelMsgId ? extractClassifyTopicTitle(topicFocusRelMsg?.content, topicFocusTargetCount) : "",
+    [topicFocusRelMsgId, topicFocusRelMsg, topicFocusTargetCount]
+  );
 
   // Messages and edges to pass to the canvas views, with classified text messages (and their
   // exclusively-classified related relation messages) hidden when not in topic-focus mode.
@@ -1682,12 +1702,7 @@ export default function TopicDetailPage() {
       return;
     }
     if (relType === "classify") {
-      const targetTextIds = getClassifyTargetTextMessageIds(
-        relEdges.map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
-      );
-      if (targetTextIds.length === 0) return;
-      enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: relMsgId });
-      setFocusHop(0);
+      enterClassifyTopic(relMsgId);
       return;
     }
     // For frame-group (classify/merge): enter focus mode
@@ -1919,11 +1934,20 @@ export default function TopicDetailPage() {
 
         <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
           {isTopicFocus && (
-            <div style={{ border: "1px solid #4b5f7a", borderRadius: 6, padding: 8, background: "#162033", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div style={{ border: "1px solid #4b5f7a", borderRadius: 10, padding: "8px 10px", background: "#ffffff", color: "#111827", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600, marginBottom: 2 }}>正在显示分类话题</div>
-                <div style={{ fontSize: 12, opacity: 0.8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  关系消息：{currentFocusEntry?.topicRelMsgId ?? "（未知）"}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {topicFocusTitle || "分类话题"}
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d", flexShrink: 0 }}>
+                    进行中
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <span>由 <span style={{ fontWeight: 600, color: "#4b5563" }}>{topicFocusRelMsg?.author ?? "系统"}</span> 发起</span>
+                  <span>💬 {topicFocusTargetCount} 条观点</span>
+                  <span>{topicFocusRelMsg ? new Date(topicFocusRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
                 </div>
               </div>
               <button onClick={exitFocus} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #6f8fbd", background: "#223a5f", color: "#fff", cursor: "pointer", flexShrink: 0 }}>

@@ -21,6 +21,7 @@ const ALL_RELATION_TYPES: RelationType[] = [
 
 /** Max characters to display for an existing tag label in the secondary relation selector. */
 const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
+const CLASSIFY_TEXT_TARGET_HINT = "文本消息（普通消息，不能是关系消息）";
 
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
@@ -296,6 +297,14 @@ type FocusSnapshot = {
   targetUnits: UnitSelection[];
   activeTextSelectId: string | null;
   lastClickedMessageId: string | null;
+  focusHop: number;
+};
+
+type FocusEntry = {
+  ids: string[];
+  snapshot: FocusSnapshot | null;
+  mode: "focus" | "topic";
+  topicRelMsgId?: string;
 };
 
 export default function TopicDetailPage() {
@@ -346,7 +355,7 @@ export default function TopicDetailPage() {
   const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
   const [targetUnits, setTargetUnits] = useState<UnitSelection[]>([]);
   const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
-  const [focusEntries, setFocusEntries] = useState<{ ids: string[]; snapshot: FocusSnapshot | null }[]>([]);
+  const [focusEntries, setFocusEntries] = useState<FocusEntry[]>([]);
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [focusHop, setFocusHop] = useState<number>(1);
@@ -365,7 +374,8 @@ export default function TopicDetailPage() {
     x: number; y: number;
   } | null>(null);
 
-  const currentFocusIds = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].ids : null;
+  const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
+  const currentFocusIds = currentFocusEntry?.ids ?? null;
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
 
   // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
@@ -472,6 +482,7 @@ export default function TopicDetailPage() {
       targetUnits: targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       activeTextSelectId,
       lastClickedMessageId,
+      focusHop,
     };
   }
 
@@ -490,6 +501,7 @@ export default function TopicDetailPage() {
     setTargetUnits(s.targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
     setActiveTextSelectId(s.activeTextSelectId);
     setLastClickedMessageId(s.lastClickedMessageId);
+    setFocusHop(s.focusHop);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
@@ -498,17 +510,17 @@ export default function TopicDetailPage() {
     });
   }
 
-  function enterFocus(messageId: string, options?: { replace?: boolean }) {
+  function enterFocus(messageId: string, options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
     if (!messageId) return;
     const snapshot = captureSnapshot();
-    const entry = { ids: [messageId], snapshot };
+    const entry: FocusEntry = { ids: [messageId], snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
     setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
   }
 
-  function enterFocusMultiple(messageIds: string[], options?: { replace?: boolean }) {
+  function enterFocusMultiple(messageIds: string[], options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
     if (!messageIds || messageIds.length === 0) return;
     const snapshot = captureSnapshot();
-    const entry = { ids: messageIds, snapshot };
+    const entry: FocusEntry = { ids: messageIds, snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
     setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
   }
 
@@ -687,6 +699,14 @@ export default function TopicDetailPage() {
 
   function removeUnitFromDraft(unit: UnitSelection) {
     setDraftUnits(prev => prev.filter(u => !unitEquals(u, unit)));
+  }
+
+  function getClassifyTargetTextMessageIds(units: UnitSelection[]): string[] {
+    return Array.from(new Set(
+      units
+        .map(u => u.messageId)
+        .filter(mid => msgMap.get(mid)?.kind === "normal")
+    ));
   }
 
   function getEdgeIdsForRelation(relationMessageId: string) {
@@ -916,7 +936,7 @@ export default function TopicDetailPage() {
 
     // Scenario: source collection + target collection explicitly committed (no draft candidates).
     // Build the relation directly without creating a new text message.
-    if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
+    if (relationType !== "classify" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
       const labelDefault = relationTypeName(relationType);
       const label = relationLabel.trim() || labelDefault;
       await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
@@ -1195,6 +1215,46 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // CLASSIFY relation: user-to-message relation with no source message.
+    // Only text-message targets are accepted.
+    if (relationType === "classify") {
+      const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
+      if (targetTextIds.length === 0) {
+        alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
+        return;
+      }
+      const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
+      try {
+        const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs });
+        const relId = backendRel.id;
+        const relMsg: DemoMessage = {
+          id: relId,
+          author: backendRel.createdBy.username,
+          createdAt: backendRel.createdAt,
+          kind: "relation",
+          content: `建立分类话题\n目标：${targetTextIds.join(",")}`,
+        };
+        setMessages(prev => [...prev, relMsg]);
+        const anonSrcId = `anon:${backendRel.id}`;
+        const newEdges = targetTextIds.map(targetMid => ({
+          id: nextId("edge"),
+          relationMessageId: relId,
+          relationType: "classify" as RelationType,
+          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+          to: { messageId: targetMid, selection: { kind: "whole" as const } },
+          relationLabel: relationTypeName("classify"),
+        }));
+        setEdges(prev => [...prev, ...newEdges]);
+      } catch (e: any) {
+        alert(`建立关系失败: ${e?.message ?? e}`);
+        return;
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
@@ -1258,6 +1318,7 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
+  const isClassifyType = relationType === "classify";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
@@ -1286,6 +1347,8 @@ export default function TopicDetailPage() {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
+    const hasClassifyTargetsAvailable = getClassifyTargetTextMessageIds(draftUnits.length > 0 ? draftUnits : targetUnits).length > 0;
+    if (isClassifyType) return hasClassifyTargetsAvailable;
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
     if (isAgreeDisagreeType || isSupplementType || isTagWithQuickAnnotate) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
@@ -1308,6 +1371,11 @@ export default function TopicDetailPage() {
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     const usingDraft = draftUnits.length > 0;
+    if (isClassifyType) {
+      const targetCount = getClassifyTargetTextMessageIds(usingDraft ? draftUnits : targetUnits).length;
+      if (targetCount === 0) return `请至少选择一个${CLASSIFY_TEXT_TARGET_HINT}作为分类话题目标`;
+      return `建立分类话题（${targetCount} 个文本目标，自动包含其关系消息）`;
+    }
     if (isAgreeDisagreeType || isSupplementType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       return newMessageContent.trim().length > 0
@@ -1451,6 +1519,7 @@ export default function TopicDetailPage() {
 
   const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitFocus = focusEntries.length > 0;
+  const isTopicFocus = currentFocusEntry?.mode === "topic";
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -1532,6 +1601,15 @@ export default function TopicDetailPage() {
     const spec = getPresentationSpec(relType);
     if (spec.kind === 'replace-overlay') {
       setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
+      return;
+    }
+    if (relType === "classify") {
+      const targetTextIds = getClassifyTargetTextMessageIds(
+        relEdges.map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
+      );
+      if (targetTextIds.length === 0) return;
+      enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: relMsgId });
+      setFocusHop(0);
       return;
     }
     // For frame-group (classify/merge): enter focus mode
@@ -1731,7 +1809,7 @@ export default function TopicDetailPage() {
                     设为焦点消息
                   </button>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出最近一次进入的焦点并恢复进入该焦点前的现场">退出焦点</button>
+                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isTopicFocus ? "退出当前话题并恢复进入前现场" : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>{isTopicFocus ? "退出话题" : "退出焦点"}</button>
                     <button onClick={exitAllFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#333" : "#222", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
                   </div>
                 </div>
@@ -1864,6 +1942,7 @@ export default function TopicDetailPage() {
 
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ fontWeight: 600 }}>焦点</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>{isTopicFocus ? "当前模式：话题" : "当前模式：焦点"}</div>
             <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
           </div>
 

@@ -142,11 +142,11 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns 400 when sourceMessageId is missing', async () => {
+  it('returns 400 when required sourceMessageId is missing', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'REPLY', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'ANNOTATION', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(400);
   });
 
@@ -177,6 +177,33 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .send({ relationType: 'REPLY', sourceMessageId: 'nonexistent', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(404);
     expect(res.body.error).toContain('来源消息');
+  });
+
+  it('allows CLASSIFY without sourceMessageId', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'CLASSIFY', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects CLASSIFY with sourceMessageId', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'CLASSIFY', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('分类关系');
+  });
+
+  it('rejects CLASSIFY with relation message targets', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'CLASSIFY', targetRefs: [{ kind: 'relation', relationId: 'rel-1' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('文本消息');
   });
 });
 
@@ -265,4 +292,3 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     expect(res.body.error).toContain('目标关系消息');
   });
 });
-

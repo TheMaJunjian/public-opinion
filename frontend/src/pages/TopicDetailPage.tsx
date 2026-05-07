@@ -172,6 +172,7 @@ function applyTextCorrectionInheritance(
   if (replaceMap.size === 0) return edges;
   const next: DemoEdge[] = [];
   const seen = new Set<string>();
+  let changed = false;
   for (const e of edges) {
     if (e.relationType === "correct") {
       next.push(e);
@@ -189,10 +190,15 @@ function applyTextCorrectionInheritance(
           to: { ...e.to, messageId: mappedTo },
         };
     const k = `${updated.relationMessageId}::${updated.relationType}::${selKey(updated.from)}::${selKey(updated.to)}::${updated.relationLabel}`;
-    if (seen.has(k)) continue;
+    if (seen.has(k)) {
+      changed = true;
+      continue;
+    }
     seen.add(k);
+    if (updated !== e) changed = true;
     next.push(updated);
   }
+  if (!changed && next.length === edges.length) return edges;
   return next;
 }
 
@@ -445,17 +451,8 @@ export default function TopicDetailPage() {
   useEffect(() => {
     if (edges.length === 0) return;
     const inherited = applyTextCorrectionInheritance(edges, msgMap);
-    if (inherited.length !== edges.length) {
-      setEdges(inherited);
-      return;
-    }
-    for (let i = 0; i < edges.length; i++) {
-      if (inherited[i] !== edges[i]) {
-        setEdges(inherited);
-        return;
-      }
-    }
-  }, [edges, msgMap]);
+    if (inherited !== edges) setEdges(inherited);
+  }, [edges, msgMap, setEdges]);
 
   /** Returns edge IDs for a relation message, excluding any that have been individually corrected. */
   function getUncorrectedEdgeIds(relationMessageId: string): string[] {

@@ -14,13 +14,14 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     if (authLoading) return;
     if (!user) {
-      navigate('/login', { replace: true });
-      return;
+      if (!cancelled) navigate('/login', { replace: true });
+      return () => { cancelled = true; };
     }
 
-    let cancelled = false;
     async function loadOrCreate() {
       try {
         const res = await api.getTopics({ limit: 1 });
@@ -28,13 +29,20 @@ export default function HomePage() {
         if (res.data.length > 0) {
           navigate(`/topics/${res.data[0].id}`, { replace: true });
         } else {
-          const topic = await api.createTopic({ title: '公论' });
+          let topic;
+          try {
+            topic = await api.createTopic({ title: '公论' });
+          } catch (createErr: unknown) {
+            if (cancelled) return;
+            setError(`创建默认空间失败：${createErr instanceof Error ? createErr.message : createErr}`);
+            return;
+          }
           if (cancelled) return;
           navigate(`/topics/${topic.id}`, { replace: true });
         }
       } catch (e: unknown) {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : '加载失败');
+        setError(`加载话题失败：${e instanceof Error ? e.message : e}`);
       }
     }
 

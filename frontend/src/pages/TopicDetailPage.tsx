@@ -1587,8 +1587,12 @@ export default function TopicDetailPage() {
   const isTopicFocus = currentFocusEntry?.mode === "topic";
   const topicFocusRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
   const topicFocusTargetCount = useMemo(
-    () => topicFocusRelMsgId ? getClassifyTargetTextIdsByRelMsgId(topicFocusRelMsgId).length : 0,
-    [topicFocusRelMsgId, edges]
+    () => topicFocusRelMsgId ? Array.from(new Set(
+      edges
+        .filter(ed => ed.relationMessageId === topicFocusRelMsgId && msgMap.get(ed.to.messageId)?.kind === "normal")
+        .map(ed => ed.to.messageId)
+    )).length : 0,
+    [topicFocusRelMsgId, edges, msgMap]
   );
   const topicFocusRelMsg = useMemo(
     () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,

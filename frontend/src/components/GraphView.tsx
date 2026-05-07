@@ -848,7 +848,7 @@ export default function GraphView(props: GraphViewProps) {
   // GROUP frames: frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY) — same visual structure as supplement frames
   // relKind field distinguishes supplement-frame / frame-group / replace-overlay for styling
   // isBlankCorrected: same semantics as for supplementFrames above.
-  const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
+  const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
   const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
@@ -1122,12 +1122,12 @@ export default function GraphView(props: GraphViewProps) {
     // Compute GROUP frames — frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY).
     // Same structure as supplement frames; relKind/relLabel/relColor distinguish them for styling.
     // Note: CORRECT uses correction-badge kind (not replace-overlay) — no frame, badge only.
-    const newGroupFrames: {targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
+    const newGroupFrames: {targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
 
     // Generic frame computation — shared logic for supplement, frame-group, replace-overlay.
     function computeFramesForRelType(
       filterFn: (relType: string) => boolean,
-      appendFn: (f: {targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}) => void
+      appendFn: (f: {targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}) => void
     ) {
       const frameEdgesByRelMsg = new Map<string, DemoEdge[]>();
       for (const e of edges) {
@@ -1170,7 +1170,7 @@ export default function GraphView(props: GraphViewProps) {
           width: maxX - minX + SUPP_FRAME_PAD * 2, height: maxY - minY + SUPP_FRAME_PAD * 2,
         };
         const targetId = frameEdges[0].to.messageId;
-        appendFn({ targetId, sourceId, relMsgId, isBlankCorrected, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[] });
+        appendFn({ targetId, sourceId, relMsgId, relType, isBlankCorrected, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[] });
       }
     }
 
@@ -2030,7 +2030,9 @@ export default function GraphView(props: GraphViewProps) {
         const {x,y,width,height}=gf.rect;
         const HH=SUPP_FRAME_PAD;
         const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
-        const title=`${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
+        const title=gf.relType === "classify"
+          ? `话题：${gf.relMsgId}；单击选中，双击进入话题`
+          : `${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
         const gfCorrInfo=correctedRelMsgTargets.get(gf.relMsgId);
         return (
           <React.Fragment key={`gf-hit-${gf.relMsgId}`}>
@@ -2065,6 +2067,29 @@ export default function GraphView(props: GraphViewProps) {
                 </div>
               );
             })()}
+            {gf.relType === "classify" && (
+              <div data-rel-overlay="true"
+                onClick={handleClick}
+                onDoubleClick={handleDblClick}
+                title={title}
+                style={{
+                  position: "absolute",
+                  left: x + 6,
+                  top: y - HH - 2,
+                  zIndex: 5,
+                  background: "rgba(70,70,80,0.92)",
+                  color: "#fff",
+                  borderRadius: 4,
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  fontSize: 10,
+                  padding: "1px 6px",
+                  cursor: "pointer",
+                  pointerEvents: "auto",
+                  userSelect: "none",
+                }}>
+                话题
+              </div>
+            )}
           </React.Fragment>
         );
       })}

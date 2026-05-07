@@ -133,10 +133,23 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     // CORRECT: optional (can be used to mark a relation message as needing correction without a source text)
     // REPLY: optional (can express a pure-stance reply to a relation message without source text)
     // TAG: optional (user-to-message relation; label text is stored in tagLabel instead of sourceMessageId)
-    const requiresSource = data.relationType !== 'AGREE' && data.relationType !== 'DISAGREE' && data.relationType !== 'SUPPLEMENT' && data.relationType !== 'CORRECT' && data.relationType !== 'REPLY' && data.relationType !== 'TAG';
+    const requiresSource = data.relationType !== 'AGREE'
+      && data.relationType !== 'DISAGREE'
+      && data.relationType !== 'SUPPLEMENT'
+      && data.relationType !== 'CORRECT'
+      && data.relationType !== 'REPLY'
+      && data.relationType !== 'TAG'
+      && data.relationType !== 'CLASSIFY';
 
     if (requiresSource && !data.sourceMessageId) {
       res.status(400).json({ error: '该关系类型需要提供来源消息 ID' });
+      return;
+    }
+
+    // CLASSIFY is a user-to-text-message relation: no source text message and
+    // targets must be one or more text messages.
+    if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
+      res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
       return;
     }
 
@@ -160,6 +173,17 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     const targetRelationIds = data.targetRefs
       .filter(r => r.kind === 'relation')
       .map(r => (r as { kind: 'relation'; relationId: string }).relationId);
+
+    if (data.relationType === 'CLASSIFY') {
+      if (targetRelationIds.length > 0) {
+        res.status(400).json({ error: '分类关系目标必须是文本消息，不能选择关系消息' });
+        return;
+      }
+      if (targetMessageIds.length === 0) {
+        res.status(400).json({ error: '分类关系至少需要一个文本目标消息' });
+        return;
+      }
+    }
 
     // Check for duplicate target IDs
     const allTargetIds = [...targetMessageIds, ...targetRelationIds];
@@ -226,4 +250,3 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
 });
 
 export default relationsRouter;
-

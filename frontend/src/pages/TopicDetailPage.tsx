@@ -1219,7 +1219,7 @@ export default function TopicDetailPage() {
     if (relationType === "classify") {
       const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
       if (targetTextIds.length === 0) {
-        alert("分类关系至少需要一个文本目标消息");
+        alert("分类关系至少需要一个文本目标消息（普通消息，不能是关系消息）");
         return;
       }
       const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
@@ -1372,7 +1372,7 @@ export default function TopicDetailPage() {
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
       const targetCount = getClassifyTargetTextMessageIds(usingDraft ? draftUnits : targetUnits).length;
-      if (targetCount === 0) return "请至少选择一个文本消息作为分类话题目标";
+      if (targetCount === 0) return "请至少选择一个文本消息（普通消息，不能是关系消息）作为分类话题目标";
       return `建立分类话题（${targetCount} 个文本目标，自动包含其关系消息）`;
     }
     if (isAgreeDisagreeType || isSupplementType) {

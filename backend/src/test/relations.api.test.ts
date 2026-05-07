@@ -183,7 +183,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'CLASSIFY', classifyTitle: '测试话题', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(201);
   });
 
@@ -191,7 +191,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'CLASSIFY', classifyTitle: '测试话题', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('分类关系');
   });
@@ -201,7 +201,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', targetRefs: [{ kind: 'relation', relationId: 'rel-1' }] });
+      .send({ relationType: 'CLASSIFY', classifyTitle: '测试话题', targetRefs: [{ kind: 'relation', relationId: 'rel-1' }] });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('文本消息');
   });

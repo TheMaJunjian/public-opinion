@@ -54,6 +54,16 @@ const createRelationSchema = z.object({
   // tagLabel: optional label text for TAG relations (stored in place of a source message).
   // When provided, the TAG relation is a user-to-message relation without a source text message.
   tagLabel: z.string().max(200).optional(),
+  // classifyTitle: optional topic title for CLASSIFY relations (stored in relation content).
+  classifyTitle: z.string().trim().min(1).max(200).optional(),
+}).superRefine((data, ctx) => {
+  if (data.relationType === 'CLASSIFY' && !data.classifyTitle) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '分类关系需要提供话题名称',
+      path: ['classifyTitle'],
+    });
+  }
 });
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY']);
@@ -100,6 +110,7 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
       sourceMessageId: m.relSourceId ?? null,
       targetRefs: m.targetRefs,
       tagLabel: m.relationType === 'TAG' ? (m.content ?? undefined) : undefined,
+      classifyTitle: m.relationType === 'CLASSIFY' ? (m.content ?? undefined) : undefined,
       createdAt: m.createdAt,
       createdBy: m.createdBy,
     }));
@@ -215,7 +226,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     // Create the relation as a RELATION-kind message in the unified Message table.
-    // For TAG relations, tagLabel is stored in the content field so it survives round-trips.
+    // For TAG/CLASSIFY relations, label/title is stored in the content field so it survives round-trips.
     const message = await prisma.message.create({
       data: {
         topicId,
@@ -224,7 +235,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         relationType: data.relationType,
         relSourceId: data.sourceMessageId ?? null,
         targetRefs: data.targetRefs,
-        content: data.relationType === 'TAG' ? (data.tagLabel ?? null) : null,
+        content: data.relationType === 'TAG'
+          ? (data.tagLabel ?? null)
+          : data.relationType === 'CLASSIFY'
+            ? (data.classifyTitle ?? null)
+            : null,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     });
@@ -237,6 +252,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       sourceMessageId: message.relSourceId ?? null,
       targetRefs: message.targetRefs,
       tagLabel: message.relationType === 'TAG' ? (message.content ?? undefined) : undefined,
+      classifyTitle: message.relationType === 'CLASSIFY' ? (message.content ?? undefined) : undefined,
       createdAt: message.createdAt,
       createdBy: message.createdBy,
     });

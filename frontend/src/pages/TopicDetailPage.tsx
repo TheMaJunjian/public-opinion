@@ -1610,7 +1610,11 @@ export default function TopicDetailPage() {
     const baseMessages = focusEntries.length > 0 ? messagesToShow : messages;
     const baseEdges = focusEntries.length > 0 ? edgesToShow : edges;
     if (isTopicFocus) {
-      return { messagesToRenderFiltered: baseMessages, edgesToRenderFiltered: baseEdges };
+      const topicMessages = baseMessages.filter(m =>
+        !(m.kind === "relation" && relationTypeByRelMsgId.get(m.id) === "classify")
+      );
+      const topicEdges = baseEdges.filter(e => e.relationType !== "classify");
+      return { messagesToRenderFiltered: topicMessages, edgesToRenderFiltered: topicEdges };
     }
     // Main canvas: remove classified text messages and relation messages that are exclusively
     // connected to classified text messages (they "belong" to the topic view).
@@ -1621,7 +1625,7 @@ export default function TopicDetailPage() {
     });
     const filteredEdges = baseEdges.filter(e => !classifiedExclusiveRelMsgIds.has(e.relationMessageId));
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, classifiedTargetTextIds, classifiedExclusiveRelMsgIds]);
+  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, classifiedTargetTextIds, classifiedExclusiveRelMsgIds, relationTypeByRelMsgId]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -1837,6 +1841,30 @@ export default function TopicDetailPage() {
               {viewMode === "list" ? "线性视图：支持自由换行内容；双击 normal 进入文本选择模式；可点击高亮片段切换选中。" : "结构图：注释/引用 source 自动推到 target 右侧列（规则1）；label避让文字；高亮片段可点击。"}
             </div>
           </div>
+          {isTopicFocus && (
+            <div style={{ flex: "0 0 auto", padding: "8px 8px 0 8px", background: "#101010" }}>
+              <div style={{ border: "1px solid #4b5f7a", borderRadius: 10, padding: "8px 10px", background: "#ffffff", color: "#111827", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {topicFocusTitle || "分类话题"}
+                    </div>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d", flexShrink: 0 }}>
+                      进行中
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <span>由 <span style={{ fontWeight: 600, color: "#4b5563" }}>{topicFocusRelMsg?.author ?? "系统"}</span> 发起</span>
+                    <span>💬 {topicFocusTargetCount} 条观点</span>
+                    <span>{topicFocusRelMsg ? new Date(topicFocusRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                  </div>
+                </div>
+                <button onClick={exitFocus} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #6f8fbd", background: "#223a5f", color: "#fff", cursor: "pointer", flexShrink: 0 }}>
+                  退出话题
+                </button>
+              </div>
+            </div>
+          )}
 
           <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}>
             {viewMode === "list" ? (
@@ -1937,28 +1965,6 @@ export default function TopicDetailPage() {
         />
 
         <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
-          {isTopicFocus && (
-            <div style={{ border: "1px solid #4b5f7a", borderRadius: 10, padding: "8px 10px", background: "#ffffff", color: "#111827", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {topicFocusTitle || "分类话题"}
-                  </div>
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d", flexShrink: 0 }}>
-                    进行中
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  <span>由 <span style={{ fontWeight: 600, color: "#4b5563" }}>{topicFocusRelMsg?.author ?? "系统"}</span> 发起</span>
-                  <span>💬 {topicFocusTargetCount} 条观点</span>
-                  <span>{topicFocusRelMsg ? new Date(topicFocusRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
-                </div>
-              </div>
-              <button onClick={exitFocus} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #6f8fbd", background: "#223a5f", color: "#fff", cursor: "pointer", flexShrink: 0 }}>
-                退出话题
-              </button>
-            </div>
-          )}
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
               <div style={{ fontWeight: 600 }}>候选区（Draft）</div>

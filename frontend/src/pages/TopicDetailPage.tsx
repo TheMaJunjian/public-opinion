@@ -1604,11 +1604,9 @@ export default function TopicDetailPage() {
       return;
     }
     if (relType === "classify") {
-      const targetTextIds = Array.from(new Set(
-        relEdges
-          .map(ed => ed.to.messageId)
-          .filter(mid => msgMap.get(mid)?.kind === "normal")
-      ));
+      const targetTextIds = getClassifyTargetTextMessageIds(
+        relEdges.map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
+      );
       if (targetTextIds.length === 0) return;
       enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: relMsgId });
       setFocusHop(0);

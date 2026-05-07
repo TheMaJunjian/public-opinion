@@ -142,11 +142,11 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns 400 when sourceMessageId is missing', async () => {
+  it('returns 400 when required sourceMessageId is missing', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'REPLY', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'ANNOTATION', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(400);
   });
 

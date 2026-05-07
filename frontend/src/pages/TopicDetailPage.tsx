@@ -137,6 +137,65 @@ function generateCorrectionContent(
   return content;
 }
 
+function buildTextCorrectionReplacementMap(
+  edges: DemoEdge[],
+  msgMap: Map<string, DemoMessage>
+): Map<string, string> {
+  const raw = new Map<string, string>();
+  for (const e of edges) {
+    if (e.relationType !== "correct") continue;
+    if (e.from.messageId.startsWith("anon:")) continue;
+    const fromMsg = msgMap.get(e.from.messageId);
+    const toMsg = msgMap.get(e.to.messageId);
+    if (fromMsg?.kind !== "normal" || toMsg?.kind !== "normal") continue;
+    raw.set(e.to.messageId, e.from.messageId);
+  }
+  const resolved = new Map<string, string>();
+  function resolve(id: string, seen = new Set<string>()): string {
+    const next = raw.get(id);
+    if (!next) return id;
+    if (seen.has(id)) return id;
+    seen.add(id);
+    const finalId = resolve(next, seen);
+    resolved.set(id, finalId);
+    return finalId;
+  }
+  for (const oldId of raw.keys()) resolve(oldId);
+  return resolved;
+}
+
+function applyTextCorrectionInheritance(
+  edges: DemoEdge[],
+  msgMap: Map<string, DemoMessage>
+): DemoEdge[] {
+  const replaceMap = buildTextCorrectionReplacementMap(edges, msgMap);
+  if (replaceMap.size === 0) return edges;
+  const next: DemoEdge[] = [];
+  const seen = new Set<string>();
+  for (const e of edges) {
+    if (e.relationType === "correct") {
+      next.push(e);
+      continue;
+    }
+    const fromIsNormal = msgMap.get(e.from.messageId)?.kind === "normal";
+    const toIsNormal = msgMap.get(e.to.messageId)?.kind === "normal";
+    const mappedFrom = fromIsNormal ? (replaceMap.get(e.from.messageId) ?? e.from.messageId) : e.from.messageId;
+    const mappedTo = toIsNormal ? (replaceMap.get(e.to.messageId) ?? e.to.messageId) : e.to.messageId;
+    const updated: DemoEdge = (mappedFrom === e.from.messageId && mappedTo === e.to.messageId)
+      ? e
+      : {
+          ...e,
+          from: { ...e.from, messageId: mappedFrom },
+          to: { ...e.to, messageId: mappedTo },
+        };
+    const k = `${updated.relationMessageId}::${updated.relationType}::${selKey(updated.from)}::${selKey(updated.to)}::${updated.relationLabel}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    next.push(updated);
+  }
+  return next;
+}
+
 // ========================= Character-level diff for comparison popup =========================
 
 type DiffPart = { type: 'keep' | 'del' | 'ins'; text: string };
@@ -383,6 +442,21 @@ export default function TopicDetailPage() {
   // Used to skip corrected fragments when double-clicking to select all fragments.
   const correctedEdgeMap = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
 
+  useEffect(() => {
+    if (edges.length === 0) return;
+    const inherited = applyTextCorrectionInheritance(edges, msgMap);
+    if (inherited.length !== edges.length) {
+      setEdges(inherited);
+      return;
+    }
+    for (let i = 0; i < edges.length; i++) {
+      if (inherited[i] !== edges[i]) {
+        setEdges(inherited);
+        return;
+      }
+    }
+  }, [edges, msgMap]);
+
   /** Returns edge IDs for a relation message, excluding any that have been individually corrected. */
   function getUncorrectedEdgeIds(relationMessageId: string): string[] {
     const correctedIds = correctedEdgeMap.get(relationMessageId);
@@ -438,6 +512,17 @@ export default function TopicDetailPage() {
     }
     return map;
   }, [edges]);
+  const replacedRelationMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType !== "correct") continue;
+      if (e.from.messageId.startsWith("anon:")) continue;
+      const fromKind = msgMap.get(e.from.messageId)?.kind;
+      const toKind = msgMap.get(e.to.messageId)?.kind;
+      if (fromKind === "relation" && toKind === "relation") ids.add(e.to.messageId);
+    }
+    return ids;
+  }, [edges, msgMap]);
   const classifiedTargetTextIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -1253,6 +1338,24 @@ export default function TopicDetailPage() {
         alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
         return;
       }
+      const selectedSet = new Set(targetTextIds);
+      const supplementTargetsByRelMsg = new Map<string, string[]>();
+      for (const e of edges) {
+        if (e.relationType !== "supplement") continue;
+        if (msgMap.get(e.to.messageId)?.kind !== "normal") continue;
+        const arr = supplementTargetsByRelMsg.get(e.relationMessageId) ?? [];
+        arr.push(e.to.messageId);
+        supplementTargetsByRelMsg.set(e.relationMessageId, arr);
+      }
+      for (const [suppRelMsgId, mids] of supplementTargetsByRelMsg) {
+        const uniqueMids = Array.from(new Set(mids));
+        if (uniqueMids.length <= 1) continue;
+        const selectedCount = uniqueMids.filter(mid => selectedSet.has(mid)).length;
+        if (selectedCount > 0 && selectedCount < uniqueMids.length) {
+          alert(`补充关系 ${suppRelMsgId} 关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
+          return;
+        }
+      }
       const classifyTitle = newMessageContent.trim();
       if (!classifyTitle) {
         alert("话题名称不能为空");
@@ -1635,11 +1738,15 @@ export default function TopicDetailPage() {
     const filteredMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
+      if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
       return true;
     });
-    const filteredEdges = baseEdges.filter(e => !classifiedExclusiveRelMsgIds.has(e.relationMessageId));
+    const filteredEdges = baseEdges.filter(e =>
+      !classifiedExclusiveRelMsgIds.has(e.relationMessageId) &&
+      !replacedRelationMsgIds.has(e.relationMessageId)
+    );
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, classifiedTargetTextIds, classifiedExclusiveRelMsgIds, relationTypeByRelMsgId]);
+  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, classifiedTargetTextIds, classifiedExclusiveRelMsgIds, relationTypeByRelMsgId, replacedRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);

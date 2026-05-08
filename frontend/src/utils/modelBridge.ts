@@ -1,5 +1,5 @@
-import type { Message as BackendMessage, Relation as BackendRelation, TargetRef } from '../types';
-import { getPresentationSpec } from '../types';
+import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
+import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 
 export type MessageKind = "normal" | "relation";
 export type RelationType =
@@ -35,6 +35,7 @@ export type DemoMessage = {
   content: string;
   kind: MessageKind;
   relationType?: RelationType;
+  relationPayload?: RelationPayload;
 };
 
 export type DemoEdge = {
@@ -101,21 +102,18 @@ export function convertMessagesToDemoModel(
     const relMsgId = rel.id;
     const relType = rel.relationType.toLowerCase() as RelationType;
 
-    // Resolve the effective tag label for TAG relations.
-    // Prefer the dedicated tagLabel field (new-style); fall back to the source message's content
-    // (legacy TAG relations that used a source text message to carry the label).
-    let tagLabel: string | undefined;
-    if (relType === 'tag') {
-      tagLabel = rel.tagLabel ?? msgContentMap.get(rel.sourceMessageId ?? '') ?? undefined;
-    }
+    const tagLabel = relType === 'tag'
+      ? getRelationLabel(rel.payload)
+      : undefined;
+    const classifyTitle = relType === 'classify'
+      ? (getRelationTitle(rel.payload) || `分类话题（${rel.targetRefs.length}）`)
+      : undefined;
 
     if (!seenRelMsgIds.has(relMsgId)) {
       seenRelMsgIds.add(relMsgId);
       const typeName = relationTypeName(rel.relationType);
       let content: string;
       if (relType === 'classify') {
-        // Backward compatibility: historical CLASSIFY relations may not have persisted titles.
-        const classifyTitle = rel.classifyTitle?.trim() || `分类话题（${rel.targetRefs.length}）`;
         content = `话题：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'tag' && tagLabel) {
         content = `建立${typeName}关系「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
@@ -131,6 +129,7 @@ export function convertMessagesToDemoModel(
         content,
         kind: "relation",
         relationType: relType,
+        relationPayload: rel.payload,
       });
     }
 

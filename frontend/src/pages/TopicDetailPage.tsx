@@ -7,10 +7,9 @@ import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType,
 } from '../utils/modelBridge';
-import type { Topic, TargetRef } from '../types';
-import { getPresentationSpec } from '../types';
+import type { Topic, TargetRef, Relation, RelationPayload } from '../types';
+import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
-import { extractClassifyTopicTitle } from '../utils/classifyTopic';
 
 // ========================= Helpers =========================
 
@@ -84,6 +83,103 @@ function nextId(prefix: string): string {
 function targetRefDisplayId(r: TargetRef): string {
   if (r.kind === 'message' || r.kind === 'text-fragment') return r.messageId;
   return r.relationId;
+}
+
+function buildRelationPayload(params: {
+  relationType: string;
+  label?: string;
+  title?: string;
+  targetLayout?: RelationPayload['targetLayout'];
+}): RelationPayload | undefined {
+  const payload: RelationPayload = {};
+  if (params.label) payload.label = params.label;
+  if (params.title) payload.title = params.title;
+  if (params.targetLayout) payload.targetLayout = params.targetLayout;
+  if (params.relationType.toUpperCase() === 'MERGE' && !payload.targetLayout) {
+    payload.targetLayout = 'multi-column';
+  }
+  return Object.keys(payload).length > 0 ? payload : undefined;
+}
+
+function relationTargetRefsSummary(targetRefs: TargetRef[]): string {
+  if (targetRefs.length === 0) return '（无目标）';
+  return targetRefs.map(ref => {
+    if (ref.kind === 'message') return `消息 ${ref.messageId}`;
+    if (ref.kind === 'text-fragment') return `消息 ${ref.messageId} 的片段`;
+    return `关系 ${ref.relationId}`;
+  }).join('；');
+}
+
+function buildRelationDemoMessage(relation: Relation): DemoMessage {
+  const relType = relation.relationType.toLowerCase() as RelationType;
+  const label = getRelationLabel(relation.payload);
+  const title = getRelationTitle(relation.payload);
+  const typeName = relationTypeName(relType);
+  const targetSummary = relationTargetRefsSummary(relation.targetRefs);
+  let content: string;
+  if (relType === 'classify') {
+    content = `话题：${title ?? `分类话题（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
+  } else if (relType === 'tag' && label) {
+    content = `建立${typeName}关系「${label}」\n目标：${targetSummary}`;
+  } else if (relation.sourceMessageId) {
+    content = `建立${typeName}关系\n来源：${relation.sourceMessageId}\n目标：${targetSummary}`;
+  } else {
+    content = `建立${typeName}关系（无来源消息）\n目标：${targetSummary}`;
+  }
+  return {
+    id: relation.id,
+    author: relation.createdBy.username,
+    createdAt: relation.createdAt,
+    kind: 'relation',
+    relationType: relType,
+    relationPayload: relation.payload,
+    content,
+  };
+}
+
+function getTextTargetIds(targetRefs: TargetRef[]): string[] {
+  return Array.from(new Set(
+    targetRefs
+      .filter((ref): ref is Extract<TargetRef, { kind: 'message' | 'text-fragment' }> =>
+        ref.kind === 'message' || ref.kind === 'text-fragment'
+      )
+      .map(ref => ref.messageId)
+  ));
+}
+
+function getRelationTargetIds(targetRefs: TargetRef[]): string[] {
+  return Array.from(new Set(
+    targetRefs
+      .filter((ref): ref is Extract<TargetRef, { kind: 'relation' }> => ref.kind === 'relation')
+      .map(ref => ref.relationId)
+  ));
+}
+
+function collectOwnedByRelation(
+  relationId: string,
+  relationById: Map<string, Relation>,
+  visited = new Set<string>()
+): { textIds: Set<string>; relationIds: Set<string> } {
+  const textIds = new Set<string>();
+  const relationIds = new Set<string>();
+  if (visited.has(relationId)) return { textIds, relationIds };
+  visited.add(relationId);
+  const relation = relationById.get(relationId);
+  if (!relation) return { textIds, relationIds };
+
+  for (const textId of getTextTargetIds(relation.targetRefs)) textIds.add(textId);
+  for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
+    relationIds.add(childRelationId);
+    const child = relationById.get(childRelationId);
+    if (!child) continue;
+    const childType = child.relationType.toUpperCase();
+    if (childType !== 'CLASSIFY' && childType !== 'MERGE') continue;
+    const nested = collectOwnedByRelation(childRelationId, relationById, visited);
+    nested.textIds.forEach(id => textIds.add(id));
+    nested.relationIds.forEach(id => relationIds.add(id));
+  }
+
+  return { textIds, relationIds };
 }
 
 /** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
@@ -381,6 +477,7 @@ export default function TopicDetailPage() {
   const [topic, setTopic] = useState<Topic | null>(null);
   const [messages, setMessages] = useState<DemoMessage[]>([]);
   const [edges, setEdges] = useState<DemoEdge[]>([]);
+  const [relations, setRelations] = useState<Relation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -400,6 +497,7 @@ export default function TopicDetailPage() {
         const { messages: demoMsgs, edges: demoEdges } = convertMessagesToDemoModel(
           messagesData.data, relationsData.data
         );
+        setRelations(relationsData.data);
         setMessages(demoMsgs);
         setEdges(demoEdges);
       } catch (e: any) {
@@ -442,7 +540,12 @@ export default function TopicDetailPage() {
 
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
+  const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
+  const appendCreatedRelation = useCallback((backendRel: Relation) => {
+    setRelations(prev => [...prev, backendRel]);
+    setMessages(prev => [...prev, buildRelationDemoMessage(backendRel)]);
+  }, []);
 
   // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
   // Used to skip corrected fragments when double-clicking to select all fragments.
@@ -515,14 +618,11 @@ export default function TopicDetailPage() {
   }, [edges]);
   const relationTypeByRelMsgId = useMemo(() => {
     const map = new Map<string, RelationType>();
-    for (const m of messages) {
-      if (m.kind === "relation" && m.relationType) map.set(m.id, m.relationType);
-    }
-    for (const e of edges) {
-      if (!map.has(e.relationMessageId)) map.set(e.relationMessageId, e.relationType);
+    for (const relation of relations) {
+      map.set(relation.id, relation.relationType.toLowerCase() as RelationType);
     }
     return map;
-  }, [edges, messages]);
+  }, [relations]);
   const replacedRelationMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -534,57 +634,37 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [edges, msgMap]);
-  const classifiedTargetTextIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const e of edges) {
-      if (e.relationType !== "classify") continue;
-      if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
+  const classifiedOwnership = useMemo(() => {
+    const textIds = new Set<string>();
+    const relationIds = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'CLASSIFY') continue;
+      const owned = collectOwnedByRelation(relation.id, relationById);
+      owned.textIds.forEach(id => textIds.add(id));
+      owned.relationIds.forEach(id => relationIds.add(id));
     }
-    return ids;
-  }, [edges, msgMap]);
+    return { textIds, relationIds };
+  }, [relations, relationById]);
+  const classifiedTargetTextIds = classifiedOwnership.textIds;
   const classifiedTargetClassifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const e of edges) {
-      if (e.relationType !== "classify") continue;
-      if (msgMap.get(e.to.messageId)?.kind !== "relation") continue;
-      if (relationTypeByRelMsgId.get(e.to.messageId) !== "classify") continue;
-      ids.add(e.to.messageId);
-    }
+    classifiedOwnership.relationIds.forEach(id => {
+      if (relationById.get(id)?.relationType === 'CLASSIFY') ids.add(id);
+    });
     return ids;
-  }, [edges, msgMap, relationTypeByRelMsgId]);
-
-  // MERGE relation messages directly targeted by a CLASSIFY edge.
-  // They are hidden from the main canvas (they "belong" to the topic).
+  }, [classifiedOwnership, relationById]);
   const classifiedTargetMergeRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const e of edges) {
-      if (e.relationType !== "classify") continue;
-      if (msgMap.get(e.to.messageId)?.kind !== "relation") continue;
-      if (relationTypeByRelMsgId.get(e.to.messageId) !== "merge") continue;
-      ids.add(e.to.messageId);
-    }
+    classifiedOwnership.relationIds.forEach(id => {
+      if (relationById.get(id)?.relationType === 'MERGE') ids.add(id);
+    });
     return ids;
-  }, [edges, msgMap, relationTypeByRelMsgId]);
-
-  // Text messages that are targets of classified MERGE relations.
-  // These are also hidden from the main canvas (they "belong" to the topic via the MERGE).
-  const classifiedMergeTargetTextIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const e of edges) {
-      if (e.relationType !== 'merge') continue;
-      if (!classifiedTargetMergeRelMsgIds.has(e.relationMessageId)) continue;
-      if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
-      if (msgMap.get(e.from.messageId)?.kind === "normal") ids.add(e.from.messageId);
-    }
-    return ids;
-  }, [edges, msgMap, classifiedTargetMergeRelMsgIds]);
+  }, [classifiedOwnership, relationById]);
 
   // Non-classify relation messages whose ALL text-message endpoints are classified.
   // These are also hidden from the main canvas (they "belong" to the topic).
   const classifiedExclusiveRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    // Combined set of all classified text message IDs (direct + via classified MERGE relations).
-    const allClassifiedTextIds = new Set([...classifiedTargetTextIds, ...classifiedMergeTargetTextIds]);
     const edgesByRel = new Map<string, DemoEdge[]>();
     for (const e of edges) {
       const arr = edgesByRel.get(e.relationMessageId) ?? [];
@@ -593,17 +673,17 @@ export default function TopicDetailPage() {
     }
     for (const [relMsgId, relEdges] of edgesByRel) {
       if (relEdges[0]?.relationType === 'classify') continue;
-      if (classifiedTargetMergeRelMsgIds.has(relMsgId)) continue;
+      if (classifiedOwnership.relationIds.has(relMsgId)) continue;
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])
         .filter(mid => msgMap.get(mid)?.kind === 'normal');
       if (textEndpoints.length === 0) continue;
-      if (textEndpoints.every(mid => allClassifiedTextIds.has(mid))) {
+      if (textEndpoints.every(mid => classifiedOwnership.textIds.has(mid))) {
         ids.add(relMsgId);
       }
     }
     return ids;
-  }, [edges, msgMap, classifiedTargetTextIds, classifiedMergeTargetTextIds, classifiedTargetMergeRelMsgIds]);
+  }, [edges, msgMap, classifiedOwnership]);
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusLenRef = useRef(0);
@@ -907,53 +987,17 @@ export default function TopicDetailPage() {
     setDraftUnits(prev => prev.filter(u => !unitEquals(u, unit)));
   }
 
-  function getClassifyTargetTextMessageIds(units: UnitSelection[]): string[] {
-    return Array.from(new Set(
-      units
-        .map(u => u.messageId)
-        .filter(mid => msgMap.get(mid)?.kind === "normal")
-    ));
-  }
-
-  /** Collect all normal text message IDs that are endpoints of a given MERGE relation's edges. */
-  function getMergeRelationTextTargetIds(relMsgId: string): string[] {
+  function getGroupedTargetTextMessageIds(units: UnitSelection[]): string[] {
     const ids = new Set<string>();
-    for (const e of edges) {
-      if (e.relationMessageId !== relMsgId) continue;
-      if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
-      if (msgMap.get(e.from.messageId)?.kind === "normal") ids.add(e.from.messageId);
-    }
-    return [...ids];
-  }
-
-  function getNestedClassifyTargetTextIds(relMsgId: string, visited = new Set<string>()): string[] {
-    if (visited.has(relMsgId)) return [];
-    visited.add(relMsgId);
-    const ids = new Set<string>();
-    for (const edge of edges) {
-      if (edge.relationMessageId !== relMsgId) continue;
-      const targetMsg = msgMap.get(edge.to.messageId);
-      if (targetMsg?.kind === "normal") {
-        ids.add(edge.to.messageId);
+    for (const unit of foldUpToWhole(units)) {
+      if (msgMap.get(unit.messageId)?.kind === "normal") {
+        ids.add(unit.messageId);
         continue;
       }
-      if (targetMsg?.kind === "relation" && relationTypeByRelMsgId.get(edge.to.messageId) === "classify") {
-        getNestedClassifyTargetTextIds(edge.to.messageId, visited).forEach(id => ids.add(id));
-      }
-    }
-    return [...ids];
-  }
-
-  function getGroupedTargetTextMessageIds(units: UnitSelection[]): string[] {
-    const ids = new Set(getClassifyTargetTextMessageIds(units));
-    for (const unit of foldUpToWhole(units)) {
-      if (msgMap.get(unit.messageId)?.kind !== "relation") continue;
       const relType = relationTypeByRelMsgId.get(unit.messageId);
-      if (relType === "classify") {
-        getNestedClassifyTargetTextIds(unit.messageId).forEach(id => ids.add(id));
-      } else if (relType === "merge") {
-        getMergeRelationTextTargetIds(unit.messageId).forEach(id => ids.add(id));
-      }
+      if (relType !== "classify" && relType !== "merge") continue;
+      const owned = collectOwnedByRelation(unit.messageId, relationById);
+      owned.textIds.forEach(id => ids.add(id));
     }
     return [...ids];
   }
@@ -997,36 +1041,40 @@ export default function TopicDetailPage() {
   }
 
   function getClassifyTargetTextIdsByRelMsgId(relMsgId: string): string[] {
-    return getClassifyTargetTextMessageIds(
-      edges
-        .filter(ed => ed.relationMessageId === relMsgId)
-        .map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
-    );
+    const relation = relationById.get(relMsgId);
+    return relation ? getTextTargetIds(relation.targetRefs) : [];
   }
 
   function getClassifyTargetRelationIdsByRelMsgId(relMsgId: string): string[] {
-    return Array.from(new Set(
-      edges
-        .filter(ed => ed.relationMessageId === relMsgId)
-        .map(ed => ed.to.messageId)
-        .filter(mid =>
+    const relation = relationById.get(relMsgId);
+    return relation
+      ? getRelationTargetIds(relation.targetRefs).filter(mid =>
           msgMap.get(mid)?.kind === "relation" &&
           (relationTypeByRelMsgId.get(mid) === "classify" || relationTypeByRelMsgId.get(mid) === "merge")
         )
-    ));
+      : [];
   }
 
   function enterClassifyTopic(relMsgId: string) {
     const targetTextIds = getClassifyTargetTextIdsByRelMsgId(relMsgId);
-    const targetClassifyIds = getClassifyTargetRelationIdsByRelMsgId(relMsgId);
-    const targetIds = Array.from(new Set([...targetTextIds, ...targetClassifyIds]));
-    if (targetIds.length === 0) {
+    const targetRelationIds = getClassifyTargetRelationIdsByRelMsgId(relMsgId);
+    const targetIds = new Set<string>(targetTextIds);
+    for (const targetRelationId of targetRelationIds) {
+      if (relationTypeByRelMsgId.get(targetRelationId) === "classify") {
+        targetIds.add(targetRelationId);
+        continue;
+      }
+      const owned = collectOwnedByRelation(targetRelationId, relationById);
+      owned.textIds.forEach(id => targetIds.add(id));
+      owned.relationIds.forEach(id => targetIds.add(id));
+    }
+    if (targetIds.size === 0) {
       if (!msgMap.has(relMsgId)) return;
       enterFocusMultiple([relMsgId], { mode: "topic", topicRelMsgId: relMsgId });
       setFocusHop(0);
       return;
     }
-    enterFocusMultiple(targetIds, { mode: "topic", topicRelMsgId: relMsgId });
+    enterFocusMultiple(Array.from(targetIds), { mode: "topic", topicRelMsgId: relMsgId });
     setFocusHop(0);
   }
 
@@ -1087,13 +1135,16 @@ export default function TopicDetailPage() {
    */
   async function sendTagRelation(targetMid: string, tagLabel: string): Promise<DemoEdge | null> {
     if (!topicId) return null;
-    const typeName = relationTypeName("tag");
     const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
     try {
-      const backendRel = await api.createRelation(topicId, { relationType: 'TAG', sourceMessageId: null, tagLabel, targetRefs: [backendTargetRef] });
+      const backendRel = await api.createRelation(topicId, {
+        relationType: 'TAG',
+        sourceMessageId: null,
+        targetRefs: [backendTargetRef],
+        payload: buildRelationPayload({ relationType: 'TAG', label: tagLabel }),
+      });
       const relId = backendRel.id;
-      const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系「${tagLabel}」\n目标：${targetMid}` };
-      setMessages(prev => [...prev, relMsg]);
+      appendCreatedRelation(backendRel);
       const anonSrcId = `anon:${relId}`;
       return { id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge;
     } catch (e: any) {
@@ -1142,8 +1193,7 @@ export default function TopicDetailPage() {
         try {
           const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
           const relId = backendRel.id;
-          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${toReply.map(t => t.messageId).join(",")}` };
-          setMessages(prev => [...prev, relMsg]);
+          appendCreatedRelation(backendRel);
           for (const s of fromReply) {
             for (const t of toReply) {
               newEdgesList.push(buildEdges({ ...s }, { ...t }, "reply", label, relId));
@@ -1168,8 +1218,7 @@ export default function TopicDetailPage() {
             const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
             const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
             const relId = backendRel.id;
-            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${uniqueTargetMids.join(",")}` };
-            setMessages(prev => [...prev, relMsg]);
+            appendCreatedRelation(backendRel);
             for (const targetMid of uniqueTargetMids) {
               newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
             }
@@ -1181,8 +1230,7 @@ export default function TopicDetailPage() {
           try {
             const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
             const relId = backendRel.id;
-            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${targetMid}` };
-            setMessages(prev => [...prev, relMsg]);
+            appendCreatedRelation(backendRel);
             const anonSrcId = `anon:${backendRel.id}`;
             newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -1196,8 +1244,7 @@ export default function TopicDetailPage() {
         try {
           const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
           const relId = backendRel.id;
-          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${targetMid}` };
-          setMessages(prev => [...prev, relMsg]);
+          appendCreatedRelation(backendRel);
           const anonSrcId = `anon:${backendRel.id}`;
           newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -1221,8 +1268,7 @@ export default function TopicDetailPage() {
           try {
             const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
             const relId = backendRel.id;
-            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: ${srcId} → ${targets.map(t => t.messageId).join(",")}` };
-            setMessages(prev => [...prev, relMsg]);
+            appendCreatedRelation(backendRel);
             for (const t of targets) {
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, relationType, label, relId));
             }
@@ -1285,8 +1331,7 @@ export default function TopicDetailPage() {
           try {
             const backendRel = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
             const relId = backendRel.id;
-            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${secType}: (无来源消息) → ${tgtMid}` };
-            setMessages(prev => [...prev, relMsg]);
+            appendCreatedRelation(backendRel);
             const anonSrcId = `anon:${backendRel.id}`;
             newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -1357,17 +1402,10 @@ export default function TopicDetailPage() {
           if (wholeSelected) {
             // Whole selected: one combined correction covering all edges (original behavior)
             const newTargetRefs = uniqueTargetRefsFromEdges(edgesToCorrect, msgMap);
-            const targetDisplayIds = newTargetRefs.map(targetRefDisplayId).join(",");
             // Step 1: Create the new relation of secondary type with the same endpoints
             const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
             const newRelId = newRelBackend.id;
-            const newRelMsg: DemoMessage = {
-              id: newRelId, author: newRelBackend.createdBy.username, createdAt: newRelBackend.createdAt, kind: "relation",
-              content: newSourceId
-                ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${targetDisplayIds}`
-                : `建立${secTypeName}关系（无来源消息）\n目标：${targetDisplayIds}`,
-            };
-            setMessages(prev => [...prev, newRelMsg]);
+            appendCreatedRelation(newRelBackend);
             const newFromId = newSourceId ?? `anon:${newRelId}`;
             for (const e of edgesToCorrect) {
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
@@ -1375,37 +1413,22 @@ export default function TopicDetailPage() {
             // Step 2: Create the CORRECT relation with the new relation as source, old relation as target
             const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
             const corrRelId = corrBackendRel.id;
-            const corrRelMsg: DemoMessage = {
-              id: corrRelId, author: corrBackendRel.createdBy.username, createdAt: corrBackendRel.createdAt, kind: "relation",
-              content: `建立${corrTypeName}关系\n来源：${newRelId}\n目标：关系 ${targetRelMsgId}`,
-            };
-            setMessages(prev => [...prev, corrRelMsg]);
+            appendCreatedRelation(corrBackendRel);
             newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
           } else {
             // Specific fragments selected: one separate correction per selected edge fragment
             for (const edge of edgesToCorrect) {
               const newTargetRefs = uniqueTargetRefsFromEdges([edge], msgMap);
-              const targetDisplayIds = newTargetRefs.map(targetRefDisplayId).join(",");
               // Step 1: Create a new relation of secondary type for this fragment only
               const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
               const newRelId = newRelBackend.id;
-              const newRelMsg: DemoMessage = {
-                id: newRelId, author: newRelBackend.createdBy.username, createdAt: newRelBackend.createdAt, kind: "relation",
-                content: newSourceId
-                  ? `建立${secTypeName}关系\n来源：${newSourceId}\n目标：${targetDisplayIds}`
-                  : `建立${secTypeName}关系（无来源消息）\n目标：${targetDisplayIds}`,
-              };
-              setMessages(prev => [...prev, newRelMsg]);
+              appendCreatedRelation(newRelBackend);
               const newFromId = newSourceId ?? `anon:${newRelId}`;
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...edge.to }, relationLabel: secTypeName } as DemoEdge);
               // Step 2: Create the CORRECT relation for this fragment
               const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
               const corrRelId = corrBackendRel.id;
-              const corrRelMsg: DemoMessage = {
-                id: corrRelId, author: corrBackendRel.createdBy.username, createdAt: corrBackendRel.createdAt, kind: "relation",
-                content: `建立${corrTypeName}关系\n来源：${newRelId}\n目标：关系 ${targetRelMsgId}`,
-              };
-              setMessages(prev => [...prev, corrRelMsg]);
+              appendCreatedRelation(corrBackendRel);
               newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
             }
           }
@@ -1423,8 +1446,7 @@ export default function TopicDetailPage() {
       try {
         const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
         const relId = backendRel.id;
-        const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系（无来源消息）\n目标：${draftUnits.slice(0, 3).map(u => u.messageId).join(",") + (draftUnits.length > 3 ? "…" : "")}` };
-        setMessages(prev => [...prev, relMsg]);
+        appendCreatedRelation(backendRel);
         const anonSrcId = `anon:${backendRel.id}`;
         for (const t of draftUnits) {
           newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: typeName } as DemoEdge);
@@ -1454,8 +1476,7 @@ export default function TopicDetailPage() {
           const backendRel = await api.createRelation(topicId!, { relationType: 'SUPPLEMENT', sourceMessageId: null, targetRefs });
           const relId = backendRel.id;
           const typeName = relationTypeName("supplement");
-          const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `建立${typeName}关系（无来源消息）；类型：${typeName}` };
-          setMessages(prev => [...prev, relMsg]);
+          appendCreatedRelation(backendRel);
           const anonSrcId = `anon:${backendRel.id}`;
           for (const tgtMid of uniqueTargetMids) {
             newEdgesList.push({
@@ -1473,8 +1494,7 @@ export default function TopicDetailPage() {
           try {
             const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
             const relId = backendRel.id;
-            const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${relationType}: (无来源消息) → ${tgtMid}` };
-            setMessages(prev => [...prev, relMsg]);
+            appendCreatedRelation(backendRel);
             const anonSrcId = `anon:${backendRel.id}`;
             newEdgesList.push({
               id: nextId("edge"), relationMessageId: relId, relationType,
@@ -1524,17 +1544,14 @@ export default function TopicDetailPage() {
       }
       const targetRefs = getClassifyTargetRefs(effectiveTargets);
       try {
-        const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs, classifyTitle });
+        const backendRel = await api.createRelation(topicId!, {
+          relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs,
+          payload: buildRelationPayload({ relationType: 'CLASSIFY', title: classifyTitle }),
+        });
         const relId = backendRel.id;
-        const relMsg: DemoMessage = {
-          id: relId,
-          author: backendRel.createdBy.username,
-          createdAt: backendRel.createdAt,
-          kind: "relation",
-          relationType: "classify",
-          content: `话题：${classifyTitle}\n目标：${targetTextIds.join(",")}`,
-        };
-        setMessages(prev => [...prev, relMsg]);
+        appendCreatedRelation(backendRel);
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
           targetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
@@ -1576,19 +1593,15 @@ export default function TopicDetailPage() {
         alert("归并关系至少需要一个文本消息或关系消息作为目标");
         return;
       }
-      const mergeTargetDisplayIds = mergeTargetRefs.map(targetRefDisplayId);
       try {
-        const backendRel = await api.createRelation(topicId!, { relationType: 'MERGE', sourceMessageId: null, targetRefs: mergeTargetRefs });
+        const backendRel = await api.createRelation(topicId!, {
+          relationType: 'MERGE',
+          sourceMessageId: null,
+          targetRefs: mergeTargetRefs,
+          payload: buildRelationPayload({ relationType: 'MERGE', targetLayout: 'multi-column' }),
+        });
         const relId = backendRel.id;
-        const relMsg: DemoMessage = {
-          id: relId,
-          author: backendRel.createdBy.username,
-          createdAt: backendRel.createdAt,
-          kind: "relation",
-          relationType: "merge",
-          content: `建立归并关系（无来源消息）\n目标：${mergeTargetDisplayIds.join(",")}`,
-        };
-        setMessages(prev => [...prev, relMsg]);
+        appendCreatedRelation(backendRel);
         const virtualFrameNodeId = `anon:${backendRel.id}`;
         const newEdges = mergeTargetRefs.map(targetRef => ({
           id: nextId("edge"),
@@ -1943,19 +1956,15 @@ export default function TopicDetailPage() {
   const isTopicFocus = currentFocusEntry?.mode === "topic";
   const topicFocusRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
   const topicFocusTargetCount = useMemo(
-    () => topicFocusRelMsgId ? Array.from(new Set(
-      edges
-        .filter(ed => ed.relationMessageId === topicFocusRelMsgId && msgMap.get(ed.to.messageId)?.kind === "normal")
-        .map(ed => ed.to.messageId)
-    )).length : 0,
-    [topicFocusRelMsgId, edges, msgMap]
+    () => topicFocusRelMsgId ? collectOwnedByRelation(topicFocusRelMsgId, relationById).textIds.size : 0,
+    [topicFocusRelMsgId, relationById]
   );
   const topicFocusRelMsg = useMemo(
     () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,
     [topicFocusRelMsgId, msgMap]
   );
   const topicFocusTitle = useMemo(
-    () => topicFocusRelMsg ? extractClassifyTopicTitle(topicFocusRelMsg.content, topicFocusTargetCount) : "",
+    () => topicFocusRelMsg ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `分类话题（${topicFocusTargetCount}）`) : "",
     [topicFocusRelMsg, topicFocusTargetCount]
   );
   // Messages and edges to pass to the canvas views, with classified text messages (and their
@@ -1966,59 +1975,26 @@ export default function TopicDetailPage() {
     const baseMessages = focusEntries.length > 0 ? messagesToShow : messages;
     const baseEdges = focusEntries.length > 0 ? edgesToShow : edges;
     if (isTopicFocus) {
-      // Build a single-pass map from relationMessageId → edges for all lookups below.
       const edgesByRelMsgId = new Map<string, DemoEdge[]>();
       for (const e of baseEdges) {
         const arr = edgesByRelMsgId.get(e.relationMessageId) ?? [];
         arr.push(e);
         edgesByRelMsgId.set(e.relationMessageId, arr);
       }
-      // Find child classify rel msg IDs: classify relation messages directly targeted by the
-      // parent classify. Their own targets must not be auto-expanded into the topic canvas.
-      const parentEdges = topicFocusRelMsgId ? (edgesByRelMsgId.get(topicFocusRelMsgId) ?? []) : [];
-      const parentDirectTargetIds = new Set(parentEdges.map(e => e.to.messageId));
+      const topicRelation = topicFocusRelMsgId ? relationById.get(topicFocusRelMsgId) : null;
       const childClassifyRelMsgIds = new Set(
-        parentEdges
-          .map(e => e.to.messageId)
-          .filter(mid =>
-            msgMap.get(mid)?.kind === "relation" &&
-            relationTypeByRelMsgId.get(mid) === "classify"
-          )
+        topicRelation
+          ? getRelationTargetIds(topicRelation.targetRefs).filter(mid => relationById.get(mid)?.relationType === 'CLASSIFY')
+          : []
       );
-      // Collect IDs of messages that are targets of child classify relations.
-      // Exclude any that are also direct targets of the parent classify (safety guard).
-      const childClassifyTargetIds = new Set<string>();
+      const childOwnedIds = new Set<string>();
       for (const childId of childClassifyRelMsgIds) {
-        for (const e of edgesByRelMsgId.get(childId) ?? []) {
-          if (!parentDirectTargetIds.has(e.to.messageId)) childClassifyTargetIds.add(e.to.messageId);
-        }
+        const owned = collectOwnedByRelation(childId, relationById);
+        owned.textIds.forEach(id => childOwnedIds.add(id));
+        owned.relationIds.forEach(id => childOwnedIds.add(id));
       }
-      // Expand childClassifyTargetIds recursively to include all targets reachable through
-      // nested classify and merge relations. Because `for...of` on a Set processes entries
-      // added during iteration, this naturally handles arbitrarily deep nesting:
-      //   child-classify → nested-classify → ... → merge → text messages
-      // All such messages belong to an inner topic and must not be shown in the outer view.
-      for (const id of childClassifyTargetIds) {
-        const m = msgMap.get(id);
-        if (m?.kind !== "relation") continue;
-        const relType = relationTypeByRelMsgId.get(id);
-        if (relType === "classify") {
-          // Add all direct targets of this nested classify so they are processed in turn.
-          for (const e of edgesByRelMsgId.get(id) ?? []) {
-            childClassifyTargetIds.add(e.to.messageId);
-          }
-        } else if (relType === "merge") {
-          // Add all text-message endpoints of this merge relation.
-          for (const e of edgesByRelMsgId.get(id) ?? []) {
-            if (msgMap.get(e.to.messageId)?.kind === "normal") childClassifyTargetIds.add(e.to.messageId);
-            if (msgMap.get(e.from.messageId)?.kind === "normal") childClassifyTargetIds.add(e.from.messageId);
-          }
-        }
-      }
-      // Find relation messages that exclusively connect to child classify targets
-      // (analogous to classifiedExclusiveRelMsgIds on the main canvas).
       const exclusiveToChildRelMsgIds = new Set<string>();
-      if (childClassifyTargetIds.size > 0) {
+      if (childOwnedIds.size > 0) {
         for (const [relMsgId, relEdges] of edgesByRelMsgId) {
           if (relMsgId === topicFocusRelMsgId || childClassifyRelMsgIds.has(relMsgId)) continue;
           if (relEdges[0]?.relationType === 'classify') continue;
@@ -2026,20 +2002,19 @@ export default function TopicDetailPage() {
             .flatMap(e => [e.from.messageId, e.to.messageId])
             .filter(mid => msgMap.get(mid)?.kind === 'normal');
           if (textEndpoints.length === 0) continue;
-          if (textEndpoints.every(mid => childClassifyTargetIds.has(mid))) {
+          if (textEndpoints.every(mid => childOwnedIds.has(mid))) {
             exclusiveToChildRelMsgIds.add(relMsgId);
           }
         }
       }
       const topicMessages = baseMessages.filter(m =>
         !(m.kind === "relation" && m.id === topicFocusRelMsgId) &&
-        !childClassifyTargetIds.has(m.id) &&
+        !childOwnedIds.has(m.id) &&
         !exclusiveToChildRelMsgIds.has(m.id)
       );
       const topicEdges = baseEdges.filter(e =>
         e.relationMessageId !== topicFocusRelMsgId &&
-        !childClassifyRelMsgIds.has(e.relationMessageId) &&
-        !childClassifyTargetIds.has(e.relationMessageId) &&
+        !childOwnedIds.has(e.relationMessageId) &&
         !exclusiveToChildRelMsgIds.has(e.relationMessageId)
       );
       return { messagesToRenderFiltered: topicMessages, edgesToRenderFiltered: topicEdges };
@@ -2048,7 +2023,6 @@ export default function TopicDetailPage() {
     // connected to classified text messages (they "belong" to the topic view).
     const filteredMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
-      if (m.kind === "normal" && classifiedMergeTargetTextIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedTargetClassifyRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedTargetMergeRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
@@ -2062,7 +2036,7 @@ export default function TopicDetailPage() {
       !replacedRelationMsgIds.has(e.relationMessageId)
     );
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, relationTypeByRelMsgId, classifiedTargetTextIds, classifiedMergeTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
+  }, [messages, edges, relations, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -2078,10 +2052,9 @@ export default function TopicDetailPage() {
         targetRefs: [{ kind: 'message', messageId }],
       });
       const relId = backendRel.id;
-      const relMsg: DemoMessage = { id: relId, author: backendRel.createdBy.username, createdAt: backendRel.createdAt, kind: "relation", content: `${kind}: (无来源消息) → ${messageId}` };
       const anonSrcId = `anon:${backendRel.id}`;
       const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relId, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };
-      setMessages(prev => [...prev, relMsg]);
+      appendCreatedRelation(backendRel);
       setEdges(prev => [...prev, edge]);
     } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
   }
@@ -2312,13 +2285,9 @@ export default function TopicDetailPage() {
                   const relType = msg.kind === "relation" ? relationTypeByRelMsgId.get(msg.id) : null;
                   const isClassifyTopicMsg = relType === "classify";
                   const classifyTargetCount = isClassifyTopicMsg
-                    ? getClassifyTargetTextMessageIds(
-                        edges
-                          .filter(ed => ed.relationMessageId === msg.id)
-                          .map(ed => ({ messageId: ed.to.messageId, selection: { kind: "whole" as const } }))
-                      ).length
+                    ? collectOwnedByRelation(msg.id, relationById).textIds.size
                     : 0;
-                  const classifyTitle = isClassifyTopicMsg ? extractClassifyTopicTitle(msg.content, classifyTargetCount) : "";
+                  const classifyTitle = isClassifyTopicMsg ? (getRelationTitle(msg.relationPayload) || `分类话题（${classifyTargetCount}）`) : "";
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{

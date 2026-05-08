@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
-import { getPresentationSpec } from '../types';
+import { getPresentationSpec, getRelationTitle } from '../types';
 import { computeCorrectedEdgeMap } from '../utils/modelBridge';
 import type { PresentationKind } from '../types';
-import { extractClassifyTopicTitle } from '../utils/classifyTopic';
 
 // ========================= Layout types =========================
 
@@ -622,7 +621,8 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
  *
  * Rules:
  *   - Source message (if real, not anon:) → same column as its first target.
- *   - No-source framing relations with multiple targets → all targets chained into the same column.
+ *   - No-source framing relations with multiple targets → all targets chained into the same column,
+ *     except MERGE which keeps its natural multi-column layout.
  *   - All framing-type relations (supplement-frame, frame-group, replace-overlay) participate.
  *   - correction-badge (CORRECT) also uses same-column stacking without a frame.
  */
@@ -656,15 +656,16 @@ function applyGroupingColumnOverride(params: {
   // column and stacked tightly (zero gap).  This also covers the previously-anon-only case
   // where an explicit-source supplement has more than one target: those targets now also get
   // chained, so they are stacked below the first target together with the source message.
-  const frameTargetsByRelMsg = new Map<string, string[]>();
+  const frameTargetsByRelMsg = new Map<string, { targetIds: string[]; relationType: string }>();
   for (const e of edges) {
     if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
     if (!normalSet.has(e.to.messageId)) continue;
-    const arr = frameTargetsByRelMsg.get(e.relationMessageId) ?? [];
-    arr.push(e.to.messageId);
-    frameTargetsByRelMsg.set(e.relationMessageId, arr);
+    const entry = frameTargetsByRelMsg.get(e.relationMessageId) ?? { targetIds: [], relationType: e.relationType };
+    entry.targetIds.push(e.to.messageId);
+    frameTargetsByRelMsg.set(e.relationMessageId, entry);
   }
-  for (const [, targetIds] of frameTargetsByRelMsg) {
+  for (const [, { targetIds, relationType }] of frameTargetsByRelMsg) {
+    if (relationType === 'merge') continue;
     if (targetIds.length < 2) continue;
     // Sort by creation time for deterministic, chronological ordering.
     targetIds.sort((a, b) =>
@@ -1858,7 +1859,7 @@ export default function GraphView(props: GraphViewProps) {
           if (msg.kind === "relation" && classifyRelMsgIds.has(msg.id)) {
             const relEdgesForMsg = edges.filter(e => e.relationMessageId === msg.id);
             const targetCount = relEdgesForMsg.filter(e => !e.to.messageId.startsWith('anon:')).length;
-            const classifyTitle = extractClassifyTopicTitle(msg.content, targetCount);
+            const classifyTitle = getRelationTitle(msg.relationPayload) || `分类话题（${targetCount}）`;
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             return (
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
@@ -2386,7 +2387,7 @@ export default function GraphView(props: GraphViewProps) {
                       .filter(ed => msgMap.get(ed.to.messageId)?.kind === "normal")
                       .map(ed => ed.to.messageId)
                   ));
-                  const topicTitle = extractClassifyTopicTitle(relMsg?.content, targetTextIds.length);
+                  const topicTitle = getRelationTitle(relMsg?.relationPayload) || `分类话题（${targetTextIds.length}）`;
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>

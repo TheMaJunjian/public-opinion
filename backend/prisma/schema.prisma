@@ -61,6 +61,7 @@ model Message {
   relationType  String?
   relSourceId   String?
   targetRefs    Json?
+  relationPayload Json?
 
   topic     Topic    @relation(fields: [topicId], references: [id])
   createdBy User     @relation(fields: [createdById], references: [id])

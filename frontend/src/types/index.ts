@@ -97,6 +97,14 @@ export type TargetRef =
       part?: 'label' | 'decoration' | 'frame' | 'whole';
     };
 
+export type RelationTargetLayout = 'single-column' | 'multi-column';
+
+export interface RelationPayload {
+  label?: string;
+  title?: string;
+  targetLayout?: RelationTargetLayout;
+}
+
 export interface Relation {
   id: string;
   topicId: string;
@@ -108,16 +116,7 @@ export interface Relation {
    */
   sourceMessageId: string | null;
   targetRefs: TargetRef[];
-  /**
-   * Label text for TAG relations. Stored directly on the relation instead of a source message.
-   * Undefined for all non-TAG relation types.
-   */
-  tagLabel?: string;
-  /**
-   * Topic title for CLASSIFY relations. Stored directly on the relation.
-   * Undefined for all non-CLASSIFY relation types.
-   */
-  classifyTitle?: string;
+  payload?: RelationPayload;
   createdAt: string;
   createdBy: User;
 }
@@ -255,6 +254,19 @@ export function getTargetRelationIds(targetRefs: TargetRef[]): string[] {
   return targetRefs
     .filter((r): r is Extract<TargetRef, { kind: 'relation' }> => r.kind === 'relation')
     .map(r => r.relationId);
+}
+
+export function getRelationLabel(payload: RelationPayload | undefined): string | undefined {
+  return payload?.label?.trim() || undefined;
+}
+
+export function getRelationTitle(payload: RelationPayload | undefined): string | undefined {
+  return payload?.title?.trim() || undefined;
+}
+
+export function getRelationTargetLayout(relation: Pick<Relation, 'relationType' | 'payload'>): RelationTargetLayout {
+  if (relation.payload?.targetLayout) return relation.payload.targetLayout;
+  return relation.relationType.toUpperCase() === 'MERGE' ? 'multi-column' : 'single-column';
 }
 
 // ============================================================

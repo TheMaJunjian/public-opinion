@@ -54,17 +54,24 @@ const createRelationSchema = z.object({
   // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
   // for relation types not listed in TARGET_OPTIONAL_RELATION_TYPES (currently only CLASSIFY).
   targetRefs: z.array(targetRefSchema).max(20),
-  // tagLabel: optional label text for TAG relations (stored in place of a source message).
-  // When provided, the TAG relation is a user-to-message relation without a source text message.
-  tagLabel: z.string().max(200).optional(),
-  // classifyTitle: optional topic title for CLASSIFY relations (stored in relation content).
-  classifyTitle: z.string().trim().min(1).max(200).optional(),
+  payload: z.object({
+    label: z.string().trim().min(1).max(200).optional(),
+    title: z.string().trim().min(1).max(200).optional(),
+    targetLayout: z.enum(['single-column', 'multi-column']).optional(),
+  }).strict().optional(),
 }).superRefine((data, ctx) => {
-  if (data.relationType === 'CLASSIFY' && !data.classifyTitle) {
+  if (data.relationType === 'TAG' && !(data.payload && data.payload.label)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '标注关系需要提供标签文本',
+      path: ['payload', 'label'],
+    });
+  }
+  if (data.relationType === 'CLASSIFY' && !data.payload?.title) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: '分类关系需要提供话题名称',
-      path: ['classifyTitle'],
+      path: ['payload', 'title'],
     });
   }
 });
@@ -180,8 +187,7 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
       relationType: m.relationType!,
       sourceMessageId: m.relSourceId ?? null,
       targetRefs: m.targetRefs,
-      tagLabel: m.relationType === 'TAG' ? (m.content ?? undefined) : undefined,
-      classifyTitle: m.relationType === 'CLASSIFY' ? (m.content ?? undefined) : undefined,
+      payload: m.relationPayload ?? undefined,
       createdAt: m.createdAt,
       createdBy: m.createdBy,
     }));
@@ -363,8 +369,12 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       }
     }
 
+    const relationPayload =
+      data.relationType === 'MERGE' && !data.payload?.targetLayout
+        ? { ...data.payload, targetLayout: 'multi-column' as const }
+        : data.payload;
+
     // Create the relation as a RELATION-kind message in the unified Message table.
-    // For TAG/CLASSIFY relations, label/title is stored in the content field so it survives round-trips.
     const message = await prisma.message.create({
       data: {
         topicId,
@@ -373,11 +383,8 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         relationType: data.relationType,
         relSourceId: data.sourceMessageId ?? null,
         targetRefs: data.targetRefs,
-        content: data.relationType === 'TAG'
-          ? (data.tagLabel ?? null)
-          : data.relationType === 'CLASSIFY'
-            ? (data.classifyTitle ?? null)
-            : null,
+        relationPayload: relationPayload ?? undefined,
+        content: null,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     });
@@ -389,8 +396,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       relationType: message.relationType!,
       sourceMessageId: message.relSourceId ?? null,
       targetRefs: message.targetRefs,
-      tagLabel: message.relationType === 'TAG' ? (message.content ?? undefined) : undefined,
-      classifyTitle: message.relationType === 'CLASSIFY' ? (message.content ?? undefined) : undefined,
+      payload: message.relationPayload ?? undefined,
       createdAt: message.createdAt,
       createdBy: message.createdBy,
     });

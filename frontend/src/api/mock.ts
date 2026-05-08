@@ -392,16 +392,14 @@ export async function createRelation(topicId: string, data: {
   relationType: string;
   sourceMessageId?: string | null;
   targetRefs: TargetRef[];
-  tagLabel?: string;
-  classifyTitle?: string;
+  payload?: import('../types').RelationPayload;
 }) {
   await delay();
   if (!mockUser) throw new Error('请先登录');
   const rel: Relation = {
     id: genId(), topicId, relationType: data.relationType,
     sourceMessageId: data.sourceMessageId ?? null, targetRefs: data.targetRefs,
-    tagLabel: data.relationType === 'TAG' ? data.tagLabel : undefined,
-    classifyTitle: data.relationType === 'CLASSIFY' ? data.classifyTitle : undefined,
+    payload: data.payload,
     createdAt: new Date().toISOString(), createdBy: mockUser,
   };
   relations.push(rel);

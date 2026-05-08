@@ -184,6 +184,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
     });
+    expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
@@ -331,5 +332,84 @@ describe('TopicDetailPage summary relation visibility', () => {
       expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
     });
     expect(screen.queryByText('消息 msg-1')).not.toBeInTheDocument();
+
+    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe('TopicDetailPage classify containing merge with nested classify target', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-a', '消息A'),
+        makeMessage('msg-b', '消息B'),
+        makeMessage('msg-c', '消息C'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-inner',
+          topicId: 'topic-1',
+          relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-c' }],
+          payload: { title: '内层话题' },
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-merge',
+          topicId: 'topic-1',
+          relationType: 'MERGE',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-a' }, { kind: 'relation', relationId: 'rel-inner' }],
+          createdAt: '2024-01-01T00:03:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-outer',
+          topicId: 'topic-1',
+          relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }, { kind: 'message', messageId: 'msg-b' }],
+          payload: { title: '外层话题' },
+          createdAt: '2024-01-01T00:04:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('keeps nested classify-owned text hidden when entering outer classify', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-outer')).toBeInTheDocument();
+    });
+    fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
+
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
+    });
+    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
   });
 });

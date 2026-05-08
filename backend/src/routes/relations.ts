@@ -112,6 +112,15 @@ function collectSelectedGroupTargetTextIds(params: {
       .filter(rel => rel.relationType === 'CLASSIFY')
       .map(rel => [rel.id, rel] as const)
   );
+
+  // Also include text targets of MERGE relations in targetRelations
+  // (when a MERGE relation is a CLASSIFY target, its text targets are part of the group).
+  for (const rel of params.targetRelations) {
+    if (rel.relationType === 'MERGE') {
+      extractTextTargetIds(rel.targetRefs).forEach(id => selectedTextIds.add(id));
+    }
+  }
+
   const queue = Array.from(classifyRelations.keys());
   const visited = new Set<string>();
 

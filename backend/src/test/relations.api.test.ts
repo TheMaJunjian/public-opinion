@@ -336,6 +336,52 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       });
     expect(res.status).toBe(201);
   });
+
+  it('allows CLASSIFY with MERGE relation message target', async () => {
+    const mockMergeRel = {
+      id: 'rel-merge',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'MERGE',
+      relSourceId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }, { kind: 'message', messageId: 'msg-2' }],
+    };
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([mockMergeRel])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'CLASSIFY', classifyTitle: '测试话题', targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects CLASSIFY when MERGE relation target text messages have cross links to outside messages', async () => {
+    const mockMergeRel = {
+      id: 'rel-merge',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'MERGE',
+      relSourceId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+    };
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([mockMergeRel])
+      .mockResolvedValueOnce([{
+        id: 'rel-existing',
+        relationType: 'REPLY',
+        relSourceId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      }])
+      .mockResolvedValueOnce([{ id: 'msg-1' }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'CLASSIFY', classifyTitle: '测试话题', targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
+  });
 });
 
 describe('POST /api/topics/:topicId/relations — successful creation', () => {

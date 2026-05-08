@@ -213,6 +213,33 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
+  it('allows MERGE without sourceMessageId', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'MERGE', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects MERGE with sourceMessageId', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'MERGE', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('归并关系');
+  });
+
+  it('rejects MERGE with relation targets', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'MERGE', targetRefs: [{ kind: 'relation', relationId: 'rel-1' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('归并关系目标');
+  });
+
   it('rejects CLASSIFY when selected text targets have non-reference cross links', async () => {
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])

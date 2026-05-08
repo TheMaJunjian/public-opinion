@@ -47,8 +47,8 @@ const createRelationSchema = z.object({
   relationType: z.enum(RELATION_TYPES, {
     errorMap: () => ({ message: `关系类型必须是以下之一: ${RELATION_TYPES.join(', ')}` }),
   }),
-  // sourceMessageId is required for most relation types, but optional for AGREE/DISAGREE
-  // (which may be pure stance declarations without an attached text message).
+  // sourceMessageId is required for most relation types, but optional for
+  // user-to-message relation types (AGREE/DISAGREE/TAG/CLASSIFY/MERGE etc.).
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
   // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
   // for relation types not listed in TARGET_OPTIONAL_RELATION_TYPES (currently only CLASSIFY).
@@ -68,7 +68,7 @@ const createRelationSchema = z.object({
   }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
 const CLASSIFY_CROSS_LINK_ERROR = '分类目标与其他消息存在非引用关联，无法建立分类关系';
 
@@ -162,9 +162,17 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // CLASSIFY is a user-to-message relation: no source text message.
+    // CLASSIFY / MERGE are user-to-message relations: no source text message.
     if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
       res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
+      return;
+    }
+    if (data.relationType === 'MERGE' && data.sourceMessageId) {
+      res.status(400).json({ error: '归并关系不应提供来源消息 ID' });
+      return;
+    }
+    if (data.relationType === 'MERGE' && data.targetRefs.some(r => r.kind === 'relation')) {
+      res.status(400).json({ error: '归并关系目标必须是文本消息' });
       return;
     }
 

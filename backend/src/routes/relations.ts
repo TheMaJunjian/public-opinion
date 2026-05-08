@@ -60,7 +60,7 @@ const createRelationSchema = z.object({
     targetLayout: z.enum(['single-column', 'multi-column']).optional(),
   }).strict().optional(),
 }).superRefine((data, ctx) => {
-  if (data.relationType === 'TAG' && !data.payload?.label) {
+  if (data.relationType === 'TAG' && !(data.payload && data.payload.label)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: '标注关系需要提供标签文本',
@@ -369,9 +369,10 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       }
     }
 
-    const relationPayload = data.relationType === 'MERGE'
-      ? { ...(data.payload ?? {}), targetLayout: data.payload?.targetLayout ?? 'multi-column' }
-      : data.payload;
+    const relationPayload =
+      data.relationType === 'MERGE' && !data.payload?.targetLayout
+        ? { ...data.payload, targetLayout: 'multi-column' as const }
+        : data.payload;
 
     // Create the relation as a RELATION-kind message in the unified Message table.
     const message = await prisma.message.create({

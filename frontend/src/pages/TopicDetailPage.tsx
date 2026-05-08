@@ -1993,16 +1993,26 @@ export default function TopicDetailPage() {
           if (!parentDirectTargetIds.has(e.to.messageId)) childClassifyTargetIds.add(e.to.messageId);
         }
       }
-      // Expand childClassifyTargetIds to also include the text-message endpoints of any MERGE
-      // relation messages already in that set. When a child classify targets a MERGE relation,
-      // the MERGE's text targets belong to the inner topic and must not be shown in the outer
-      // topic view until the user explicitly navigates into the inner topic.
+      // Expand childClassifyTargetIds recursively to include all targets reachable through
+      // nested classify and merge relations. Because `for...of` on a Set processes entries
+      // added during iteration, this naturally handles arbitrarily deep nesting:
+      //   child-classify → nested-classify → ... → merge → text messages
+      // All such messages belong to an inner topic and must not be shown in the outer view.
       for (const id of childClassifyTargetIds) {
         const m = msgMap.get(id);
-        if (m?.kind !== "relation" || relationTypeByRelMsgId.get(id) !== "merge") continue;
-        for (const e of edgesByRelMsgId.get(id) ?? []) {
-          if (msgMap.get(e.to.messageId)?.kind === "normal") childClassifyTargetIds.add(e.to.messageId);
-          if (msgMap.get(e.from.messageId)?.kind === "normal") childClassifyTargetIds.add(e.from.messageId);
+        if (m?.kind !== "relation") continue;
+        const relType = relationTypeByRelMsgId.get(id);
+        if (relType === "classify") {
+          // Add all direct targets of this nested classify so they are processed in turn.
+          for (const e of edgesByRelMsgId.get(id) ?? []) {
+            childClassifyTargetIds.add(e.to.messageId);
+          }
+        } else if (relType === "merge") {
+          // Add all text-message endpoints of this merge relation.
+          for (const e of edgesByRelMsgId.get(id) ?? []) {
+            if (msgMap.get(e.to.messageId)?.kind === "normal") childClassifyTargetIds.add(e.to.messageId);
+            if (msgMap.get(e.from.messageId)?.kind === "normal") childClassifyTargetIds.add(e.from.messageId);
+          }
         }
       }
       // Find relation messages that exclusively connect to child classify targets
@@ -2029,6 +2039,7 @@ export default function TopicDetailPage() {
       const topicEdges = baseEdges.filter(e =>
         e.relationMessageId !== topicFocusRelMsgId &&
         !childClassifyRelMsgIds.has(e.relationMessageId) &&
+        !childClassifyTargetIds.has(e.relationMessageId) &&
         !exclusiveToChildRelMsgIds.has(e.relationMessageId)
       );
       return { messagesToRenderFiltered: topicMessages, edgesToRenderFiltered: topicEdges };

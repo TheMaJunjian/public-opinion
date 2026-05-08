@@ -185,3 +185,93 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
   });
 });
+
+describe('TopicDetailPage deeply nested classify → classify → merge', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    // Normal text messages
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        { id: 'msg-a', topicId: 'topic-1', contentType: 'TEXT', content: '消息A', createdAt: '2024-01-01T00:00:00.000Z', createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' } },
+        { id: 'msg-b', topicId: 'topic-1', contentType: 'TEXT', content: '消息B', createdAt: '2024-01-01T00:01:00.000Z', createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' } },
+      ],
+    });
+    // Relations:
+    //   rel-merge   (MERGE)    → targets msg-a, msg-b
+    //   rel-inner   (CLASSIFY) → targets rel-merge
+    //   rel-middle  (CLASSIFY) → targets rel-inner  (nested classify inside outer)
+    //   rel-outer   (CLASSIFY) → targets rel-middle (outermost topic)
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-merge', topicId: 'topic-1', relationType: 'MERGE', sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-a' }, { kind: 'message', messageId: 'msg-b' }],
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
+        },
+        {
+          id: 'rel-inner', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }],
+          classifyTitle: '内层话题',
+          createdAt: '2024-01-01T00:03:00.000Z',
+          createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
+        },
+        {
+          id: 'rel-middle', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-inner' }],
+          classifyTitle: '中层话题',
+          createdAt: '2024-01-01T00:04:00.000Z',
+          createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
+        },
+        {
+          id: 'rel-outer', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-middle' }],
+          classifyTitle: '外层话题',
+          createdAt: '2024-01-01T00:05:00.000Z',
+          createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
+        },
+      ],
+    });
+  });
+
+  it('prevents deeply nested merge-relation text messages from expanding into outer topic view', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    // Switch to list view
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+
+    // On the main canvas only the outer classify topic card should be visible.
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-outer')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类话题 rel-middle')).not.toBeInTheDocument();
+
+    // Enter the outer topic by double-clicking its card.
+    fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
+
+    // After entering outer-topic focus, only the middle topic card should be shown.
+    // msg-a, msg-b, rel-merge, and rel-inner must NOT be expanded into the outer view.
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-middle')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
+  });
+});

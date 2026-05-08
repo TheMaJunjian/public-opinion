@@ -414,7 +414,6 @@ export function applyMergeCanvasReservations(params: {
     byCol.set(col, arr);
   }
   const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
-  for (const ids of byCol.values()) sortIdsByY(ids);
 
   function computeCurrentReservationRect(reservation: MergeCanvasReservation): Rect {
     const boxes: LayoutBox[] = [];

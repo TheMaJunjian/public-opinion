@@ -117,9 +117,11 @@ function collectSelectedGroupTargetTextIds(params: {
   const relationById = new Map(
     params.targetRelations.map(rel => [rel.id, rel] as const)
   );
-  const queue = params.targetRelations.map(rel => rel.id);
-  const visited = new Set<string>();
   const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT']);
+  const queue = params.targetRelations
+    .filter(rel => expandableRelationTypes.has(rel.relationType ?? ''))
+    .map(rel => rel.id);
+  const visited = new Set<string>();
 
   while (queue.length > 0) {
     const relId = queue.shift()!;
@@ -303,7 +305,9 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         queued.add(id);
         queue.push(id);
       };
-      directTargetRelations.forEach(rel => enqueue(rel.id));
+      directTargetRelations
+        .filter(rel => expandableRelationTypes.has(rel.relationType ?? ''))
+        .forEach(rel => enqueue(rel.id));
 
       while (queue.length > 0) {
         const relId = queue.shift()!;

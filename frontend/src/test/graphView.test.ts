@@ -36,6 +36,8 @@ describe('merge canvas helpers', () => {
     expect(reservations).toHaveLength(1);
     expect(Array.from(reservations[0].cardIds)).toEqual(expect.arrayContaining(['msg-1', 'msg-2', 'msg-3']));
     expect(reservations[0].headerRect.y).toBeLessThan(reservations[0].contentRect.y);
+    expect(reservations[0].headerRect.height).toBeLessThan(30);
+    expect(reservations[0].headerRect.width).toBeLessThan(80);
     expect(reservations[0].contentRect.height).toBeGreaterThan(250);
   });
 
@@ -60,8 +62,8 @@ describe('merge canvas helpers', () => {
       reservations: [{
         relMsgId: 'merge-1',
         contentRect: { x: 6, y: 6, width: 744, height: 120 },
-        headerRect: { x: 12, y: -66, width: 240, height: 54 },
-        rect: { x: 6, y: -66, width: 744, height: 192 },
+        headerRect: { x: 16, y: -2, width: 56, height: 24 },
+        rect: { x: 6, y: -2, width: 744, height: 128 },
         cardIds: new Set(['msg-1', 'msg-2']),
       }],
     });

@@ -1442,7 +1442,6 @@ export default function GraphView(props: GraphViewProps) {
       for (const ref of [...Array.from(header.getClientRects()),...Array.from(content.getClientRects())])
         globalForbiddenRects.push({x:ref.left-canvasRect.left,y:ref.top-canvasRect.top,width:ref.width,height:ref.height});
     }
-    for (const mergeCanvas of mergeCanvasReservations) globalForbiddenRects.push(mergeCanvas.headerRect);
 
     function getMessageRects(messageId: string): Rect[] {
       const res: Rect[] = [];
@@ -2032,7 +2031,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds, mergeCanvasReservations]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -2215,41 +2214,6 @@ export default function GraphView(props: GraphViewProps) {
           );
         })}
       </div>
-      <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:4,pointerEvents:"none"}}>
-        {mergeCanvasReservations.map(mc => {
-          const title = `归并关系：${mc.relMsgId}；单击选中，双击展开详情`;
-          const handleClick = (e: React.MouseEvent) => { e.stopPropagation(); (onGroupFrameClick ?? onMessageClick)(e, mc.relMsgId); };
-          const handleDoubleClick = (e: React.MouseEvent) => { e.stopPropagation(); (onGroupFrameDoubleClick ?? onMessageDoubleClick)(e, mc.relMsgId); };
-          return (
-            <div key={`merge-canvas-header-${mc.relMsgId}`}
-              data-rel-overlay="true"
-              onClick={handleClick}
-              onDoubleClick={handleDoubleClick}
-              title={title}
-              style={{
-                position:"absolute",
-                left:mc.headerRect.x,
-                top:mc.headerRect.y,
-                width:mc.headerRect.width,
-                height:mc.headerRect.height,
-                borderRadius:999,
-                border:"1px solid rgba(100,116,139,0.35)",
-                background:"rgba(255,255,255,0.95)",
-                color:"#475569",
-                boxShadow:"0 6px 14px rgba(15,23,42,0.16)",
-                cursor:"pointer",
-                pointerEvents:"auto",
-                userSelect:"none",
-                display:"flex",
-                alignItems:"center",
-                justifyContent:"center"
-              }}>
-              <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em"}}>归并</span>
-            </div>
-          );
-        })}
-      </div>
-
       {/* SVG layer: supplement frame visuals + edge paths.
           Gate on either having edges or frames so frames render even with no other edges. */}
       {(positionedEdges.length>0||supplementFrames.length>0||groupFrames.length>0)&&(

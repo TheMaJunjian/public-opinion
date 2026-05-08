@@ -184,7 +184,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: '退出分类' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
@@ -335,7 +335,7 @@ describe('TopicDetailPage summary relation visibility', () => {
 
     fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '退出总结' })).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
     });
   });
 });

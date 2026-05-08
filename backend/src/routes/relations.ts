@@ -50,6 +50,8 @@ const createRelationSchema = z.object({
   // sourceMessageId is required for most relation types, but optional for AGREE/DISAGREE
   // (which may be pure stance declarations without an attached text message).
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
+  // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
+  // for relation types not listed in TARGET_OPTIONAL_RELATION_TYPES (currently only CLASSIFY).
   targetRefs: z.array(targetRefSchema).max(20),
   // tagLabel: optional label text for TAG relations (stored in place of a source message).
   // When provided, the TAG relation is a user-to-message relation without a source text message.
@@ -67,6 +69,7 @@ const createRelationSchema = z.object({
 });
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY']);
+const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -153,7 +156,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    if (data.relationType !== 'CLASSIFY' && data.targetRefs.length === 0) {
+    if (!TARGET_OPTIONAL_RELATION_TYPES.has(data.relationType) && data.targetRefs.length === 0) {
       res.status(400).json({ error: '至少需要一个目标引用' });
       return;
     }

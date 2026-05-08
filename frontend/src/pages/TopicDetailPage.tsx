@@ -724,7 +724,6 @@ export default function TopicDetailPage() {
           if (prev.length === 0) return prev;
           const last = prev[prev.length - 1];
           if (last.mode !== "topic") return prev;
-          if (last.ids.includes(msg.id)) return prev;
           return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
         });
       }
@@ -904,7 +903,8 @@ export default function TopicDetailPage() {
   function enterClassifyTopic(relMsgId: string) {
     const targetTextIds = getClassifyTargetTextIdsByRelMsgId(relMsgId);
     if (targetTextIds.length === 0) {
-      enterFocus(relMsgId, { mode: "topic", topicRelMsgId: relMsgId });
+      if (!msgMap.has(relMsgId)) return;
+      enterFocusMultiple([relMsgId], { mode: "topic", topicRelMsgId: relMsgId });
       setFocusHop(0);
       return;
     }
@@ -1595,7 +1595,8 @@ export default function TopicDetailPage() {
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
-      return `建立分类话题（${targetCount} 个${CLASSIFY_TARGET_HINT}目标，可为空）`;
+      if (targetCount === 0) return "建立分类话题（无目标）";
+      return `建立分类话题（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
     }
     if (isAgreeDisagreeType || isSupplementType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";

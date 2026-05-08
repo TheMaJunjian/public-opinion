@@ -1929,7 +1929,7 @@ export default function TopicDetailPage() {
     const shownAfterRelation = new Set(messagesToShowArr.map(m => m.id));
     for (const id of startIds) {
       if (!shownAfterRelation.has(id)) {
-        const m = messages.find(x => x.id === id);
+        const m = msgMap.get(id);
         if (m) messagesToShowArr.push(m);
       }
     }
@@ -1997,7 +1997,7 @@ export default function TopicDetailPage() {
       // relation messages already in that set. When a child classify targets a MERGE relation,
       // the MERGE's text targets belong to the inner topic and must not be shown in the outer
       // topic view until the user explicitly navigates into the inner topic.
-      for (const id of [...childClassifyTargetIds]) {
+      for (const id of childClassifyTargetIds) {
         if (msgMap.get(id)?.kind !== "relation" || relationTypeByRelMsgId.get(id) !== "merge") continue;
         for (const e of edgesByRelMsgId.get(id) ?? []) {
           if (msgMap.get(e.to.messageId)?.kind === "normal") childClassifyTargetIds.add(e.to.messageId);

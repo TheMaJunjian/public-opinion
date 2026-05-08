@@ -457,16 +457,17 @@ export function applyMergeCanvasReservations(params: {
           cursor = Math.max(cursor, box.y + box.height + ROW_GAP);
           continue;
         }
+        // Compact upward only: never push a merge target further down during compaction.
         const nextY = box.y > cursor ? cursor : box.y;
         nextLayout[id] = { ...box, y: nextY };
         cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
       }
-      sortIdsByY(ids);
     }
 
     const reservationRect = computeCurrentReservationRect(reservation);
     finalReservationRects.push(reservationRect);
     for (const ids of byCol.values()) {
+      sortIdsByY(ids);
       let cursor = reservationRect.y + reservationRect.height + MERGE_CANVAS_STACK_GAP;
       for (const id of ids) {
         const box = nextLayout[id];

@@ -223,6 +223,67 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       }
     }
 
+    // CLASSIFY targets cannot have non-reference cross-message links with non-target text messages.
+    if (data.relationType === 'CLASSIFY') {
+      const classifyTargetTextIds = [...new Set(
+        data.targetRefs
+          .filter((r): r is Extract<typeof data.targetRefs[number], { kind: 'message' | 'text-fragment' }> =>
+            r.kind === 'message' || r.kind === 'text-fragment'
+          )
+          .map(r => r.messageId)
+      )];
+      if (classifyTargetTextIds.length > 0) {
+        const selectedTargetTextIdSet = new Set(classifyTargetTextIds);
+        const relationMessages = await prisma.message.findMany({
+          where: { topicId, kind: 'RELATION' },
+          select: { relationType: true, relSourceId: true, targetRefs: true },
+        });
+        const sourceIds = [...new Set(
+          relationMessages
+            .map(m => m.relSourceId)
+            .filter((id): id is string => !!id)
+        )];
+        const sourceTextRows = sourceIds.length > 0
+          ? await prisma.message.findMany({
+              where: { topicId, kind: 'TEXT', id: { in: sourceIds } },
+              select: { id: true },
+            })
+          : [];
+        const sourceTextIdSet = new Set(sourceTextRows.map(row => row.id));
+
+        for (const relMsg of relationMessages) {
+          if (relMsg.relationType === 'REFERENCE') continue;
+          const sourceTextId =
+            relMsg.relSourceId && sourceTextIdSet.has(relMsg.relSourceId)
+              ? relMsg.relSourceId
+              : null;
+          const refs = Array.isArray(relMsg.targetRefs)
+            ? relMsg.targetRefs as Array<{ kind?: unknown; messageId?: unknown }>
+            : [];
+          const targetTextIds = [...new Set(
+            refs
+              .filter(ref =>
+                (ref.kind === 'message' || ref.kind === 'text-fragment') &&
+                typeof ref.messageId === 'string'
+              )
+              .map(ref => ref.messageId as string)
+          )];
+          const hasSelectedEndpoint =
+            (sourceTextId !== null && selectedTargetTextIdSet.has(sourceTextId)) ||
+            targetTextIds.some(id => selectedTargetTextIdSet.has(id));
+          if (!hasSelectedEndpoint) continue;
+          if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId)) {
+            res.status(400).json({ error: '分类目标与其他消息存在非引用关联，无法建立分类关系' });
+            return;
+          }
+          if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id))) {
+            res.status(400).json({ error: '分类目标与其他消息存在非引用关联，无法建立分类关系' });
+            return;
+          }
+        }
+      }
+    }
+
     // Create the relation as a RELATION-kind message in the unified Message table.
     // For TAG/CLASSIFY relations, label/title is stored in the content field so it survives round-trips.
     const message = await prisma.message.create({

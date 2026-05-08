@@ -726,6 +726,25 @@ export default function TopicDetailPage() {
           if (last.mode !== "topic") return prev;
           return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
         });
+        if (topicFocusRelMsgId) {
+          setEdges(prev => {
+            const alreadyLinked = prev.some(e =>
+              e.relationType === "classify" &&
+              e.relationMessageId === topicFocusRelMsgId &&
+              e.to.messageId === msg.id &&
+              e.to.selection.kind === "whole"
+            );
+            if (alreadyLinked) return prev;
+            return [...prev, {
+              id: nextId("edge"),
+              relationMessageId: topicFocusRelMsgId,
+              relationType: "classify",
+              from: { messageId: `anon:${topicFocusRelMsgId}`, selection: { kind: "whole" } },
+              to: { messageId: msg.id, selection: { kind: "whole" } },
+              relationLabel: relationTypeName("classify"),
+            }];
+          });
+        }
       }
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);

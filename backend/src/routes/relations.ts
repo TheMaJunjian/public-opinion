@@ -48,7 +48,8 @@ const createRelationSchema = z.object({
     errorMap: () => ({ message: `关系类型必须是以下之一: ${RELATION_TYPES.join(', ')}` }),
   }),
   // sourceMessageId is required for most relation types, but optional for
-  // user-to-message relation types (AGREE/DISAGREE/TAG/CLASSIFY/MERGE etc.).
+  // relation types that support source-less semantics (AGREE, DISAGREE, SUPPLEMENT,
+  // CORRECT, REPLY, TAG, CLASSIFY, MERGE).
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
   // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
   // for relation types not listed in TARGET_OPTIONAL_RELATION_TYPES (currently only CLASSIFY).
@@ -162,7 +163,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // CLASSIFY / MERGE are user-to-message relations: no source text message.
+    // CLASSIFY and MERGE are user-to-message relations: no source text message.
     if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
       res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
       return;

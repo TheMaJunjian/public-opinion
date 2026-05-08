@@ -1515,12 +1515,12 @@ export default function TopicDetailPage() {
           content: `建立归并关系（无来源消息）\n目标：${mergeTargetIds.join(",")}`,
         };
         setMessages(prev => [...prev, relMsg]);
-        const syntheticSourceId = `anon:${backendRel.id}`;
+        const virtualFrameNodeId = `anon:${backendRel.id}`;
         const newEdges = mergeTargetIds.map(targetMid => ({
           id: nextId("edge"),
           relationMessageId: relId,
           relationType: "merge" as RelationType,
-          from: { messageId: syntheticSourceId, selection: { kind: "whole" as const } },
+          from: { messageId: virtualFrameNodeId, selection: { kind: "whole" as const } },
           to: { messageId: targetMid, selection: { kind: "whole" as const } },
           relationLabel: relationTypeName("merge"),
         }));

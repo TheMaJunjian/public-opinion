@@ -184,6 +184,35 @@ function collectOwnedByRelation(
   return { textIds, relationIds };
 }
 
+function collectNestedTopicRelationIds(
+  rootRelationId: string,
+  relationById: Map<string, Relation>
+): Set<string> {
+  const ids = new Set<string>();
+  const visited = new Set<string>();
+  const queue = [rootRelationId];
+  const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
+
+  while (queue.length > 0) {
+    const relationId = queue.shift()!;
+    if (visited.has(relationId)) continue;
+    visited.add(relationId);
+    const relation = relationById.get(relationId);
+    if (!relation) continue;
+    const relationType = relation.relationType.toUpperCase();
+
+    if (relationId !== rootRelationId && (relationType === 'CLASSIFY' || relationType === 'SUMMARY')) {
+      ids.add(relationId);
+    }
+    if (!expandableTypes.has(relationType)) continue;
+    for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
+      if (!visited.has(childRelationId)) queue.push(childRelationId);
+    }
+  }
+
+  return ids;
+}
+
 /** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
 function uniqueTargetRefsFromEdges(
   relEdges: DemoEdge[],
@@ -2064,9 +2093,15 @@ export default function TopicDetailPage() {
     () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,
     [topicFocusRelMsgId, msgMap]
   );
+  const topicFocusRelType = useMemo(
+    () => topicFocusRelMsg?.relationType === "summary" ? "summary" : "classify",
+    [topicFocusRelMsg]
+  );
+  const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : "分类";
+  const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : "退出分类";
   const topicFocusTitle = useMemo(
-    () => topicFocusRelMsg ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `分类话题（${topicFocusTargetCount}）`) : "",
-    [topicFocusRelMsg, topicFocusTargetCount]
+    () => topicFocusRelMsg ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`) : "",
+    [topicFocusRelMsg, topicFocusTargetCount, topicFocusKindLabel]
   );
   // Messages and edges to pass to the canvas views, with classified text messages (and their
   // exclusively-classified related relation messages) hidden when not in topic-focus mode.
@@ -2083,14 +2118,9 @@ export default function TopicDetailPage() {
         edgesByRelMsgId.set(e.relationMessageId, arr);
       }
       const topicRelation = topicFocusRelMsgId ? relationById.get(topicFocusRelMsgId) : null;
-      const childClassifyRelMsgIds = new Set(
-        topicRelation
-          ? getRelationTargetIds(topicRelation.targetRefs).filter(mid =>
-              relationById.get(mid)?.relationType === 'CLASSIFY' ||
-              relationById.get(mid)?.relationType === 'SUMMARY'
-            )
-          : []
-      );
+      const childClassifyRelMsgIds = topicRelation
+        ? collectNestedTopicRelationIds(topicRelation.id, relationById)
+        : new Set<string>();
       const childOwnedIds = new Set<string>();
       for (const childId of childClassifyRelMsgIds) {
         const owned = collectOwnedByRelation(childId, relationById);
@@ -2363,7 +2393,7 @@ export default function TopicDetailPage() {
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {topicFocusTitle || "分类话题"}
+                      {topicFocusTitle || topicFocusKindLabel}
                     </div>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d", flexShrink: 0 }}>
                       进行中
@@ -2376,7 +2406,7 @@ export default function TopicDetailPage() {
                   </div>
                 </div>
                 <button onClick={exitFocus} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #6f8fbd", background: "#223a5f", color: "#fff", cursor: "pointer", flexShrink: 0 }}>
-                  退出话题
+                  {topicFocusExitLabel}
                 </button>
               </div>
             </div>
@@ -2493,7 +2523,7 @@ export default function TopicDetailPage() {
                     设为焦点消息
                   </button>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isTopicFocus ? "退出当前话题并恢复进入前现场" : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>{isTopicFocus ? "退出话题" : "退出焦点"}</button>
+                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isTopicFocus ? `退出当前${topicFocusKindLabel}并恢复进入前现场` : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>{isTopicFocus ? topicFocusExitLabel : "退出焦点"}</button>
                     <button onClick={exitAllFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#333" : "#222", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
                   </div>
                 </div>

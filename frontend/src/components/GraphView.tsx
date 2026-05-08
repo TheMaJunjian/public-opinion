@@ -1326,27 +1326,19 @@ export default function GraphView(props: GraphViewProps) {
     () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: hiddenCorrectedTargetIds }),
     [normals, colOf, measuredHeights, maxCol, groupSourceToTarget, hiddenCorrectedTargetIds]
   );
-  const mergeCanvasReservations = useMemo(
-    () => buildMergeCanvasReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
-    [edges, baseLayout, msgMap, relationCardMsgIds]
-  );
-  const { layout: mergeAdjustedLayout, canvasHeight: mergeAdjustedCanvasHeight } = useMemo(
-    () => applyMergeCanvasReservations({ layout: baseLayout, normals, colOf, reservations: mergeCanvasReservations }),
-    [baseLayout, normals, colOf, mergeCanvasReservations]
-  );
   const frameAvoidanceReservations = useMemo(
-    () => buildFrameAvoidanceReservations({ edges, layout: mergeAdjustedLayout, msgMap, relationCardMsgIds }),
-    [edges, mergeAdjustedLayout, msgMap, relationCardMsgIds]
+    () => buildFrameAvoidanceReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
+    [edges, baseLayout, msgMap, relationCardMsgIds]
   );
   const { layout, canvasHeight } = useMemo(
     () => applyFrameAvoidanceReservations({
-      layout: mergeAdjustedLayout,
+      layout: baseLayout,
       normals,
       colOf,
       reservations: frameAvoidanceReservations,
-      minCanvasHeight: mergeAdjustedCanvasHeight,
+      minCanvasHeight: 0,
     }),
-    [mergeAdjustedLayout, normals, colOf, frameAvoidanceReservations, mergeAdjustedCanvasHeight]
+    [baseLayout, normals, colOf, frameAvoidanceReservations]
   );
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
@@ -2103,7 +2095,7 @@ export default function GraphView(props: GraphViewProps) {
             const relEdgesForMsg = edges.filter(e => e.relationMessageId === msg.id);
             const targetCount = relEdgesForMsg.filter(e => !e.to.messageId.startsWith('anon:')).length;
             const isSummaryTopic = msg.relationType === "summary";
-            const topicTitle = getRelationTitle(msg.relationPayload) || (isSummaryTopic ? `总结（${targetCount}）` : `分类话题（${targetCount}）`);
+            const topicTitle = getRelationTitle(msg.relationPayload) || (isSummaryTopic ? `总结（${targetCount}）` : `分类（${targetCount}）`);
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             return (
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
@@ -2114,8 +2106,8 @@ export default function GraphView(props: GraphViewProps) {
                   padding:"10px 12px",boxShadow:"0 4px 12px rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",
                   gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:"auto",color:"#111827"}}>
                 <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.8,display:"flex",justifyContent:"space-between"}}>
-                  <span>{`${isSummaryTopic ? "总结" : "分类话题"} ${msg.id}`}</span>
-                  <span>{"双击进入话题"}</span>
+                  <span>{`${isSummaryTopic ? "总结" : "分类"} ${msg.id}`}</span>
+                  <span>{isSummaryTopic ? "双击进入总结" : "双击进入分类"}</span>
                 </div>
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
@@ -2566,7 +2558,7 @@ export default function GraphView(props: GraphViewProps) {
         const HH=SUPP_FRAME_PAD;
         const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=(gf.relType === "classify" || gf.relType === "summary")
-          ? `话题：${gf.relMsgId}；单击选中，双击进入话题`
+          ? `${gf.relType === "summary" ? "总结" : "分类"}：${gf.relMsgId}；单击选中，双击进入${gf.relType === "summary" ? "总结" : "分类"}`
           : `${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
         const gfCorrInfo=correctedRelMsgTargets.get(gf.relMsgId);
         return (
@@ -2632,7 +2624,7 @@ export default function GraphView(props: GraphViewProps) {
                       .filter(ed => msgMap.get(ed.to.messageId)?.kind === "normal")
                       .map(ed => ed.to.messageId)
                   ));
-                  const topicTitle = getRelationTitle(relMsg?.relationPayload) || (isSummaryTopic ? `总结（${targetTextIds.length}）` : `分类话题（${targetTextIds.length}）`);
+                  const topicTitle = getRelationTitle(relMsg?.relationPayload) || (isSummaryTopic ? `总结（${targetTextIds.length}）` : `分类（${targetTextIds.length}）`);
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>

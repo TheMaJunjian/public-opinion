@@ -1054,8 +1054,8 @@ export default function TopicDetailPage() {
       const fromSelected = selected.has(e.from.messageId);
       const toSelected = selected.has(e.to.messageId);
       if (fromSelected !== toSelected) {
-        const nonSelectedId = fromSelected ? e.to.messageId : e.from.messageId;
-        if (classifiedTargetTextIds.has(nonSelectedId)) return true;
+        const nonTargetMessageId = fromSelected ? e.to.messageId : e.from.messageId;
+        if (classifiedTargetTextIds.has(nonTargetMessageId)) return true;
       }
     }
     return false;
@@ -1800,6 +1800,9 @@ export default function TopicDetailPage() {
   }, [focusEntries, viewMode]);
 
   // Restore saved scroll position after view mode switch so switching does not auto-scroll to top.
+  // Two nested requestAnimationFrame calls are needed: the first waits for React to commit the DOM
+  // update (replacing graph view with list view), the second waits for the browser to complete layout
+  // so the scroll container has its full scrollable extent before we set scrollTop/scrollLeft.
   useEffect(() => {
     const saved = viewModeScrollRef.current[viewMode];
     if (saved !== null) {

@@ -373,24 +373,27 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
 
         // Build the set of text message IDs already owned by existing CLASSIFY/SUMMARY relations.
         // These are the "already classified" messages that make cross-links forbidden.
+        // A single BFS processes all CLASSIFY/SUMMARY relations together to avoid redundant traversals.
         const allRelById = new Map(relationMessages.map(r => [r.id, r]));
         const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
         const alreadyClassifiedTextIds = new Set<string>();
+        const bfsQueue: string[] = [];
+        const bfsVisited = new Set<string>();
         for (const rel of relationMessages) {
-          if (rel.relationType !== 'CLASSIFY' && rel.relationType !== 'SUMMARY') continue;
-          const bfsQueue = [rel.id];
-          const bfsVisited = new Set<string>();
-          while (bfsQueue.length > 0) {
-            const bfsId = bfsQueue.shift()!;
-            if (bfsVisited.has(bfsId)) continue;
-            bfsVisited.add(bfsId);
-            const bfsRel = allRelById.get(bfsId);
-            if (!bfsRel) continue;
-            extractTextTargetIds(bfsRel.targetRefs).forEach(id => alreadyClassifiedTextIds.add(id));
-            if (!expandableTypes.has(bfsRel.relationType ?? '')) continue;
-            for (const nestedId of extractNestedRelationIds(bfsRel.targetRefs)) {
-              if (!bfsVisited.has(nestedId)) bfsQueue.push(nestedId);
-            }
+          if ((rel.relationType === 'CLASSIFY' || rel.relationType === 'SUMMARY') && !bfsVisited.has(rel.id)) {
+            bfsQueue.push(rel.id);
+          }
+        }
+        while (bfsQueue.length > 0) {
+          const bfsId = bfsQueue.shift()!;
+          if (bfsVisited.has(bfsId)) continue;
+          bfsVisited.add(bfsId);
+          const bfsRel = allRelById.get(bfsId);
+          if (!bfsRel) continue;
+          extractTextTargetIds(bfsRel.targetRefs).forEach(id => alreadyClassifiedTextIds.add(id));
+          if (!expandableTypes.has(bfsRel.relationType ?? '')) continue;
+          for (const nestedId of extractNestedRelationIds(bfsRel.targetRefs)) {
+            if (!bfsVisited.has(nestedId)) bfsQueue.push(nestedId);
           }
         }
 

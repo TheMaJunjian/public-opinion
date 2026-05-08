@@ -1494,12 +1494,12 @@ export default function TopicDetailPage() {
           .filter(mid => msgMap.get(mid)?.kind === "normal")
       ));
       if (mergeTargetIds.length === 0) {
-        alert("归并关系至少需要一个文本消息目标");
+        alert("归并关系至少需要一个普通消息作为目标");
         return;
       }
       const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === "relation");
       if (hasRelationTarget) {
-        alert("归并关系仅支持文本消息目标");
+        alert("归并关系仅支持普通消息目标，不能包含关系消息");
         return;
       }
       const targetRefs = mergeTargetIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
@@ -1515,18 +1515,18 @@ export default function TopicDetailPage() {
           content: `建立归并关系（无来源消息）\n目标：${mergeTargetIds.join(",")}`,
         };
         setMessages(prev => [...prev, relMsg]);
-        const anonSrcId = `anon:${backendRel.id}`;
+        const syntheticSourceId = `anon:${backendRel.id}`;
         const newEdges = mergeTargetIds.map(targetMid => ({
           id: nextId("edge"),
           relationMessageId: relId,
           relationType: "merge" as RelationType,
-          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+          from: { messageId: syntheticSourceId, selection: { kind: "whole" as const } },
           to: { messageId: targetMid, selection: { kind: "whole" as const } },
           relationLabel: relationTypeName("merge"),
         }));
         setEdges(prev => [...prev, ...newEdges]);
       } catch (e: any) {
-        alert(`建立关系失败: ${e?.message ?? e}`);
+        alert(`建立归并关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -1703,7 +1703,7 @@ export default function TopicDetailPage() {
       return `建立分类话题（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
     }
     if (isMergeType) {
-      if (sourceUnits.length > 0) return "归并关系不使用来源集合，请清空来源集合";
+      if (sourceUnits.length > 0) return "归并关系不需要来源消息，请清空来源集合";
       if (!hasTargetsAvailable) return "请在画布中选择要归并的目标消息";
       if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;

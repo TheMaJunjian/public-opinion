@@ -61,6 +61,8 @@ const MERGE_CANVAS_LABEL_MAX_W = 320;
 const MERGE_CANVAS_LABEL_LEFT_OFFSET = 10;
 const MERGE_CANVAS_LABEL_TOP_OFFSET = 8;
 const MERGE_CANVAS_STACK_GAP = ROW_GAP;
+const MERGE_LABEL_CHAR_WIDTH_ESTIMATE = 14;
+const MERGE_LABEL_HORIZONTAL_PADDING = 24;
 const GROUP_HEADER_MIN_W = 180;
 const GROUP_HEADER_MAX_W = 320;
 const GROUP_HEADER_X_OFFSET = 6;
@@ -301,7 +303,7 @@ function getMergeHeaderText(msg: DemoMessage | undefined): string {
 }
 
 function getMergeHeaderWidth(text: string): number {
-  const estimated = Math.round(text.length * 14 + 24);
+  const estimated = Math.round(text.length * MERGE_LABEL_CHAR_WIDTH_ESTIMATE + MERGE_LABEL_HORIZONTAL_PADDING);
   return Math.max(MERGE_CANVAS_LABEL_MIN_W, Math.min(MERGE_CANVAS_LABEL_MAX_W, estimated));
 }
 
@@ -329,6 +331,8 @@ function getRelationBoundsFromLayout(params: {
 
   const relMsg = msgMap.get(relMsgId);
   const directBox = layout[relMsgId];
+  // MERGE keeps its framed visual (targets + merge header) when nested; using only the direct
+  // card box would drop the merge-frame context and break outer-frame containment.
   if (directBox && relationCardMsgIds.has(relMsgId) && relMsg?.relationType !== 'merge') {
     return { rect: directBox, cardIds: new Set([relMsgId]) };
   }

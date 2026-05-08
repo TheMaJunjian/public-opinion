@@ -13,6 +13,7 @@ describe('merge canvas helpers', () => {
       makeNormal('msg-2'),
       makeNormal('msg-3'),
       { id: 'rel-1', author: 'tester', createdAt: '2024-01-01T00:01:00.000Z', content: 'reply', kind: 'relation', relationType: 'reply' },
+      // Long Chinese title to verify merge header width expands adaptively.
       { id: 'merge-1', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'merge', kind: 'relation', relationType: 'merge', relationPayload: { title: '归并话题标签很长用于测试宽度自适应' } },
     ];
     const edges: DemoEdge[] = [

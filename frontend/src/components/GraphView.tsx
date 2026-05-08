@@ -61,6 +61,9 @@ const MERGE_CANVAS_HEADER_TOP_GAP = 18;
 const MERGE_CANVAS_HEADER_MIN_W = 200;
 const MERGE_CANVAS_HEADER_MAX_W = 300;
 const MERGE_CANVAS_STACK_GAP = ROW_GAP;
+const MERGE_CANVAS_HEADER_WIDTH_BUFFER = 24;
+const MERGE_CANVAS_HEADER_LEFT_OFFSET = 6;
+const MERGE_CANVAS_MIN_WIDTH_PADDING = 12;
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -365,9 +368,9 @@ export function buildMergeCanvasReservations(params: {
       width: contentUnion.width + SUPP_FRAME_PAD * 2,
       height: contentUnion.height + SUPP_FRAME_PAD * 2,
     };
-    const headerWidth = Math.min(MERGE_CANVAS_HEADER_MAX_W, Math.max(MERGE_CANVAS_HEADER_MIN_W, contentRect.width - 24));
+    const headerWidth = Math.min(MERGE_CANVAS_HEADER_MAX_W, Math.max(MERGE_CANVAS_HEADER_MIN_W, contentRect.width - MERGE_CANVAS_HEADER_WIDTH_BUFFER));
     const headerRect = {
-      x: contentRect.x + 6,
+      x: contentRect.x + MERGE_CANVAS_HEADER_LEFT_OFFSET,
       y: contentRect.y - MERGE_CANVAS_HEADER_TOP_GAP - MERGE_CANVAS_HEADER_H,
       width: headerWidth,
       height: MERGE_CANVAS_HEADER_H,
@@ -379,7 +382,7 @@ export function buildMergeCanvasReservations(params: {
       rect: {
         x: contentRect.x,
         y: headerRect.y,
-        width: Math.max(contentRect.width, headerWidth + 12),
+        width: Math.max(contentRect.width, headerWidth + MERGE_CANVAS_MIN_WIDTH_PADDING),
         height: contentRect.y + contentRect.height - headerRect.y,
       },
       cardIds,

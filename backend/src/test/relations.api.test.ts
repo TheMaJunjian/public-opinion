@@ -357,6 +357,26 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
+  it('allows CLASSIFY with SUPPLEMENT relation target', async () => {
+    const mockSupplementRel = {
+      id: 'rel-supp',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'SUPPLEMENT',
+      relSourceId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }, { kind: 'message', messageId: 'msg-2' }],
+    };
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([mockSupplementRel])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }] });
+    expect(res.status).toBe(201);
+  });
+
   it('rejects CLASSIFY when MERGE relation target text messages have cross links to outside messages', async () => {
     const mockMergeRel = {
       id: 'rel-merge',
@@ -379,6 +399,32 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
+  });
+
+  it('rejects MERGE when SUPPLEMENT relation target text messages have cross links to outside messages', async () => {
+    const mockSupplementRel = {
+      id: 'rel-supp',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'SUPPLEMENT',
+      relSourceId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+    };
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([mockSupplementRel])
+      .mockResolvedValueOnce([{
+        id: 'rel-existing',
+        relationType: 'REPLY',
+        relSourceId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      }])
+      .mockResolvedValueOnce([{ id: 'msg-1' }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'MERGE', targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }] });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('非引用关联');
   });

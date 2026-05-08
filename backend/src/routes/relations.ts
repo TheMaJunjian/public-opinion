@@ -95,7 +95,7 @@ function extractTextTargetIds(targetRefs: unknown): string[] {
   )];
 }
 
-function extractNestedClassifyRelationIds(targetRefs: unknown): string[] {
+function extractNestedRelationIds(targetRefs: unknown): string[] {
   if (!Array.isArray(targetRefs)) return [];
   return [...new Set(
     targetRefs
@@ -114,32 +114,25 @@ function collectSelectedGroupTargetTextIds(params: {
   targetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }>;
 }): string[] {
   const selectedTextIds = new Set(params.targetTextIds);
-  const classifyRelations = new Map(
-    params.targetRelations
-      .filter(rel => rel.relationType === 'CLASSIFY')
-      .map(rel => [rel.id, rel] as const)
+  const relationById = new Map(
+    params.targetRelations.map(rel => [rel.id, rel] as const)
   );
-
-  // Also include text targets of MERGE relations in targetRelations
-  // (when a MERGE relation is a CLASSIFY target, its text targets are part of the group).
-  for (const rel of params.targetRelations) {
-    if (rel.relationType === 'MERGE') {
-      extractTextTargetIds(rel.targetRefs).forEach(id => selectedTextIds.add(id));
-    }
-  }
-
-  const queue = Array.from(classifyRelations.keys());
+  const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT']);
+  const queue = params.targetRelations
+    .filter(rel => expandableRelationTypes.has(rel.relationType ?? ''))
+    .map(rel => rel.id);
   const visited = new Set<string>();
 
   while (queue.length > 0) {
     const relId = queue.shift()!;
     if (visited.has(relId)) continue;
     visited.add(relId);
-    const rel = classifyRelations.get(relId);
+    const rel = relationById.get(relId);
     if (!rel) continue;
+    if (!expandableRelationTypes.has(rel.relationType ?? '')) continue;
     extractTextTargetIds(rel.targetRefs).forEach(id => selectedTextIds.add(id));
-    for (const nestedRelId of extractNestedClassifyRelationIds(rel.targetRefs)) {
-      if (!visited.has(nestedRelId) && classifyRelations.has(nestedRelId)) queue.push(nestedRelId);
+    for (const nestedRelId of extractNestedRelationIds(rel.targetRefs)) {
+      if (!visited.has(nestedRelId) && relationById.has(nestedRelId)) queue.push(nestedRelId);
     }
   }
 
@@ -291,14 +284,48 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     let foundTargetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }> = [];
     if (targetRelationIds.length > 0) {
       const uniqueRelationIds = [...new Set(targetRelationIds)];
-      foundTargetRelations = await prisma.message.findMany({
+      const directTargetRelations = await prisma.message.findMany({
         where: { id: { in: uniqueRelationIds }, topicId, kind: 'RELATION' },
         select: { id: true, relationType: true, targetRefs: true },
       });
-      if (foundTargetRelations.length !== uniqueRelationIds.length) {
+      if (directTargetRelations.length !== uniqueRelationIds.length) {
         res.status(404).json({ error: '部分目标关系消息不存在或不属于该话题' });
         return;
       }
+
+      // Expand nested relation-message targets for grouping relations so CLASSIFY/MERGE can
+      // treat SUPPLEMENT/MERGE/CLASSIFY target relations as their owned text targets.
+      const relationById = new Map<string, { id: string; relationType: string | null; targetRefs: unknown }>();
+      directTargetRelations.forEach(rel => relationById.set(rel.id, rel));
+      const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT']);
+      const queued = new Set<string>();
+      const queue: string[] = [];
+      const enqueue = (id: string) => {
+        if (queued.has(id)) return;
+        queued.add(id);
+        queue.push(id);
+      };
+      directTargetRelations
+        .filter(rel => expandableRelationTypes.has(rel.relationType ?? ''))
+        .forEach(rel => enqueue(rel.id));
+
+      while (queue.length > 0) {
+        const relId = queue.shift()!;
+        const rel = relationById.get(relId);
+        if (!rel || !expandableRelationTypes.has(rel.relationType ?? '')) continue;
+        const nestedRelationIds = extractNestedRelationIds(rel.targetRefs).filter(id => !relationById.has(id));
+        if (nestedRelationIds.length === 0) continue;
+        const nestedRelations = await prisma.message.findMany({
+          where: { id: { in: nestedRelationIds }, topicId, kind: 'RELATION' },
+          select: { id: true, relationType: true, targetRefs: true },
+        });
+        nestedRelations.forEach(nestedRel => {
+          relationById.set(nestedRel.id, nestedRel);
+          enqueue(nestedRel.id);
+        });
+      }
+
+      foundTargetRelations = [...relationById.values()];
     }
 
     // CLASSIFY targets cannot have non-reference cross-message links with non-target text messages.

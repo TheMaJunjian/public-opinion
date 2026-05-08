@@ -21,7 +21,7 @@ const ALL_RELATION_TYPES: RelationType[] = [
 
 /** Max characters to display for an existing tag label in the secondary relation selector. */
 const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
-const CLASSIFY_TARGET_HINT = "文本消息、分类话题消息或归并关系消息";
+const CLASSIFY_TARGET_HINT = "文本消息、补充关系消息、分类话题消息或归并关系消息";
 
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
@@ -173,7 +173,7 @@ function collectOwnedByRelation(
     const child = relationById.get(childRelationId);
     if (!child) continue;
     const childType = child.relationType.toUpperCase();
-    if (childType !== 'CLASSIFY' && childType !== 'MERGE') continue;
+    if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'SUPPLEMENT') continue;
     const nested = collectOwnedByRelation(childRelationId, relationById, visited);
     nested.textIds.forEach(id => textIds.add(id));
     nested.relationIds.forEach(id => relationIds.add(id));
@@ -660,6 +660,13 @@ export default function TopicDetailPage() {
     });
     return ids;
   }, [classifiedOwnership, relationById]);
+  const classifiedTargetSupplementRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    classifiedOwnership.relationIds.forEach(id => {
+      if (relationById.get(id)?.relationType === 'SUPPLEMENT') ids.add(id);
+    });
+    return ids;
+  }, [classifiedOwnership, relationById]);
 
   // Non-classify relation messages whose ALL text-message endpoints are classified.
   // These are also hidden from the main canvas (they "belong" to the topic).
@@ -995,7 +1002,7 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(unit.messageId);
-      if (relType !== "classify" && relType !== "merge") continue;
+      if (relType !== "classify" && relType !== "merge" && relType !== "supplement") continue;
       const owned = collectOwnedByRelation(unit.messageId, relationById);
       owned.textIds.forEach(id => ids.add(id));
     }
@@ -1017,7 +1024,7 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(mid);
-      if (relType !== "classify" && relType !== "merge") continue;
+      if (relType !== "classify" && relType !== "merge" && relType !== "supplement") continue;
       const key = `relation:${mid}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1050,7 +1057,11 @@ export default function TopicDetailPage() {
     return relation
       ? getRelationTargetIds(relation.targetRefs).filter(mid =>
           msgMap.get(mid)?.kind === "relation" &&
-          (relationTypeByRelMsgId.get(mid) === "classify" || relationTypeByRelMsgId.get(mid) === "merge")
+          (
+            relationTypeByRelMsgId.get(mid) === "classify" ||
+            relationTypeByRelMsgId.get(mid) === "merge" ||
+            relationTypeByRelMsgId.get(mid) === "supplement"
+          )
         )
       : [];
   }
@@ -2025,6 +2036,7 @@ export default function TopicDetailPage() {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedTargetClassifyRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedTargetMergeRelMsgIds.has(m.id)) return false;
+      if (m.kind === "relation" && classifiedTargetSupplementRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
       return true;
@@ -2032,11 +2044,12 @@ export default function TopicDetailPage() {
     const filteredEdges = baseEdges.filter(e =>
       !classifiedTargetClassifyRelMsgIds.has(e.relationMessageId) &&
       !classifiedTargetMergeRelMsgIds.has(e.relationMessageId) &&
+      !classifiedTargetSupplementRelMsgIds.has(e.relationMessageId) &&
       !classifiedExclusiveRelMsgIds.has(e.relationMessageId) &&
       !replacedRelationMsgIds.has(e.relationMessageId)
     );
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, relations, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
+  }, [messages, edges, relations, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);

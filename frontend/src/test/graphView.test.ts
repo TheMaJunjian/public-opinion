@@ -30,7 +30,7 @@ describe('merge canvas helpers', () => {
       edges,
       layout,
       msgMap: new Map(messages.map(message => [message.id, message])),
-      classifyRelMsgIds: new Set<string>(),
+      relationCardMsgIds: new Set<string>(),
     });
 
     expect(reservations).toHaveLength(1);

@@ -261,6 +261,7 @@ function isCorrectionBadgeRel(relType: string): boolean {
 
 type RelationBounds = { rect: LayoutBox; cardIds: Set<string> };
 type MergeCanvasReservation = { relMsgId: string; rect: Rect; contentRect: Rect; headerRect: Rect; cardIds: Set<string> };
+type FrameAvoidanceReservation = { relMsgId: string; rect: Rect; cardIds: Set<string> };
 
 function unionBoxes(boxes: LayoutBox[]): LayoutBox | null {
   if (boxes.length === 0) return null;
@@ -278,21 +279,30 @@ function rectsOverlapX(a: Rect, b: Rect): boolean {
   return !(a.x + a.width <= b.x || b.x + b.width <= a.x);
 }
 
+function rectContains(outer: Rect, inner: Rect): boolean {
+  return (
+    outer.x <= inner.x &&
+    outer.y <= inner.y &&
+    outer.x + outer.width >= inner.x + inner.width &&
+    outer.y + outer.height >= inner.y + inner.height
+  );
+}
+
 function getRelationBoundsFromLayout(params: {
   relMsgId: string;
   edgesByRelMsg: Map<string, DemoEdge[]>;
   layout: Record<string, LayoutBox>;
   msgMap: Map<string, DemoMessage>;
-  classifyRelMsgIds: Set<string>;
+  relationCardMsgIds: Set<string>;
   visited?: Set<string>;
 }): RelationBounds | null {
-  const { relMsgId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds } = params;
+  const { relMsgId, edgesByRelMsg, layout, msgMap, relationCardMsgIds } = params;
   const visited = params.visited ?? new Set<string>();
   if (visited.has(relMsgId)) return null;
   visited.add(relMsgId);
 
   const directBox = layout[relMsgId];
-  if (directBox && classifyRelMsgIds.has(relMsgId)) {
+  if (directBox && relationCardMsgIds.has(relMsgId)) {
     return { rect: directBox, cardIds: new Set([relMsgId]) };
   }
 
@@ -304,13 +314,13 @@ function getRelationBoundsFromLayout(params: {
       if (endpointId.startsWith("anon:")) continue;
       const endpointMsg = msgMap.get(endpointId);
       const endpointBox = layout[endpointId];
-      if (endpointBox && (endpointMsg?.kind === "normal" || classifyRelMsgIds.has(endpointId))) {
+      if (endpointBox && (endpointMsg?.kind === "normal" || relationCardMsgIds.has(endpointId))) {
         boxes.push(endpointBox);
         cardIds.add(endpointId);
         continue;
       }
       if (endpointMsg?.kind === "relation") {
-        const nested = getRelationBoundsFromLayout({ relMsgId: endpointId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds, visited });
+        const nested = getRelationBoundsFromLayout({ relMsgId: endpointId, edgesByRelMsg, layout, msgMap, relationCardMsgIds, visited });
         if (!nested) continue;
         boxes.push(nested.rect);
         nested.cardIds.forEach(id => cardIds.add(id));
@@ -326,9 +336,9 @@ export function buildMergeCanvasReservations(params: {
   edges: DemoEdge[];
   layout: Record<string, LayoutBox>;
   msgMap: Map<string, DemoMessage>;
-  classifyRelMsgIds: Set<string>;
+  relationCardMsgIds: Set<string>;
 }): MergeCanvasReservation[] {
-  const { edges, layout, msgMap, classifyRelMsgIds } = params;
+  const { edges, layout, msgMap, relationCardMsgIds } = params;
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   for (const edge of edges) {
     const arr = edgesByRelMsg.get(edge.relationMessageId) ?? [];
@@ -344,13 +354,13 @@ export function buildMergeCanvasReservations(params: {
     for (const edge of relEdges) {
       const targetMsg = msgMap.get(edge.to.messageId);
       const targetBox = layout[edge.to.messageId];
-      if (targetBox && (targetMsg?.kind === "normal" || classifyRelMsgIds.has(edge.to.messageId))) {
+      if (targetBox && (targetMsg?.kind === "normal" || relationCardMsgIds.has(edge.to.messageId))) {
         boxes.push(targetBox);
         cardIds.add(edge.to.messageId);
         continue;
       }
       if (targetMsg?.kind === "relation") {
-        const nested = getRelationBoundsFromLayout({ relMsgId: edge.to.messageId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds });
+        const nested = getRelationBoundsFromLayout({ relMsgId: edge.to.messageId, edgesByRelMsg, layout, msgMap, relationCardMsgIds });
         if (!nested) continue;
         boxes.push(nested.rect);
         nested.cardIds.forEach(id => cardIds.add(id));
@@ -403,16 +413,67 @@ export function applyMergeCanvasReservations(params: {
     arr.push(msg.id);
     byCol.set(col, arr);
   }
-  for (const ids of byCol.values()) ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+  const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
 
+  function computeCurrentReservationRect(reservation: MergeCanvasReservation): Rect {
+    const boxes: LayoutBox[] = [];
+    reservation.cardIds.forEach(id => {
+      const box = nextLayout[id];
+      if (box) boxes.push(box);
+    });
+    const union = unionBoxes(boxes);
+    if (!union) return reservation.rect;
+    const contentRect = {
+      x: union.x - SUPP_FRAME_PAD,
+      y: union.y - SUPP_FRAME_PAD,
+      width: union.width + SUPP_FRAME_PAD * 2,
+      height: union.height + SUPP_FRAME_PAD * 2,
+    };
+    const headerRect = {
+      x: contentRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
+      y: contentRect.y - MERGE_CANVAS_LABEL_TOP_OFFSET,
+      width: MERGE_CANVAS_LABEL_W,
+      height: MERGE_CANVAS_LABEL_H,
+    };
+    return {
+      x: contentRect.x,
+      y: headerRect.y,
+      width: contentRect.width,
+      height: contentRect.y + contentRect.height - headerRect.y,
+    };
+  }
+
+  const finalReservationRects: Rect[] = [];
   for (const reservation of params.reservations) {
+    // Compact reservation targets inside each original column while preserving per-column order
+    // and avoiding overlaps with non-target cards in that column.
     for (const ids of byCol.values()) {
-      let cursor = reservation.rect.y + reservation.rect.height + MERGE_CANVAS_STACK_GAP;
+      sortIdsByY(ids);
+      let cursor = GRID_TOP;
+      for (const id of ids) {
+        const box = nextLayout[id];
+        if (!box) continue;
+        if (!reservation.cardIds.has(id)) {
+          cursor = Math.max(cursor, box.y + box.height + ROW_GAP);
+          continue;
+        }
+        // Compact upward only: never push a reserved target further down during compaction.
+        const nextY = box.y > cursor ? cursor : box.y;
+        nextLayout[id] = { ...box, y: nextY };
+        cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
+      }
+    }
+
+    const reservationRect = computeCurrentReservationRect(reservation);
+    finalReservationRects.push(reservationRect);
+    for (const ids of byCol.values()) {
+      sortIdsByY(ids);
+      let cursor = reservationRect.y + reservationRect.height + MERGE_CANVAS_STACK_GAP;
       for (const id of ids) {
         const box = nextLayout[id];
         if (!box || reservation.cardIds.has(id)) continue;
-        if (!rectsOverlapX(box, reservation.rect)) continue;
-        if (box.y + box.height <= reservation.rect.y) continue;
+        if (!rectsOverlapX(box, reservationRect)) continue;
+        if (box.y + box.height <= reservationRect.y) continue;
         if (box.y >= cursor) {
           cursor = box.y + box.height + ROW_GAP;
           continue;
@@ -425,8 +486,158 @@ export function applyMergeCanvasReservations(params: {
 
   let maxBottom = GRID_TOP;
   for (const box of Object.values(nextLayout)) maxBottom = Math.max(maxBottom, box.y + box.height);
-  for (const reservation of params.reservations) maxBottom = Math.max(maxBottom, reservation.rect.y + reservation.rect.height);
+  for (const reservationRect of finalReservationRects) maxBottom = Math.max(maxBottom, reservationRect.y + reservationRect.height);
   return { layout: nextLayout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
+}
+
+function buildFrameAvoidanceReservations(params: {
+  edges: DemoEdge[];
+  layout: Record<string, LayoutBox>;
+  msgMap: Map<string, DemoMessage>;
+  relationCardMsgIds: Set<string>;
+}): FrameAvoidanceReservation[] {
+  const { edges, layout, msgMap, relationCardMsgIds } = params;
+  const edgesByRelMsg = new Map<string, DemoEdge[]>();
+  for (const edge of edges) {
+    const arr = edgesByRelMsg.get(edge.relationMessageId) ?? [];
+    arr.push(edge);
+    edgesByRelMsg.set(edge.relationMessageId, arr);
+  }
+  const reservations: FrameAvoidanceReservation[] = [];
+  for (const [relMsgId, relEdges] of edgesByRelMsg) {
+    if (relEdges.length === 0) continue;
+    const relKind = getRelKind(relEdges[0].relationType);
+    if (relKind !== 'supplement-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') continue;
+    const boxes: LayoutBox[] = [];
+    const cardIds = new Set<string>();
+    const sourceId = relEdges[0].from.messageId;
+    if (!sourceId.startsWith('anon:')) {
+      const sourceMsg = msgMap.get(sourceId);
+      const sourceBox = layout[sourceId];
+      if (sourceBox && (sourceMsg?.kind === 'normal' || relationCardMsgIds.has(sourceId))) {
+        boxes.push(sourceBox);
+        cardIds.add(sourceId);
+      }
+    }
+    for (const edge of relEdges) {
+      const targetMsg = msgMap.get(edge.to.messageId);
+      const targetBox = layout[edge.to.messageId];
+      if (targetBox && (targetMsg?.kind === 'normal' || relationCardMsgIds.has(edge.to.messageId))) {
+        boxes.push(targetBox);
+        cardIds.add(edge.to.messageId);
+        continue;
+      }
+      if (targetMsg?.kind === 'relation') {
+        const nested = getRelationBoundsFromLayout({
+          relMsgId: edge.to.messageId,
+          edgesByRelMsg,
+          layout,
+          msgMap,
+          relationCardMsgIds,
+        });
+        if (!nested) continue;
+        boxes.push(nested.rect);
+        nested.cardIds.forEach(id => cardIds.add(id));
+      }
+    }
+    const union = unionBoxes(boxes);
+    if (!union) continue;
+    reservations.push({
+      relMsgId,
+      cardIds,
+      rect: {
+        x: union.x - SUPP_FRAME_PAD,
+        y: union.y - SUPP_FRAME_PAD,
+        width: union.width + SUPP_FRAME_PAD * 2,
+        height: union.height + SUPP_FRAME_PAD * 2,
+      },
+    });
+  }
+  reservations.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+  return reservations;
+}
+
+function applyFrameAvoidanceReservations(params: {
+  layout: Record<string, LayoutBox>;
+  normals: DemoMessage[];
+  colOf: Record<string, number>;
+  reservations: FrameAvoidanceReservation[];
+  minCanvasHeight: number;
+}) {
+  if (params.reservations.length === 0) {
+    return { layout: params.layout, canvasHeight: params.minCanvasHeight };
+  }
+  const nextLayout: Record<string, LayoutBox> = {};
+  for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
+
+  const byCol = new Map<number, string[]>();
+  for (const msg of params.normals) {
+    const col = params.colOf[msg.id] ?? 0;
+    const arr = byCol.get(col) ?? [];
+    arr.push(msg.id);
+    byCol.set(col, arr);
+  }
+  const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+  for (const ids of byCol.values()) sortIdsByY(ids);
+
+  function computeRect(reservation: FrameAvoidanceReservation): Rect {
+    const boxes: LayoutBox[] = [];
+    reservation.cardIds.forEach(id => {
+      const box = nextLayout[id];
+      if (box) boxes.push(box);
+    });
+    const union = unionBoxes(boxes);
+    if (!union) return reservation.rect;
+    return {
+      x: union.x - SUPP_FRAME_PAD,
+      y: union.y - SUPP_FRAME_PAD,
+      width: union.width + SUPP_FRAME_PAD * 2,
+      height: union.height + SUPP_FRAME_PAD * 2,
+    };
+  }
+
+  // Non-containing reservations should not overlap; move the lower one downward.
+  for (let i = 0; i < params.reservations.length; i++) {
+    const upperRect = computeRect(params.reservations[i]);
+    for (let j = i + 1; j < params.reservations.length; j++) {
+      const lower = params.reservations[j];
+      const lowerRect = computeRect(lower);
+      if (!rectsIntersect(upperRect, lowerRect)) continue;
+      if (rectContains(upperRect, lowerRect) || rectContains(lowerRect, upperRect)) continue;
+      const deltaY = upperRect.y + upperRect.height + ROW_GAP - lowerRect.y;
+      if (deltaY <= 0) continue;
+      for (const id of lower.cardIds) {
+        const box = nextLayout[id];
+        if (!box) continue;
+        nextLayout[id] = { ...box, y: box.y + deltaY };
+      }
+    }
+  }
+
+  // Then push unrelated cards below each reservation to avoid frame/content collisions.
+  for (const reservation of params.reservations) {
+    const reservationRect = computeRect(reservation);
+    for (const ids of byCol.values()) {
+      sortIdsByY(ids);
+      let cursor = reservationRect.y + reservationRect.height + ROW_GAP;
+      for (const id of ids) {
+        const box = nextLayout[id];
+        if (!box || reservation.cardIds.has(id)) continue;
+        if (!rectsOverlapX(box, reservationRect)) continue;
+        if (box.y + box.height <= reservationRect.y) continue;
+        if (box.y >= cursor) {
+          cursor = box.y + box.height + ROW_GAP;
+          continue;
+        }
+        nextLayout[id] = { ...box, y: cursor };
+        cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
+      }
+    }
+  }
+
+  let maxBottom = GRID_TOP;
+  for (const box of Object.values(nextLayout)) maxBottom = Math.max(maxBottom, box.y + box.height);
+  return { layout: nextLayout, canvasHeight: Math.max(params.minCanvasHeight, maxBottom + CANVAS_BOTTOM_PAD) };
 }
 
 function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
@@ -1006,14 +1217,32 @@ export default function GraphView(props: GraphViewProps) {
     }
     return ids;
   }, [edges, messages]);
+  const supplementTargetRelationCardIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType !== 'supplement') continue;
+      const targetMsg = msgMap.get(e.to.messageId);
+      if (targetMsg?.kind !== 'relation') continue;
+      const targetType = targetMsg.relationType;
+      if (targetType === 'supplement' || targetType === 'merge' || targetType === 'classify') {
+        ids.add(targetMsg.id);
+      }
+    }
+    return ids;
+  }, [edges, msgMap]);
+  const relationCardMsgIds = useMemo(() => {
+    const ids = new Set<string>(classifyRelMsgIds);
+    supplementTargetRelationCardIds.forEach(id => ids.add(id));
+    return ids;
+  }, [classifyRelMsgIds, supplementTargetRelationCardIds]);
   const normals = useMemo(() => messages.filter(m =>
     (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
-    (m.kind === "relation" && classifyRelMsgIds.has(m.id))
-  ), [messages, tagSourceIds, classifyRelMsgIds]);
+    (m.kind === "relation" && relationCardMsgIds.has(m.id))
+  ), [messages, tagSourceIds, relationCardMsgIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
   // Exclude CLASSIFY messages from relIds — they are now in normals and should not be
   // treated as relation-message endpoints for edge-routing constraint algorithms.
-  const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation" && !classifyRelMsgIds.has(m.id)).map(m => m.id)), [messages, classifyRelMsgIds]);
+  const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation" && !relationCardMsgIds.has(m.id)).map(m => m.id)), [messages, relationCardMsgIds]);
 
   const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges, relIds), [normalIds, edges, relIds]);
   const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol, relIds }), [normals, edges, baseCol, baseMaxCol, relIds]);
@@ -1098,12 +1327,26 @@ export default function GraphView(props: GraphViewProps) {
     [normals, colOf, measuredHeights, maxCol, groupSourceToTarget, hiddenCorrectedTargetIds]
   );
   const mergeCanvasReservations = useMemo(
-    () => buildMergeCanvasReservations({ edges, layout: baseLayout, msgMap, classifyRelMsgIds }),
-    [edges, baseLayout, msgMap, classifyRelMsgIds]
+    () => buildMergeCanvasReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
+    [edges, baseLayout, msgMap, relationCardMsgIds]
   );
-  const { layout, canvasHeight } = useMemo(
+  const { layout: mergeAdjustedLayout, canvasHeight: mergeAdjustedCanvasHeight } = useMemo(
     () => applyMergeCanvasReservations({ layout: baseLayout, normals, colOf, reservations: mergeCanvasReservations }),
     [baseLayout, normals, colOf, mergeCanvasReservations]
+  );
+  const frameAvoidanceReservations = useMemo(
+    () => buildFrameAvoidanceReservations({ edges, layout: mergeAdjustedLayout, msgMap, relationCardMsgIds }),
+    [edges, mergeAdjustedLayout, msgMap, relationCardMsgIds]
+  );
+  const { layout, canvasHeight } = useMemo(
+    () => applyFrameAvoidanceReservations({
+      layout: mergeAdjustedLayout,
+      normals,
+      colOf,
+      reservations: frameAvoidanceReservations,
+      minCanvasHeight: mergeAdjustedCanvasHeight,
+    }),
+    [mergeAdjustedLayout, normals, colOf, frameAvoidanceReservations, mergeAdjustedCanvasHeight]
   );
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
@@ -1185,8 +1428,8 @@ export default function GraphView(props: GraphViewProps) {
 
     function endpointBoxForNormal(id: string): {box:LayoutBox;col:number}|null {
       const m = msgMap.get(id);
-      // Accept both normal text messages and CLASSIFY relation messages (shown as cards)
-      if (!m || (m.kind !== "normal" && !classifyRelMsgIds.has(id))) return null;
+      // Accept both normal text messages and relation messages currently rendered as cards.
+      if (!m || (m.kind !== "normal" && !relationCardMsgIds.has(id))) return null;
       const cardEl = cardRefs.current[id];
       if (cardEl) {
         const r = cardEl.getBoundingClientRect();
@@ -1252,8 +1495,8 @@ export default function GraphView(props: GraphViewProps) {
       } else if (e.to.selection.kind==="whole") {
         const mid=e.to.messageId;
         // Relation message targets are tracked separately in relDecByRelMsgId below,
-        // except CLASSIFY relation messages which are rendered as topic cards.
-        if (msgMap.get(mid)?.kind === "relation" && !classifyRelMsgIds.has(mid)) continue;
+        // except relation messages that are rendered as cards.
+        if (msgMap.get(mid)?.kind === "relation" && !relationCardMsgIds.has(mid)) continue;
         if (e.relationType==="agree"||e.relationType==="disagree") {
           if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
           if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
@@ -1358,7 +1601,7 @@ export default function GraphView(props: GraphViewProps) {
         let anyTarget = false;
         for (const e of frameEdges) {
           const relationTargetBounds = msgMap.get(e.to.messageId)?.kind === "relation"
-            ? getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds })
+            ? getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg, layout, msgMap, relationCardMsgIds })
             : null;
           const targetBox = relationTargetBounds?.rect ?? endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
           if (!targetBox) continue;
@@ -1391,7 +1634,7 @@ export default function GraphView(props: GraphViewProps) {
       const targetMsg = msgMap.get(mid);
       const isInlineBadgeTargetCard = !!targetMsg && (
         targetMsg.kind === 'normal' ||
-        (targetMsg.kind === 'relation' && classifyRelMsgIds.has(mid))
+        (targetMsg.kind === 'relation' && relationCardMsgIds.has(mid))
       );
       if (!isInlineBadgeTargetCard) continue;
       const ep = endpointBoxForNormal(mid), box = ep?.box ?? layout[mid]; if (!box) continue;
@@ -1797,7 +2040,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, classifyRelMsgIds, mergeCanvasReservations]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds, mergeCanvasReservations]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;

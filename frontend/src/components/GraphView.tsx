@@ -1075,8 +1075,9 @@ export default function GraphView(props: GraphViewProps) {
         }
       } else if (e.to.selection.kind==="whole") {
         const mid=e.to.messageId;
-        // Relation message targets are tracked separately in relDecByRelMsgId below
-        if (msgMap.get(mid)?.kind === "relation") continue;
+        // Relation message targets are tracked separately in relDecByRelMsgId below,
+        // except CLASSIFY relation messages which are rendered as topic cards.
+        if (msgMap.get(mid)?.kind === "relation" && !classifyRelMsgIds.has(mid)) continue;
         if (e.relationType==="agree"||e.relationType==="disagree") {
           if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
           if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;

@@ -542,6 +542,16 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [edges, msgMap]);
+  const classifiedTargetClassifyRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType !== "classify") continue;
+      if (msgMap.get(e.to.messageId)?.kind !== "relation") continue;
+      if (relationTypeByRelMsgId.get(e.to.messageId) !== "classify") continue;
+      ids.add(e.to.messageId);
+    }
+    return ids;
+  }, [edges, msgMap, relationTypeByRelMsgId]);
 
   // Non-classify relation messages whose ALL text-message endpoints are classified.
   // These are also hidden from the main canvas (they "belong" to the topic).
@@ -919,15 +929,29 @@ export default function TopicDetailPage() {
     );
   }
 
+  function getClassifyTargetRelationIdsByRelMsgId(relMsgId: string): string[] {
+    return Array.from(new Set(
+      edges
+        .filter(ed => ed.relationMessageId === relMsgId)
+        .map(ed => ed.to.messageId)
+        .filter(mid =>
+          msgMap.get(mid)?.kind === "relation" &&
+          relationTypeByRelMsgId.get(mid) === "classify"
+        )
+    ));
+  }
+
   function enterClassifyTopic(relMsgId: string) {
     const targetTextIds = getClassifyTargetTextIdsByRelMsgId(relMsgId);
-    if (targetTextIds.length === 0) {
+    const targetClassifyIds = getClassifyTargetRelationIdsByRelMsgId(relMsgId);
+    const targetIds = Array.from(new Set([...targetTextIds, ...targetClassifyIds]));
+    if (targetIds.length === 0) {
       if (!msgMap.has(relMsgId)) return;
       enterFocusMultiple([relMsgId], { mode: "topic", topicRelMsgId: relMsgId });
       setFocusHop(0);
       return;
     }
-    enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: relMsgId });
+    enterFocusMultiple(targetIds, { mode: "topic", topicRelMsgId: relMsgId });
     setFocusHop(0);
   }
 
@@ -1209,9 +1233,9 @@ export default function TopicDetailPage() {
       return;
     }
 
-    // Relation target with reply/correct: no text, no source — create null-source relation
+    // Relation target with CORRECT: no text, no source — create null-source relation
     const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
-    const hasSecSelector = (relationType === "reply" || relationType === "correct") && hasDraftRelTarget;
+    const hasSecSelector = relationType === "correct" && hasDraftRelTarget;
     if (hasSecSelector) {
       if (text.length > 0 || sourceUnits.length > 0) return; // validation: state must be clean
 
@@ -1317,7 +1341,7 @@ export default function TopicDetailPage() {
         return;
       }
 
-      // REPLY or CORRECT (no secondary) targeting a relation message: create null-source relation
+      // CORRECT (no secondary) targeting a relation message: create null-source relation
       const targetRefs = draftUnits.map(u => unitSelectionToTargetRef(u, msgMap));
       const typeName = relationTypeName(relationType);
       const newEdgesList: DemoEdge[] = [];
@@ -1584,8 +1608,8 @@ export default function TopicDetailPage() {
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
   const singleButtonEnabled = (() => {
     if (relationType === null) return newMessageContent.trim().length > 0;
-    // reply/correct targeting a relation message: special mode (no text, no source, use secondary selector)
-    if (draftHasRelationTarget && (relationType === "reply" || relationType === "correct")) {
+    // CORRECT targeting a relation message: special mode (no text, no source, use secondary selector)
+    if (draftHasRelationTarget && relationType === "correct") {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
@@ -1604,9 +1628,9 @@ export default function TopicDetailPage() {
       return "仅发送这条消息（未选择关系类型）";
     }
     const typeName = relationTypeName(relationType);
-    if (draftHasRelationTarget && (relationType === "reply" || relationType === "correct")) {
-      if (newMessageContent.trim().length > 0) return `请清空文本输入框（目标为关系消息时不应有文本）`;
-      if (sourceUnits.length > 0) return `请清空来源集合（目标为关系消息时来源必须为空）`;
+    if (draftHasRelationTarget && relationType === "correct") {
+      if (newMessageContent.trim().length > 0) return `请清空文本输入框（更正关系目标为关系消息时不应有文本）`;
+      if (sourceUnits.length > 0) return `请清空来源集合（更正关系目标为关系消息时来源必须为空）`;
       const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
       return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
     }
@@ -1780,31 +1804,34 @@ export default function TopicDetailPage() {
   );
   // Messages and edges to pass to the canvas views, with classified text messages (and their
   // exclusively-classified related relation messages) hidden when not in topic-focus mode.
-  // The CLASSIFY relation messages themselves remain visible as topic cards on the main canvas.
+  // CLASSIFY relations that are targeted by another CLASSIFY relation are hidden on the main
+  // canvas and only shown inside the newly entered topic canvas.
   const { messagesToRenderFiltered, edgesToRenderFiltered } = useMemo(() => {
     const baseMessages = focusEntries.length > 0 ? messagesToShow : messages;
     const baseEdges = focusEntries.length > 0 ? edgesToShow : edges;
     if (isTopicFocus) {
       const topicMessages = baseMessages.filter(m =>
-        !(m.kind === "relation" && relationTypeByRelMsgId.get(m.id) === "classify")
+        !(m.kind === "relation" && m.id === topicFocusRelMsgId)
       );
-      const topicEdges = baseEdges.filter(e => e.relationType !== "classify");
+      const topicEdges = baseEdges.filter(e => e.relationMessageId !== topicFocusRelMsgId);
       return { messagesToRenderFiltered: topicMessages, edgesToRenderFiltered: topicEdges };
     }
     // Main canvas: remove classified text messages and relation messages that are exclusively
     // connected to classified text messages (they "belong" to the topic view).
     const filteredMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
+      if (m.kind === "relation" && classifiedTargetClassifyRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
       return true;
     });
     const filteredEdges = baseEdges.filter(e =>
+      !classifiedTargetClassifyRelMsgIds.has(e.relationMessageId) &&
       !classifiedExclusiveRelMsgIds.has(e.relationMessageId) &&
       !replacedRelationMsgIds.has(e.relationMessageId)
     );
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, classifiedTargetTextIds, classifiedExclusiveRelMsgIds, relationTypeByRelMsgId, replacedRelationMsgIds]);
+  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -2260,12 +2287,12 @@ export default function TopicDetailPage() {
               <input style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }} placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签" : "关系标签"} value={relationLabel} onChange={e => setRelationLabel(e.target.value)} />
               {(() => {
                 const textAreaDisabled =
-                  (draftHasRelationTarget && (relationType === "reply" || relationType === "correct"))
+                  (draftHasRelationTarget && relationType === "correct")
                   || isTagWithQuickAnnotate;
                 return (
                   <textarea
                     style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : "目标为关系消息时，此处不应有内容") : "输入一条新普通消息（支持自由换行）"}
+                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : "更正关系目标为关系消息时，此处不应有内容") : "输入一条新普通消息（支持自由换行）"}
                     value={newMessageContent}
                     readOnly={textAreaDisabled}
                     onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}

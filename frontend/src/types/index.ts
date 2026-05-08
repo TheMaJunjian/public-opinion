@@ -45,8 +45,8 @@ export interface Message {
  *   Decoration (badge on target):    AGREE, DISAGREE
  *   Decoration-label (text tag):     TAG
  *   Supplement-frame (border wrap):  SUPPLEMENT
- *   Replace/Overlay:                 CORRECT, SUMMARY
- *   Frame/Group:                     CLASSIFY, MERGE
+ *   Replace/Overlay:                 CORRECT
+ *   Frame/Group:                     CLASSIFY, MERGE, SUMMARY
  *   Inline badge:                    RECOMMEND, ARCHIVE
  *
  * Notes:
@@ -193,7 +193,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   SUPPLEMENT:  { kind: 'supplement-frame',  label: '补充', color: 'purple', formsTrees: true,  groupsTargets: true   },
   CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true   },
   MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },
-  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, groupsTargets: true, replacesTarget: true },
+  SUMMARY:     { kind: 'frame-group',       label: '总结', color: 'amber',  formsTrees: false, groupsTargets: true   },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
 };
@@ -266,7 +266,8 @@ export function getRelationTitle(payload: RelationPayload | undefined): string |
 
 export function getRelationTargetLayout(relation: Pick<Relation, 'relationType' | 'payload'>): RelationTargetLayout {
   if (relation.payload?.targetLayout) return relation.payload.targetLayout;
-  return relation.relationType.toUpperCase() === 'MERGE' ? 'multi-column' : 'single-column';
+  const type = relation.relationType.toUpperCase();
+  return (type === 'MERGE' || type === 'SUMMARY') ? 'multi-column' : 'single-column';
 }
 
 // ============================================================

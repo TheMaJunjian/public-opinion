@@ -95,7 +95,7 @@ function buildRelationPayload(params: {
   if (params.label) payload.label = params.label;
   if (params.title) payload.title = params.title;
   if (params.targetLayout) payload.targetLayout = params.targetLayout;
-  if (params.relationType.toUpperCase() === 'MERGE' && !payload.targetLayout) {
+  if ((params.relationType.toUpperCase() === 'MERGE' || params.relationType.toUpperCase() === 'SUMMARY') && !payload.targetLayout) {
     payload.targetLayout = 'multi-column';
   }
   return Object.keys(payload).length > 0 ? payload : undefined;
@@ -119,6 +119,8 @@ function buildRelationDemoMessage(relation: Relation): DemoMessage {
   let content: string;
   if (relType === 'classify') {
     content = `话题：${title ?? `分类话题（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
+  } else if (relType === 'summary') {
+    content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'tag' && label) {
     content = `建立${typeName}关系「${label}」\n目标：${targetSummary}`;
   } else if (relation.sourceMessageId) {
@@ -173,7 +175,7 @@ function collectOwnedByRelation(
     const child = relationById.get(childRelationId);
     if (!child) continue;
     const childType = child.relationType.toUpperCase();
-    if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'SUPPLEMENT') continue;
+    if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'SUPPLEMENT' && childType !== 'SUMMARY') continue;
     const nested = collectOwnedByRelation(childRelationId, relationById, visited);
     nested.textIds.forEach(id => textIds.add(id));
     nested.relationIds.forEach(id => relationIds.add(id));
@@ -638,7 +640,7 @@ export default function TopicDetailPage() {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
     for (const relation of relations) {
-      if (relation.relationType !== 'CLASSIFY') continue;
+      if (relation.relationType !== 'CLASSIFY' && relation.relationType !== 'SUMMARY') continue;
       const owned = collectOwnedByRelation(relation.id, relationById);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
@@ -664,6 +666,13 @@ export default function TopicDetailPage() {
     const ids = new Set<string>();
     classifiedOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType === 'SUPPLEMENT') ids.add(id);
+    });
+    return ids;
+  }, [classifiedOwnership, relationById]);
+  const classifiedTargetSummaryRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    classifiedOwnership.relationIds.forEach(id => {
+      if (relationById.get(id)?.relationType === 'SUMMARY') ids.add(id);
     });
     return ids;
   }, [classifiedOwnership, relationById]);
@@ -693,6 +702,8 @@ export default function TopicDetailPage() {
   }, [edges, msgMap, classifiedOwnership]);
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
+  // Saved scroll positions for each view mode, so switching modes does not reset to top.
+  const viewModeScrollRef = useRef<{ graph: { top: number; left: number } | null; list: { top: number; left: number } | null }>({ graph: null, list: null });
   const prevFocusLenRef = useRef(0);
   const lastAddedFragmentRef = useRef<{ messageId: string; unit: UnitSelection; time: number } | null>(null);
   const mouseDownRef = useRef<{ x: number; y: number; messageId: string | null } | null>(null);
@@ -933,7 +944,7 @@ export default function TopicDetailPage() {
     const currentlyActive = activeTextSelectId === messageId;
     if (m?.kind === "relation") {
       const relType = relationTypeByRelMsgId.get(messageId);
-      if (relType === "classify") {
+      if (relType === "classify" || relType === "summary") {
         enterClassifyTopic(messageId);
         if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
         return;
@@ -1002,7 +1013,7 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(unit.messageId);
-      if (relType !== "classify" && relType !== "merge" && relType !== "supplement") continue;
+      if (relType !== "classify" && relType !== "merge" && relType !== "supplement" && relType !== "summary") continue;
       const owned = collectOwnedByRelation(unit.messageId, relationById);
       owned.textIds.forEach(id => ids.add(id));
     }
@@ -1024,7 +1035,7 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(mid);
-      if (relType !== "classify" && relType !== "merge" && relType !== "supplement") continue;
+      if (relType !== "classify" && relType !== "merge" && relType !== "supplement" && relType !== "summary") continue;
       const key = `relation:${mid}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1042,7 +1053,10 @@ export default function TopicDetailPage() {
       if (msgMap.get(e.to.messageId)?.kind !== "normal") continue;
       const fromSelected = selected.has(e.from.messageId);
       const toSelected = selected.has(e.to.messageId);
-      if (fromSelected !== toSelected) return true;
+      if (fromSelected !== toSelected) {
+        const nonSelectedId = fromSelected ? e.to.messageId : e.from.messageId;
+        if (classifiedTargetTextIds.has(nonSelectedId)) return true;
+      }
     }
     return false;
   }
@@ -1060,7 +1074,8 @@ export default function TopicDetailPage() {
           (
             relationTypeByRelMsgId.get(mid) === "classify" ||
             relationTypeByRelMsgId.get(mid) === "merge" ||
-            relationTypeByRelMsgId.get(mid) === "supplement"
+            relationTypeByRelMsgId.get(mid) === "supplement" ||
+            relationTypeByRelMsgId.get(mid) === "summary"
           )
         )
       : [];
@@ -1071,7 +1086,8 @@ export default function TopicDetailPage() {
     const targetRelationIds = getClassifyTargetRelationIdsByRelMsgId(relMsgId);
     const targetIds = new Set<string>(targetTextIds);
     for (const targetRelationId of targetRelationIds) {
-      if (relationTypeByRelMsgId.get(targetRelationId) === "classify") {
+      if (relationTypeByRelMsgId.get(targetRelationId) === "classify" ||
+          relationTypeByRelMsgId.get(targetRelationId) === "summary") {
         targetIds.add(targetRelationId);
         continue;
       }
@@ -1527,7 +1543,7 @@ export default function TopicDetailPage() {
     if (relationType === "classify") {
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        alert("分类目标与其他消息存在非引用关联，无法建立分类关系");
+        alert("分类目标与已分类消息存在非引用关联，无法建立分类关系");
         return;
       }
       const selectedSet = new Set(targetTextIds);
@@ -1586,12 +1602,62 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // SUMMARY relation: user-to-message relation, like CLASSIFY but with multi-column layout.
+    // Requires both non-empty targets and non-empty title text.
+    if (relationType === "summary") {
+      const summaryTitle = newMessageContent.trim();
+      if (!summaryTitle) {
+        alert("总结内容不能为空");
+        return;
+      }
+      const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
+      if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
+        alert("总结目标与已分类消息存在非引用关联，无法建立总结关系");
+        return;
+      }
+      const summaryTargetRefs = getClassifyTargetRefs(effectiveTargets);
+      if (summaryTargetRefs.length === 0) {
+        alert("总结关系至少需要一个目标消息");
+        return;
+      }
+      try {
+        const backendRel = await api.createRelation(topicId!, {
+          relationType: 'SUMMARY',
+          sourceMessageId: null,
+          targetRefs: summaryTargetRefs,
+          payload: buildRelationPayload({ relationType: 'SUMMARY', title: summaryTitle, targetLayout: 'multi-column' }),
+        });
+        const relId = backendRel.id;
+        appendCreatedRelation(backendRel);
+        const anonSrcId = `anon:${backendRel.id}`;
+        const edgeTargetIds = Array.from(new Set(
+          summaryTargetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
+        ));
+        const newEdges = edgeTargetIds.map(targetMid => ({
+          id: nextId("edge"),
+          relationMessageId: relId,
+          relationType: "summary" as RelationType,
+          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+          to: { messageId: targetMid, selection: { kind: "whole" as const } },
+          relationLabel: relationTypeName("summary"),
+        }));
+        setEdges(prev => [...prev, ...newEdges]);
+      } catch (e: any) {
+        alert(`建立总结关系失败: ${e?.message ?? e}`);
+        return;
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
     // MERGE relation: user-to-message relation with no source message.
     // Targets may be text messages or relation messages; fragments are folded up to whole targets.
     if (relationType === "merge") {
       const mergeTargetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
       if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
-        alert("归并目标与其他消息存在非引用关联，无法建立归并关系");
+        alert("归并目标与已分类消息存在非引用关联，无法建立归并关系");
         return;
       }
       const mergeTargetRefs = Array.from(new Map(
@@ -1733,6 +1799,19 @@ export default function TopicDetailPage() {
     });
   }, [focusEntries, viewMode]);
 
+  // Restore saved scroll position after view mode switch so switching does not auto-scroll to top.
+  useEffect(() => {
+    const saved = viewModeScrollRef.current[viewMode];
+    if (saved !== null) {
+      viewModeScrollRef.current[viewMode] = null;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          clampAndSetScroll(leftPanelRef.current, saved.top, saved.left);
+        });
+      });
+    }
+  }, [viewMode]);
+
   function getSelectedWholeMessageIds(): string[] {
     const ids = draftUnits.filter(u => u.selection.kind === "whole").map(u => u.messageId);
     return Array.from(new Set(ids));
@@ -1745,6 +1824,7 @@ export default function TopicDetailPage() {
   const isSupplementType = relationType === "supplement";
   const isClassifyType = relationType === "classify";
   const isMergeType = relationType === "merge";
+  const isSummaryType = relationType === "summary";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
@@ -1775,6 +1855,7 @@ export default function TopicDetailPage() {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
     if (isClassifyType) return newMessageContent.trim().length > 0;
+    if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
     if (isAgreeDisagreeType || isSupplementType || isTagWithQuickAnnotate) return hasTargetsAvailable;
@@ -1801,6 +1882,12 @@ export default function TopicDetailPage() {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
       if (targetCount === 0) return "建立分类话题（无目标）";
       return `建立分类话题（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
+    }
+    if (isSummaryType) {
+      const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
+      if (!hasTargetsAvailable) return "请在画布中选择要总结的目标消息";
+      if (newMessageContent.trim().length === 0) return "请输入总结内容（不能为空）";
+      return `建立总结关系（${targetCount} 个目标）`;
     }
     if (isMergeType) {
       if (sourceUnits.length > 0) return "归并关系不需要来源消息，请清空来源集合";
@@ -1995,7 +2082,10 @@ export default function TopicDetailPage() {
       const topicRelation = topicFocusRelMsgId ? relationById.get(topicFocusRelMsgId) : null;
       const childClassifyRelMsgIds = new Set(
         topicRelation
-          ? getRelationTargetIds(topicRelation.targetRefs).filter(mid => relationById.get(mid)?.relationType === 'CLASSIFY')
+          ? getRelationTargetIds(topicRelation.targetRefs).filter(mid =>
+              relationById.get(mid)?.relationType === 'CLASSIFY' ||
+              relationById.get(mid)?.relationType === 'SUMMARY'
+            )
           : []
       );
       const childOwnedIds = new Set<string>();
@@ -2018,11 +2108,12 @@ export default function TopicDetailPage() {
           }
         }
       }
-      const topicMessages = baseMessages.filter(m =>
-        !(m.kind === "relation" && m.id === topicFocusRelMsgId) &&
-        !childOwnedIds.has(m.id) &&
-        !exclusiveToChildRelMsgIds.has(m.id)
-      );
+      const topicMessages = baseMessages.filter(m => {
+        if (m.kind === "relation" && m.id === topicFocusRelMsgId) return false;
+        if (childOwnedIds.has(m.id)) return false;
+        if (exclusiveToChildRelMsgIds.has(m.id)) return false;
+        return true;
+      });
       const topicEdges = baseEdges.filter(e =>
         e.relationMessageId !== topicFocusRelMsgId &&
         !childOwnedIds.has(e.relationMessageId) &&
@@ -2037,6 +2128,7 @@ export default function TopicDetailPage() {
       if (m.kind === "relation" && classifiedTargetClassifyRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedTargetMergeRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedTargetSupplementRelMsgIds.has(m.id)) return false;
+      if (m.kind === "relation" && classifiedTargetSummaryRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
       return true;
@@ -2045,11 +2137,12 @@ export default function TopicDetailPage() {
       !classifiedTargetClassifyRelMsgIds.has(e.relationMessageId) &&
       !classifiedTargetMergeRelMsgIds.has(e.relationMessageId) &&
       !classifiedTargetSupplementRelMsgIds.has(e.relationMessageId) &&
+      !classifiedTargetSummaryRelMsgIds.has(e.relationMessageId) &&
       !classifiedExclusiveRelMsgIds.has(e.relationMessageId) &&
       !replacedRelationMsgIds.has(e.relationMessageId)
     );
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, relations, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
+  }, [messages, edges, relations, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -2124,19 +2217,13 @@ export default function TopicDetailPage() {
   function handleGroupFrameDoubleClick(e: React.MouseEvent, relMsgId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relMsgId);
-    // For summary (replace-overlay): show comparison popup
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
-    const relType = relEdges[0]?.relationType ?? "";
-    const spec = getPresentationSpec(relType);
-    if (spec.kind === 'replace-overlay') {
-      setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
-      return;
-    }
-    if (relType === "classify") {
+    const relType = relEdges[0]?.relationType ?? relationTypeByRelMsgId.get(relMsgId) ?? "";
+    if (relType === "classify" || relType === "summary") {
       enterClassifyTopic(relMsgId);
       return;
     }
-    // For frame-group (classify/merge): enter focus mode
+    // For frame-group (merge): enter focus mode
     enterFocus(relMsgId);
   }
 
@@ -2254,7 +2341,12 @@ export default function TopicDetailPage() {
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
-              <button onClick={() => setViewMode(prev => prev === "list" ? "graph" : "list")} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
+              <button onClick={() => {
+                if (leftPanelRef.current) {
+                  viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
+                }
+                setViewMode(prev => prev === "list" ? "graph" : "list");
+              }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
               </button>
             </div>
@@ -2297,34 +2389,36 @@ export default function TopicDetailPage() {
                   const isActiveText = activeTextSelectId === msg.id;
                   const relType = msg.kind === "relation" ? relationTypeByRelMsgId.get(msg.id) : null;
                   const isClassifyTopicMsg = relType === "classify";
-                  const classifyTargetCount = isClassifyTopicMsg
+                  const isSummaryTopicMsg = relType === "summary";
+                  const isTopicMsg = isClassifyTopicMsg || isSummaryTopicMsg;
+                  const topicMsgTargetCount = isTopicMsg
                     ? collectOwnedByRelation(msg.id, relationById).textIds.size
                     : 0;
-                  const classifyTitle = isClassifyTopicMsg ? (getRelationTitle(msg.relationPayload) || `分类话题（${classifyTargetCount}）`) : "";
+                  const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类话题（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{
-                        borderRadius: isClassifyTopicMsg ? 10 : 6,
-                        border: isClassifyTopicMsg
+                        borderRadius: isTopicMsg ? 10 : 6,
+                        border: isTopicMsg
                           ? "1px solid #e5e7eb"
                           : msg.kind === "relation" ? "1px solid #886400" : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444",
-                        background: isClassifyTopicMsg ? "#ffffff" : msg.kind === "relation" ? "#232018" : "#1f1f1f",
-                        color: isClassifyTopicMsg ? "#111827" : undefined,
-                        padding: isClassifyTopicMsg ? "10px 12px" : "10px 14px",
+                        background: isTopicMsg ? "#ffffff" : msg.kind === "relation" ? "#232018" : "#1f1f1f",
+                        color: isTopicMsg ? "#111827" : undefined,
+                        padding: isTopicMsg ? "10px 12px" : "10px 14px",
                         cursor: "pointer",
                         fontSize: 13,
-                        boxShadow: isClassifyTopicMsg ? "0 4px 12px rgba(0,0,0,0.2)" : undefined,
+                        boxShadow: isTopicMsg ? "0 4px 12px rgba(0,0,0,0.2)" : undefined,
                         outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none",
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
                       <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
-                        <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
-                        <span>{isClassifyTopicMsg ? "双击进入话题" : `作者：${msg.author}`}</span>
+                        <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
+                        <span>{isTopicMsg ? "双击进入话题" : `作者：${msg.author}`}</span>
                       </div>
-                      {isClassifyTopicMsg && (
+                      {isTopicMsg && (
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                           <div style={{ fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {classifyTitle}
+                            {topicMsgTitle}
                           </div>
                           <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d" }}>
                             进行中
@@ -2335,11 +2429,11 @@ export default function TopicDetailPage() {
                       <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => msg.kind === "normal" && handleTextMouseUp(e, msg.id)}>
                         {msg.kind === "normal"
                           ? renderMessageContentWithAnchorsForList(msg)
-                          : isClassifyTopicMsg
+                          : isTopicMsg
                             ? (
                               <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
                                 <span>由 <span style={{ fontWeight: 600, color: "#4b5563" }}>{msg.author}</span> 发起</span>
-                                <span>💬 {classifyTargetCount} 条观点</span>
+                                <span>💬 {topicMsgTargetCount} 条观点</span>
                                 <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
                               </div>
                             )
@@ -2507,7 +2601,7 @@ export default function TopicDetailPage() {
                 return (
                   <textarea
                     style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容") : "输入一条新普通消息（支持自由换行）"}
+                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容") : isClassifyType ? "输入分类话题名称（不能为空）" : isSummaryType ? "输入总结内容（不能为空）" : "输入一条新普通消息（支持自由换行）"}
                     value={newMessageContent}
                     readOnly={textAreaDisabled}
                     onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}

@@ -1209,7 +1209,12 @@ export default function GraphView(props: GraphViewProps) {
       if (getRelKind(e.relationType) !== 'inline-badge') continue;
       if (e.to.selection.kind !== 'whole') continue;
       const mid = e.to.messageId;
-      if (msgMap.get(mid)?.kind !== 'normal') continue;
+      const targetMsg = msgMap.get(mid);
+      const isInlineBadgeTargetCard = !!targetMsg && (
+        targetMsg.kind === 'normal' ||
+        (targetMsg.kind === 'relation' && classifyRelMsgIds.has(mid))
+      );
+      if (!isInlineBadgeTargetCard) continue;
       const ep = endpointBoxForNormal(mid), box = ep?.box ?? layout[mid]; if (!box) continue;
       const spec = getPresentationSpec(e.relationType);
       const arr = newInlineBadgesByMsg.get(mid) ?? [];

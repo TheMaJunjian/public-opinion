@@ -575,18 +575,6 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [edges, msgMap, classifiedTargetTextIds]);
-  const hasCrossClassifyNonReferenceLink = useMemo(() => {
-    for (const e of edges) {
-      if (e.relationType === "reference") continue;
-      if (msgMap.get(e.from.messageId)?.kind !== "normal") continue;
-      if (msgMap.get(e.to.messageId)?.kind !== "normal") continue;
-      const fromClassified = classifiedTargetTextIds.has(e.from.messageId);
-      const toClassified = classifiedTargetTextIds.has(e.to.messageId);
-      if (fromClassified !== toClassified) return true;
-    }
-    return false;
-  }, [edges, msgMap, classifiedTargetTextIds]);
-
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusLenRef = useRef(0);
@@ -919,6 +907,20 @@ export default function TopicDetailPage() {
       res.push({ kind: "relation", relationId: mid });
     }
     return res;
+  }
+
+  function hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds: string[]): boolean {
+    if (targetTextIds.length === 0) return false;
+    const selected = new Set(targetTextIds);
+    for (const e of edges) {
+      if (e.relationType === "reference") continue;
+      if (msgMap.get(e.from.messageId)?.kind !== "normal") continue;
+      if (msgMap.get(e.to.messageId)?.kind !== "normal") continue;
+      const fromSelected = selected.has(e.from.messageId);
+      const toSelected = selected.has(e.to.messageId);
+      if (fromSelected !== toSelected) return true;
+    }
+    return false;
   }
 
   function getClassifyTargetTextIdsByRelMsgId(relMsgId: string): string[] {
@@ -1420,6 +1422,10 @@ export default function TopicDetailPage() {
     // Targets can be text messages and/or classify relation messages, and can be empty.
     if (relationType === "classify") {
       const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
+      if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
+        alert("分类目标与其他消息存在非引用关联，无法建立分类关系");
+        return;
+      }
       const selectedSet = new Set(targetTextIds);
       const supplementTargetsByRelMsg = new Map<string, string[]>();
       for (const e of edges) {
@@ -1457,7 +1463,10 @@ export default function TopicDetailPage() {
         };
         setMessages(prev => [...prev, relMsg]);
         const anonSrcId = `anon:${backendRel.id}`;
-        const newEdges = targetTextIds.map(targetMid => ({
+        const edgeTargetIds = Array.from(new Set(
+          targetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
+        ));
+        const newEdges = edgeTargetIds.map(targetMid => ({
           id: nextId("edge"),
           relationMessageId: relId,
           relationType: "classify" as RelationType,

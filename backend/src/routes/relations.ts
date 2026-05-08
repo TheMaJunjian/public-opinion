@@ -70,6 +70,7 @@ const createRelationSchema = z.object({
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
+const CLASSIFY_CROSS_LINK_ERROR = '分类目标与其他消息存在非引用关联，无法建立分类关系';
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -220,6 +221,67 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       if (foundRelations.length !== uniqueRelationIds.length) {
         res.status(404).json({ error: '部分目标关系消息不存在或不属于该话题' });
         return;
+      }
+    }
+
+    // CLASSIFY targets cannot have non-reference cross-message links with non-target text messages.
+    if (data.relationType === 'CLASSIFY') {
+      const classifyTargetTextIds = [...new Set(
+        data.targetRefs
+          .filter((r): r is Extract<typeof data.targetRefs[number], { kind: 'message' | 'text-fragment' }> =>
+            r.kind === 'message' || r.kind === 'text-fragment'
+          )
+          .map(r => r.messageId)
+      )];
+      if (classifyTargetTextIds.length > 0) {
+        const selectedTargetTextIdSet = new Set(classifyTargetTextIds);
+        const relationMessages = await prisma.message.findMany({
+          where: { topicId, kind: 'RELATION' },
+          select: { relationType: true, relSourceId: true, targetRefs: true },
+        });
+        const sourceIds = [...new Set(
+          relationMessages
+            .map(m => m.relSourceId)
+            .filter((id): id is string => !!id)
+        )];
+        const sourceTextRows = sourceIds.length > 0
+          ? await prisma.message.findMany({
+              where: { topicId, kind: 'TEXT', id: { in: sourceIds } },
+              select: { id: true },
+            })
+          : [];
+        const sourceTextIdSet = new Set(sourceTextRows.map(row => row.id));
+
+        for (const relMsg of relationMessages) {
+          if (relMsg.relationType === 'REFERENCE') continue;
+          const sourceTextId =
+            relMsg.relSourceId && sourceTextIdSet.has(relMsg.relSourceId)
+              ? relMsg.relSourceId
+              : null;
+          const refs = Array.isArray(relMsg.targetRefs)
+            ? relMsg.targetRefs as Array<{ kind?: unknown; messageId?: unknown }>
+            : [];
+          const targetTextIds = [...new Set(
+            refs
+              .filter(ref =>
+                (ref.kind === 'message' || ref.kind === 'text-fragment') &&
+                typeof ref.messageId === 'string'
+              )
+              .map(ref => ref.messageId as string)
+          )];
+          const hasSelectedEndpoint =
+            (sourceTextId !== null && selectedTargetTextIdSet.has(sourceTextId)) ||
+            targetTextIds.some(id => selectedTargetTextIdSet.has(id));
+          if (!hasSelectedEndpoint) continue;
+          if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId)) {
+            res.status(400).json({ error: CLASSIFY_CROSS_LINK_ERROR });
+            return;
+          }
+          if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id))) {
+            res.status(400).json({ error: CLASSIFY_CROSS_LINK_ERROR });
+            return;
+          }
+        }
       }
     }
 

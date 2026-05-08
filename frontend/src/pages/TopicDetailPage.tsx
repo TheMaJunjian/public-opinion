@@ -22,7 +22,7 @@ const ALL_RELATION_TYPES: RelationType[] = [
 
 /** Max characters to display for an existing tag label in the secondary relation selector. */
 const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
-const CLASSIFY_TARGET_HINT = "文本消息或分类话题消息";
+const CLASSIFY_TARGET_HINT = "文本消息、分类话题消息或归并关系消息";
 
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
@@ -553,10 +553,37 @@ export default function TopicDetailPage() {
     return ids;
   }, [edges, msgMap, relationTypeByRelMsgId]);
 
+  // MERGE relation messages directly targeted by a CLASSIFY edge.
+  // They are hidden from the main canvas (they "belong" to the topic).
+  const classifiedTargetMergeRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType !== "classify") continue;
+      if (msgMap.get(e.to.messageId)?.kind !== "relation") continue;
+      if (relationTypeByRelMsgId.get(e.to.messageId) !== "merge") continue;
+      ids.add(e.to.messageId);
+    }
+    return ids;
+  }, [edges, msgMap, relationTypeByRelMsgId]);
+
+  // Text messages that are targets of classified MERGE relations.
+  // These are also hidden from the main canvas (they "belong" to the topic via the MERGE).
+  const classifiedMergeTargetTextIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (!classifiedTargetMergeRelMsgIds.has(e.relationMessageId)) continue;
+      if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
+      if (msgMap.get(e.from.messageId)?.kind === "normal") ids.add(e.from.messageId);
+    }
+    return ids;
+  }, [edges, msgMap, classifiedTargetMergeRelMsgIds]);
+
   // Non-classify relation messages whose ALL text-message endpoints are classified.
   // These are also hidden from the main canvas (they "belong" to the topic).
   const classifiedExclusiveRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
+    // Combined set of all classified text message IDs (direct + via classified MERGE relations).
+    const allClassifiedTextIds = new Set([...classifiedTargetTextIds, ...classifiedMergeTargetTextIds]);
     const edgesByRel = new Map<string, DemoEdge[]>();
     for (const e of edges) {
       const arr = edgesByRel.get(e.relationMessageId) ?? [];
@@ -565,16 +592,17 @@ export default function TopicDetailPage() {
     }
     for (const [relMsgId, relEdges] of edgesByRel) {
       if (relEdges[0]?.relationType === 'classify') continue;
+      if (classifiedTargetMergeRelMsgIds.has(relMsgId)) continue;
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])
         .filter(mid => msgMap.get(mid)?.kind === 'normal');
       if (textEndpoints.length === 0) continue;
-      if (textEndpoints.every(mid => classifiedTargetTextIds.has(mid))) {
+      if (textEndpoints.every(mid => allClassifiedTextIds.has(mid))) {
         ids.add(relMsgId);
       }
     }
     return ids;
-  }, [edges, msgMap, classifiedTargetTextIds]);
+  }, [edges, msgMap, classifiedTargetTextIds, classifiedMergeTargetTextIds, classifiedTargetMergeRelMsgIds]);
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const prevFocusLenRef = useRef(0);
@@ -908,8 +936,15 @@ export default function TopicDetailPage() {
     const ids = new Set(getClassifyTargetTextMessageIds(units));
     for (const unit of foldUpToWhole(units)) {
       if (msgMap.get(unit.messageId)?.kind !== "relation") continue;
-      if (relationTypeByRelMsgId.get(unit.messageId) !== "classify") continue;
-      getNestedClassifyTargetTextIds(unit.messageId).forEach(id => ids.add(id));
+      const relType = relationTypeByRelMsgId.get(unit.messageId);
+      if (relType === "classify") {
+        getNestedClassifyTargetTextIds(unit.messageId).forEach(id => ids.add(id));
+      } else if (relType === "merge") {
+        for (const e of edges) {
+          if (e.relationMessageId !== unit.messageId) continue;
+          if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
+        }
+      }
     }
     return [...ids];
   }
@@ -928,7 +963,8 @@ export default function TopicDetailPage() {
         res.push({ kind: "message", messageId: mid });
         continue;
       }
-      if (relationTypeByRelMsgId.get(mid) !== "classify") continue;
+      const relType = relationTypeByRelMsgId.get(mid);
+      if (relType !== "classify" && relType !== "merge") continue;
       const key = `relation:${mid}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -966,7 +1002,7 @@ export default function TopicDetailPage() {
         .map(ed => ed.to.messageId)
         .filter(mid =>
           msgMap.get(mid)?.kind === "relation" &&
-          relationTypeByRelMsgId.get(mid) === "classify"
+          (relationTypeByRelMsgId.get(mid) === "classify" || relationTypeByRelMsgId.get(mid) === "merge")
         )
     ));
   }
@@ -1967,18 +2003,21 @@ export default function TopicDetailPage() {
     // connected to classified text messages (they "belong" to the topic view).
     const filteredMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
+      if (m.kind === "normal" && classifiedMergeTargetTextIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedTargetClassifyRelMsgIds.has(m.id)) return false;
+      if (m.kind === "relation" && classifiedTargetMergeRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
       return true;
     });
     const filteredEdges = baseEdges.filter(e =>
       !classifiedTargetClassifyRelMsgIds.has(e.relationMessageId) &&
+      !classifiedTargetMergeRelMsgIds.has(e.relationMessageId) &&
       !classifiedExclusiveRelMsgIds.has(e.relationMessageId) &&
       !replacedRelationMsgIds.has(e.relationMessageId)
     );
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, relationTypeByRelMsgId, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
+  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, relationTypeByRelMsgId, classifiedTargetTextIds, classifiedMergeTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);

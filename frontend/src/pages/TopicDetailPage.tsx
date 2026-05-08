@@ -1819,41 +1819,38 @@ export default function TopicDetailPage() {
     const baseMessages = focusEntries.length > 0 ? messagesToShow : messages;
     const baseEdges = focusEntries.length > 0 ? edgesToShow : edges;
     if (isTopicFocus) {
+      // Build a single-pass map from relationMessageId → edges for all lookups below.
+      const edgesByRelMsgId = new Map<string, DemoEdge[]>();
+      for (const e of baseEdges) {
+        const arr = edgesByRelMsgId.get(e.relationMessageId) ?? [];
+        arr.push(e);
+        edgesByRelMsgId.set(e.relationMessageId, arr);
+      }
       // Find child classify rel msg IDs: classify relation messages directly targeted by the
       // parent classify. Their own targets must not be auto-expanded into the topic canvas.
+      const parentEdges = topicFocusRelMsgId ? (edgesByRelMsgId.get(topicFocusRelMsgId) ?? []) : [];
+      const parentDirectTargetIds = new Set(parentEdges.map(e => e.to.messageId));
       const childClassifyRelMsgIds = new Set(
-        baseEdges
-          .filter(e => e.relationMessageId === topicFocusRelMsgId &&
-            msgMap.get(e.to.messageId)?.kind === "relation" &&
-            relationTypeByRelMsgId.get(e.to.messageId) === "classify")
+        parentEdges
           .map(e => e.to.messageId)
+          .filter(mid =>
+            msgMap.get(mid)?.kind === "relation" &&
+            relationTypeByRelMsgId.get(mid) === "classify"
+          )
       );
       // Collect IDs of messages that are targets of child classify relations.
       // Exclude any that are also direct targets of the parent classify (safety guard).
-      const parentDirectTargetIds = new Set(
-        topicFocusRelMsgId
-          ? baseEdges.filter(e => e.relationMessageId === topicFocusRelMsgId).map(e => e.to.messageId)
-          : []
-      );
       const childClassifyTargetIds = new Set<string>();
       for (const childId of childClassifyRelMsgIds) {
-        for (const e of baseEdges) {
-          if (e.relationMessageId === childId && !parentDirectTargetIds.has(e.to.messageId)) {
-            childClassifyTargetIds.add(e.to.messageId);
-          }
+        for (const e of edgesByRelMsgId.get(childId) ?? []) {
+          if (!parentDirectTargetIds.has(e.to.messageId)) childClassifyTargetIds.add(e.to.messageId);
         }
       }
       // Find relation messages that exclusively connect to child classify targets
       // (analogous to classifiedExclusiveRelMsgIds on the main canvas).
       const exclusiveToChildRelMsgIds = new Set<string>();
       if (childClassifyTargetIds.size > 0) {
-        const edgesByRelId = new Map<string, DemoEdge[]>();
-        for (const e of baseEdges) {
-          const arr = edgesByRelId.get(e.relationMessageId) ?? [];
-          arr.push(e);
-          edgesByRelId.set(e.relationMessageId, arr);
-        }
-        for (const [relMsgId, relEdges] of edgesByRelId) {
+        for (const [relMsgId, relEdges] of edgesByRelMsgId) {
           if (relMsgId === topicFocusRelMsgId || childClassifyRelMsgIds.has(relMsgId)) continue;
           if (relEdges[0]?.relationType === 'classify') continue;
           const textEndpoints = relEdges

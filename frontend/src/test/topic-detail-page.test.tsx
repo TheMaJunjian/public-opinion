@@ -3,13 +3,14 @@ import { describe, beforeEach, expect, it, vi } from 'vitest';
 import TopicDetailPage from '../pages/TopicDetailPage';
 import type { Message, Relation, Topic, User } from '../types';
 
-const { mockApi, mockNavigate } = vi.hoisted(() => ({
+const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
   mockApi: {
     getTopic: vi.fn(),
     getMessages: vi.fn(),
     getRelations: vi.fn(),
   },
   mockNavigate: vi.fn(),
+  mockGraphView: vi.fn(),
 }));
 
 vi.mock('../api', () => ({ api: mockApi }));
@@ -30,7 +31,10 @@ vi.mock('../components/GraphView', async () => {
   const actual = await vi.importActual<typeof import('../components/GraphView')>('../components/GraphView');
   return {
     ...actual,
-    default: () => <div data-testid="graph-view" />,
+    default: (props: any) => {
+      mockGraphView(props);
+      return <div data-testid="graph-view" />;
+    },
   };
 });
 
@@ -273,5 +277,59 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
+  });
+});
+
+describe('TopicDetailPage summary relation visibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const topic: Topic = {
+      id: 'topic-1',
+      title: '测试话题',
+      status: 'OPEN',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      createdBy: makeUser(),
+    };
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-1', '第一条'),
+        makeMessage('msg-2', '第二条'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-summary',
+          topicId: 'topic-1',
+          relationType: 'SUMMARY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-1' }],
+          payload: { title: '总结观点', targetLayout: 'multi-column' },
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('shows summary relation in list view and keeps it in graph-render messages', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    // Graph view receives summary relation message for rendering.
+    await waitFor(() => {
+      expect(mockGraphView).toHaveBeenCalled();
+    });
+    const latestGraphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1]?.[0];
+    expect(latestGraphProps?.messages?.some((m: { id: string }) => m.id === 'rel-summary')).toBe(true);
+
+    // In list view, summary topic card is visible while its target text message is hidden.
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('消息 msg-1')).not.toBeInTheDocument();
   });
 });

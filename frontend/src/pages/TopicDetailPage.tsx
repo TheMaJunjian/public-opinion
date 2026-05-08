@@ -1819,10 +1819,59 @@ export default function TopicDetailPage() {
     const baseMessages = focusEntries.length > 0 ? messagesToShow : messages;
     const baseEdges = focusEntries.length > 0 ? edgesToShow : edges;
     if (isTopicFocus) {
-      const topicMessages = baseMessages.filter(m =>
-        !(m.kind === "relation" && m.id === topicFocusRelMsgId)
+      // Build a single-pass map from relationMessageId → edges for all lookups below.
+      const edgesByRelMsgId = new Map<string, DemoEdge[]>();
+      for (const e of baseEdges) {
+        const arr = edgesByRelMsgId.get(e.relationMessageId) ?? [];
+        arr.push(e);
+        edgesByRelMsgId.set(e.relationMessageId, arr);
+      }
+      // Find child classify rel msg IDs: classify relation messages directly targeted by the
+      // parent classify. Their own targets must not be auto-expanded into the topic canvas.
+      const parentEdges = topicFocusRelMsgId ? (edgesByRelMsgId.get(topicFocusRelMsgId) ?? []) : [];
+      const parentDirectTargetIds = new Set(parentEdges.map(e => e.to.messageId));
+      const childClassifyRelMsgIds = new Set(
+        parentEdges
+          .map(e => e.to.messageId)
+          .filter(mid =>
+            msgMap.get(mid)?.kind === "relation" &&
+            relationTypeByRelMsgId.get(mid) === "classify"
+          )
       );
-      const topicEdges = baseEdges.filter(e => e.relationMessageId !== topicFocusRelMsgId);
+      // Collect IDs of messages that are targets of child classify relations.
+      // Exclude any that are also direct targets of the parent classify (safety guard).
+      const childClassifyTargetIds = new Set<string>();
+      for (const childId of childClassifyRelMsgIds) {
+        for (const e of edgesByRelMsgId.get(childId) ?? []) {
+          if (!parentDirectTargetIds.has(e.to.messageId)) childClassifyTargetIds.add(e.to.messageId);
+        }
+      }
+      // Find relation messages that exclusively connect to child classify targets
+      // (analogous to classifiedExclusiveRelMsgIds on the main canvas).
+      const exclusiveToChildRelMsgIds = new Set<string>();
+      if (childClassifyTargetIds.size > 0) {
+        for (const [relMsgId, relEdges] of edgesByRelMsgId) {
+          if (relMsgId === topicFocusRelMsgId || childClassifyRelMsgIds.has(relMsgId)) continue;
+          if (relEdges[0]?.relationType === 'classify') continue;
+          const textEndpoints = relEdges
+            .flatMap(e => [e.from.messageId, e.to.messageId])
+            .filter(mid => msgMap.get(mid)?.kind === 'normal');
+          if (textEndpoints.length === 0) continue;
+          if (textEndpoints.every(mid => childClassifyTargetIds.has(mid))) {
+            exclusiveToChildRelMsgIds.add(relMsgId);
+          }
+        }
+      }
+      const topicMessages = baseMessages.filter(m =>
+        !(m.kind === "relation" && m.id === topicFocusRelMsgId) &&
+        !childClassifyTargetIds.has(m.id) &&
+        !exclusiveToChildRelMsgIds.has(m.id)
+      );
+      const topicEdges = baseEdges.filter(e =>
+        e.relationMessageId !== topicFocusRelMsgId &&
+        !childClassifyRelMsgIds.has(e.relationMessageId) &&
+        !exclusiveToChildRelMsgIds.has(e.relationMessageId)
+      );
       return { messagesToRenderFiltered: topicMessages, edgesToRenderFiltered: topicEdges };
     }
     // Main canvas: remove classified text messages and relation messages that are exclusively
@@ -1840,7 +1889,7 @@ export default function TopicDetailPage() {
       !replacedRelationMsgIds.has(e.relationMessageId)
     );
     return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
+  }, [messages, edges, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, relationTypeByRelMsgId, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);

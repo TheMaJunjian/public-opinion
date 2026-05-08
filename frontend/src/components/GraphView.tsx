@@ -413,7 +413,8 @@ export function applyMergeCanvasReservations(params: {
     arr.push(msg.id);
     byCol.set(col, arr);
   }
-  for (const ids of byCol.values()) ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+  const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+  for (const ids of byCol.values()) sortIdsByY(ids);
 
   function computeCurrentReservationRect(reservation: MergeCanvasReservation): Rect {
     const boxes: LayoutBox[] = [];
@@ -448,7 +449,7 @@ export function applyMergeCanvasReservations(params: {
     // Compact MERGE targets inside each original column while preserving per-column order
     // and avoiding overlaps with non-target cards in that column.
     for (const ids of byCol.values()) {
-      ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+      sortIdsByY(ids);
       let cursor = GRID_TOP;
       for (const id of ids) {
         const box = nextLayout[id];
@@ -461,7 +462,7 @@ export function applyMergeCanvasReservations(params: {
         nextLayout[id] = { ...box, y: nextY };
         cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
       }
-      ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+      sortIdsByY(ids);
     }
 
     const reservationRect = computeCurrentReservationRect(reservation);
@@ -576,7 +577,8 @@ function applyFrameAvoidanceReservations(params: {
     arr.push(msg.id);
     byCol.set(col, arr);
   }
-  for (const ids of byCol.values()) ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+  const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+  for (const ids of byCol.values()) sortIdsByY(ids);
 
   function computeRect(reservation: FrameAvoidanceReservation): Rect {
     const boxes: LayoutBox[] = [];
@@ -596,7 +598,7 @@ function applyFrameAvoidanceReservations(params: {
 
   // Non-containing reservations should not overlap; move the lower one downward.
   for (let i = 0; i < params.reservations.length; i++) {
-    let upperRect = computeRect(params.reservations[i]);
+    const upperRect = computeRect(params.reservations[i]);
     for (let j = i + 1; j < params.reservations.length; j++) {
       const lower = params.reservations[j];
       const lowerRect = computeRect(lower);
@@ -610,14 +612,13 @@ function applyFrameAvoidanceReservations(params: {
         nextLayout[id] = { ...box, y: box.y + deltaY };
       }
     }
-    upperRect = computeRect(params.reservations[i]);
   }
 
   // Then push unrelated cards below each reservation to avoid frame/content collisions.
   for (const reservation of params.reservations) {
     const reservationRect = computeRect(reservation);
     for (const ids of byCol.values()) {
-      ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+      sortIdsByY(ids);
       let cursor = reservationRect.y + reservationRect.height + ROW_GAP;
       for (const id of ids) {
         const box = nextLayout[id];

@@ -95,7 +95,7 @@ function extractTextTargetIds(targetRefs: unknown): string[] {
   )];
 }
 
-function extractNestedGroupRelationIds(targetRefs: unknown): string[] {
+function extractNestedRelationIds(targetRefs: unknown): string[] {
   if (!Array.isArray(targetRefs)) return [];
   return [...new Set(
     targetRefs
@@ -129,7 +129,7 @@ function collectSelectedGroupTargetTextIds(params: {
     if (!rel) continue;
     if (!expandableRelationTypes.has(rel.relationType ?? '')) continue;
     extractTextTargetIds(rel.targetRefs).forEach(id => selectedTextIds.add(id));
-    for (const nestedRelId of extractNestedGroupRelationIds(rel.targetRefs)) {
+    for (const nestedRelId of extractNestedRelationIds(rel.targetRefs)) {
       if (!visited.has(nestedRelId) && relationById.has(nestedRelId)) queue.push(nestedRelId);
     }
   }
@@ -309,7 +309,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         const relId = queue.shift()!;
         const rel = relationById.get(relId);
         if (!rel || !expandableRelationTypes.has(rel.relationType ?? '')) continue;
-        const nestedRelationIds = extractNestedGroupRelationIds(rel.targetRefs).filter(id => !relationById.has(id));
+        const nestedRelationIds = extractNestedRelationIds(rel.targetRefs).filter(id => !relationById.has(id));
         if (nestedRelationIds.length === 0) continue;
         const nestedRelations = await prisma.message.findMany({
           where: { id: { in: nestedRelationIds }, topicId, kind: 'RELATION' },

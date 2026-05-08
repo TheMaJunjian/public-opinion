@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
-import { getPresentationSpec, getRelationTitle } from '../types';
+import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import { computeCorrectedEdgeMap } from '../utils/modelBridge';
 import type { PresentationKind } from '../types';
 
@@ -56,10 +56,15 @@ const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
 const MERGE_CANVAS_LABEL_H = 24;
-const MERGE_CANVAS_LABEL_W = 56;
+const MERGE_CANVAS_LABEL_MIN_W = 56;
+const MERGE_CANVAS_LABEL_MAX_W = 320;
 const MERGE_CANVAS_LABEL_LEFT_OFFSET = 10;
 const MERGE_CANVAS_LABEL_TOP_OFFSET = 8;
 const MERGE_CANVAS_STACK_GAP = ROW_GAP;
+const GROUP_HEADER_MIN_W = 180;
+const GROUP_HEADER_MAX_W = 320;
+const GROUP_HEADER_X_OFFSET = 6;
+const GROUP_HEADER_HEIGHT = 56;
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -288,6 +293,27 @@ function rectContains(outer: Rect, inner: Rect): boolean {
   );
 }
 
+function getMergeHeaderText(msg: DemoMessage | undefined): string {
+  if (!msg) return getPresentationSpec('merge').label;
+  return getRelationTitle(msg.relationPayload)
+    ?? getRelationLabel(msg.relationPayload)
+    ?? getPresentationSpec(msg.relationType ?? 'merge').label;
+}
+
+function getMergeHeaderWidth(text: string): number {
+  const estimated = Math.round(text.length * 14 + 24);
+  return Math.max(MERGE_CANVAS_LABEL_MIN_W, Math.min(MERGE_CANVAS_LABEL_MAX_W, estimated));
+}
+
+function getGroupHeaderRect(frameRect: Rect): Rect {
+  return {
+    x: frameRect.x + GROUP_HEADER_X_OFFSET,
+    y: frameRect.y - SUPP_FRAME_PAD - Math.max(4, Math.round(SUPP_FRAME_PAD / 2)),
+    width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
+    height: GROUP_HEADER_HEIGHT,
+  };
+}
+
 function getRelationBoundsFromLayout(params: {
   relMsgId: string;
   edgesByRelMsg: Map<string, DemoEdge[]>;
@@ -301,8 +327,9 @@ function getRelationBoundsFromLayout(params: {
   if (visited.has(relMsgId)) return null;
   visited.add(relMsgId);
 
+  const relMsg = msgMap.get(relMsgId);
   const directBox = layout[relMsgId];
-  if (directBox && relationCardMsgIds.has(relMsgId)) {
+  if (directBox && relationCardMsgIds.has(relMsgId) && relMsg?.relationType !== 'merge') {
     return { rect: directBox, cardIds: new Set([relMsgId]) };
   }
 
@@ -328,8 +355,29 @@ function getRelationBoundsFromLayout(params: {
     }
   }
 
-  const rect = unionBoxes(boxes);
-  return rect ? { rect, cardIds } : null;
+  let rect = unionBoxes(boxes);
+  if (!rect) return null;
+  if (relMsg?.relationType === 'merge') {
+    const contentRect = {
+      x: rect.x - SUPP_FRAME_PAD,
+      y: rect.y - SUPP_FRAME_PAD,
+      width: rect.width + SUPP_FRAME_PAD * 2,
+      height: rect.height + SUPP_FRAME_PAD * 2,
+    };
+    const headerWidth = getMergeHeaderWidth(getMergeHeaderText(relMsg));
+    const headerRect = {
+      x: contentRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
+      y: contentRect.y - MERGE_CANVAS_LABEL_TOP_OFFSET,
+      width: headerWidth,
+      height: MERGE_CANVAS_LABEL_H,
+    };
+    const minX = Math.min(contentRect.x, headerRect.x);
+    const minY = Math.min(contentRect.y, headerRect.y);
+    const maxX = Math.max(contentRect.x + contentRect.width, headerRect.x + headerRect.width);
+    const maxY = Math.max(contentRect.y + contentRect.height, headerRect.y + headerRect.height);
+    rect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+  return { rect, cardIds };
 }
 
 export function buildMergeCanvasReservations(params: {
@@ -368,6 +416,7 @@ export function buildMergeCanvasReservations(params: {
     }
     const contentUnion = unionBoxes(boxes);
     if (!contentUnion) continue;
+    const headerWidth = getMergeHeaderWidth(getMergeHeaderText(msgMap.get(relMsgId)));
     const contentRect = {
       x: contentUnion.x - SUPP_FRAME_PAD,
       y: contentUnion.y - SUPP_FRAME_PAD,
@@ -377,7 +426,7 @@ export function buildMergeCanvasReservations(params: {
     const headerRect = {
       x: contentRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
       y: contentRect.y - MERGE_CANVAS_LABEL_TOP_OFFSET,
-      width: MERGE_CANVAS_LABEL_W,
+      width: headerWidth,
       height: MERGE_CANVAS_LABEL_H,
     };
     reservations.push({
@@ -387,7 +436,7 @@ export function buildMergeCanvasReservations(params: {
       rect: {
         x: contentRect.x,
         y: headerRect.y,
-        width: contentRect.width,
+        width: Math.max(contentRect.width, headerRect.x + headerRect.width - contentRect.x),
         height: contentRect.y + contentRect.height - headerRect.y,
       },
       cardIds,
@@ -432,13 +481,13 @@ export function applyMergeCanvasReservations(params: {
     const headerRect = {
       x: contentRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
       y: contentRect.y - MERGE_CANVAS_LABEL_TOP_OFFSET,
-      width: MERGE_CANVAS_LABEL_W,
+      width: reservation.headerRect.width,
       height: MERGE_CANVAS_LABEL_H,
     };
     return {
       x: contentRect.x,
       y: headerRect.y,
-      width: contentRect.width,
+      width: Math.max(contentRect.width, headerRect.x + headerRect.width - contentRect.x),
       height: contentRect.y + contentRect.height - headerRect.y,
     };
   }
@@ -1217,14 +1266,13 @@ export default function GraphView(props: GraphViewProps) {
     }
     return ids;
   }, [edges, messages]);
-  const supplementTargetRelationCardIds = useMemo(() => {
+  const targetRelationCardIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
-      if (e.relationType !== 'supplement') continue;
       const targetMsg = msgMap.get(e.to.messageId);
       if (targetMsg?.kind !== 'relation') continue;
       const targetType = targetMsg.relationType;
-      if (targetType === 'supplement' || targetType === 'merge' || targetType === 'classify') {
+      if (targetType === 'supplement' || targetType === 'merge' || targetType === 'classify' || targetType === 'summary') {
         ids.add(targetMsg.id);
       }
     }
@@ -1232,9 +1280,9 @@ export default function GraphView(props: GraphViewProps) {
   }, [edges, msgMap]);
   const relationCardMsgIds = useMemo(() => {
     const ids = new Set<string>(topicRelMsgIds);
-    supplementTargetRelationCardIds.forEach(id => ids.add(id));
+    targetRelationCardIds.forEach(id => ids.add(id));
     return ids;
-  }, [topicRelMsgIds, supplementTargetRelationCardIds]);
+  }, [topicRelMsgIds, targetRelationCardIds]);
   const normals = useMemo(() => messages.filter(m =>
     (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
     (m.kind === "relation" && relationCardMsgIds.has(m.id))
@@ -2089,36 +2137,37 @@ export default function GraphView(props: GraphViewProps) {
           // Chained correction sources remain visible so their own correction badge is preserved.
           if (hiddenCorrectedTargetIds.has(msg.id)) return null;
 
-          // CLASSIFY / SUMMARY relation messages are shown as topic cards (matching the list-view style).
+          // CLASSIFY / SUMMARY relation messages are shown as relation cards on the main canvas.
           if (msg.kind === "relation" && topicRelMsgIds.has(msg.id)) {
             const relEdgesForMsg = edges.filter(e => e.relationMessageId === msg.id);
             const targetCount = relEdgesForMsg.filter(e => !e.to.messageId.startsWith('anon:')).length;
             const isSummaryTopic = msg.relationType === "summary";
             const topicTitle = getRelationTitle(msg.relationPayload) || (isSummaryTopic ? `总结（${targetCount}）` : `分类（${targetCount}）`);
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
+            const isActive = lastClickedMessageId === msg.id;
             return (
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
                 onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-                style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#ffffff",borderRadius:10,
-                  border:isWhole?"2px solid #0b84ff":"1px solid #e5e7eb",
-                  padding:"10px 12px",boxShadow:"0 4px 12px rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",
-                  gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:"auto",color:"#111827"}}>
-                <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.8,display:"flex",justifyContent:"space-between"}}>
+                style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,
+                  border:isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  padding:"12px 16px",boxShadow:isWhole?"0 8px 20px rgba(11,132,255,0.22)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
+                  gap:8,cursor:"pointer",outline:isActive?"1px dashed #0b84ff":"none",userSelect:"auto",color:"#f5f5f5"}}>
+                <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
                   <span>{`${isSummaryTopic ? "总结" : "分类"} ${msg.id}`}</span>
                   <span>{isSummaryTopic ? "双击进入总结" : "双击进入分类"}</span>
                 </div>
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
-                    <div style={{fontWeight:600,color:"#111827",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    <div style={{fontWeight:600,color:"#f3f4f6",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                       {topicTitle}
                     </div>
-                    <span style={{fontSize:11,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"#dcfce7",color:"#15803d",flexShrink:0}}>
+                    <span style={{fontSize:11,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"rgba(2,150,80,0.2)",color:"#86efac",flexShrink:0}}>
                       进行中
                     </span>
                   </div>
-                  <div style={{fontSize:12,color:"#6b7280",display:"flex",gap:12,flexWrap:"wrap"}}>
-                    <span>由 <span style={{fontWeight:600,color:"#4b5563"}}>{msg.author}</span> 发起</span>
+                  <div style={{fontSize:12,color:"#9ca3af",display:"flex",gap:12,flexWrap:"wrap"}}>
+                    <span>由 <span style={{fontWeight:600,color:"#e5e7eb"}}>{msg.author}</span> 发起</span>
                     <span>💬 {targetCount} 条观点</span>
                     <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
                   </div>
@@ -2558,23 +2607,24 @@ export default function GraphView(props: GraphViewProps) {
                 </div>
               );
             })()}
-            {(gf.relType === "classify" || gf.relType === "summary") && (
+            {(gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
               <div data-rel-overlay="true"
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
                 title={title}
                 style={{
                   position: "absolute",
-                  left: x + 6,
-                  // Keep the card slightly above the frame; tie offset to HH so spacing scales with frame strip size.
-                  top: y - HH - Math.max(4, Math.round(HH / 2)),
+                  left: getGroupHeaderRect(gf.rect).x,
+                  top: getGroupHeaderRect(gf.rect).y,
                   zIndex: 5,
-                  width: Math.min(280, Math.max(180, width - 24)),
-                  background: "#ffffff",
-                  color: "#111827",
-                  borderRadius: 10,
-                  border: "1px solid #e5e7eb",
-                  boxShadow: "0 6px 14px rgba(0,0,0,0.22)",
+                  width: getGroupHeaderRect(gf.rect).width,
+                  minHeight: getGroupHeaderRect(gf.rect).height,
+                  background: "#1f1f1f",
+                  color: "#f5f5f5",
+                  borderRadius: 6,
+                  border: isRelWholeSel(gf.relMsgId) ? "2px solid #0b84ff" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
+                  boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(11,132,255,0.22)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
+                  outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
                   padding: "8px 10px",
                   cursor: "pointer",
                   pointerEvents: "auto",
@@ -2582,26 +2632,33 @@ export default function GraphView(props: GraphViewProps) {
                 }}>
                 {(() => {
                   const relMsg = msgMap.get(gf.relMsgId);
+                  const isMergeTopic = gf.relType === "merge";
                   const isSummaryTopic = gf.relType === "summary";
-                  const targetTextIds = Array.from(new Set(
+                  const targetIds = Array.from(new Set(
                     (edgesByRelMsg.get(gf.relMsgId) ?? [])
-                      .filter(ed => msgMap.get(ed.to.messageId)?.kind === "normal")
+                      .filter(ed => !ed.to.messageId.startsWith('anon:'))
                       .map(ed => ed.to.messageId)
                   ));
-                  const topicTitle = getRelationTitle(relMsg?.relationPayload) || (isSummaryTopic ? `总结（${targetTextIds.length}）` : `分类（${targetTextIds.length}）`);
+                  const topicTitle = getRelationTitle(relMsg?.relationPayload) || (
+                    isSummaryTopic
+                      ? `总结（${targetIds.length}）`
+                      : isMergeTopic
+                        ? `归并（${targetIds.length}）`
+                        : `分类（${targetIds.length}）`
+                  );
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {topicTitle}
                         </span>
-                        <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 999, background: "#dcfce7", color: "#15803d" }}>
-                          进行中
+                        <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 999, background: isMergeTopic ? "rgba(148,163,184,0.22)" : "rgba(2,150,80,0.2)", color: isMergeTopic ? "#cbd5e1" : "#86efac" }}>
+                          {isMergeTopic ? "归并" : "进行中"}
                         </span>
                       </div>
-                      <div style={{ marginTop: 4, fontSize: 10, color: "#6b7280", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <div style={{ marginTop: 4, fontSize: 10, color: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>由 {relMsg?.author ?? "系统"} 发起</span>
-                        <span style={{ flexShrink: 0 }}>💬 {targetTextIds.length}</span>
+                        <span style={{ flexShrink: 0 }}>💬 {targetIds.length}</span>
                         <span style={{ flexShrink: 0 }}>{relMsg ? new Date(relMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
                       </div>
                     </>

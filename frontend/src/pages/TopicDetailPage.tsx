@@ -1917,8 +1917,9 @@ export default function TopicDetailPage() {
     for (const e of edges) {
       if (shownIds.has(e.from.messageId) || shownIds.has(e.to.messageId)) relationMessagesToAdd.add(e.relationMessageId);
     }
+    const relationMsgsAdded = new Set<string>();
     for (const rmId of relationMessagesToAdd) {
-      if (!shownIds.has(rmId)) { const m = messages.find(x => x.id === rmId); if (m) messagesToShowArr.push(m); }
+      if (!shownIds.has(rmId)) { const m = messages.find(x => x.id === rmId); if (m) { messagesToShowArr.push(m); relationMsgsAdded.add(rmId); } }
     }
     // Always ensure the original focus-entry IDs are in messagesToShow.
     // When a startId is a classify relation message, collectNormalMessagesForRelation resolves
@@ -1926,9 +1927,8 @@ export default function TopicDetailPage() {
     // BFS dist or the relation-adjacency step above (if its edges point to other relations,
     // not directly to text messages). Without this, the classify relation's edges are missing
     // from edgesToShow, which breaks the child-classify filtering in messagesToRenderFiltered.
-    const shownAfterRelation = new Set(messagesToShowArr.map(m => m.id));
     for (const id of startIds) {
-      if (!shownAfterRelation.has(id)) {
+      if (!shownIds.has(id) && !relationMsgsAdded.has(id)) {
         const m = msgMap.get(id);
         if (m) messagesToShowArr.push(m);
       }
@@ -1998,7 +1998,8 @@ export default function TopicDetailPage() {
       // the MERGE's text targets belong to the inner topic and must not be shown in the outer
       // topic view until the user explicitly navigates into the inner topic.
       for (const id of childClassifyTargetIds) {
-        if (msgMap.get(id)?.kind !== "relation" || relationTypeByRelMsgId.get(id) !== "merge") continue;
+        const m = msgMap.get(id);
+        if (m?.kind !== "relation" || relationTypeByRelMsgId.get(id) !== "merge") continue;
         for (const e of edgesByRelMsgId.get(id) ?? []) {
           if (msgMap.get(e.to.messageId)?.kind === "normal") childClassifyTargetIds.add(e.to.messageId);
           if (msgMap.get(e.from.messageId)?.kind === "normal") childClassifyTargetIds.add(e.from.messageId);

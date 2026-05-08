@@ -154,7 +154,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     });
   });
 
-  it('hides merge-relation text messages when viewing outer topic (they belong to the inner topic)', async () => {
+  it('prevents merge-relation text messages from expanding into outer topic view', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 

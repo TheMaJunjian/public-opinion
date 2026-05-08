@@ -828,11 +828,14 @@ export default function GraphView(props: GraphViewProps) {
   // so they participate in the normals layout like regular text messages.
   const classifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
+    for (const m of messages) {
+      if (m.kind === "relation" && m.relationType === "classify") ids.add(m.id);
+    }
     for (const e of edges) {
       if (e.relationType === 'classify') ids.add(e.relationMessageId);
     }
     return ids;
-  }, [edges]);
+  }, [edges, messages]);
   const normals = useMemo(() => messages.filter(m =>
     (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
     (m.kind === "relation" && classifyRelMsgIds.has(m.id))

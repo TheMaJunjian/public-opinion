@@ -22,7 +22,7 @@ const ALL_RELATION_TYPES: RelationType[] = [
 
 /** Max characters to display for an existing tag label in the secondary relation selector. */
 const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
-const CLASSIFY_TEXT_TARGET_HINT = "文本消息（普通消息，不能是关系消息）";
+const CLASSIFY_TARGET_HINT = "文本消息或分类话题消息";
 
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
@@ -515,11 +515,14 @@ export default function TopicDetailPage() {
   }, [edges]);
   const relationTypeByRelMsgId = useMemo(() => {
     const map = new Map<string, RelationType>();
+    for (const m of messages) {
+      if (m.kind === "relation" && m.relationType) map.set(m.id, m.relationType);
+    }
     for (const e of edges) {
       if (!map.has(e.relationMessageId)) map.set(e.relationMessageId, e.relationType);
     }
     return map;
-  }, [edges]);
+  }, [edges, messages]);
   const replacedRelationMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -716,6 +719,14 @@ export default function TopicDetailPage() {
         kind: "normal",
       };
       setMessages(prev => [...prev, msg]);
+      if (isTopicFocus) {
+        setFocusEntries(prev => {
+          if (prev.length === 0) return prev;
+          const last = prev[prev.length - 1];
+          if (last.mode !== "topic") return prev;
+          return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
+        });
+      }
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
       return msg;
@@ -858,6 +869,29 @@ export default function TopicDetailPage() {
     ));
   }
 
+  function getClassifyTargetRefs(units: UnitSelection[]): TargetRef[] {
+    const res: TargetRef[] = [];
+    const seen = new Set<string>();
+    for (const u of foldUpToWhole(units)) {
+      const mid = u.messageId;
+      const m = msgMap.get(mid);
+      if (!m) continue;
+      if (m.kind === "normal") {
+        const key = `message:${mid}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        res.push({ kind: "message", messageId: mid });
+        continue;
+      }
+      if (relationTypeByRelMsgId.get(mid) !== "classify") continue;
+      const key = `relation:${mid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      res.push({ kind: "relation", relationId: mid });
+    }
+    return res;
+  }
+
   function getClassifyTargetTextIdsByRelMsgId(relMsgId: string): string[] {
     return getClassifyTargetTextMessageIds(
       edges
@@ -868,7 +902,12 @@ export default function TopicDetailPage() {
 
   function enterClassifyTopic(relMsgId: string) {
     const targetTextIds = getClassifyTargetTextIdsByRelMsgId(relMsgId);
-    if (targetTextIds.length === 0) return;
+    if (targetTextIds.length === 0) {
+      if (!msgMap.has(relMsgId)) return;
+      enterFocusMultiple([relMsgId], { mode: "topic", topicRelMsgId: relMsgId });
+      setFocusHop(0);
+      return;
+    }
     enterFocusMultiple(targetTextIds, { mode: "topic", topicRelMsgId: relMsgId });
     setFocusHop(0);
   }
@@ -1110,7 +1149,7 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if (effectiveTargets.length === 0) return;
+    if (effectiveTargets.length === 0 && relationType !== "classify") return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isSupplement = relationType === "supplement";
     // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
@@ -1335,13 +1374,9 @@ export default function TopicDetailPage() {
     }
 
     // CLASSIFY relation: user-to-message relation with no source message.
-    // Only text-message targets are accepted.
+    // Targets can be text messages and/or classify relation messages, and can be empty.
     if (relationType === "classify") {
       const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
-      if (targetTextIds.length === 0) {
-        alert(`分类关系至少需要一个${CLASSIFY_TEXT_TARGET_HINT}`);
-        return;
-      }
       const selectedSet = new Set(targetTextIds);
       const supplementTargetsByRelMsg = new Map<string, string[]>();
       for (const e of edges) {
@@ -1365,7 +1400,7 @@ export default function TopicDetailPage() {
         alert("话题名称不能为空");
         return;
       }
-      const targetRefs = targetTextIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
+      const targetRefs = getClassifyTargetRefs(effectiveTargets);
       try {
         const backendRel = await api.createRelation(topicId!, { relationType: 'CLASSIFY', sourceMessageId: null, targetRefs, classifyTitle });
         const relId = backendRel.id;
@@ -1374,6 +1409,7 @@ export default function TopicDetailPage() {
           author: backendRel.createdBy.username,
           createdAt: backendRel.createdAt,
           kind: "relation",
+          relationType: "classify",
           content: `话题：${classifyTitle}\n目标：${targetTextIds.join(",")}`,
         };
         setMessages(prev => [...prev, relMsg]);
@@ -1534,8 +1570,7 @@ export default function TopicDetailPage() {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
-    const hasClassifyTargetsAvailable = getClassifyTargetTextMessageIds(draftUnits.length > 0 ? draftUnits : targetUnits).length > 0;
-    if (isClassifyType) return hasClassifyTargetsAvailable;
+    if (isClassifyType) return newMessageContent.trim().length > 0;
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
     if (isAgreeDisagreeType || isSupplementType || isTagWithQuickAnnotate) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
@@ -1559,9 +1594,9 @@ export default function TopicDetailPage() {
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
-      const targetCount = getClassifyTargetTextMessageIds(usingDraft ? draftUnits : targetUnits).length;
-      if (targetCount === 0) return `请至少选择一个${CLASSIFY_TEXT_TARGET_HINT}作为分类话题目标`;
-      return `建立分类话题（${targetCount} 个文本目标，自动包含其关系消息）`;
+      const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
+      if (targetCount === 0) return "建立分类话题（无目标）";
+      return `建立分类话题（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
     }
     if (isAgreeDisagreeType || isSupplementType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";

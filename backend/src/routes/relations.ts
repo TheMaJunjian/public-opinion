@@ -50,7 +50,9 @@ const createRelationSchema = z.object({
   // sourceMessageId is required for most relation types, but optional for AGREE/DISAGREE
   // (which may be pure stance declarations without an attached text message).
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
-  targetRefs: z.array(targetRefSchema).min(1, '至少需要一个目标引用').max(20),
+  // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
+  // for relation types not listed in TARGET_OPTIONAL_RELATION_TYPES (currently only CLASSIFY).
+  targetRefs: z.array(targetRefSchema).max(20),
   // tagLabel: optional label text for TAG relations (stored in place of a source message).
   // When provided, the TAG relation is a user-to-message relation without a source text message.
   tagLabel: z.string().max(200).optional(),
@@ -67,6 +69,7 @@ const createRelationSchema = z.object({
 });
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY']);
+const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -153,8 +156,12 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // CLASSIFY is a user-to-text-message relation: no source text message and
-    // targets must be one or more text messages.
+    if (!TARGET_OPTIONAL_RELATION_TYPES.has(data.relationType) && data.targetRefs.length === 0) {
+      res.status(400).json({ error: '至少需要一个目标引用' });
+      return;
+    }
+
+    // CLASSIFY is a user-to-message relation: no source text message.
     if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
       res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
       return;
@@ -181,16 +188,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       .filter(r => r.kind === 'relation')
       .map(r => (r as { kind: 'relation'; relationId: string }).relationId);
 
-    if (data.relationType === 'CLASSIFY') {
-      if (targetRelationIds.length > 0) {
-        res.status(400).json({ error: '分类关系目标必须是文本消息，不能选择关系消息' });
-        return;
-      }
-      if (targetMessageIds.length === 0) {
-        res.status(400).json({ error: '分类关系至少需要一个文本目标消息' });
-        return;
-      }
-    }
+    // CLASSIFY supports empty targets and relation-message targets (e.g., topic-to-topic grouping).
 
     // Check for duplicate target IDs
     const allTargetIds = [...targetMessageIds, ...targetRelationIds];

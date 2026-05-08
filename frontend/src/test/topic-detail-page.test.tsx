@@ -3,11 +3,14 @@ import { describe, beforeEach, expect, it, vi } from 'vitest';
 import TopicDetailPage from '../pages/TopicDetailPage';
 import type { Message, Relation, Topic, User } from '../types';
 
-const mockApi = {
-  getTopic: vi.fn(),
-  getMessages: vi.fn(),
-  getRelations: vi.fn(),
-};
+const { mockApi, mockNavigate } = vi.hoisted(() => ({
+  mockApi: {
+    getTopic: vi.fn(),
+    getMessages: vi.fn(),
+    getRelations: vi.fn(),
+  },
+  mockNavigate: vi.fn(),
+}));
 
 vi.mock('../api', () => ({ api: mockApi }));
 vi.mock('../context/AuthContext', () => ({
@@ -20,7 +23,7 @@ vi.mock('react-router-dom', async () => {
   return {
     ...actual,
     useParams: () => ({ topicId: 'topic-1' }),
-    useNavigate: () => vi.fn(),
+    useNavigate: () => mockNavigate,
   };
 });
 vi.mock('../components/GraphView', async () => {

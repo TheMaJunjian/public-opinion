@@ -201,7 +201,7 @@ function collectNestedTopicRelationIds(
     visited.add(relationId);
     const relation = relationById.get(relationId);
     if (!relation) continue;
-    const relationType = relation.relationType.toUpperCase();
+    const relationType = relation.relationType;
 
     if (relationId !== rootRelationId && (relationType === 'CLASSIFY' || relationType === 'SUMMARY')) {
       ids.add(relationId);
@@ -2096,11 +2096,15 @@ export default function TopicDetailPage() {
     [topicFocusRelMsgId, msgMap]
   );
   const topicFocusRelType = useMemo(
-    () => topicFocusRelMsg?.relationType === "summary" ? "summary" : "classify",
+    () => {
+      if (topicFocusRelMsg?.relationType === "summary") return "summary";
+      if (topicFocusRelMsg?.relationType === "classify") return "classify";
+      return null;
+    },
     [topicFocusRelMsg]
   );
-  const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : "分类";
-  const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : "退出分类";
+  const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : topicFocusRelType === "classify" ? "分类" : "话题";
+  const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : topicFocusRelType === "classify" ? "退出分类" : "退出话题";
   const topicFocusTitle = useMemo(
     () => topicFocusRelMsg ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`) : "",
     [topicFocusRelMsg, topicFocusTargetCount, topicFocusKindLabel]

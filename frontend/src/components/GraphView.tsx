@@ -1205,15 +1205,15 @@ export default function GraphView(props: GraphViewProps) {
     for (const id of shouldKeepVisible) isTagSource.delete(id);
     return isTagSource;
   }, [edges, msgMap]);
-  // CLASSIFY relation messages are displayed as topic cards on the main canvas (not as SVG frames),
-  // so they participate in the normals layout like regular text messages.
-  const classifyRelMsgIds = useMemo(() => {
+  // CLASSIFY / SUMMARY relation messages are displayed as topic cards on the main canvas
+  // (not as SVG frames), so they participate in the normals layout like regular text messages.
+  const topicRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const m of messages) {
-      if (m.kind === "relation" && m.relationType === "classify") ids.add(m.id);
+      if (m.kind === "relation" && (m.relationType === "classify" || m.relationType === "summary")) ids.add(m.id);
     }
     for (const e of edges) {
-      if (e.relationType === 'classify') ids.add(e.relationMessageId);
+      if (e.relationType === 'classify' || e.relationType === 'summary') ids.add(e.relationMessageId);
     }
     return ids;
   }, [edges, messages]);
@@ -1231,10 +1231,10 @@ export default function GraphView(props: GraphViewProps) {
     return ids;
   }, [edges, msgMap]);
   const relationCardMsgIds = useMemo(() => {
-    const ids = new Set<string>(classifyRelMsgIds);
+    const ids = new Set<string>(topicRelMsgIds);
     supplementTargetRelationCardIds.forEach(id => ids.add(id));
     return ids;
-  }, [classifyRelMsgIds, supplementTargetRelationCardIds]);
+  }, [topicRelMsgIds, supplementTargetRelationCardIds]);
   const normals = useMemo(() => messages.filter(m =>
     (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
     (m.kind === "relation" && relationCardMsgIds.has(m.id))
@@ -1736,7 +1736,7 @@ export default function GraphView(props: GraphViewProps) {
       if (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay' || relTypeKind === 'correction-badge') {
         const fr = groupFrameByRelMsgId.get(relId);
         if (!fr && relTypeKind === 'frame-group') {
-          // CLASSIFY relation messages are rendered as topic cards rather than SVG frames.
+          // CLASSIFY / SUMMARY relation messages are rendered as topic cards rather than SVG frames.
           const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
           if (relCard) return relCard;
         }
@@ -2098,11 +2098,12 @@ export default function GraphView(props: GraphViewProps) {
           // Chained correction sources remain visible so their own correction badge is preserved.
           if (hiddenCorrectedTargetIds.has(msg.id)) return null;
 
-          // CLASSIFY relation messages are shown as topic cards (matching the list-view style).
-          if (msg.kind === "relation" && classifyRelMsgIds.has(msg.id)) {
+          // CLASSIFY / SUMMARY relation messages are shown as topic cards (matching the list-view style).
+          if (msg.kind === "relation" && topicRelMsgIds.has(msg.id)) {
             const relEdgesForMsg = edges.filter(e => e.relationMessageId === msg.id);
             const targetCount = relEdgesForMsg.filter(e => !e.to.messageId.startsWith('anon:')).length;
-            const classifyTitle = getRelationTitle(msg.relationPayload) || `分类话题（${targetCount}）`;
+            const isSummaryTopic = msg.relationType === "summary";
+            const topicTitle = getRelationTitle(msg.relationPayload) || (isSummaryTopic ? `总结（${targetCount}）` : `分类话题（${targetCount}）`);
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             return (
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
@@ -2113,13 +2114,13 @@ export default function GraphView(props: GraphViewProps) {
                   padding:"10px 12px",boxShadow:"0 4px 12px rgba(0,0,0,0.2)",display:"flex",flexDirection:"column",
                   gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:"auto",color:"#111827"}}>
                 <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.8,display:"flex",justifyContent:"space-between"}}>
-                  <span>{`分类话题 ${msg.id}`}</span>
+                  <span>{`${isSummaryTopic ? "总结" : "分类话题"} ${msg.id}`}</span>
                   <span>{"双击进入话题"}</span>
                 </div>
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
                     <div style={{fontWeight:600,color:"#111827",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                      {classifyTitle}
+                      {topicTitle}
                     </div>
                     <span style={{fontSize:11,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"#dcfce7",color:"#15803d",flexShrink:0}}>
                       进行中
@@ -2564,7 +2565,7 @@ export default function GraphView(props: GraphViewProps) {
         const {x,y,width,height}=gf.rect;
         const HH=SUPP_FRAME_PAD;
         const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
-        const title=gf.relType === "classify"
+        const title=(gf.relType === "classify" || gf.relType === "summary")
           ? `话题：${gf.relMsgId}；单击选中，双击进入话题`
           : `${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
         const gfCorrInfo=correctedRelMsgTargets.get(gf.relMsgId);
@@ -2601,7 +2602,7 @@ export default function GraphView(props: GraphViewProps) {
                 </div>
               );
             })()}
-            {gf.relType === "classify" && (
+            {(gf.relType === "classify" || gf.relType === "summary") && (
               <div data-rel-overlay="true"
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
@@ -2625,12 +2626,13 @@ export default function GraphView(props: GraphViewProps) {
                 }}>
                 {(() => {
                   const relMsg = msgMap.get(gf.relMsgId);
+                  const isSummaryTopic = gf.relType === "summary";
                   const targetTextIds = Array.from(new Set(
                     (edgesByRelMsg.get(gf.relMsgId) ?? [])
                       .filter(ed => msgMap.get(ed.to.messageId)?.kind === "normal")
                       .map(ed => ed.to.messageId)
                   ));
-                  const topicTitle = getRelationTitle(relMsg?.relationPayload) || `分类话题（${targetTextIds.length}）`;
+                  const topicTitle = getRelationTitle(relMsg?.relationPayload) || (isSummaryTopic ? `总结（${targetTextIds.length}）` : `分类话题（${targetTextIds.length}）`);
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>

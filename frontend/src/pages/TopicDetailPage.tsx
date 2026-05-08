@@ -688,7 +688,7 @@ export default function TopicDetailPage() {
       edgesByRel.set(e.relationMessageId, arr);
     }
     for (const [relMsgId, relEdges] of edgesByRel) {
-      if (relEdges[0]?.relationType === 'classify') continue;
+      if (relEdges[0]?.relationType === 'classify' || relEdges[0]?.relationType === 'summary') continue;
       if (classifiedOwnership.relationIds.has(relMsgId)) continue;
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])

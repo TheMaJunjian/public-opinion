@@ -1585,7 +1585,6 @@ export default function TopicDetailPage() {
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
   const isClassifyType = relationType === "classify";
-  const isCorrectType = relationType === "correct";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
@@ -2288,7 +2287,7 @@ export default function TopicDetailPage() {
               <input style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }} placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签" : "关系标签"} value={relationLabel} onChange={e => setRelationLabel(e.target.value)} />
               {(() => {
                 const textAreaDisabled =
-                  (draftHasRelationTarget && isCorrectType)
+                  (draftHasRelationTarget && relationType === "correct")
                   || isTagWithQuickAnnotate;
                 return (
                   <textarea

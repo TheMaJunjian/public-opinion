@@ -74,12 +74,20 @@ const createRelationSchema = z.object({
       path: ['payload', 'title'],
     });
   }
+  if (data.relationType === 'SUMMARY' && !data.payload?.title) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '总结关系需要提供总结内容标题',
+      path: ['payload', 'title'],
+    });
+  }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
-const CLASSIFY_CROSS_LINK_ERROR = '分类目标与其他消息存在非引用关联，无法建立分类关系';
-const MERGE_CROSS_LINK_ERROR = '归并目标与其他消息存在非引用关联，无法建立归并关系';
+const CLASSIFY_CROSS_LINK_ERROR = '分类目标与已分类消息存在非引用关联，无法建立分类关系';
+const MERGE_CROSS_LINK_ERROR = '归并目标与已分类消息存在非引用关联，无法建立归并关系';
+const SUMMARY_CROSS_LINK_ERROR = '总结目标与已分类消息存在非引用关联，无法建立总结关系';
 
 function extractTextTargetIds(targetRefs: unknown): string[] {
   if (!Array.isArray(targetRefs)) return [];
@@ -117,7 +125,7 @@ function collectSelectedGroupTargetTextIds(params: {
   const relationById = new Map(
     params.targetRelations.map(rel => [rel.id, rel] as const)
   );
-  const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT']);
+  const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
   const queue = params.targetRelations
     .filter(rel => expandableRelationTypes.has(rel.relationType ?? ''))
     .map(rel => rel.id);
@@ -228,13 +236,17 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // CLASSIFY and MERGE are user-to-message relations: no source text message.
+    // CLASSIFY, MERGE, and SUMMARY are user-to-message relations: no source text message.
     if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
       res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
       return;
     }
     if (data.relationType === 'MERGE' && data.sourceMessageId) {
       res.status(400).json({ error: '归并关系不应提供来源消息 ID' });
+      return;
+    }
+    if (data.relationType === 'SUMMARY' && data.sourceMessageId) {
+      res.status(400).json({ error: '总结关系不应提供来源消息 ID' });
       return;
     }
     // sourceMessageId can reference ANY message in this topic (TEXT or RELATION kind),
@@ -297,7 +309,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       // treat SUPPLEMENT/MERGE/CLASSIFY target relations as their owned text targets.
       const relationById = new Map<string, { id: string; relationType: string | null; targetRefs: unknown }>();
       directTargetRelations.forEach(rel => relationById.set(rel.id, rel));
-      const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT']);
+      const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
       const queued = new Set<string>();
       const queue: string[] = [];
       const enqueue = (id: string) => {
@@ -328,8 +340,20 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       foundTargetRelations = [...relationById.values()];
     }
 
-    // CLASSIFY targets cannot have non-reference cross-message links with non-target text messages.
-    if (data.relationType === 'CLASSIFY' || data.relationType === 'MERGE') {
+    // SUMMARY targets must be text messages, SUPPLEMENT, MERGE, or CLASSIFY relation messages.
+    if (data.relationType === 'SUMMARY' && foundTargetRelations.length > 0) {
+      const allowedSummaryTargetRelTypes = new Set(['SUPPLEMENT', 'MERGE', 'CLASSIFY']);
+      for (const rel of foundTargetRelations.filter(r => targetRelationIds.includes(r.id))) {
+        if (!allowedSummaryTargetRelTypes.has(rel.relationType ?? '')) {
+          res.status(400).json({ error: '总结关系的目标关系消息只能是补充、归并或分类关系消息' });
+          return;
+        }
+      }
+    }
+
+    // CLASSIFY, MERGE, and SUMMARY targets cannot have non-reference cross-links with
+    // text messages that are already owned by an existing CLASSIFY or SUMMARY relation.
+    if (data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'SUMMARY') {
       const groupedTargetTextIds = collectSelectedGroupTargetTextIds({
         targetTextIds: [...new Set(
           data.targetRefs
@@ -346,6 +370,33 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
           where: { topicId, kind: 'RELATION' },
           select: { id: true, relationType: true, relSourceId: true, targetRefs: true },
         });
+
+        // Build the set of text message IDs already owned by existing CLASSIFY/SUMMARY relations.
+        // These are the "already classified" messages that make cross-links forbidden.
+        // A single BFS processes all CLASSIFY/SUMMARY relations together to avoid redundant traversals.
+        const allRelById = new Map(relationMessages.map(r => [r.id, r]));
+        const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
+        const alreadyClassifiedTextIds = new Set<string>();
+        const bfsQueue: string[] = [];
+        const bfsVisited = new Set<string>();
+        for (const rel of relationMessages) {
+          if ((rel.relationType === 'CLASSIFY' || rel.relationType === 'SUMMARY') && !bfsVisited.has(rel.id)) {
+            bfsQueue.push(rel.id);
+          }
+        }
+        while (bfsQueue.length > 0) {
+          const bfsId = bfsQueue.shift()!;
+          if (bfsVisited.has(bfsId)) continue;
+          bfsVisited.add(bfsId);
+          const bfsRel = allRelById.get(bfsId);
+          if (!bfsRel) continue;
+          extractTextTargetIds(bfsRel.targetRefs).forEach(id => alreadyClassifiedTextIds.add(id));
+          if (!expandableTypes.has(bfsRel.relationType ?? '')) continue;
+          for (const nestedId of extractNestedRelationIds(bfsRel.targetRefs)) {
+            if (!bfsVisited.has(nestedId)) bfsQueue.push(nestedId);
+          }
+        }
+
         const sourceIds = [...new Set(
           relationMessages
             .map(m => m.relSourceId)
@@ -358,6 +409,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
             })
           : [];
         const sourceTextIdSet = new Set(sourceTextRows.map(row => row.id));
+
+        const crossLinkError =
+          data.relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR
+          : data.relationType === 'MERGE' ? MERGE_CROSS_LINK_ERROR
+          : SUMMARY_CROSS_LINK_ERROR;
 
         for (const relMsg of relationMessages) {
           if (relMsg.relationType === 'REFERENCE') continue;
@@ -380,16 +436,13 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
             (sourceTextId !== null && selectedTargetTextIdSet.has(sourceTextId)) ||
             targetTextIds.some(id => selectedTargetTextIdSet.has(id));
           if (!hasSelectedEndpoint) continue;
-          if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId)) {
-            res.status(400).json({
-              error: data.relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR : MERGE_CROSS_LINK_ERROR,
-            });
+          // Only block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY.
+          if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId) && alreadyClassifiedTextIds.has(sourceTextId)) {
+            res.status(400).json({ error: crossLinkError });
             return;
           }
-          if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id))) {
-            res.status(400).json({
-              error: data.relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR : MERGE_CROSS_LINK_ERROR,
-            });
+          if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id) && alreadyClassifiedTextIds.has(id))) {
+            res.status(400).json({ error: crossLinkError });
             return;
           }
         }
@@ -397,7 +450,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     const relationPayload =
-      data.relationType === 'MERGE' && !data.payload?.targetLayout
+      (data.relationType === 'MERGE' || data.relationType === 'SUMMARY') && !data.payload?.targetLayout
         ? { ...data.payload, targetLayout: 'multi-column' as const }
         : data.payload;
 

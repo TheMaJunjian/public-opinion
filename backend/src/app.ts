@@ -17,9 +17,13 @@ app.use(cors());
 app.use(express.json());
 
 // Rate limiters
+// Rate limiters — higher limits in test environments to avoid interference
+const writeLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 60;
+const authLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 20;
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,
+  max: authLimiterMax,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: '请求过于频繁，请稍后再试' },
@@ -28,7 +32,7 @@ const authLimiter = rateLimit({
 // 写操作限流（仅限 POST / PATCH / DELETE）
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 60,
+  max: writeLimiterMax,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: '请求过于频繁，请稍后再试' },

@@ -408,6 +408,8 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
     });
+    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
     expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
   });
 });

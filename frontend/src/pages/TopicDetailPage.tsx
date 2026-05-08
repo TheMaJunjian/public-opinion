@@ -184,6 +184,8 @@ function collectOwnedByRelation(
   return { textIds, relationIds };
 }
 
+const TOPIC_EXPANDABLE_RELATION_TYPES = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
+
 function collectNestedTopicRelationIds(
   rootRelationId: string,
   relationById: Map<string, Relation>
@@ -191,10 +193,10 @@ function collectNestedTopicRelationIds(
   const ids = new Set<string>();
   const visited = new Set<string>();
   const queue = [rootRelationId];
-  const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
 
   while (queue.length > 0) {
-    const relationId = queue.shift()!;
+    const relationId = queue.shift();
+    if (!relationId) continue;
     if (visited.has(relationId)) continue;
     visited.add(relationId);
     const relation = relationById.get(relationId);
@@ -204,7 +206,7 @@ function collectNestedTopicRelationIds(
     if (relationId !== rootRelationId && (relationType === 'CLASSIFY' || relationType === 'SUMMARY')) {
       ids.add(relationId);
     }
-    if (!expandableTypes.has(relationType)) continue;
+    if (!TOPIC_EXPANDABLE_RELATION_TYPES.has(relationType)) continue;
     for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
       if (!visited.has(childRelationId)) queue.push(childRelationId);
     }

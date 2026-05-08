@@ -1184,7 +1184,7 @@ export default function TopicDetailPage() {
 
     // Scenario: source collection + target collection explicitly committed (no draft candidates).
     // Build the relation directly without creating a new text message.
-    if (relationType !== "classify" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
+    if (relationType !== "classify" && relationType !== "merge" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
       const labelDefault = relationTypeName(relationType);
       const label = relationLabel.trim() || labelDefault;
       await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
@@ -1485,6 +1485,56 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // MERGE relation: user-to-message relation with no source message.
+    // Targets must be whole text messages; relation-message targets are not allowed.
+    if (relationType === "merge") {
+      const mergeTargetIds = Array.from(new Set(
+        foldUpToWhole(effectiveTargets)
+          .map(u => u.messageId)
+          .filter(mid => msgMap.get(mid)?.kind === "normal")
+      ));
+      if (mergeTargetIds.length === 0) {
+        alert("归并关系至少需要一个普通消息作为目标");
+        return;
+      }
+      const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === "relation");
+      if (hasRelationTarget) {
+        alert("归并关系仅支持普通消息目标，不能包含关系消息");
+        return;
+      }
+      const targetRefs = mergeTargetIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
+      try {
+        const backendRel = await api.createRelation(topicId!, { relationType: 'MERGE', sourceMessageId: null, targetRefs });
+        const relId = backendRel.id;
+        const relMsg: DemoMessage = {
+          id: relId,
+          author: backendRel.createdBy.username,
+          createdAt: backendRel.createdAt,
+          kind: "relation",
+          relationType: "merge",
+          content: `建立归并关系（无来源消息）\n目标：${mergeTargetIds.join(",")}`,
+        };
+        setMessages(prev => [...prev, relMsg]);
+        const virtualFrameNodeId = `anon:${backendRel.id}`;
+        const newEdges = mergeTargetIds.map(targetMid => ({
+          id: nextId("edge"),
+          relationMessageId: relId,
+          relationType: "merge" as RelationType,
+          from: { messageId: virtualFrameNodeId, selection: { kind: "whole" as const } },
+          to: { messageId: targetMid, selection: { kind: "whole" as const } },
+          relationLabel: relationTypeName("merge"),
+        }));
+        setEdges(prev => [...prev, ...newEdges]);
+      } catch (e: any) {
+        alert(`建立归并关系失败: ${e?.message ?? e}`);
+        return;
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
     if (text.length === 0) return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
@@ -1594,6 +1644,7 @@ export default function TopicDetailPage() {
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isSupplementType = relationType === "supplement";
   const isClassifyType = relationType === "classify";
+  const isMergeType = relationType === "merge";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
@@ -1623,6 +1674,7 @@ export default function TopicDetailPage() {
     }
     const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     if (isClassifyType) return newMessageContent.trim().length > 0;
+    if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
     if (isAgreeDisagreeType || isSupplementType || isTagWithQuickAnnotate) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
@@ -1649,6 +1701,12 @@ export default function TopicDetailPage() {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
       if (targetCount === 0) return "建立分类话题（无目标）";
       return `建立分类话题（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
+    }
+    if (isMergeType) {
+      if (sourceUnits.length > 0) return "归并关系不需要来源消息，请清空来源集合";
+      if (!hasTargetsAvailable) return "请在画布中选择要归并的目标消息";
+      if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
+      return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
     if (isAgreeDisagreeType || isSupplementType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
@@ -2346,11 +2404,12 @@ export default function TopicDetailPage() {
               {(() => {
                 const textAreaDisabled =
                   (draftHasRelationTarget && relationType === "correct")
-                  || isTagWithQuickAnnotate;
+                  || isTagWithQuickAnnotate
+                  || isMergeType;
                 return (
                   <textarea
                     style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : "更正关系目标为关系消息时，此处不应有内容") : "输入一条新普通消息（支持自由换行）"}
+                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容") : "输入一条新普通消息（支持自由换行）"}
                     value={newMessageContent}
                     readOnly={textAreaDisabled}
                     onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}

@@ -2105,10 +2105,9 @@ export default function TopicDetailPage() {
   );
   const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : topicFocusRelType === "classify" ? "分类" : "话题";
   const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : topicFocusRelType === "classify" ? "退出分类" : "退出话题";
-  const topicFocusTitle = useMemo(
-    () => topicFocusRelMsg ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`) : "",
-    [topicFocusRelMsg, topicFocusTargetCount, topicFocusKindLabel]
-  );
+  const topicFocusTitle = topicFocusRelMsg
+    ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`)
+    : "";
   // Messages and edges to pass to the canvas views, with classified text messages (and their
   // exclusively-classified related relation messages) hidden when not in topic-focus mode.
   // CLASSIFY relations that are targeted by another CLASSIFY relation are hidden on the main

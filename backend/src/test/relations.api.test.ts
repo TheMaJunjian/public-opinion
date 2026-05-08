@@ -187,6 +187,14 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
+  it('allows CLASSIFY with empty targetRefs', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'CLASSIFY', classifyTitle: '空话题', targetRefs: [] });
+    expect(res.status).toBe(201);
+  });
+
   it('rejects CLASSIFY with sourceMessageId', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
@@ -196,14 +204,13 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('分类关系');
   });
 
-  it('rejects CLASSIFY with relation message targets', async () => {
+  it('allows CLASSIFY with relation message targets', async () => {
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', classifyTitle: '测试话题', targetRefs: [{ kind: 'relation', relationId: 'rel-1' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('文本消息');
+    expect(res.status).toBe(201);
   });
 });
 

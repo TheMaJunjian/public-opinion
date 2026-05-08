@@ -34,6 +34,7 @@ export type DemoMessage = {
   createdAt: string;
   content: string;
   kind: MessageKind;
+  relationType?: RelationType;
 };
 
 export type DemoEdge = {
@@ -129,6 +130,7 @@ export function convertMessagesToDemoModel(
         createdAt: rel.createdAt,
         content,
         kind: "relation",
+        relationType: relType,
       });
     }
 

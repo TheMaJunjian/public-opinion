@@ -571,6 +571,7 @@ export default function TopicDetailPage() {
   const classifiedMergeTargetTextIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
+      if (e.relationType !== 'merge') continue;
       if (!classifiedTargetMergeRelMsgIds.has(e.relationMessageId)) continue;
       if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
       if (msgMap.get(e.from.messageId)?.kind === "normal") ids.add(e.from.messageId);
@@ -914,6 +915,17 @@ export default function TopicDetailPage() {
     ));
   }
 
+  /** Collect all normal text message IDs that are endpoints of a given MERGE relation's edges. */
+  function getMergeRelationTextTargetIds(relMsgId: string): string[] {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationMessageId !== relMsgId) continue;
+      if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
+      if (msgMap.get(e.from.messageId)?.kind === "normal") ids.add(e.from.messageId);
+    }
+    return [...ids];
+  }
+
   function getNestedClassifyTargetTextIds(relMsgId: string, visited = new Set<string>()): string[] {
     if (visited.has(relMsgId)) return [];
     visited.add(relMsgId);
@@ -940,10 +952,7 @@ export default function TopicDetailPage() {
       if (relType === "classify") {
         getNestedClassifyTargetTextIds(unit.messageId).forEach(id => ids.add(id));
       } else if (relType === "merge") {
-        for (const e of edges) {
-          if (e.relationMessageId !== unit.messageId) continue;
-          if (msgMap.get(e.to.messageId)?.kind === "normal") ids.add(e.to.messageId);
-        }
+        getMergeRelationTextTargetIds(unit.messageId).forEach(id => ids.add(id));
       }
     }
     return [...ids];

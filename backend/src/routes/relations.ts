@@ -172,11 +172,6 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       res.status(400).json({ error: '归并关系不应提供来源消息 ID' });
       return;
     }
-    if (data.relationType === 'MERGE' && data.targetRefs.some(r => r.kind === 'relation')) {
-      res.status(400).json({ error: '归并关系目标必须是文本消息' });
-      return;
-    }
-
     // sourceMessageId can reference ANY message in this topic (TEXT or RELATION kind),
     // because relation messages are also messages — a single unified table lookup suffices.
     if (data.sourceMessageId) {

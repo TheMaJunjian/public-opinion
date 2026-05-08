@@ -1720,6 +1720,10 @@ export default function TopicDetailPage() {
     () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,
     [topicFocusRelMsgId, msgMap]
   );
+  const topicFocusTitle = useMemo(
+    () => topicFocusRelMsg ? extractClassifyTopicTitle(topicFocusRelMsg.content, topicFocusTargetCount) : "",
+    [topicFocusRelMsg, topicFocusTargetCount]
+  );
   // Messages and edges to pass to the canvas views, with classified text messages (and their
   // exclusively-classified related relation messages) hidden when not in topic-focus mode.
   // The CLASSIFY relation messages themselves remain visible as topic cards on the main canvas.
@@ -1737,7 +1741,6 @@ export default function TopicDetailPage() {
     // connected to classified text messages (they "belong" to the topic view).
     const filteredMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
-      if (m.kind === "relation" && relationTypeByRelMsgId.get(m.id) === "classify") return false;
       if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
       if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
       return true;
@@ -1930,7 +1933,6 @@ export default function TopicDetailPage() {
     <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontWeight: 600 }}>分类关系视图</span>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
               {topic?.status === 'ARCHIVED' ? '重新开放' : '归档'}
@@ -1967,7 +1969,9 @@ export default function TopicDetailPage() {
               <div style={{ border: "1px solid #4b5f7a", borderRadius: 10, padding: "8px 10px", background: "#ffffff", color: "#111827", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                    <div style={{ fontWeight: 600 }}>分类话题</div>
+                    <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {topicFocusTitle || "分类话题"}
+                    </div>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d", flexShrink: 0 }}>
                       进行中
                     </span>

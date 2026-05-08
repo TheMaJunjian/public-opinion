@@ -56,14 +56,11 @@ const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pai
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
-const MERGE_CANVAS_HEADER_H = 54;
-const MERGE_CANVAS_HEADER_TOP_GAP = 18;
-const MERGE_CANVAS_HEADER_MIN_W = 200;
-const MERGE_CANVAS_HEADER_MAX_W = 300;
+const MERGE_CANVAS_LABEL_H = 24;
+const MERGE_CANVAS_LABEL_W = 56;
+const MERGE_CANVAS_LABEL_LEFT_OFFSET = 10;
+const MERGE_CANVAS_LABEL_TOP_OFFSET = 8;
 const MERGE_CANVAS_STACK_GAP = ROW_GAP;
-const MERGE_CANVAS_HEADER_WIDTH_BUFFER = 24;
-const MERGE_CANVAS_HEADER_LEFT_OFFSET = 6;
-const MERGE_CANVAS_MIN_WIDTH_PADDING = 12;
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -368,12 +365,11 @@ export function buildMergeCanvasReservations(params: {
       width: contentUnion.width + SUPP_FRAME_PAD * 2,
       height: contentUnion.height + SUPP_FRAME_PAD * 2,
     };
-    const headerWidth = Math.min(MERGE_CANVAS_HEADER_MAX_W, Math.max(MERGE_CANVAS_HEADER_MIN_W, contentRect.width - MERGE_CANVAS_HEADER_WIDTH_BUFFER));
     const headerRect = {
-      x: contentRect.x + MERGE_CANVAS_HEADER_LEFT_OFFSET,
-      y: contentRect.y - MERGE_CANVAS_HEADER_TOP_GAP - MERGE_CANVAS_HEADER_H,
-      width: headerWidth,
-      height: MERGE_CANVAS_HEADER_H,
+      x: contentRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
+      y: contentRect.y - MERGE_CANVAS_LABEL_TOP_OFFSET,
+      width: MERGE_CANVAS_LABEL_W,
+      height: MERGE_CANVAS_LABEL_H,
     };
     reservations.push({
       relMsgId,
@@ -382,7 +378,7 @@ export function buildMergeCanvasReservations(params: {
       rect: {
         x: contentRect.x,
         y: headerRect.y,
-        width: Math.max(contentRect.width, headerWidth + MERGE_CANVAS_MIN_WIDTH_PADDING),
+        width: contentRect.width,
         height: contentRect.y + contentRect.height - headerRect.y,
       },
       cardIds,
@@ -1850,22 +1846,6 @@ export default function GraphView(props: GraphViewProps) {
   return (
     <div ref={canvasRef} style={{position:"relative",width:canvasWidth,height:canvasHeight}}
       onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
-      <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:1,pointerEvents:"none"}}>
-        {mergeCanvasReservations.map(mc => (
-          <div key={`merge-canvas-bg-${mc.relMsgId}`} style={{
-            position:"absolute",
-            left:mc.contentRect.x,
-            top:mc.contentRect.y,
-            width:mc.contentRect.width,
-            height:mc.contentRect.height,
-            borderRadius:12,
-            border:"1px solid rgba(148,163,184,0.45)",
-            background:"rgba(255,255,255,0.72)",
-            boxShadow:"0 10px 24px rgba(15,23,42,0.14)",
-            backdropFilter:"blur(2px)"
-          }}/>
-        ))}
-      </div>
       <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
@@ -2000,10 +1980,6 @@ export default function GraphView(props: GraphViewProps) {
       </div>
       <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:4,pointerEvents:"none"}}>
         {mergeCanvasReservations.map(mc => {
-          const relMsg = msgMap.get(mc.relMsgId);
-          const relEdges = edgesByRelMsg.get(mc.relMsgId) ?? [];
-          const targetMsgCount = Array.from(new Set(relEdges.filter(edge => msgMap.get(edge.to.messageId)?.kind === "normal").map(edge => edge.to.messageId))).length;
-          const targetRelationCount = Array.from(new Set(relEdges.filter(edge => msgMap.get(edge.to.messageId)?.kind === "relation").map(edge => edge.to.messageId))).length;
           const title = `归并关系：${mc.relMsgId}；单击选中，双击展开详情`;
           const handleClick = (e: React.MouseEvent) => { e.stopPropagation(); (onGroupFrameClick ?? onMessageClick)(e, mc.relMsgId); };
           const handleDoubleClick = (e: React.MouseEvent) => { e.stopPropagation(); (onGroupFrameDoubleClick ?? onMessageDoubleClick)(e, mc.relMsgId); };
@@ -2018,29 +1994,20 @@ export default function GraphView(props: GraphViewProps) {
                 left:mc.headerRect.x,
                 top:mc.headerRect.y,
                 width:mc.headerRect.width,
-                minHeight:mc.headerRect.height,
-                borderRadius:12,
-                border:"1px solid #dbe4ee",
-                background:"#ffffff",
-                color:"#111827",
-                boxShadow:"0 12px 28px rgba(15,23,42,0.2)",
-                padding:"8px 12px",
+                height:mc.headerRect.height,
+                borderRadius:999,
+                border:"1px solid rgba(100,116,139,0.35)",
+                background:"rgba(255,255,255,0.95)",
+                color:"#475569",
+                boxShadow:"0 6px 14px rgba(15,23,42,0.16)",
                 cursor:"pointer",
                 pointerEvents:"auto",
                 userSelect:"none",
                 display:"flex",
-                flexDirection:"column",
-                gap:4
+                alignItems:"center",
+                justifyContent:"center"
               }}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
-                <span style={{fontSize:12,fontWeight:700,color:"#111827",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>归并画布</span>
-                <span style={{fontSize:10,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"#e0f2fe",color:"#0369a1",flexShrink:0}}>MERGE</span>
-              </div>
-              <div style={{fontSize:11,color:"#475569",display:"flex",gap:10,flexWrap:"wrap"}}>
-                <span>由 {relMsg?.author ?? "系统"} 发起</span>
-                <span>文本 {targetMsgCount}</span>
-                <span>关系 {targetRelationCount}</span>
-              </div>
+              <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em"}}>归并</span>
             </div>
           );
         })}

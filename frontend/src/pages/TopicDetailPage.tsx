@@ -886,6 +886,34 @@ export default function TopicDetailPage() {
     ));
   }
 
+  function getNestedClassifyTargetTextIds(relMsgId: string, visited = new Set<string>()): string[] {
+    if (visited.has(relMsgId)) return [];
+    visited.add(relMsgId);
+    const ids = new Set<string>();
+    for (const edge of edges) {
+      if (edge.relationMessageId !== relMsgId) continue;
+      const targetMsg = msgMap.get(edge.to.messageId);
+      if (targetMsg?.kind === "normal") {
+        ids.add(edge.to.messageId);
+        continue;
+      }
+      if (targetMsg?.kind === "relation" && relationTypeByRelMsgId.get(edge.to.messageId) === "classify") {
+        getNestedClassifyTargetTextIds(edge.to.messageId, visited).forEach(id => ids.add(id));
+      }
+    }
+    return [...ids];
+  }
+
+  function getGroupedTargetTextMessageIds(units: UnitSelection[]): string[] {
+    const ids = new Set(getClassifyTargetTextMessageIds(units));
+    for (const unit of foldUpToWhole(units)) {
+      if (msgMap.get(unit.messageId)?.kind !== "relation") continue;
+      if (relationTypeByRelMsgId.get(unit.messageId) !== "classify") continue;
+      getNestedClassifyTargetTextIds(unit.messageId).forEach(id => ids.add(id));
+    }
+    return [...ids];
+  }
+
   function getClassifyTargetRefs(units: UnitSelection[]): TargetRef[] {
     const res: TargetRef[] = [];
     const seen = new Set<string>();
@@ -1421,7 +1449,7 @@ export default function TopicDetailPage() {
     // CLASSIFY relation: user-to-message relation with no source message.
     // Targets can be text messages and/or classify relation messages, and can be empty.
     if (relationType === "classify") {
-      const targetTextIds = getClassifyTargetTextMessageIds(effectiveTargets);
+      const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
         alert("分类目标与其他消息存在非引用关联，无法建立分类关系");
         return;
@@ -1488,6 +1516,11 @@ export default function TopicDetailPage() {
     // MERGE relation: user-to-message relation with no source message.
     // Targets may be text messages or relation messages; fragments are folded up to whole targets.
     if (relationType === "merge") {
+      const mergeTargetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
+      if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
+        alert("归并目标与其他消息存在非引用关联，无法建立归并关系");
+        return;
+      }
       const mergeTargetRefs = Array.from(new Map(
         foldUpToWhole(effectiveTargets).map(u => {
           const ref = unitSelectionToTargetRef(u, msgMap);

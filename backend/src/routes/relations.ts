@@ -72,6 +72,63 @@ const createRelationSchema = z.object({
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
 const CLASSIFY_CROSS_LINK_ERROR = '分类目标与其他消息存在非引用关联，无法建立分类关系';
+const MERGE_CROSS_LINK_ERROR = '归并目标与其他消息存在非引用关联，无法建立归并关系';
+
+function extractTextTargetIds(targetRefs: unknown): string[] {
+  if (!Array.isArray(targetRefs)) return [];
+  return [...new Set(
+    targetRefs
+      .filter((ref): ref is { kind: 'message' | 'text-fragment'; messageId: string } =>
+        !!ref &&
+        typeof ref === 'object' &&
+        ((ref as { kind?: unknown }).kind === 'message' || (ref as { kind?: unknown }).kind === 'text-fragment') &&
+        typeof (ref as { messageId?: unknown }).messageId === 'string'
+      )
+      .map(ref => ref.messageId)
+  )];
+}
+
+function extractNestedClassifyRelationIds(targetRefs: unknown): string[] {
+  if (!Array.isArray(targetRefs)) return [];
+  return [...new Set(
+    targetRefs
+      .filter((ref): ref is { kind: 'relation'; relationId: string } =>
+        !!ref &&
+        typeof ref === 'object' &&
+        (ref as { kind?: unknown }).kind === 'relation' &&
+        typeof (ref as { relationId?: unknown }).relationId === 'string'
+      )
+      .map(ref => ref.relationId)
+  )];
+}
+
+function collectSelectedGroupTargetTextIds(params: {
+  targetTextIds: string[];
+  targetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }>;
+}): string[] {
+  const selectedTextIds = new Set(params.targetTextIds);
+  const classifyRelations = new Map(
+    params.targetRelations
+      .filter(rel => rel.relationType === 'CLASSIFY')
+      .map(rel => [rel.id, rel] as const)
+  );
+  const queue = Array.from(classifyRelations.keys());
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const relId = queue.shift()!;
+    if (visited.has(relId)) continue;
+    visited.add(relId);
+    const rel = classifyRelations.get(relId);
+    if (!rel) continue;
+    extractTextTargetIds(rel.targetRefs).forEach(id => selectedTextIds.add(id));
+    for (const nestedRelId of extractNestedClassifyRelationIds(rel.targetRefs)) {
+      if (!visited.has(nestedRelId) && classifyRelations.has(nestedRelId)) queue.push(nestedRelId);
+    }
+  }
+
+  return [...selectedTextIds];
+}
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -216,32 +273,36 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     // Validate target relation messages exist in this topic (kind=RELATION)
+    let foundTargetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }> = [];
     if (targetRelationIds.length > 0) {
       const uniqueRelationIds = [...new Set(targetRelationIds)];
-      const foundRelations = await prisma.message.findMany({
+      foundTargetRelations = await prisma.message.findMany({
         where: { id: { in: uniqueRelationIds }, topicId, kind: 'RELATION' },
-        select: { id: true },
+        select: { id: true, relationType: true, targetRefs: true },
       });
-      if (foundRelations.length !== uniqueRelationIds.length) {
+      if (foundTargetRelations.length !== uniqueRelationIds.length) {
         res.status(404).json({ error: '部分目标关系消息不存在或不属于该话题' });
         return;
       }
     }
 
     // CLASSIFY targets cannot have non-reference cross-message links with non-target text messages.
-    if (data.relationType === 'CLASSIFY') {
-      const classifyTargetTextIds = [...new Set(
-        data.targetRefs
-          .filter((r): r is Extract<typeof data.targetRefs[number], { kind: 'message' | 'text-fragment' }> =>
-            r.kind === 'message' || r.kind === 'text-fragment'
-          )
-          .map(r => r.messageId)
-      )];
-      if (classifyTargetTextIds.length > 0) {
-        const selectedTargetTextIdSet = new Set(classifyTargetTextIds);
+    if (data.relationType === 'CLASSIFY' || data.relationType === 'MERGE') {
+      const groupedTargetTextIds = collectSelectedGroupTargetTextIds({
+        targetTextIds: [...new Set(
+          data.targetRefs
+            .filter((r): r is Extract<typeof data.targetRefs[number], { kind: 'message' | 'text-fragment' }> =>
+              r.kind === 'message' || r.kind === 'text-fragment'
+            )
+            .map(r => r.messageId)
+        )],
+        targetRelations: foundTargetRelations,
+      });
+      if (groupedTargetTextIds.length > 0) {
+        const selectedTargetTextIdSet = new Set(groupedTargetTextIds);
         const relationMessages = await prisma.message.findMany({
           where: { topicId, kind: 'RELATION' },
-          select: { relationType: true, relSourceId: true, targetRefs: true },
+          select: { id: true, relationType: true, relSourceId: true, targetRefs: true },
         });
         const sourceIds = [...new Set(
           relationMessages
@@ -278,11 +339,15 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
             targetTextIds.some(id => selectedTargetTextIdSet.has(id));
           if (!hasSelectedEndpoint) continue;
           if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId)) {
-            res.status(400).json({ error: CLASSIFY_CROSS_LINK_ERROR });
+            res.status(400).json({
+              error: data.relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR : MERGE_CROSS_LINK_ERROR,
+            });
             return;
           }
           if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id))) {
-            res.status(400).json({ error: CLASSIFY_CROSS_LINK_ERROR });
+            res.status(400).json({
+              error: data.relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR : MERGE_CROSS_LINK_ERROR,
+            });
             return;
           }
         }

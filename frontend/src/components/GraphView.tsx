@@ -445,7 +445,7 @@ export function applyMergeCanvasReservations(params: {
 
   const finalReservationRects: Rect[] = [];
   for (const reservation of params.reservations) {
-    // Compact MERGE targets inside each original column while preserving per-column order
+    // Compact reservation targets inside each original column while preserving per-column order
     // and avoiding overlaps with non-target cards in that column.
     for (const ids of byCol.values()) {
       sortIdsByY(ids);
@@ -457,7 +457,7 @@ export function applyMergeCanvasReservations(params: {
           cursor = Math.max(cursor, box.y + box.height + ROW_GAP);
           continue;
         }
-        // Compact upward only: never push a merge target further down during compaction.
+        // Compact upward only: never push a reserved target further down during compaction.
         const nextY = box.y > cursor ? cursor : box.y;
         nextLayout[id] = { ...box, y: nextY };
         cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;

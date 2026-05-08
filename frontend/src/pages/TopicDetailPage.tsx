@@ -1486,25 +1486,21 @@ export default function TopicDetailPage() {
     }
 
     // MERGE relation: user-to-message relation with no source message.
-    // Targets must be whole text messages; relation-message targets are not allowed.
+    // Targets may be text messages or relation messages; fragments are folded up to whole targets.
     if (relationType === "merge") {
-      const mergeTargetIds = Array.from(new Set(
-        foldUpToWhole(effectiveTargets)
-          .map(u => u.messageId)
-          .filter(mid => msgMap.get(mid)?.kind === "normal")
-      ));
-      if (mergeTargetIds.length === 0) {
-        alert("归并关系至少需要一个普通消息作为目标");
+      const mergeTargetRefs = Array.from(new Map(
+        foldUpToWhole(effectiveTargets).map(u => {
+          const ref = unitSelectionToTargetRef(u, msgMap);
+          return [targetRefDisplayId(ref), ref] as const;
+        })
+      ).values());
+      if (mergeTargetRefs.length === 0) {
+        alert("归并关系至少需要一个文本消息或关系消息作为目标");
         return;
       }
-      const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === "relation");
-      if (hasRelationTarget) {
-        alert("归并关系仅支持普通消息目标，不能包含关系消息");
-        return;
-      }
-      const targetRefs = mergeTargetIds.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
+      const mergeTargetDisplayIds = mergeTargetRefs.map(targetRefDisplayId);
       try {
-        const backendRel = await api.createRelation(topicId!, { relationType: 'MERGE', sourceMessageId: null, targetRefs });
+        const backendRel = await api.createRelation(topicId!, { relationType: 'MERGE', sourceMessageId: null, targetRefs: mergeTargetRefs });
         const relId = backendRel.id;
         const relMsg: DemoMessage = {
           id: relId,
@@ -1512,16 +1508,18 @@ export default function TopicDetailPage() {
           createdAt: backendRel.createdAt,
           kind: "relation",
           relationType: "merge",
-          content: `建立归并关系（无来源消息）\n目标：${mergeTargetIds.join(",")}`,
+          content: `建立归并关系（无来源消息）\n目标：${mergeTargetDisplayIds.join(",")}`,
         };
         setMessages(prev => [...prev, relMsg]);
         const virtualFrameNodeId = `anon:${backendRel.id}`;
-        const newEdges = mergeTargetIds.map(targetMid => ({
+        const newEdges = mergeTargetRefs.map(targetRef => ({
           id: nextId("edge"),
           relationMessageId: relId,
           relationType: "merge" as RelationType,
           from: { messageId: virtualFrameNodeId, selection: { kind: "whole" as const } },
-          to: { messageId: targetMid, selection: { kind: "whole" as const } },
+          to: targetRef.kind === "relation"
+            ? { messageId: targetRef.relationId, selection: { kind: "whole" as const } }
+            : { messageId: targetRef.messageId, selection: { kind: "whole" as const } },
           relationLabel: relationTypeName("merge"),
         }));
         setEdges(prev => [...prev, ...newEdges]);
@@ -1651,6 +1649,8 @@ export default function TopicDetailPage() {
 
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
+  const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
+  const composerRefreshKey = `${relationType ?? "plain"}::${secondaryRelationType}::${draftUnits.length === 0 ? "draft-empty" : "draft-has"}::${targetUnits.length === 0 ? "target-empty" : "target-has"}::${sourceUnits.length === 0 ? "source-empty" : "source-has"}::${draftHasRelationTarget ? "draft-rel" : "draft-text"}`;
 
   // Additional relation selector: show when draft targets include a relation message for reply/correct,
   // or whenever TAG type is selected (to offer none/recommend/archive/existing-tag shortcuts).
@@ -1672,7 +1672,6 @@ export default function TopicDetailPage() {
     if (draftHasRelationTarget && relationType === "correct") {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
     }
-    const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     if (isClassifyType) return newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
@@ -1695,7 +1694,6 @@ export default function TopicDetailPage() {
       const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
       return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
     }
-    const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
@@ -2401,11 +2399,12 @@ export default function TopicDetailPage() {
                 );
               })()}
               <input style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }} placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签" : "关系标签"} value={relationLabel} onChange={e => setRelationLabel(e.target.value)} />
+              <div key={composerRefreshKey}>
               {(() => {
                 const textAreaDisabled =
                   (draftHasRelationTarget && relationType === "correct")
-                  || isTagWithQuickAnnotate
-                  || isMergeType;
+                  || (isTagWithQuickAnnotate && hasTargetsAvailable)
+                  || (isMergeType && hasTargetsAvailable);
                 return (
                   <textarea
                     style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
@@ -2427,6 +2426,7 @@ export default function TopicDetailPage() {
                 <span style={{ fontSize: 11, opacity: singleButtonEnabled ? 0.9 : 0.5, color: singleButtonEnabled ? "#cce4ff" : "#999" }}>
                   {singleButtonLabel}
                 </span>
+              </div>
               </div>
             </div>
           )}

@@ -56,6 +56,11 @@ const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pai
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
+const MERGE_CANVAS_HEADER_H = 54;
+const MERGE_CANVAS_HEADER_TOP_GAP = 18;
+const MERGE_CANVAS_HEADER_MIN_W = 200;
+const MERGE_CANVAS_HEADER_MAX_W = 300;
+const MERGE_CANVAS_STACK_GAP = ROW_GAP;
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -239,12 +244,6 @@ function getRelKind(relType: string): PresentationKind {
   return getPresentationSpec(relType).kind;
 }
 
-/** True for relation types that cluster targets in a frame (supplement-frame, frame-group, replace-overlay with groupsTargets). */
-function isFramingRel(relType: string): boolean {
-  const spec = getPresentationSpec(relType);
-  return spec.kind === 'supplement-frame' || spec.kind === 'frame-group' || (spec.kind === 'replace-overlay' && !!spec.groupsTargets);
-}
-
 /** True for relation types that use the supplement-frame kind specifically. */
 function isSuppFrameRel(relType: string): boolean {
   return getRelKind(relType) === 'supplement-frame';
@@ -259,6 +258,177 @@ function isAnyFrameRel(relType: string): boolean {
 /** True for correction-badge relations (CORRECT): badge inside source card, same-column stacking. */
 function isCorrectionBadgeRel(relType: string): boolean {
   return getRelKind(relType) === 'correction-badge';
+}
+
+type RelationBounds = { rect: LayoutBox; cardIds: Set<string> };
+type MergeCanvasReservation = { relMsgId: string; rect: Rect; contentRect: Rect; headerRect: Rect; cardIds: Set<string> };
+
+function unionBoxes(boxes: LayoutBox[]): LayoutBox | null {
+  if (boxes.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const box of boxes) {
+    minX = Math.min(minX, box.x);
+    minY = Math.min(minY, box.y);
+    maxX = Math.max(maxX, box.x + box.width);
+    maxY = Math.max(maxY, box.y + box.height);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+function rectsOverlapX(a: Rect, b: Rect): boolean {
+  return !(a.x + a.width <= b.x || b.x + b.width <= a.x);
+}
+
+function getRelationBoundsFromLayout(params: {
+  relMsgId: string;
+  edgesByRelMsg: Map<string, DemoEdge[]>;
+  layout: Record<string, LayoutBox>;
+  msgMap: Map<string, DemoMessage>;
+  classifyRelMsgIds: Set<string>;
+  visited?: Set<string>;
+}): RelationBounds | null {
+  const { relMsgId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds } = params;
+  const visited = params.visited ?? new Set<string>();
+  if (visited.has(relMsgId)) return null;
+  visited.add(relMsgId);
+
+  const directBox = layout[relMsgId];
+  if (directBox && classifyRelMsgIds.has(relMsgId)) {
+    return { rect: directBox, cardIds: new Set([relMsgId]) };
+  }
+
+  const relEdges = edgesByRelMsg.get(relMsgId) ?? [];
+  const boxes: LayoutBox[] = [];
+  const cardIds = new Set<string>();
+  for (const edge of relEdges) {
+    for (const endpointId of [edge.from.messageId, edge.to.messageId]) {
+      if (endpointId.startsWith("anon:")) continue;
+      const endpointMsg = msgMap.get(endpointId);
+      const endpointBox = layout[endpointId];
+      if (endpointBox && (endpointMsg?.kind === "normal" || classifyRelMsgIds.has(endpointId))) {
+        boxes.push(endpointBox);
+        cardIds.add(endpointId);
+        continue;
+      }
+      if (endpointMsg?.kind === "relation") {
+        const nested = getRelationBoundsFromLayout({ relMsgId: endpointId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds, visited });
+        if (!nested) continue;
+        boxes.push(nested.rect);
+        nested.cardIds.forEach(id => cardIds.add(id));
+      }
+    }
+  }
+
+  const rect = unionBoxes(boxes);
+  return rect ? { rect, cardIds } : null;
+}
+
+export function buildMergeCanvasReservations(params: {
+  edges: DemoEdge[];
+  layout: Record<string, LayoutBox>;
+  msgMap: Map<string, DemoMessage>;
+  classifyRelMsgIds: Set<string>;
+}): MergeCanvasReservation[] {
+  const { edges, layout, msgMap, classifyRelMsgIds } = params;
+  const edgesByRelMsg = new Map<string, DemoEdge[]>();
+  for (const edge of edges) {
+    const arr = edgesByRelMsg.get(edge.relationMessageId) ?? [];
+    arr.push(edge);
+    edgesByRelMsg.set(edge.relationMessageId, arr);
+  }
+
+  const reservations: MergeCanvasReservation[] = [];
+  for (const [relMsgId, relEdges] of edgesByRelMsg) {
+    if (relEdges[0]?.relationType !== "merge") continue;
+    const boxes: LayoutBox[] = [];
+    const cardIds = new Set<string>();
+    for (const edge of relEdges) {
+      const targetMsg = msgMap.get(edge.to.messageId);
+      const targetBox = layout[edge.to.messageId];
+      if (targetBox && (targetMsg?.kind === "normal" || classifyRelMsgIds.has(edge.to.messageId))) {
+        boxes.push(targetBox);
+        cardIds.add(edge.to.messageId);
+        continue;
+      }
+      if (targetMsg?.kind === "relation") {
+        const nested = getRelationBoundsFromLayout({ relMsgId: edge.to.messageId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds });
+        if (!nested) continue;
+        boxes.push(nested.rect);
+        nested.cardIds.forEach(id => cardIds.add(id));
+      }
+    }
+    const contentUnion = unionBoxes(boxes);
+    if (!contentUnion) continue;
+    const contentRect = {
+      x: contentUnion.x - SUPP_FRAME_PAD,
+      y: contentUnion.y - SUPP_FRAME_PAD,
+      width: contentUnion.width + SUPP_FRAME_PAD * 2,
+      height: contentUnion.height + SUPP_FRAME_PAD * 2,
+    };
+    const headerWidth = Math.min(MERGE_CANVAS_HEADER_MAX_W, Math.max(MERGE_CANVAS_HEADER_MIN_W, contentRect.width - 24));
+    const headerRect = {
+      x: contentRect.x + 6,
+      y: contentRect.y - MERGE_CANVAS_HEADER_TOP_GAP - MERGE_CANVAS_HEADER_H,
+      width: headerWidth,
+      height: MERGE_CANVAS_HEADER_H,
+    };
+    reservations.push({
+      relMsgId,
+      contentRect,
+      headerRect,
+      rect: {
+        x: contentRect.x,
+        y: headerRect.y,
+        width: Math.max(contentRect.width, headerWidth + 12),
+        height: contentRect.y + contentRect.height - headerRect.y,
+      },
+      cardIds,
+    });
+  }
+  reservations.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+  return reservations;
+}
+
+export function applyMergeCanvasReservations(params: {
+  layout: Record<string, LayoutBox>;
+  normals: DemoMessage[];
+  colOf: Record<string, number>;
+  reservations: MergeCanvasReservation[];
+}) {
+  const nextLayout: Record<string, LayoutBox> = {};
+  for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
+
+  const byCol = new Map<number, string[]>();
+  for (const msg of params.normals) {
+    const col = params.colOf[msg.id] ?? 0;
+    const arr = byCol.get(col) ?? [];
+    arr.push(msg.id);
+    byCol.set(col, arr);
+  }
+  for (const ids of byCol.values()) ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+
+  for (const reservation of params.reservations) {
+    for (const ids of byCol.values()) {
+      let cursor = reservation.rect.y + reservation.rect.height + MERGE_CANVAS_STACK_GAP;
+      for (const id of ids) {
+        const box = nextLayout[id];
+        if (!box || reservation.cardIds.has(id)) continue;
+        if (!rectsOverlapX(box, reservation.rect)) continue;
+        if (box.y + box.height <= reservation.rect.y) continue;
+        if (box.y >= cursor) {
+          cursor = box.y + box.height + ROW_GAP;
+          continue;
+        }
+        nextLayout[id] = { ...box, y: cursor };
+        cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
+      }
+    }
+  }
+
+  let maxBottom = GRID_TOP;
+  for (const box of Object.values(nextLayout)) maxBottom = Math.max(maxBottom, box.y + box.height);
+  for (const reservation of params.reservations) maxBottom = Math.max(maxBottom, reservation.rect.y + reservation.rect.height);
+  return { layout: nextLayout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
 }
 
 function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
@@ -854,8 +1024,6 @@ export default function GraphView(props: GraphViewProps) {
   const { col: colOf, maxCol, groupSourceToTarget } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
-  const [layout, setLayout] = useState<Record<string,LayoutBox>>({});
-  const [canvasHeight, setCanvasHeight] = useState<number>(900);
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
   const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
   const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}>|null>(null);
@@ -925,6 +1093,18 @@ export default function GraphView(props: GraphViewProps) {
     }
     return ids;
   }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
+  const { layout: baseLayout } = useMemo(
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: hiddenCorrectedTargetIds }),
+    [normals, colOf, measuredHeights, maxCol, groupSourceToTarget, hiddenCorrectedTargetIds]
+  );
+  const mergeCanvasReservations = useMemo(
+    () => buildMergeCanvasReservations({ edges, layout: baseLayout, msgMap, classifyRelMsgIds }),
+    [edges, baseLayout, msgMap, classifyRelMsgIds]
+  );
+  const { layout, canvasHeight } = useMemo(
+    () => applyMergeCanvasReservations({ layout: baseLayout, normals, colOf, reservations: mergeCanvasReservations }),
+    [baseLayout, normals, colOf, mergeCanvasReservations]
+  );
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
   // Used to embed correction badge in the target relation's hit area.
@@ -999,11 +1179,6 @@ export default function GraphView(props: GraphViewProps) {
   }, [normals, layout]);
 
   useEffect(() => {
-    const { layout: nl, canvasHeight: h } = computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: hiddenCorrectedTargetIds });
-    setLayout(nl); setCanvasHeight(h);
-  }, [normals, colOf, maxCol, measuredHeights, groupSourceToTarget, hiddenCorrectedTargetIds]);
-
-  useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
     const canvasRect = canvasEl.getBoundingClientRect();
     const normalSet = new Set(normalIds);
@@ -1032,6 +1207,7 @@ export default function GraphView(props: GraphViewProps) {
       for (const ref of [...Array.from(header.getClientRects()),...Array.from(content.getClientRects())])
         globalForbiddenRects.push({x:ref.left-canvasRect.left,y:ref.top-canvasRect.top,width:ref.width,height:ref.height});
     }
+    for (const mergeCanvas of mergeCanvasReservations) globalForbiddenRects.push(mergeCanvas.headerRect);
 
     function getMessageRects(messageId: string): Rect[] {
       const res: Rect[] = [];
@@ -1181,7 +1357,10 @@ export default function GraphView(props: GraphViewProps) {
         }
         let anyTarget = false;
         for (const e of frameEdges) {
-          const targetBox = endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
+          const relationTargetBounds = msgMap.get(e.to.messageId)?.kind === "relation"
+            ? getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg, layout, msgMap, classifyRelMsgIds })
+            : null;
+          const targetBox = relationTargetBounds?.rect ?? endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
           if (!targetBox) continue;
           anyTarget = true;
           minX = Math.min(minX, targetBox.x); minY = Math.min(minY, targetBox.y);
@@ -1618,7 +1797,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, classifyRelMsgIds]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, classifyRelMsgIds, mergeCanvasReservations]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -1667,7 +1846,24 @@ export default function GraphView(props: GraphViewProps) {
 
   return (
     <div ref={canvasRef} style={{position:"relative",width:canvasWidth,height:canvasHeight}}
-      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
+      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
+      <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:1,pointerEvents:"none"}}>
+        {mergeCanvasReservations.map(mc => (
+          <div key={`merge-canvas-bg-${mc.relMsgId}`} style={{
+            position:"absolute",
+            left:mc.contentRect.x,
+            top:mc.contentRect.y,
+            width:mc.contentRect.width,
+            height:mc.contentRect.height,
+            borderRadius:12,
+            border:"1px solid rgba(148,163,184,0.45)",
+            background:"rgba(255,255,255,0.72)",
+            boxShadow:"0 10px 24px rgba(15,23,42,0.14)",
+            backdropFilter:"blur(2px)"
+          }}/>
+        ))}
+      </div>
+      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
           if (hideMessageIds?.has(msg.id)) return null;
@@ -1794,6 +1990,53 @@ export default function GraphView(props: GraphViewProps) {
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:4,pointerEvents:"none"}}>
+        {mergeCanvasReservations.map(mc => {
+          const relMsg = msgMap.get(mc.relMsgId);
+          const relEdges = edgesByRelMsg.get(mc.relMsgId) ?? [];
+          const targetMsgCount = Array.from(new Set(relEdges.filter(edge => msgMap.get(edge.to.messageId)?.kind === "normal").map(edge => edge.to.messageId))).length;
+          const targetRelationCount = Array.from(new Set(relEdges.filter(edge => msgMap.get(edge.to.messageId)?.kind === "relation").map(edge => edge.to.messageId))).length;
+          const title = `归并关系：${mc.relMsgId}；单击选中，双击展开详情`;
+          const handleClick = (e: React.MouseEvent) => { e.stopPropagation(); (onGroupFrameClick ?? onMessageClick)(e, mc.relMsgId); };
+          const handleDoubleClick = (e: React.MouseEvent) => { e.stopPropagation(); (onGroupFrameDoubleClick ?? onMessageDoubleClick)(e, mc.relMsgId); };
+          return (
+            <div key={`merge-canvas-header-${mc.relMsgId}`}
+              data-rel-overlay="true"
+              onClick={handleClick}
+              onDoubleClick={handleDoubleClick}
+              title={title}
+              style={{
+                position:"absolute",
+                left:mc.headerRect.x,
+                top:mc.headerRect.y,
+                width:mc.headerRect.width,
+                minHeight:mc.headerRect.height,
+                borderRadius:12,
+                border:"1px solid #dbe4ee",
+                background:"#ffffff",
+                color:"#111827",
+                boxShadow:"0 12px 28px rgba(15,23,42,0.2)",
+                padding:"8px 12px",
+                cursor:"pointer",
+                pointerEvents:"auto",
+                userSelect:"none",
+                display:"flex",
+                flexDirection:"column",
+                gap:4
+              }}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                <span style={{fontSize:12,fontWeight:700,color:"#111827",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>归并画布</span>
+                <span style={{fontSize:10,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"#e0f2fe",color:"#0369a1",flexShrink:0}}>MERGE</span>
+              </div>
+              <div style={{fontSize:11,color:"#475569",display:"flex",gap:10,flexWrap:"wrap"}}>
+                <span>由 {relMsg?.author ?? "系统"} 发起</span>
+                <span>文本 {targetMsgCount}</span>
+                <span>关系 {targetRelationCount}</span>
               </div>
             </div>
           );

@@ -1917,8 +1917,21 @@ export default function TopicDetailPage() {
     for (const e of edges) {
       if (shownIds.has(e.from.messageId) || shownIds.has(e.to.messageId)) relationMessagesToAdd.add(e.relationMessageId);
     }
+    const relationMsgsAdded = new Set<string>();
     for (const rmId of relationMessagesToAdd) {
-      if (!shownIds.has(rmId)) { const m = messages.find(x => x.id === rmId); if (m) messagesToShowArr.push(m); }
+      if (!shownIds.has(rmId)) { const m = messages.find(x => x.id === rmId); if (m) { messagesToShowArr.push(m); relationMsgsAdded.add(rmId); } }
+    }
+    // Always ensure the original focus-entry IDs are in messagesToShow.
+    // When a startId is a classify relation message, collectNormalMessagesForRelation resolves
+    // through it to normal message targets; the classify message itself may not appear via
+    // BFS dist or the relation-adjacency step above (if its edges point to other relations,
+    // not directly to text messages). Without this, the classify relation's edges are missing
+    // from edgesToShow, which breaks the child-classify filtering in messagesToRenderFiltered.
+    for (const id of startIds) {
+      if (!shownIds.has(id) && !relationMsgsAdded.has(id)) {
+        const m = msgMap.get(id);
+        if (m) messagesToShowArr.push(m);
+      }
     }
     const shownSet = new Set(messagesToShowArr.map(m => m.id));
     const edgesToShowArr = edges.filter(e => shownSet.has(e.from.messageId) || shownSet.has(e.to.messageId) || shownSet.has(e.relationMessageId));
@@ -1978,6 +1991,18 @@ export default function TopicDetailPage() {
       for (const childId of childClassifyRelMsgIds) {
         for (const e of edgesByRelMsgId.get(childId) ?? []) {
           if (!parentDirectTargetIds.has(e.to.messageId)) childClassifyTargetIds.add(e.to.messageId);
+        }
+      }
+      // Expand childClassifyTargetIds to also include the text-message endpoints of any MERGE
+      // relation messages already in that set. When a child classify targets a MERGE relation,
+      // the MERGE's text targets belong to the inner topic and must not be shown in the outer
+      // topic view until the user explicitly navigates into the inner topic.
+      for (const id of childClassifyTargetIds) {
+        const m = msgMap.get(id);
+        if (m?.kind !== "relation" || relationTypeByRelMsgId.get(id) !== "merge") continue;
+        for (const e of edgesByRelMsgId.get(id) ?? []) {
+          if (msgMap.get(e.to.messageId)?.kind === "normal") childClassifyTargetIds.add(e.to.messageId);
+          if (msgMap.get(e.from.messageId)?.kind === "normal") childClassifyTargetIds.add(e.from.messageId);
         }
       }
       // Find relation messages that exclusively connect to child classify targets

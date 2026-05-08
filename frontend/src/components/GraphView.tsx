@@ -296,6 +296,7 @@ function rectContains(outer: Rect, inner: Rect): boolean {
   );
 }
 
+/** Resolve the merge header text with fallback priority: payload title → payload label → relation type label. */
 function getMergeHeaderText(msg: DemoMessage | undefined): string {
   if (!msg) return getPresentationSpec('merge').label;
   return getRelationTitle(msg.relationPayload)
@@ -303,11 +304,13 @@ function getMergeHeaderText(msg: DemoMessage | undefined): string {
     ?? getPresentationSpec(msg.relationType ?? 'merge').label;
 }
 
+/** Estimate adaptive merge-header width from the rendered title/label text length. */
 function getMergeHeaderWidth(text: string): number {
   const estimated = Math.round(text.length * MERGE_LABEL_CHAR_WIDTH_ESTIMATE + MERGE_LABEL_HORIZONTAL_PADDING);
   return Math.max(MERGE_HEADER_MIN_W, Math.min(MERGE_HEADER_MAX_W, estimated));
 }
 
+/** Compute the floating header card rect shown above classify/merge/summary group frames. */
 function getGroupHeaderRect(frameRect: Rect): Rect {
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,

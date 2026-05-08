@@ -1292,7 +1292,11 @@ export default function GraphView(props: GraphViewProps) {
     function getRelVisualBox(relId: string, depth = 0): LayoutBox | null {
       if (depth > MAX_RELATION_NESTING_DEPTH) return null;
       const relEdges = edgesByRelMsg.get(relId) ?? [];
-      if (relEdges.length === 0) return null;
+      if (relEdges.length === 0) {
+        // CLASSIFY relations may have no target edges yet, but their topic cards are still visible.
+        const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
+        return relCard ?? null;
+      }
       const te0 = relEdges[0];
       const relType = te0.relationType;
       if (relType === "supplement") {
@@ -1303,6 +1307,11 @@ export default function GraphView(props: GraphViewProps) {
       const relTypeKind = getPresentationSpec(relType).kind;
       if (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay' || relTypeKind === 'correction-badge') {
         const fr = groupFrameByRelMsgId.get(relId);
+        if (!fr && relTypeKind === 'frame-group') {
+          // CLASSIFY relation messages are rendered as topic cards rather than SVG frames.
+          const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
+          if (relCard) return relCard;
+        }
         return fr ? { x: fr.x, y: fr.y, width: fr.width, height: fr.height } : null;
       }
       if (relType === "tag") {

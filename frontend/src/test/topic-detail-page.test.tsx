@@ -158,7 +158,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     });
   });
 
-  it('prevents merge-relation text messages from expanding into outer topic view', async () => {
+  it('shows only outer classify targets and their related messages after entering topic', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -178,16 +178,15 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     // Enter the outer topic by double-clicking its card
     fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
 
-    // After entering outer-topic focus, the inner topic card should be shown,
-    // but the merge-relation text messages (msg-a, msg-b) must NOT be expanded
-    // into the outer view — they belong to the inner topic.
+    // After entering outer-topic focus, only the outer target relation (rel-inner)
+    // and its related messages should be shown.
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
     });
     expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
+    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.getByText('关系消息 rel-merge')).toBeInTheDocument();
   });
 });
 
@@ -249,7 +248,7 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     });
   });
 
-  it('prevents deeply nested merge-relation text messages from expanding into outer topic view', async () => {
+  it('shows only outer classify targets and their related messages in deeply nested case', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -269,15 +268,15 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     // Enter the outer topic by double-clicking its card.
     fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
 
-    // After entering outer-topic focus, only the middle topic card should be shown.
-    // msg-a, msg-b, rel-merge, and rel-inner must NOT be expanded into the outer view.
+    // After entering outer-topic focus, the middle topic card (direct target) and
+    // its related relation/text messages should be visible.
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-middle')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
-    expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
+    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.getByText('关系消息 rel-merge')).toBeInTheDocument();
+    expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
   });
 });
 
@@ -315,7 +314,7 @@ describe('TopicDetailPage summary relation visibility', () => {
     });
   });
 
-  it('shows summary relation in list view and keeps it in graph-render messages', async () => {
+  it('hides summary targets only in graph view and shows only summary targets in summary focus', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -325,18 +324,21 @@ describe('TopicDetailPage summary relation visibility', () => {
     });
     const latestGraphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1]?.[0];
     expect(latestGraphProps?.messages?.some((m: { id: string }) => m.id === 'rel-summary')).toBe(true);
+    expect(latestGraphProps?.messages?.some((m: { id: string }) => m.id === 'msg-1')).toBe(false);
 
-    // In list view, summary topic card is visible while its target text message is hidden.
+    // In list view, summary target text should remain visible.
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
       expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-1')).not.toBeInTheDocument();
+    expect(screen.getByText('消息 msg-1')).toBeInTheDocument();
 
     fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
     });
+    expect(screen.getByText('消息 msg-1')).toBeInTheDocument();
+    expect(screen.queryByText('总结 rel-summary')).not.toBeInTheDocument();
   });
 });
 
@@ -447,7 +449,7 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     });
   });
 
-  it('keeps nested classify-owned text hidden when entering outer classify', async () => {
+  it('shows outer classify targets and related nested messages when entering outer classify', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -462,6 +464,6 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     });
     expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
     expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
+    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
   });
 });

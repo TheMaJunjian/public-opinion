@@ -192,6 +192,41 @@ function collectOwnedByRelation(
   return { textIds, relationIds };
 }
 
+/**
+ * Expand a set of text message IDs by following CORRECT (更正) relations.
+ * When text message T is in the input set, this function also adds the other
+ * text message T2 from any CORRECT relation that involves T (as source or target).
+ * The traversal is repeated until no new messages are found (handles correction chains).
+ *
+ * Returns a new Set with all the original IDs plus any additionally discovered ones.
+ */
+function expandTextIdsWithCorrections(
+  textIds: Set<string>,
+  edges: DemoEdge[],
+  msgMap: Map<string, DemoMessage>
+): Set<string> {
+  const expanded = new Set(textIds);
+  const queue = Array.from(textIds);
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const tid = queue.shift()!;
+    if (visited.has(tid)) continue;
+    visited.add(tid);
+    for (const e of edges) {
+      if (e.relationType !== 'correct') continue;
+      if (msgMap.get(e.from.messageId)?.kind !== 'normal' || msgMap.get(e.to.messageId)?.kind !== 'normal') continue;
+      if (e.from.messageId === tid && !expanded.has(e.to.messageId)) {
+        expanded.add(e.to.messageId);
+        queue.push(e.to.messageId);
+      } else if (e.to.messageId === tid && !expanded.has(e.from.messageId)) {
+        expanded.add(e.from.messageId);
+        queue.push(e.from.messageId);
+      }
+    }
+  }
+  return expanded;
+}
+
 /** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
 function uniqueTargetRefsFromEdges(
   relEdges: DemoEdge[],
@@ -682,7 +717,20 @@ export default function TopicDetailPage() {
     return { textIds, relationIds };
   }, [relations, relationById]);
 
-  const classifiedTargetTextIds = classifyOwnership.textIds;
+  // Expand classify/summary ownership text IDs to include text messages that have
+  // CORRECT (更正) relations with any already-owned message. This ensures that when
+  // T1 is classified/summarized, the correcting message T2 (and the CORRECT relation
+  // message) are automatically treated as part of the same group.
+  const classifyOwnershipTextIdsExpanded = useMemo(
+    () => expandTextIdsWithCorrections(classifyOwnership.textIds, edges, msgMap),
+    [classifyOwnership, edges, msgMap]
+  );
+  const summaryOwnershipTextIdsExpanded = useMemo(
+    () => expandTextIdsWithCorrections(summaryOwnership.textIds, edges, msgMap),
+    [summaryOwnership, edges, msgMap]
+  );
+
+  const classifiedTargetTextIds = classifyOwnershipTextIdsExpanded;
   const classifiedTargetClassifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     classifyOwnership.relationIds.forEach(id => {
@@ -736,16 +784,16 @@ export default function TopicDetailPage() {
   }
 
   const listExclusiveRelMsgIds = useMemo(
-    () => collectExclusiveRelationMsgIds(classifyOwnership.textIds, classifyOwnership.relationIds),
-    [edges, msgMap, classifyOwnership]
+    () => collectExclusiveRelationMsgIds(classifyOwnershipTextIdsExpanded, classifyOwnership.relationIds),
+    [edges, msgMap, classifyOwnershipTextIdsExpanded, classifyOwnership.relationIds]
   );
   const graphHiddenTextIds = useMemo(() => {
-    const ids = new Set<string>(classifyOwnership.textIds);
-    summaryOwnership.textIds.forEach(id => ids.add(id));
+    const ids = new Set<string>(classifyOwnershipTextIdsExpanded);
+    summaryOwnershipTextIdsExpanded.forEach(id => ids.add(id));
     // MERGE displays as a group frame whose targets remain visible as cards on the canvas,
     // so mergeOwnership.textIds is intentionally excluded here.
     return ids;
-  }, [classifyOwnership, summaryOwnership]);
+  }, [classifyOwnershipTextIdsExpanded, summaryOwnershipTextIdsExpanded]);
   const graphOwnedRelationIds = useMemo(() => {
     const ids = new Set<string>(classifyOwnership.relationIds);
     mergeOwnership.relationIds.forEach(id => ids.add(id));
@@ -2182,6 +2230,31 @@ export default function TopicDetailPage() {
             if (!topicRelationIds.has(id)) queue.push(id);
             topicRelationIds.add(id);
           });
+        }
+      }
+      // Expand topicTextIds with text messages that have CORRECT (更正) relations
+      // with any text message already in the topic, and add the CORRECT relation
+      // messages between such pairs to topicRelationIds.
+      // This implements: when T1 is in the topic, CORRECT-related T2 and the
+      // CORRECT relation message are automatically included in the topic view.
+      {
+        const correctQ = Array.from(topicTextIds);
+        const correctVisited = new Set<string>();
+        while (correctQ.length > 0) {
+          const tid = correctQ.shift()!;
+          if (correctVisited.has(tid)) continue;
+          correctVisited.add(tid);
+          for (const e of baseEdges) {
+            if (e.relationType !== 'correct') continue;
+            if (msgMap.get(e.from.messageId)?.kind !== 'normal' || msgMap.get(e.to.messageId)?.kind !== 'normal') continue;
+            if (e.from.messageId !== tid && e.to.messageId !== tid) continue;
+            topicRelationIds.add(e.relationMessageId);
+            const other = e.from.messageId === tid ? e.to.messageId : e.from.messageId;
+            if (!topicTextIds.has(other)) {
+              topicTextIds.add(other);
+              correctQ.push(other);
+            }
+          }
         }
       }
       const edgesByRel = new Map<string, DemoEdge[]>();

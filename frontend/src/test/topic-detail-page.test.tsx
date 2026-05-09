@@ -172,7 +172,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     });
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
+    expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
 
     // Enter the outer topic by double-clicking its card
@@ -186,7 +186,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
     expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.getByText('关系消息 rel-merge')).toBeInTheDocument();
+    expect(screen.getByText('归并 rel-merge')).toBeInTheDocument();
   });
 });
 
@@ -261,7 +261,7 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     });
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 rel-merge')).not.toBeInTheDocument();
+    expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
     expect(screen.queryByText('分类话题 rel-middle')).not.toBeInTheDocument();
 
@@ -275,7 +275,7 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     });
     expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
     expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.getByText('关系消息 rel-merge')).toBeInTheDocument();
+    expect(screen.getByText('归并 rel-merge')).toBeInTheDocument();
     expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
   });
 });

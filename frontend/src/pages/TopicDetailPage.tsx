@@ -570,6 +570,10 @@ export default function TopicDetailPage() {
     relMsgId: string;
     x: number; y: number;
   } | null>(null);
+  const [mergeInfoPopup, setMergeInfoPopup] = useState<{
+    relMsgId: string;
+    x: number; y: number;
+  } | null>(null);
 
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
@@ -2261,7 +2265,10 @@ export default function TopicDetailPage() {
       enterClassifyTopic(relMsgId);
       return;
     }
-    // For frame-group (merge): enter focus mode
+    if (relType === "merge") {
+      setMergeInfoPopup({ relMsgId, x: e.clientX, y: e.clientY });
+      return;
+    }
     enterFocus(relMsgId);
   }
 
@@ -2756,6 +2763,30 @@ export default function TopicDetailPage() {
             )}
             <button onClick={() => setTagPopup(null)}
               style={{ marginTop: 10, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
+              关闭
+            </button>
+          </div>
+        </div>
+      );
+    })()}
+    {mergeInfoPopup && (() => {
+      const relMsg = messages.find(m => m.id === mergeInfoPopup.relMsgId);
+      const left = Math.min(mergeInfoPopup.x, window.innerWidth - 320);
+      const top = Math.min(mergeInfoPopup.y, window.innerHeight - 180);
+      return (
+        <div key="merge-info-popup" onClick={() => setMergeInfoPopup(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ position: "fixed", left, top, width: 300, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
+            <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>
+              归并关系信息
+            </div>
+            <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+              <div>创建者：<span style={{ fontWeight: 600 }}>{relMsg?.author ?? "未知"}</span></div>
+              <div>发送时间：<span style={{ opacity: 0.8 }}>{relMsg ? new Date(relMsg.createdAt).toLocaleString() : "未知"}</span></div>
+            </div>
+            <button onClick={() => setMergeInfoPopup(null)}
+              style={{ marginTop: 12, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
               关闭
             </button>
           </div>

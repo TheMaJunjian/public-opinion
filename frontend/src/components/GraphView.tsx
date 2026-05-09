@@ -320,6 +320,15 @@ function getGroupHeaderRect(frameRect: Rect): Rect {
   };
 }
 
+function getMergeHeaderRect(frameRect: Rect, text: string): Rect {
+  return {
+    x: frameRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
+    y: frameRect.y - MERGE_CANVAS_LABEL_TOP_OFFSET,
+    width: getMergeHeaderWidth(text),
+    height: MERGE_CANVAS_LABEL_H,
+  };
+}
+
 function getRelationBoundsFromLayout(params: {
   relMsgId: string;
   edgesByRelMsg: Map<string, DemoEdge[]>;
@@ -334,12 +343,6 @@ function getRelationBoundsFromLayout(params: {
   visited.add(relMsgId);
 
   const relMsg = msgMap.get(relMsgId);
-  const directBox = layout[relMsgId];
-  // Non-merge relation cards use their direct card box; merge keeps its framed visual
-  // (targets + merge header) so outer frames can contain the full merge relation context.
-  if (directBox && relationCardMsgIds.has(relMsgId) && relMsg?.relationType !== 'merge') {
-    return { rect: directBox, cardIds: new Set([relMsgId]) };
-  }
 
   const relEdges = edgesByRelMsg.get(relMsgId) ?? [];
   const boxes: LayoutBox[] = [];
@@ -348,23 +351,24 @@ function getRelationBoundsFromLayout(params: {
     for (const endpointId of [edge.from.messageId, edge.to.messageId]) {
       if (endpointId.startsWith("anon:")) continue;
       const endpointMsg = msgMap.get(endpointId);
-      const endpointBox = layout[endpointId];
-      if (endpointBox && (endpointMsg?.kind === "normal" || relationCardMsgIds.has(endpointId))) {
-        boxes.push(endpointBox);
-        cardIds.add(endpointId);
-        continue;
-      }
       if (endpointMsg?.kind === "relation") {
         const nested = getRelationBoundsFromLayout({ relMsgId: endpointId, edgesByRelMsg, layout, msgMap, relationCardMsgIds, visited });
         if (!nested) continue;
         boxes.push(nested.rect);
         nested.cardIds.forEach(id => cardIds.add(id));
+        continue;
+      }
+      const endpointBox = layout[endpointId];
+      if (endpointBox && (endpointMsg?.kind === "normal" || relationCardMsgIds.has(endpointId))) {
+        boxes.push(endpointBox);
+        cardIds.add(endpointId);
       }
     }
   }
 
   let rect = unionBoxes(boxes);
   if (!rect) return null;
+  const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
   if (relMsg?.relationType === 'merge') {
     const contentRect = {
       x: rect.x - SUPP_FRAME_PAD,
@@ -384,6 +388,13 @@ function getRelationBoundsFromLayout(params: {
     const maxX = Math.max(contentRect.x + contentRect.width, headerRect.x + headerRect.width);
     const maxY = Math.max(contentRect.y + contentRect.height, headerRect.y + headerRect.height);
     rect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  } else if (relKind === 'supplement-frame' || relKind === 'frame-group' || relKind === 'replace-overlay') {
+    rect = {
+      x: rect.x - SUPP_FRAME_PAD,
+      y: rect.y - SUPP_FRAME_PAD,
+      width: rect.width + SUPP_FRAME_PAD * 2,
+      height: rect.height + SUPP_FRAME_PAD * 2,
+    };
   }
   return { rect, cardIds };
 }
@@ -409,17 +420,18 @@ export function buildMergeCanvasReservations(params: {
     const cardIds = new Set<string>();
     for (const edge of relEdges) {
       const targetMsg = msgMap.get(edge.to.messageId);
+      if (targetMsg?.kind === "relation") {
+        const nested = getRelationBoundsFromLayout({ relMsgId: edge.to.messageId, edgesByRelMsg, layout, msgMap, relationCardMsgIds });
+        if (nested) {
+          boxes.push(nested.rect);
+          nested.cardIds.forEach(id => cardIds.add(id));
+          continue;
+        }
+      }
       const targetBox = layout[edge.to.messageId];
       if (targetBox && (targetMsg?.kind === "normal" || relationCardMsgIds.has(edge.to.messageId))) {
         boxes.push(targetBox);
         cardIds.add(edge.to.messageId);
-        continue;
-      }
-      if (targetMsg?.kind === "relation") {
-        const nested = getRelationBoundsFromLayout({ relMsgId: edge.to.messageId, edgesByRelMsg, layout, msgMap, relationCardMsgIds });
-        if (!nested) continue;
-        boxes.push(nested.rect);
-        nested.cardIds.forEach(id => cardIds.add(id));
       }
     }
     const contentUnion = unionBoxes(boxes);
@@ -578,12 +590,6 @@ function buildFrameAvoidanceReservations(params: {
     }
     for (const edge of relEdges) {
       const targetMsg = msgMap.get(edge.to.messageId);
-      const targetBox = layout[edge.to.messageId];
-      if (targetBox && (targetMsg?.kind === 'normal' || relationCardMsgIds.has(edge.to.messageId))) {
-        boxes.push(targetBox);
-        cardIds.add(edge.to.messageId);
-        continue;
-      }
       if (targetMsg?.kind === 'relation') {
         const nested = getRelationBoundsFromLayout({
           relMsgId: edge.to.messageId,
@@ -592,9 +598,16 @@ function buildFrameAvoidanceReservations(params: {
           msgMap,
           relationCardMsgIds,
         });
-        if (!nested) continue;
-        boxes.push(nested.rect);
-        nested.cardIds.forEach(id => cardIds.add(id));
+        if (nested) {
+          boxes.push(nested.rect);
+          nested.cardIds.forEach(id => cardIds.add(id));
+          continue;
+        }
+      }
+      const targetBox = layout[edge.to.messageId];
+      if (targetBox && (targetMsg?.kind === 'normal' || relationCardMsgIds.has(edge.to.messageId))) {
+        boxes.push(targetBox);
+        cardIds.add(edge.to.messageId);
       }
     }
     const union = unionBoxes(boxes);
@@ -1274,23 +1287,7 @@ export default function GraphView(props: GraphViewProps) {
     }
     return ids;
   }, [edges, messages]);
-  const targetRelationCardIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const e of edges) {
-      const targetMsg = msgMap.get(e.to.messageId);
-      if (targetMsg?.kind !== 'relation') continue;
-      const targetType = targetMsg.relationType;
-      if (targetType === 'supplement' || targetType === 'merge' || targetType === 'classify' || targetType === 'summary') {
-        ids.add(targetMsg.id);
-      }
-    }
-    return ids;
-  }, [edges, msgMap]);
-  const relationCardMsgIds = useMemo(() => {
-    const ids = new Set<string>(topicRelMsgIds);
-    targetRelationCardIds.forEach(id => ids.add(id));
-    return ids;
-  }, [topicRelMsgIds, targetRelationCardIds]);
+  const relationCardMsgIds = useMemo(() => new Set<string>(topicRelMsgIds), [topicRelMsgIds]);
   const normals = useMemo(() => messages.filter(m =>
     (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
     (m.kind === "relation" && relationCardMsgIds.has(m.id))
@@ -2621,19 +2618,47 @@ export default function GraphView(props: GraphViewProps) {
                 onDoubleClick={handleDblClick}
                 title={title}
                 style={{
+                  ...(gf.relType === "merge"
+                    ? (() => {
+                        const relMsg = msgMap.get(gf.relMsgId);
+                        const mergeHeaderRect = getMergeHeaderRect(gf.rect, getMergeHeaderText(relMsg));
+                        return {
+                          left: mergeHeaderRect.x,
+                          top: mergeHeaderRect.y,
+                          width: mergeHeaderRect.width,
+                          minHeight: mergeHeaderRect.height,
+                          background: isRelWholeSel(gf.relMsgId) ? "rgba(11,132,255,0.92)" : "rgba(100,116,139,0.92)",
+                          color: "#fff",
+                          borderRadius: 999,
+                          border: isRelWholeSel(gf.relMsgId) ? "1px solid rgba(255,255,255,0.7)" : "1px solid rgba(255,255,255,0.2)",
+                          boxShadow: "0 3px 10px rgba(0,0,0,0.4)",
+                          outline: "none",
+                          padding: "0 10px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        } as React.CSSProperties;
+                      })()
+                    : {
+                        left: getGroupHeaderRect(gf.rect).x,
+                        top: getGroupHeaderRect(gf.rect).y,
+                        width: getGroupHeaderRect(gf.rect).width,
+                        minHeight: getGroupHeaderRect(gf.rect).height,
+                        background: "#1f1f1f",
+                        color: "#f5f5f5",
+                        borderRadius: 6,
+                        border: isRelWholeSel(gf.relMsgId) ? "2px solid #0b84ff" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
+                        boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(11,132,255,0.22)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
+                        outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
+                        padding: "8px 10px",
+                      }),
                   position: "absolute",
-                  left: getGroupHeaderRect(gf.rect).x,
-                  top: getGroupHeaderRect(gf.rect).y,
                   zIndex: 5,
-                  width: getGroupHeaderRect(gf.rect).width,
-                  minHeight: getGroupHeaderRect(gf.rect).height,
-                  background: "#1f1f1f",
-                  color: "#f5f5f5",
-                  borderRadius: 6,
-                  border: isRelWholeSel(gf.relMsgId) ? "2px solid #0b84ff" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
-                  boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(11,132,255,0.22)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
-                  outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
-                  padding: "8px 10px",
                   cursor: "pointer",
                   pointerEvents: "auto",
                   userSelect: "none",
@@ -2654,6 +2679,9 @@ export default function GraphView(props: GraphViewProps) {
                         ? `归并（${targetIds.length}）`
                         : `分类（${targetIds.length}）`
                   );
+                  if (isMergeTopic) {
+                    return getMergeHeaderText(relMsg);
+                  }
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>

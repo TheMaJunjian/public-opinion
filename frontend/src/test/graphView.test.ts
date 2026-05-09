@@ -43,6 +43,39 @@ describe('merge canvas helpers', () => {
     expect(reservations[0].contentRect.height).toBeGreaterThan(250);
   });
 
+  it('nests supplement frames when supplement relations are merge targets', () => {
+    const messages: DemoMessage[] = [
+      makeNormal('msg-1'),
+      makeNormal('msg-2'),
+      makeNormal('msg-3'),
+      { id: 'supp-1', author: 'tester', createdAt: '2024-01-01T00:01:00.000Z', content: 'supp', kind: 'relation', relationType: 'supplement' },
+      { id: 'merge-1', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'merge', kind: 'relation', relationType: 'merge', relationPayload: { title: '归并' } },
+    ];
+    const edges: DemoEdge[] = [
+      { id: 'supp-1::0', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'msg-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-2', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
+      { id: 'merge-1::0', relationMessageId: 'merge-1', relationType: 'merge', from: { messageId: 'anon:merge-1', selection: { kind: 'whole' } }, to: { messageId: 'supp-1', selection: { kind: 'whole' } }, relationLabel: 'merge' },
+      { id: 'merge-1::1', relationMessageId: 'merge-1', relationType: 'merge', from: { messageId: 'anon:merge-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-3', selection: { kind: 'whole' } }, relationLabel: 'merge' },
+    ];
+    const layout = {
+      'msg-1': { x: 18, y: 18, width: 320, height: 96 },
+      'msg-2': { x: 18, y: 146, width: 320, height: 96 },
+      'msg-3': { x: 418, y: 18, width: 320, height: 96 },
+    };
+
+    const reservations = buildMergeCanvasReservations({
+      edges,
+      layout,
+      msgMap: new Map(messages.map(message => [message.id, message])),
+      relationCardMsgIds: new Set<string>(),
+    });
+
+    expect(reservations).toHaveLength(1);
+    expect(Array.from(reservations[0].cardIds)).toEqual(expect.arrayContaining(['msg-1', 'msg-2', 'msg-3']));
+    expect(reservations[0].contentRect.x).toBeLessThanOrEqual(6);
+    expect(reservations[0].contentRect.y).toBeLessThanOrEqual(6);
+    expect(reservations[0].contentRect.height).toBeGreaterThan(240);
+  });
+
   it('pushes unrelated cards below the merge overlay canvas', () => {
     const normals: DemoMessage[] = [
       makeNormal('msg-1'),

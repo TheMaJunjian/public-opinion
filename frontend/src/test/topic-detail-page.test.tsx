@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, beforeEach, expect, it, vi } from 'vitest';
 import TopicDetailPage from '../pages/TopicDetailPage';
 import type { Message, Relation, Topic, User } from '../types';
@@ -336,6 +336,58 @@ describe('TopicDetailPage summary relation visibility', () => {
     fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe('TopicDetailPage merge frame double-click popup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const topic: Topic = {
+      id: 'topic-1',
+      title: '测试话题',
+      status: 'OPEN',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+      createdBy: makeUser(),
+    };
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [makeMessage('msg-1', '第一条')],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-merge',
+          topicId: 'topic-1',
+          relationType: 'MERGE',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-1' }],
+          payload: { title: '归并标签', targetLayout: 'multi-column' },
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('shows creator and send time popup when merge frame label is double-clicked', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    const latestProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    act(() => {
+      latestProps.onGroupFrameDoubleClick(
+        { stopPropagation: vi.fn(), clientX: 120, clientY: 140 } as unknown as React.MouseEvent,
+        'rel-merge'
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('归并关系信息')).toBeInTheDocument();
+      expect(screen.getByText(/创建者：/)).toBeInTheDocument();
+      expect(screen.getByText(/发送时间：/)).toBeInTheDocument();
     });
   });
 });

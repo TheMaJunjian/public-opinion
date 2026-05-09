@@ -220,7 +220,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
 
     // Relation types that require a source message (non-stance types and TAG which needs content)
     // AGREE/DISAGREE: optional (pure-stance declaration without text)
-    // SUPPLEMENT: optional (no-source form wraps target messages in a frame without a source text)
+    // SUPPLEMENT: always null source — user-to-message relation; supplementary text is a target, not a source
     // CORRECT: optional (can be used to mark a relation message as needing correction without a source text)
     // REPLY: optional (can express a pure-stance reply to a relation message without source text)
     // TAG: optional (user-to-message relation; label text is stored in tagLabel instead of sourceMessageId)
@@ -236,17 +236,13 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // CLASSIFY, MERGE, and SUMMARY are user-to-message relations: no source text message.
-    if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
-      res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
-      return;
-    }
-    if (data.relationType === 'MERGE' && data.sourceMessageId) {
-      res.status(400).json({ error: '归并关系不应提供来源消息 ID' });
-      return;
-    }
-    if (data.relationType === 'SUMMARY' && data.sourceMessageId) {
-      res.status(400).json({ error: '总结关系不应提供来源消息 ID' });
+    // CLASSIFY, MERGE, SUMMARY, and SUPPLEMENT are user-to-message relations: no source text message.
+    // For SUPPLEMENT: the supplementary text (if any) is stored as a target, not a source.
+    const noSourceRelTypeNames: Record<string, string> = {
+      CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', SUPPLEMENT: '补充',
+    };
+    if (data.relationType in noSourceRelTypeNames && data.sourceMessageId) {
+      res.status(400).json({ error: `${noSourceRelTypeNames[data.relationType]}关系不应提供来源消息 ID` });
       return;
     }
     // sourceMessageId can reference ANY message in this topic (TEXT or RELATION kind),

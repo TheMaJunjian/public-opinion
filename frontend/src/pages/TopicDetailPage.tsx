@@ -26,9 +26,17 @@ const CLASSIFY_TARGET_HINT = "文本消息、补充关系消息、分类话题�
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
   if (t === "none") return "无";
+  if (t === "question") return "疑问";
+  if (t === "answer") return "回答";
   if (t === "recommend" || t === "archive") return relationTypeName(t);
   if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
   return t; // existing tag label text
+}
+
+function replyAdditionalLabel(t: string): string {
+  if (t === "question") return "疑问";
+  if (t === "answer") return "回答";
+  return "回复";
 }
 
 /** True when a TAG edge's relationLabel carries actual user-entered label text (not the bare type name). */
@@ -182,37 +190,6 @@ function collectOwnedByRelation(
   }
 
   return { textIds, relationIds };
-}
-
-const TOPIC_EXPANDABLE_RELATION_TYPES = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
-
-function collectNestedTopicRelationIds(
-  rootRelationId: string,
-  relationById: Map<string, Relation>
-): Set<string> {
-  const ids = new Set<string>();
-  const visited = new Set<string>();
-  const queue = [rootRelationId];
-
-  while (queue.length > 0) {
-    const relationId = queue.shift();
-    if (!relationId) continue;
-    if (visited.has(relationId)) continue;
-    visited.add(relationId);
-    const relation = relationById.get(relationId);
-    if (!relation) continue;
-    const relationType = relation.relationType;
-
-    if (relationId !== rootRelationId && (relationType === 'CLASSIFY' || relationType === 'SUMMARY')) {
-      ids.add(relationId);
-    }
-    if (!TOPIC_EXPANDABLE_RELATION_TYPES.has(relationType)) continue;
-    for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
-      if (!visited.has(childRelationId)) queue.push(childRelationId);
-    }
-  }
-
-  return ids;
 }
 
 /** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
@@ -671,50 +648,71 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [edges, msgMap]);
-  const classifiedOwnership = useMemo(() => {
+  const classifyOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
     for (const relation of relations) {
-      if (relation.relationType !== 'CLASSIFY' && relation.relationType !== 'SUMMARY') continue;
+      if (relation.relationType !== 'CLASSIFY') continue;
       const owned = collectOwnedByRelation(relation.id, relationById);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
     return { textIds, relationIds };
   }, [relations, relationById]);
-  const classifiedTargetTextIds = classifiedOwnership.textIds;
+  const mergeOwnership = useMemo(() => {
+    const textIds = new Set<string>();
+    const relationIds = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'MERGE') continue;
+      const owned = collectOwnedByRelation(relation.id, relationById);
+      owned.textIds.forEach(id => textIds.add(id));
+      owned.relationIds.forEach(id => relationIds.add(id));
+    }
+    return { textIds, relationIds };
+  }, [relations, relationById]);
+  const summaryOwnership = useMemo(() => {
+    const textIds = new Set<string>();
+    const relationIds = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'SUMMARY') continue;
+      const owned = collectOwnedByRelation(relation.id, relationById);
+      owned.textIds.forEach(id => textIds.add(id));
+      owned.relationIds.forEach(id => relationIds.add(id));
+    }
+    return { textIds, relationIds };
+  }, [relations, relationById]);
+
+  const classifiedTargetTextIds = classifyOwnership.textIds;
   const classifiedTargetClassifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifiedOwnership.relationIds.forEach(id => {
+    classifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType === 'CLASSIFY') ids.add(id);
     });
     return ids;
-  }, [classifiedOwnership, relationById]);
+  }, [classifyOwnership, relationById]);
   const classifiedTargetMergeRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifiedOwnership.relationIds.forEach(id => {
+    classifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType === 'MERGE') ids.add(id);
     });
     return ids;
-  }, [classifiedOwnership, relationById]);
+  }, [classifyOwnership, relationById]);
   const classifiedTargetSupplementRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifiedOwnership.relationIds.forEach(id => {
+    classifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType === 'SUPPLEMENT') ids.add(id);
     });
     return ids;
-  }, [classifiedOwnership, relationById]);
+  }, [classifyOwnership, relationById]);
   const classifiedTargetSummaryRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifiedOwnership.relationIds.forEach(id => {
+    classifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType === 'SUMMARY') ids.add(id);
     });
     return ids;
-  }, [classifiedOwnership, relationById]);
+  }, [classifyOwnership, relationById]);
 
-  // Non-classify relation messages whose ALL text-message endpoints are classified.
-  // These are also hidden from the main canvas (they "belong" to the topic).
-  const classifiedExclusiveRelMsgIds = useMemo(() => {
+  function collectExclusiveRelationMsgIds(hiddenTextIds: Set<string>, ownedRelationIds: Set<string>) {
     const ids = new Set<string>();
     const edgesByRel = new Map<string, DemoEdge[]>();
     for (const e of edges) {
@@ -723,18 +721,40 @@ export default function TopicDetailPage() {
       edgesByRel.set(e.relationMessageId, arr);
     }
     for (const [relMsgId, relEdges] of edgesByRel) {
-      if (relEdges[0]?.relationType === 'classify' || relEdges[0]?.relationType === 'summary') continue;
-      if (classifiedOwnership.relationIds.has(relMsgId)) continue;
+      const relType = relEdges[0]?.relationType;
+      if (relType === 'classify' || relType === 'summary' || relType === 'merge') continue;
+      if (ownedRelationIds.has(relMsgId)) continue;
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])
         .filter(mid => msgMap.get(mid)?.kind === 'normal');
       if (textEndpoints.length === 0) continue;
-      if (textEndpoints.every(mid => classifiedOwnership.textIds.has(mid))) {
+      if (textEndpoints.every(mid => hiddenTextIds.has(mid))) {
         ids.add(relMsgId);
       }
     }
     return ids;
-  }, [edges, msgMap, classifiedOwnership]);
+  }
+
+  const listExclusiveRelMsgIds = useMemo(
+    () => collectExclusiveRelationMsgIds(classifyOwnership.textIds, classifyOwnership.relationIds),
+    [edges, msgMap, classifyOwnership]
+  );
+  const graphHiddenTextIds = useMemo(() => {
+    const ids = new Set<string>(classifyOwnership.textIds);
+    mergeOwnership.textIds.forEach(id => ids.add(id));
+    summaryOwnership.textIds.forEach(id => ids.add(id));
+    return ids;
+  }, [classifyOwnership, mergeOwnership, summaryOwnership]);
+  const graphOwnedRelationIds = useMemo(() => {
+    const ids = new Set<string>(classifyOwnership.relationIds);
+    mergeOwnership.relationIds.forEach(id => ids.add(id));
+    summaryOwnership.relationIds.forEach(id => ids.add(id));
+    return ids;
+  }, [classifyOwnership, mergeOwnership, summaryOwnership]);
+  const graphExclusiveRelMsgIds = useMemo(
+    () => collectExclusiveRelationMsgIds(graphHiddenTextIds, graphOwnedRelationIds),
+    [edges, msgMap, graphHiddenTextIds, graphOwnedRelationIds]
+  );
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   // Saved scroll positions for each view mode, so switching modes does not reset to top.
@@ -1250,21 +1270,27 @@ export default function TopicDetailPage() {
       const toReply = foldUpToWhole(targets);
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(fromReply.map(s => s.messageId)));
+      const replyAdditional = secondaryRelationType === "question" || secondaryRelationType === "answer"
+        ? secondaryRelationType
+        : "none";
+      const replyEdgeLabel = replyAdditional === "none" ? "reply" : replyAdditional;
       for (const srcId of uniqueSources) {
         const targetRefs = toReply.map(t => unitSelectionToTargetRef(t, msgMap));
         try {
-          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+          const backendRel = await api.createRelation(topicId, {
+            relationType: relationType.toUpperCase(),
+            sourceMessageId: srcId,
+            targetRefs,
+            payload: buildRelationPayload({
+              relationType: relationType.toUpperCase(),
+              label: replyAdditional === "none" ? undefined : replyAdditional,
+            }),
+          });
           const relId = backendRel.id;
           appendCreatedRelation(backendRel);
           for (const s of fromReply) {
             for (const t of toReply) {
-              newEdgesList.push(buildEdges({ ...s }, { ...t }, "reply", label, relId));
-            }
-          }
-          if (secondaryRelationType !== "none") {
-            const secType = secondaryRelationType as RelationType;
-            for (const s of sources) for (const t of targets) {
-              newEdgesList.push(buildEdges({ ...s }, { ...t }, secType, label, relId));
+              newEdgesList.push(buildEdges({ ...s }, { ...t }, "reply", replyEdgeLabel, relId));
             }
           }
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -1872,10 +1898,13 @@ export default function TopicDetailPage() {
   const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
   const composerRefreshKey = `${relationType ?? "plain"}::${secondaryRelationType}::${draftUnits.length === 0 ? "draft-empty" : "draft-has"}::${targetUnits.length === 0 ? "target-empty" : "target-has"}::${sourceUnits.length === 0 ? "source-empty" : "source-has"}::${draftHasRelationTarget ? "draft-rel" : "draft-text"}`;
 
-  // Additional relation selector: show when draft targets include a relation message for reply/correct,
-  // or whenever TAG type is selected (to offer none/recommend/archive/existing-tag shortcuts).
+  // Additional relation selector:
+  // - REPLY: always available (none/question/answer)
+  // - CORRECT: only when targeting relation messages
+  // - TAG: always available (none/recommend/archive/existing-tag shortcuts)
   const hasSecondaryRelationSelector =
-    ((relationType === "reply" || relationType === "correct") && draftHasRelationTarget)
+    relationType === "reply"
+    || (relationType === "correct" && draftHasRelationTarget)
     || relationType === "tag";
 
   // Send button enabled logic (single button):
@@ -2074,8 +2103,7 @@ export default function TopicDetailPage() {
     // When a startId is a classify relation message, collectNormalMessagesForRelation resolves
     // through it to normal message targets; the classify message itself may not appear via
     // BFS dist or the relation-adjacency step above (if its edges point to other relations,
-    // not directly to text messages). Without this, the classify relation's edges are missing
-    // from edgesToShow, which breaks the child-classify filtering in messagesToRenderFiltered.
+    // not directly to text messages).
     for (const id of startIds) {
       if (!shownIds.has(id) && !relationMsgsAdded.has(id)) {
         const m = msgMap.get(id);
@@ -2112,79 +2140,109 @@ export default function TopicDetailPage() {
   const topicFocusTitle = topicFocusRelMsg
     ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`)
     : "";
-  // Messages and edges to pass to the canvas views, with classified text messages (and their
-  // exclusively-classified related relation messages) hidden when not in topic-focus mode.
-  // CLASSIFY relations that are targeted by another CLASSIFY relation are hidden on the main
-  // canvas and only shown inside the newly entered topic canvas.
-  const { messagesToRenderFiltered, edgesToRenderFiltered } = useMemo(() => {
-    const baseMessages = focusEntries.length > 0 ? messagesToShow : messages;
-    const baseEdges = focusEntries.length > 0 ? edgesToShow : edges;
-    if (isTopicFocus) {
-      const edgesByRelMsgId = new Map<string, DemoEdge[]>();
-      for (const e of baseEdges) {
-        const arr = edgesByRelMsgId.get(e.relationMessageId) ?? [];
-        arr.push(e);
-        edgesByRelMsgId.set(e.relationMessageId, arr);
-      }
-      const topicRelation = topicFocusRelMsgId ? relationById.get(topicFocusRelMsgId) : null;
-      const childClassifyRelMsgIds = topicRelation
-        ? collectNestedTopicRelationIds(topicRelation.id, relationById)
-        : new Set<string>();
-      const childOwnedIds = new Set<string>();
-      for (const childId of childClassifyRelMsgIds) {
-        const owned = collectOwnedByRelation(childId, relationById);
-        owned.textIds.forEach(id => childOwnedIds.add(id));
-        owned.relationIds.forEach(id => childOwnedIds.add(id));
-      }
-      const exclusiveToChildRelMsgIds = new Set<string>();
-      if (childOwnedIds.size > 0) {
-        for (const [relMsgId, relEdges] of edgesByRelMsgId) {
-          if (relMsgId === topicFocusRelMsgId || childClassifyRelMsgIds.has(relMsgId)) continue;
-          if (relEdges[0]?.relationType === 'classify') continue;
-          const textEndpoints = relEdges
-            .flatMap(e => [e.from.messageId, e.to.messageId])
-            .filter(mid => msgMap.get(mid)?.kind === 'normal');
-          if (textEndpoints.length === 0) continue;
-          if (textEndpoints.every(mid => childOwnedIds.has(mid))) {
-            exclusiveToChildRelMsgIds.add(relMsgId);
-          }
+  const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender } = useMemo(() => {
+    const useFocusWindow = focusEntries.length > 0 && !isTopicFocus;
+    const baseMessages = useFocusWindow ? messagesToShow : messages;
+    const baseEdges = useFocusWindow ? edgesToShow : edges;
+    if (isTopicFocus && topicFocusRelMsgId) {
+      const topicRelation = relationById.get(topicFocusRelMsgId);
+      const topicTextIds = new Set<string>();
+      const topicRelationIds = new Set<string>();
+      if (topicRelation) {
+        getTextTargetIds(topicRelation.targetRefs).forEach(id => topicTextIds.add(id));
+        getRelationTargetIds(topicRelation.targetRefs).forEach(id => topicRelationIds.add(id));
+        const queue = Array.from(topicRelationIds);
+        const visited = new Set<string>();
+        while (queue.length > 0) {
+          const relId = queue.shift();
+          if (!relId || visited.has(relId)) continue;
+          visited.add(relId);
+          const rel = relationById.get(relId);
+          if (!rel) continue;
+          const relType = rel.relationType.toUpperCase();
+          if (relType !== 'CLASSIFY' && relType !== 'MERGE' && relType !== 'SUPPLEMENT' && relType !== 'SUMMARY') continue;
+          const owned = collectOwnedByRelation(relId, relationById);
+          owned.textIds.forEach(id => topicTextIds.add(id));
+          owned.relationIds.forEach(id => {
+            if (!topicRelationIds.has(id)) queue.push(id);
+            topicRelationIds.add(id);
+          });
         }
       }
-      const topicMessages = baseMessages.filter(m => {
-        if (m.kind === "relation" && m.id === topicFocusRelMsgId) return false;
-        if (childOwnedIds.has(m.id)) return false;
-        if (exclusiveToChildRelMsgIds.has(m.id)) return false;
-        return true;
-      });
+      const edgesByRel = new Map<string, DemoEdge[]>();
+      for (const e of baseEdges) {
+        const arr = edgesByRel.get(e.relationMessageId) ?? [];
+        arr.push(e);
+        edgesByRel.set(e.relationMessageId, arr);
+      }
+      for (const [relMsgId, relEdges] of edgesByRel) {
+        if (relMsgId === topicFocusRelMsgId || topicRelationIds.has(relMsgId)) continue;
+        const textEndpoints = relEdges
+          .flatMap(e => [e.from.messageId, e.to.messageId])
+          .filter(mid => msgMap.get(mid)?.kind === 'normal');
+        if (textEndpoints.length > 0 && textEndpoints.every(mid => topicTextIds.has(mid))) {
+          topicRelationIds.add(relMsgId);
+        }
+      }
+      const visibleIds = new Set<string>([...topicTextIds, ...topicRelationIds]);
+      const topicMessages = baseMessages.filter(m => visibleIds.has(m.id));
       const topicEdges = baseEdges.filter(e =>
-        e.relationMessageId !== topicFocusRelMsgId &&
-        !childOwnedIds.has(e.relationMessageId) &&
-        !exclusiveToChildRelMsgIds.has(e.relationMessageId)
+        visibleIds.has(e.relationMessageId) &&
+        visibleIds.has(e.from.messageId) &&
+        visibleIds.has(e.to.messageId)
       );
-      return { messagesToRenderFiltered: topicMessages, edgesToRenderFiltered: topicEdges };
+      return {
+        graphMessagesToRender: topicMessages,
+        graphEdgesToRender: topicEdges,
+        listMessagesToRender: topicMessages,
+        listEdgesToRender: topicEdges,
+      };
     }
-    // Main canvas: remove classified text messages and relation messages that are exclusively
-    // connected to classified text messages (they "belong" to the topic view).
-    const filteredMessages = baseMessages.filter(m => {
+
+    const listHiddenRelationIds = new Set<string>([
+      ...classifiedTargetClassifyRelMsgIds,
+      ...classifiedTargetMergeRelMsgIds,
+      ...classifiedTargetSupplementRelMsgIds,
+      ...classifiedTargetSummaryRelMsgIds,
+      ...listExclusiveRelMsgIds,
+      ...replacedRelationMsgIds,
+    ]);
+    const listMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
-      if (m.kind === "relation" && classifiedTargetClassifyRelMsgIds.has(m.id)) return false;
-      if (m.kind === "relation" && classifiedTargetMergeRelMsgIds.has(m.id)) return false;
-      if (m.kind === "relation" && classifiedTargetSupplementRelMsgIds.has(m.id)) return false;
-      if (m.kind === "relation" && classifiedTargetSummaryRelMsgIds.has(m.id)) return false;
-      if (m.kind === "relation" && classifiedExclusiveRelMsgIds.has(m.id)) return false;
-      if (m.kind === "relation" && replacedRelationMsgIds.has(m.id)) return false;
+      if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
       return true;
     });
-    const filteredEdges = baseEdges.filter(e =>
-      !classifiedTargetClassifyRelMsgIds.has(e.relationMessageId) &&
-      !classifiedTargetMergeRelMsgIds.has(e.relationMessageId) &&
-      !classifiedTargetSupplementRelMsgIds.has(e.relationMessageId) &&
-      !classifiedTargetSummaryRelMsgIds.has(e.relationMessageId) &&
-      !classifiedExclusiveRelMsgIds.has(e.relationMessageId) &&
-      !replacedRelationMsgIds.has(e.relationMessageId)
+    const listVisibleIds = new Set(listMessages.map(m => m.id));
+    const listEdges = baseEdges.filter(e =>
+      listVisibleIds.has(e.relationMessageId) &&
+      listVisibleIds.has(e.from.messageId) &&
+      listVisibleIds.has(e.to.messageId)
     );
-    return { messagesToRenderFiltered: filteredMessages, edgesToRenderFiltered: filteredEdges };
-  }, [messages, edges, relations, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, classifiedExclusiveRelMsgIds, replacedRelationMsgIds]);
+
+    const graphHiddenRelationIds = new Set<string>([
+      ...listHiddenRelationIds,
+      ...mergeOwnership.relationIds,
+      ...summaryOwnership.relationIds,
+      ...graphExclusiveRelMsgIds,
+    ]);
+    const graphMessages = baseMessages.filter(m => {
+      if (m.kind === "normal" && graphHiddenTextIds.has(m.id)) return false;
+      if (m.kind === "relation" && graphHiddenRelationIds.has(m.id)) return false;
+      return true;
+    });
+    const graphVisibleIds = new Set(graphMessages.map(m => m.id));
+    const graphEdges = baseEdges.filter(e =>
+      graphVisibleIds.has(e.relationMessageId) &&
+      graphVisibleIds.has(e.from.messageId) &&
+      graphVisibleIds.has(e.to.messageId)
+    );
+    return {
+      graphMessagesToRender: graphMessages,
+      graphEdgesToRender: graphEdges,
+      listMessagesToRender: listMessages,
+      listEdgesToRender: listEdges,
+    };
+  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, mergeOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -2354,8 +2412,8 @@ export default function TopicDetailPage() {
     );
   }
 
-  const messagesToRender = messagesToRenderFiltered;
-  const edgesToRender = edgesToRenderFiltered;
+  const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
+  const edgesToRender = viewMode === "list" ? listEdgesToRender : graphEdgesToRender;
   const isOwner = user && topic && (topic as any).author?.id === user.id;
 
   return (
@@ -2401,23 +2459,23 @@ export default function TopicDetailPage() {
           </div>
           {isTopicFocus && (
             <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
-              <div style={{ border: "1px solid #4b5f7a", borderRadius: 10, padding: "8px 10px", background: "#ffffff", color: "#111827", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div style={{ border: "1px solid #334155", borderRadius: 10, padding: "8px 10px", background: "linear-gradient(180deg, #162036 0%, #0f172a 100%)", color: "#e2e8f0", boxShadow: "0 6px 16px rgba(0,0,0,0.25)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {topicFocusTitle || topicFocusKindLabel}
                     </div>
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d", flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
                       进行中
                     </span>
                   </div>
-                  <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    <span>由 <span style={{ fontWeight: 600, color: "#4b5563" }}>{topicFocusRelMsg?.author ?? "系统"}</span> 发起</span>
+                  <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{topicFocusRelMsg?.author ?? "系统"}</span> 发起</span>
                     <span>💬 {topicFocusTargetCount} 条观点</span>
                     <span>{topicFocusRelMsg ? new Date(topicFocusRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
                   </div>
                 </div>
-                <button onClick={exitFocus} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid #6f8fbd", background: "#223a5f", color: "#fff", cursor: "pointer", flexShrink: 0 }}>
+                <button onClick={exitFocus} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
                   {topicFocusExitLabel}
                 </button>
               </div>
@@ -2620,7 +2678,7 @@ export default function TopicDetailPage() {
               <div style={{ fontWeight: 600 }}>关系标签与消息文本</div>
               {hasSecondaryRelationSelector && (() => {
                 const opts = relationType === "reply"
-                  ? ["none", "annotation", "reference"]
+                  ? ["none", "question", "answer"]
                   : relationType === "tag"
                     ? tagSecondaryOptions
                     : correctSecondaryOptions;
@@ -2636,7 +2694,13 @@ export default function TopicDetailPage() {
                   </div>
                 );
               })()}
-              <input style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }} placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签" : "关系标签"} value={relationLabel} onChange={e => setRelationLabel(e.target.value)} />
+              <input
+                style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: relationType === "reply" ? "#1a1a1a" : "#222", color: relationType === "reply" ? "#999" : "#eee", fontSize: 12 }}
+                placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签由附加关系决定" : "关系标签"}
+                value={relationType === "reply" ? replyAdditionalLabel(secondaryRelationType) : relationLabel}
+                readOnly={relationType === "reply"}
+                onChange={e => relationType !== "reply" && setRelationLabel(e.target.value)}
+              />
               <div key={composerRefreshKey}>
               {(() => {
                 const textAreaDisabled =

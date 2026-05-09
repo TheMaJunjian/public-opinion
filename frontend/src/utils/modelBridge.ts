@@ -16,7 +16,7 @@ export type RelationType =
   | "summary"
   | "recommend"
   | "archive";
-export type SecondaryRelationType = "none" | "annotation" | "reference";
+export type SecondaryRelationType = "none" | "question" | "answer";
 
 export type Selection =
   | { kind: "whole" }
@@ -70,6 +70,14 @@ function hashText(text: string): string {
 
 function relationTypeName(t: string): string {
   return getPresentationSpec(t).label;
+}
+
+function normalizeReplyAdditional(label: string | undefined): "reply" | "question" | "answer" {
+  if (!label) return "reply";
+  const normalized = label.trim().toLowerCase();
+  if (normalized === "question" || normalized === "疑问") return "question";
+  if (normalized === "answer" || normalized === "回答") return "answer";
+  return "reply";
 }
 
 function findTextInContent(content: string, text: string): { start: number; len: number } | null {
@@ -145,7 +153,11 @@ export function convertMessagesToDemoModel(
     // For TAG relations, relationLabel carries the human-readable tag label text
     // rather than the bare type string, so all consumers can use it directly.
     const relationLabel: string =
-      relType === 'tag' ? (tagLabel ?? getPresentationSpec('tag').label) : relType;
+      relType === 'tag'
+        ? (tagLabel ?? getPresentationSpec('tag').label)
+        : relType === 'reply'
+          ? normalizeReplyAdditional(getRelationLabel(rel.payload))
+          : relType;
 
     // Deduplicate relation-type targetRefs by relationId to prevent duplicate arrows.
     const seenRelationTargetIds = new Set<string>();

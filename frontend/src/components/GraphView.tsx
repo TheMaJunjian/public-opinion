@@ -1862,7 +1862,16 @@ export default function GraphView(props: GraphViewProps) {
       if (relType === "disagree") return "反驳";
       return relationTypeName(relType);
     }
-    const labelText = (e:DemoEdge,author:string) => `${author} · ${edgeLabelName(e.relationType)}`;
+    function replyEdgeLabel(raw: string): string {
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === "question" || normalized === "疑问") return "疑问";
+      if (normalized === "answer" || normalized === "回答") return "回答";
+      return "回复";
+    }
+    const labelText = (e: DemoEdge, author: string) => {
+      if (e.relationType === "reply") return replyEdgeLabel(e.relationLabel);
+      return `${author} · ${edgeLabelName(e.relationType)}`;
+    };
 
     for (const e of edges) {
       const fromMsg=msgMap.get(e.from.messageId); if (!fromMsg||fromMsg.kind!=="normal") continue;

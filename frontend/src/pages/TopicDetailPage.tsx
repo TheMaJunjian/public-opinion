@@ -741,10 +741,11 @@ export default function TopicDetailPage() {
   );
   const graphHiddenTextIds = useMemo(() => {
     const ids = new Set<string>(classifyOwnership.textIds);
-    mergeOwnership.textIds.forEach(id => ids.add(id));
     summaryOwnership.textIds.forEach(id => ids.add(id));
+    // MERGE displays as a group frame whose targets remain visible as cards on the canvas,
+    // so mergeOwnership.textIds is intentionally excluded here.
     return ids;
-  }, [classifyOwnership, mergeOwnership, summaryOwnership]);
+  }, [classifyOwnership, summaryOwnership]);
   const graphOwnedRelationIds = useMemo(() => {
     const ids = new Set<string>(classifyOwnership.relationIds);
     mergeOwnership.relationIds.forEach(id => ids.add(id));
@@ -2161,6 +2162,20 @@ export default function TopicDetailPage() {
           if (!rel) continue;
           const relType = rel.relationType.toUpperCase();
           if (relType !== 'CLASSIFY' && relType !== 'MERGE' && relType !== 'SUPPLEMENT' && relType !== 'SUMMARY') continue;
+          // Include the source message of this relation so its frame can be rendered in GraphView.
+          // SUPPLEMENT in particular has a source text message that must appear in the topic view.
+          if (rel.sourceMessageId) {
+            const srcId = rel.sourceMessageId;
+            if (!topicTextIds.has(srcId) && !topicRelationIds.has(srcId)) {
+              const srcMsg = msgMap.get(srcId);
+              if (srcMsg?.kind === 'normal') {
+                topicTextIds.add(srcId);
+              } else if (srcMsg?.kind === 'relation') {
+                topicRelationIds.add(srcId);
+                queue.push(srcId);
+              }
+            }
+          }
           const owned = collectOwnedByRelation(relId, relationById);
           owned.textIds.forEach(id => topicTextIds.add(id));
           owned.relationIds.forEach(id => {
@@ -2221,7 +2236,8 @@ export default function TopicDetailPage() {
 
     const graphHiddenRelationIds = new Set<string>([
       ...listHiddenRelationIds,
-      ...mergeOwnership.relationIds,
+      // mergeOwnership.relationIds is intentionally excluded: MERGE-owned relation messages
+      // must remain visible so GraphView can render nested sub-frames inside the MERGE frame.
       ...summaryOwnership.relationIds,
       ...graphExclusiveRelMsgIds,
     ]);
@@ -2242,7 +2258,7 @@ export default function TopicDetailPage() {
       listMessagesToRender: listMessages,
       listEdgesToRender: listEdges,
     };
-  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, mergeOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds]);
+  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyMergeCanvasReservations, buildMergeCanvasReservations } from '../components/GraphView';
+import { applyGroupingColumnOverride, applyMergeCanvasReservations, buildMergeCanvasReservations } from '../components/GraphView';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 
 function makeNormal(id: string): DemoMessage {
@@ -105,5 +105,35 @@ describe('merge canvas helpers', () => {
 
     expect(layout['msg-3'].y).toBeGreaterThanOrEqual(158);
     expect(layout['msg-4'].y).toBeGreaterThan(layout['msg-3'].y + layout['msg-3'].height);
+  });
+});
+
+describe('grouping column override', () => {
+  it('keeps supplement targets in different original columns while compacting used columns/rows', () => {
+    const normals: DemoMessage[] = [
+      { ...makeNormal('msg-1'), createdAt: '2024-01-01T00:00:00.000Z' },
+      { ...makeNormal('msg-2'), createdAt: '2024-01-01T00:01:00.000Z' },
+      { ...makeNormal('msg-3'), createdAt: '2024-01-01T00:02:00.000Z' },
+      { ...makeNormal('msg-4'), createdAt: '2024-01-01T00:03:00.000Z' },
+    ];
+    const edges: DemoEdge[] = [
+      { id: 'supp-1::0', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-1', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
+      { id: 'supp-1::1', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-2', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
+      { id: 'supp-1::2', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-3', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
+    ];
+    const { col, maxCol, groupSourceToTarget } = applyGroupingColumnOverride({
+      normals,
+      edges,
+      col: { 'msg-1': 0, 'msg-2': 3, 'msg-3': 3, 'msg-4': 5 },
+      maxCol: 5,
+    });
+
+    expect(col['msg-1']).toBe(0);
+    expect(col['msg-2']).toBe(1);
+    expect(col['msg-3']).toBe(1);
+    expect(col['msg-4']).toBe(5);
+    expect(maxCol).toBe(5);
+    expect(groupSourceToTarget.get('msg-3')).toBe('msg-2');
+    expect(groupSourceToTarget.has('msg-2')).toBe(false);
   });
 });

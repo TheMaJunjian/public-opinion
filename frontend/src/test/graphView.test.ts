@@ -121,7 +121,7 @@ describe('grouping column override', () => {
       { id: 'supp-1::1', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-2', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
       { id: 'supp-1::2', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-3', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
     ];
-    const { col, groupSourceToTarget } = applyGroupingColumnOverride({
+    const { col, maxCol, groupSourceToTarget } = applyGroupingColumnOverride({
       normals,
       edges,
       col: { 'msg-1': 0, 'msg-2': 3, 'msg-3': 3, 'msg-4': 5 },
@@ -132,6 +132,7 @@ describe('grouping column override', () => {
     expect(col['msg-2']).toBe(1);
     expect(col['msg-3']).toBe(1);
     expect(col['msg-4']).toBe(5);
+    expect(maxCol).toBe(5);
     expect(groupSourceToTarget.get('msg-3')).toBe('msg-2');
     expect(groupSourceToTarget.has('msg-2')).toBe(false);
   });

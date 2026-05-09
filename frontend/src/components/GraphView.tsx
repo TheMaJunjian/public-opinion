@@ -915,6 +915,12 @@ export function applyGroupingColumnOverride(params: {
   const col = { ...params.col };
   const normalSet = new Set(normals.map(m => m.id));
   const msgById = new Map(normals.map(m => [m.id, m]));
+  const createdAtMs = (messageId: string): number => {
+    const raw = msgById.get(messageId)?.createdAt;
+    if (!raw) return Number.POSITIVE_INFINITY;
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+  };
 
   // groupSourceToTarget: maps a "child" message to the message it should be stacked below.
   // For supplement/correct: source message → target message.
@@ -954,10 +960,7 @@ export function applyGroupingColumnOverride(params: {
     if (relationType === 'merge') continue;
     if (targetIds.length < 2) continue;
     // Sort by creation time for deterministic, chronological ordering.
-    targetIds.sort((a, b) =>
-      new Date(msgById.get(a)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime() -
-      new Date(msgById.get(b)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime()
-    );
+    targetIds.sort((a, b) => createdAtMs(a) - createdAtMs(b));
     // Chain: each subsequent target is "stacked below" the previous one.
     for (let i = 1; i < targetIds.length; i++) {
       if (!groupSourceToTarget.has(targetIds[i])) {
@@ -976,10 +979,7 @@ export function applyGroupingColumnOverride(params: {
       return true;
     });
     if (targetIds.length < 2) continue;
-    targetIds.sort((a, b) =>
-      new Date(msgById.get(a)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime() -
-      new Date(msgById.get(b)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime()
-    );
+    targetIds.sort((a, b) => createdAtMs(a) - createdAtMs(b));
     const uniqueCols = Array.from(new Set(targetIds.map(id => col[id] ?? 0))).sort((a, b) => a - b);
     const minCol = uniqueCols[0] ?? 0;
     const compressedColByOriginal = new Map<number, number>();

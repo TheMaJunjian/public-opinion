@@ -238,20 +238,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
 
     // CLASSIFY, MERGE, SUMMARY, and SUPPLEMENT are user-to-message relations: no source text message.
     // For SUPPLEMENT: the supplementary text (if any) is stored as a target, not a source.
-    if (data.relationType === 'CLASSIFY' && data.sourceMessageId) {
-      res.status(400).json({ error: '分类关系不应提供来源消息 ID' });
-      return;
-    }
-    if (data.relationType === 'MERGE' && data.sourceMessageId) {
-      res.status(400).json({ error: '归并关系不应提供来源消息 ID' });
-      return;
-    }
-    if (data.relationType === 'SUMMARY' && data.sourceMessageId) {
-      res.status(400).json({ error: '总结关系不应提供来源消息 ID' });
-      return;
-    }
-    if (data.relationType === 'SUPPLEMENT' && data.sourceMessageId) {
-      res.status(400).json({ error: '补充关系不应提供来源消息 ID' });
+    const noSourceRelTypeNames: Record<string, string> = {
+      CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', SUPPLEMENT: '补充',
+    };
+    if (data.relationType in noSourceRelTypeNames && data.sourceMessageId) {
+      res.status(400).json({ error: `${noSourceRelTypeNames[data.relationType]}关系不应提供来源消息 ID` });
       return;
     }
     // sourceMessageId can reference ANY message in this topic (TEXT or RELATION kind),

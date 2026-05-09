@@ -1639,6 +1639,8 @@ export default function TopicDetailPage() {
       let extraTargetMid: string | null = null;
       if (text.length > 0) {
         const msg = await handleSendMessageOnly(text);
+        // If message creation fails, handleSendMessageOnly shows an alert.
+        // Keep UI state intact (selections, relation type) so the user can retry.
         if (!msg) return;
         extraTargetMid = msg.id;
       }

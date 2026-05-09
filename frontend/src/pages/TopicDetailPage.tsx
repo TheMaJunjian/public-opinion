@@ -2224,12 +2224,29 @@ export default function TopicDetailPage() {
               }
             }
           }
-          const owned = collectOwnedByRelation(relId, relationById);
-          owned.textIds.forEach(id => topicTextIds.add(id));
-          owned.relationIds.forEach(id => {
-            if (!topicRelationIds.has(id)) queue.push(id);
-            topicRelationIds.add(id);
-          });
+          if (relType === 'SUPPLEMENT') {
+            // SUPPLEMENT frames show their source (handled above) and their targets.
+            // For relation targets that are CLASSIFY or SUMMARY (topic containers), include them
+            // as visible cards but do NOT expand their owned content — the user must enter those
+            // topics explicitly by double-clicking. SUPPLEMENT and MERGE relation targets are
+            // transparent containers and are expanded normally.
+            getTextTargetIds(rel.targetRefs).forEach(id => topicTextIds.add(id));
+            getRelationTargetIds(rel.targetRefs).forEach(id => {
+              topicRelationIds.add(id);
+              const childRelType = relationById.get(id)?.relationType?.toUpperCase();
+              if ((childRelType === 'SUPPLEMENT' || childRelType === 'MERGE') && !visited.has(id)) {
+                queue.push(id);
+              }
+              // CLASSIFY and SUMMARY targets are shown as topic cards but not recursively expanded.
+            });
+          } else {
+            const owned = collectOwnedByRelation(relId, relationById);
+            owned.textIds.forEach(id => topicTextIds.add(id));
+            owned.relationIds.forEach(id => {
+              if (!topicRelationIds.has(id)) queue.push(id);
+              topicRelationIds.add(id);
+            });
+          }
         }
       }
       // Expand topicTextIds with text messages that have CORRECT (更正) relations
@@ -2335,6 +2352,7 @@ export default function TopicDetailPage() {
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
+    setRelationType(null); setSecondaryRelationType("none");
   }
 
   async function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree") {

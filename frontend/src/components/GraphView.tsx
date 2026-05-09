@@ -337,6 +337,8 @@ function getRelationBoundsFromLayout(params: {
   msgMap: Map<string, DemoMessage>;
   relationCardMsgIds: Set<string>;
   visited?: Set<string>;
+  /** Optional DOM-aware box lookup; when provided, used instead of layout for individual cards. */
+  boxFn?: (id: string) => LayoutBox | null | undefined;
 }): RelationBounds | null {
   const { relMsgId, edgesByRelMsg, layout, msgMap, relationCardMsgIds } = params;
   const visited = params.visited ?? new Set<string>();
@@ -353,13 +355,13 @@ function getRelationBoundsFromLayout(params: {
       if (endpointId.startsWith("anon:")) continue;
       const endpointMsg = msgMap.get(endpointId);
       if (endpointMsg?.kind === "relation") {
-        const nested = getRelationBoundsFromLayout({ relMsgId: endpointId, edgesByRelMsg, layout, msgMap, relationCardMsgIds, visited });
+        const nested = getRelationBoundsFromLayout({ relMsgId: endpointId, edgesByRelMsg, layout, msgMap, relationCardMsgIds, visited, boxFn: params.boxFn });
         if (!nested) continue;
         boxes.push(nested.rect);
         nested.cardIds.forEach(id => cardIds.add(id));
         continue;
       }
-      const endpointBox = layout[endpointId];
+      const endpointBox = params.boxFn ? (params.boxFn(endpointId) ?? layout[endpointId]) : layout[endpointId];
       if (endpointBox && (endpointMsg?.kind === "normal" || relationCardMsgIds.has(endpointId))) {
         boxes.push(endpointBox);
         cardIds.add(endpointId);
@@ -1638,10 +1640,13 @@ export default function GraphView(props: GraphViewProps) {
           minX = Math.min(minX, sourceBox.x); minY = Math.min(minY, sourceBox.y);
           maxX = Math.max(maxX, sourceBox.x + sourceBox.width); maxY = Math.max(maxY, sourceBox.y + sourceBox.height);
         }
+        // DOM-aware box lookup: use actual rendered positions so SUPPLEMENT frames fully contain
+        // nested relation frames whose card heights may exceed their initial layout estimates.
+        const domBoxFn = (id: string) => endpointBoxForNormal(id)?.box ?? layout[id];
         let anyTarget = false;
         for (const e of frameEdges) {
           const relationTargetBounds = msgMap.get(e.to.messageId)?.kind === "relation"
-            ? getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg, layout, msgMap, relationCardMsgIds })
+            ? getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg, layout, msgMap, relationCardMsgIds, boxFn: domBoxFn })
             : null;
           const targetBox = relationTargetBounds?.rect ?? endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
           if (!targetBox) continue;

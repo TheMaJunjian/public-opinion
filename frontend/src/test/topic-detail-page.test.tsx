@@ -467,3 +467,241 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
   });
 });
+
+describe('TopicDetailPage MERGE graph frame visibility', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [makeMessage('msg-1', '第一条'), makeMessage('msg-2', '第二条')],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-merge',
+          topicId: 'topic-1',
+          relationType: 'MERGE',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-1' }, { kind: 'message', messageId: 'msg-2' }],
+          payload: { title: '归并标签', targetLayout: 'multi-column' },
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('includes MERGE text targets in graphMessages so the frame can be rendered', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    const latestProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    // MERGE text targets must be in graphMessages for frame bounds computation.
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-1')).toBe(true);
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-2')).toBe(true);
+    // MERGE relation message itself must also be present.
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-merge')).toBe(true);
+  });
+});
+
+describe('TopicDetailPage CLASSIFY topic with supplement source visibility', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    // msg-a is the source of rel-supp; msg-b is the target
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-a', '补充来源'),
+        makeMessage('msg-b', '被补充消息'),
+      ],
+    });
+    // rel-supp: SUPPLEMENT (source=msg-a, target=msg-b)
+    // rel-classify: CLASSIFY (targets=[rel-supp])
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-supp',
+          topicId: 'topic-1',
+          relationType: 'SUPPLEMENT',
+          sourceMessageId: 'msg-a',
+          targetRefs: [{ kind: 'message', messageId: 'msg-b' }],
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-classify',
+          topicId: 'topic-1',
+          relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }],
+          payload: { title: '分类话题' },
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('shows supplement relation and its source text when entering classify topic', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    });
+
+    // Enter the classify topic
+    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+
+    await waitFor(() => {
+      // The SUPPLEMENT relation message must be visible in the topic view
+      expect(screen.getByText('关系消息 rel-supp')).toBeInTheDocument();
+    });
+    // The supplement's source text (msg-a) must also be visible so its frame can render
+    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    // The supplement's target text (msg-b) must be visible
+    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+  });
+});
+
+describe('TopicDetailPage SUMMARY topic with supplement source visibility', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-a', '补充来源'),
+        makeMessage('msg-b', '被补充消息'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-supp',
+          topicId: 'topic-1',
+          relationType: 'SUPPLEMENT',
+          sourceMessageId: 'msg-a',
+          targetRefs: [{ kind: 'message', messageId: 'msg-b' }],
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-summary',
+          topicId: 'topic-1',
+          relationType: 'SUMMARY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }],
+          payload: { title: '总结观点', targetLayout: 'multi-column' },
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('shows supplement relation and its source text when entering summary topic', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+    });
+
+    // Enter the summary topic
+    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+
+    await waitFor(() => {
+      expect(screen.getByText('关系消息 rel-supp')).toBeInTheDocument();
+    });
+    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+  });
+});
+
+describe('TopicDetailPage MERGE with nested relation target graph visibility', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [makeMessage('msg-a', '消息A'), makeMessage('msg-b', '消息B')],
+    });
+    // rel-supp: SUPPLEMENT (source=msg-a, target=msg-b)
+    // rel-merge: MERGE targeting [rel-supp]
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-supp',
+          topicId: 'topic-1',
+          relationType: 'SUPPLEMENT',
+          sourceMessageId: 'msg-a',
+          targetRefs: [{ kind: 'message', messageId: 'msg-b' }],
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-merge',
+          topicId: 'topic-1',
+          relationType: 'MERGE',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }],
+          payload: { title: '归并标签' },
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('includes MERGE-owned relation messages in graphMessages for nested frame rendering', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    const latestProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    // The MERGE relation message must be visible
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-merge')).toBe(true);
+    // The MERGE-owned SUPPLEMENT and its text targets must also be in graphMessages
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-supp')).toBe(true);
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-a')).toBe(true);
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-b')).toBe(true);
+  });
+});

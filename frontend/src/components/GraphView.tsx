@@ -320,11 +320,11 @@ function getGroupHeaderRect(frameRect: Rect): Rect {
   };
 }
 
-/** Compute the card-style header rect for MERGE group frames, positioned fully above the frame rect. */
+/** Compute the card-style header rect for MERGE group frames, positioned inside the frame at the top-left. */
 function getMergeCardHeaderRect(frameRect: Rect): Rect {
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y - GROUP_HEADER_HEIGHT - 2,
+    y: frameRect.y + SUPP_FRAME_PAD,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
     height: GROUP_HEADER_HEIGHT,
   };
@@ -371,19 +371,14 @@ function getRelationBoundsFromLayout(params: {
   if (!rect) return null;
   const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
   if (relMsg?.relationType === 'merge') {
-    const contentRect = {
+    // Header is now inside the frame at the top; reserve headerTopPad space at the top.
+    const headerTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
+    rect = {
       x: rect.x - SUPP_FRAME_PAD,
-      y: rect.y - SUPP_FRAME_PAD,
+      y: rect.y - SUPP_FRAME_PAD - headerTopPad,
       width: rect.width + SUPP_FRAME_PAD * 2,
-      height: rect.height + SUPP_FRAME_PAD * 2,
+      height: rect.height + SUPP_FRAME_PAD * 2 + headerTopPad,
     };
-    // Card-style header is fully above the frame rect; account for its height in bounds.
-    const headerRect = getMergeCardHeaderRect(contentRect);
-    const minX = Math.min(contentRect.x, headerRect.x);
-    const minY = Math.min(contentRect.y, headerRect.y);
-    const maxX = Math.max(contentRect.x + contentRect.width, headerRect.x + headerRect.width);
-    const maxY = Math.max(contentRect.y + contentRect.height, headerRect.y + headerRect.height);
-    rect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   } else if (relKind === 'supplement-frame' || relKind === 'frame-group' || relKind === 'replace-overlay') {
     rect = {
       x: rect.x - SUPP_FRAME_PAD,
@@ -1667,6 +1662,16 @@ export default function GraphView(props: GraphViewProps) {
 
     computeFramesForRelType(isSuppFrameRel, f => newSupplementFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
     computeFramesForRelType(t => !isSuppFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
+
+    // For MERGE group frames, extend the frame rect upward to include the header inside the frame.
+    // The header card is positioned at (frameRect.y + SUPP_FRAME_PAD), so the frame must start
+    // (GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD) above the union of content card positions.
+    const mergeHeaderTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
+    for (const gf of newGroupFrames) {
+      if (gf.relType === 'merge') {
+        gf.rect = { ...gf.rect, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
+      }
+    }
 
     // Compute INLINE BADGES — RECOMMEND / ARCHIVE: small badge anchored to target message card
     // Position: top-right corner of the target card, stacked upward for multiple badges.

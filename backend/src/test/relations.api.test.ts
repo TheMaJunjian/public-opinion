@@ -221,6 +221,23 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
+  it('allows SUPPLEMENT without sourceMessageId', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'SUPPLEMENT', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects SUPPLEMENT with sourceMessageId', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'SUPPLEMENT', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('补充关系');
+  });
+
   it('rejects MERGE with sourceMessageId', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')

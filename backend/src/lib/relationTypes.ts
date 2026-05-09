@@ -28,10 +28,9 @@
  *   AGREE/DISAGREE: sourceMessageId is optional (null when no text is attached).
  *     With text: treated as support/rebut stance with an associated message.
  *     Without text: pure stance declaration, no source message.
- *   SUPPLEMENT: sourceMessageId is optional (null when no source text is attached).
- *     With source: source message is placed directly below target in the non-linear view,
- *     wrapped together in a border frame.
- *     Without source: the frame wraps only the target message(s).
+ *   SUPPLEMENT: always a user-to-message relation (sourceMessageId is always null).
+ *     Any supplementary text message is stored as a target in targetRefs, not as a source.
+ *     All content is in targetRefs, wrapped together in a border frame.
  */
 export const RELATION_TYPES = [
   'ANNOTATION',   // 注释
@@ -41,7 +40,7 @@ export const RELATION_TYPES = [
   'DISAGREE',     // 反对（有附带文本消息时，视为反驳）
   'TAG',          // 标注（消息旁的装饰标签，内容不能为空）
   'CORRECT',      // 更正
-  'SUPPLEMENT',   // 补充（来源消息紧贴目标消息下方，以边框包裹）
+  'SUPPLEMENT',   // 补充（用户对消息的关系；所有目标（包括补充文本）均存储在 targetRefs 中）
   'CLASSIFY',     // 分类
   'MERGE',        // 归并
   'SUMMARY',      // 总结

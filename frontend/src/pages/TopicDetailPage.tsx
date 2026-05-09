@@ -1601,30 +1601,12 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if ((isAgreeDisagree || isSupplement || isInlineBadge) && text.length === 0) {
-      // Supplement: ONE relation message containing all targets in a single frame.
+    if ((isAgreeDisagree || isInlineBadge) && text.length === 0) {
       // Agree/disagree/inline-badge: one relation message per target (separate decoration badges).
       // Relation messages are first-class messages — persist all of them to the backend.
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
-      if (isSupplement) {
-        const targetRefs = uniqueTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
-        try {
-          const backendRel = await api.createRelation(topicId!, { relationType: 'SUPPLEMENT', sourceMessageId: null, targetRefs });
-          const relId = backendRel.id;
-          const typeName = relationTypeName("supplement");
-          appendCreatedRelation(backendRel);
-          const anonSrcId = `anon:${backendRel.id}`;
-          for (const tgtMid of uniqueTargetMids) {
-            newEdgesList.push({
-              id: nextId("edge"), relationMessageId: relId, relationType: "supplement",
-              from: { messageId: anonSrcId, selection: { kind: "whole" } },
-              to: { messageId: tgtMid, selection: { kind: "whole" } },
-              relationLabel: typeName,
-            } as DemoEdge);
-          }
-        } catch (e: any) { alert(`建立无来源补充关系失败: ${e?.message ?? e}`); }
-      } else {
+      {
         // Agree/disagree/inline-badge (recommend/archive): one relation per target — persist to backend
         for (const tgtMid of uniqueTargetMids) {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
@@ -1644,6 +1626,42 @@ export default function TopicDetailPage() {
       }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
+    // SUPPLEMENT relation: user-to-message relation (like CLASSIFY/MERGE/SUMMARY), no source message.
+    // If text is present, create a text message first and include it as a target of the frame.
+    // This avoids creating normal→normal edges that could falsely trigger cross-link checks.
+    if (isSupplement) {
+      const newEdgesList: DemoEdge[] = [];
+      const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
+      let extraTargetMid: string | null = null;
+      if (text.length > 0) {
+        const msg = await handleSendMessageOnly(text);
+        if (!msg) return;
+        extraTargetMid = msg.id;
+      }
+      const allTargetMids = extraTargetMid ? [...uniqueTargetMids, extraTargetMid] : uniqueTargetMids;
+      const targetRefs = allTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
+      try {
+        const backendRel = await api.createRelation(topicId!, { relationType: 'SUPPLEMENT', sourceMessageId: null, targetRefs });
+        const relId = backendRel.id;
+        const typeName = relationTypeName("supplement");
+        appendCreatedRelation(backendRel);
+        const anonSrcId = `anon:${backendRel.id}`;
+        for (const tgtMid of allTargetMids) {
+          newEdgesList.push({
+            id: nextId("edge"), relationMessageId: relId, relationType: "supplement",
+            from: { messageId: anonSrcId, selection: { kind: "whole" } },
+            to: { messageId: tgtMid, selection: { kind: "whole" } },
+            relationLabel: typeName,
+          } as DemoEdge);
+        }
+      } catch (e: any) { alert(`建立补充关系失败: ${e?.message ?? e}`); }
+      setEdges(prev => [...prev, ...newEdgesList]);
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
       setRelationType(null); setSecondaryRelationType("none");
       return;
     }
@@ -2011,11 +2029,17 @@ export default function TopicDetailPage() {
       if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
-    if (isAgreeDisagreeType || isSupplementType) {
+    if (isAgreeDisagreeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       return newMessageContent.trim().length > 0
         ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
         : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    }
+    if (isSupplementType) {
+      if (!hasTargetsAvailable) return "请在画布中选择目标消息";
+      return newMessageContent.trim().length > 0
+        ? `发送消息并建立「${typeName}」关系（文本消息加入补充框架）`
+        : `建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
     // TAG + secondary = recommend/archive: quick inline-badge shortcut
     if (isTagWithInlineBadge) {
@@ -2210,8 +2234,9 @@ export default function TopicDetailPage() {
           if (!rel) continue;
           const relType = rel.relationType.toUpperCase();
           if (relType !== 'CLASSIFY' && relType !== 'MERGE' && relType !== 'SUPPLEMENT' && relType !== 'SUMMARY') continue;
-          // Include the source message of this relation so its frame can be rendered in GraphView.
-          // SUPPLEMENT in particular has a source text message that must appear in the topic view.
+          // Include the source message of nested relations (not applicable to SUPPLEMENT/CLASSIFY/MERGE/SUMMARY
+          // which are user-to-message relations with no sourceMessageId, but may apply to other relation
+          // types that appear as nested targets via future extensions).
           if (rel.sourceMessageId) {
             const srcId = rel.sourceMessageId;
             if (!topicTextIds.has(srcId) && !topicRelationIds.has(srcId)) {
@@ -2225,11 +2250,10 @@ export default function TopicDetailPage() {
             }
           }
           if (relType === 'SUPPLEMENT') {
-            // SUPPLEMENT frames show their source (handled above) and their targets.
-            // For relation targets that are CLASSIFY or SUMMARY (topic containers), include them
-            // as visible cards but do NOT expand their owned content — the user must enter those
-            // topics explicitly by double-clicking. SUPPLEMENT and MERGE relation targets are
-            // transparent containers and are expanded normally.
+            // SUPPLEMENT is a user-to-message relation: all content (including any supplementary
+            // text message) is stored in targetRefs. Include all text targets and expand nested
+            // SUPPLEMENT/MERGE relation targets. CLASSIFY and SUMMARY targets are shown as topic
+            // cards but not recursively expanded (user must double-click to enter them).
             getTextTargetIds(rel.targetRefs).forEach(id => topicTextIds.add(id));
             getRelationTargetIds(rel.targetRefs).forEach(id => {
               topicRelationIds.add(id);

@@ -2276,7 +2276,7 @@ export default function TopicDetailPage() {
       const topicMessages = baseMessages.filter(m => visibleIds.has(m.id));
       const topicEdges = baseEdges.filter(e =>
         visibleIds.has(e.relationMessageId) &&
-        visibleIds.has(e.from.messageId) &&
+        (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
         visibleIds.has(e.to.messageId)
       );
       return {
@@ -2303,7 +2303,7 @@ export default function TopicDetailPage() {
     const listVisibleIds = new Set(listMessages.map(m => m.id));
     const listEdges = baseEdges.filter(e =>
       listVisibleIds.has(e.relationMessageId) &&
-      listVisibleIds.has(e.from.messageId) &&
+      (e.from.messageId.startsWith("anon:") || listVisibleIds.has(e.from.messageId)) &&
       listVisibleIds.has(e.to.messageId)
     );
 
@@ -2322,7 +2322,7 @@ export default function TopicDetailPage() {
     const graphVisibleIds = new Set(graphMessages.map(m => m.id));
     const graphEdges = baseEdges.filter(e =>
       graphVisibleIds.has(e.relationMessageId) &&
-      graphVisibleIds.has(e.from.messageId) &&
+      (e.from.messageId.startsWith("anon:") || graphVisibleIds.has(e.from.messageId)) &&
       graphVisibleIds.has(e.to.messageId)
     );
     return {
@@ -2571,7 +2571,8 @@ export default function TopicDetailPage() {
             </div>
           )}
 
-          <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}>
+          <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}
+            onClick={viewMode === "list" ? (e => { if (!(e.target as HTMLElement).closest("[data-msgid]")) handleCanvasBlankClick(); }) : undefined}>
             {viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {messagesToRender
@@ -2582,19 +2583,20 @@ export default function TopicDetailPage() {
                   const relType = msg.kind === "relation" ? relationTypeByRelMsgId.get(msg.id) : null;
                   const isClassifyTopicMsg = relType === "classify";
                   const isSummaryTopicMsg = relType === "summary";
-                  const isTopicMsg = isClassifyTopicMsg || isSummaryTopicMsg;
+                  const isMergeTopicMsg = relType === "merge";
+                  const isTopicMsg = isClassifyTopicMsg || isSummaryTopicMsg || isMergeTopicMsg;
                   const topicMsgTargetCount = isTopicMsg
                     ? collectOwnedByRelation(msg.id, relationById).textIds.size
                     : 0;
-                  const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类话题（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
+                  const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类话题（${topicMsgTargetCount}）` : isMergeTopicMsg ? `归并（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{
                         borderRadius: isTopicMsg ? 10 : 6,
                         border: isTopicMsg
                           ? "1px solid #e5e7eb"
-                          : msg.kind === "relation" ? "1px solid #886400" : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444",
-                        background: isTopicMsg ? "#ffffff" : msg.kind === "relation" ? "#232018" : "#1f1f1f",
+                          : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444",
+                        background: isTopicMsg ? "#ffffff" : "#1f1f1f",
                         color: isTopicMsg ? "#111827" : undefined,
                         padding: isTopicMsg ? "10px 12px" : "10px 14px",
                         cursor: "pointer",
@@ -2604,7 +2606,7 @@ export default function TopicDetailPage() {
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
                       <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
-                        <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
+                        <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
                         <span>{isTopicMsg ? "双击进入话题" : `作者：${msg.author}`}</span>
                       </div>
                       {isTopicMsg && (
@@ -2612,8 +2614,15 @@ export default function TopicDetailPage() {
                           <div style={{ fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {topicMsgTitle}
                           </div>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "#dcfce7", color: "#15803d" }}>
-                            进行中
+                          <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: isMergeTopicMsg ? "rgba(148,163,184,0.18)" : "#dcfce7", color: isMergeTopicMsg ? "#475569" : "#15803d" }}>
+                            {isMergeTopicMsg ? "归并" : "进行中"}
+                          </span>
+                        </div>
+                      )}
+                      {!isTopicMsg && msg.kind === "relation" && (
+                        <div style={{ marginBottom: 4 }}>
+                          <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#9ca3af" }}>
+                            {relType ? String(relType) : "关系"}
                           </span>
                         </div>
                       )}
@@ -2629,7 +2638,7 @@ export default function TopicDetailPage() {
                                 <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
                               </div>
                             )
-                            : <div style={{ whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 12 }}>{msg.content}</div>}
+                            : <div style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#d1d5db" }}>{msg.content}</div>}
                       </div>
                     </div>
                   );

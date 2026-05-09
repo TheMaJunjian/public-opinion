@@ -905,7 +905,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
  *   - All framing-type relations (supplement-frame, frame-group, replace-overlay) participate.
  *   - correction-badge (CORRECT) also uses same-column stacking without a frame.
  */
-function applyGroupingColumnOverride(params: {
+export function applyGroupingColumnOverride(params: {
   normals: DemoMessage[];
   edges: DemoEdge[];
   col: Record<string, number>;
@@ -936,9 +936,16 @@ function applyGroupingColumnOverride(params: {
   // where an explicit-source supplement has more than one target: those targets now also get
   // chained, so they are stacked below the first target together with the source message.
   const frameTargetsByRelMsg = new Map<string, { targetIds: string[]; relationType: string }>();
+  const supplementTargetsByRelMsg = new Map<string, string[]>();
   for (const e of edges) {
     if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
     if (!normalSet.has(e.to.messageId)) continue;
+    if (e.relationType === 'supplement') {
+      const ids = supplementTargetsByRelMsg.get(e.relationMessageId) ?? [];
+      ids.push(e.to.messageId);
+      supplementTargetsByRelMsg.set(e.relationMessageId, ids);
+      continue;
+    }
     const entry = frameTargetsByRelMsg.get(e.relationMessageId) ?? { targetIds: [], relationType: e.relationType };
     entry.targetIds.push(e.to.messageId);
     frameTargetsByRelMsg.set(e.relationMessageId, entry);
@@ -955,6 +962,45 @@ function applyGroupingColumnOverride(params: {
     for (let i = 1; i < targetIds.length; i++) {
       if (!groupSourceToTarget.has(targetIds[i])) {
         groupSourceToTarget.set(targetIds[i], targetIds[i - 1]);
+      }
+    }
+  }
+
+  // SUPPLEMENT relations keep targets that were originally in different columns separated,
+  // while compacting the occupied columns and rows among those targets.
+  for (const [, targetIdsRaw] of supplementTargetsByRelMsg) {
+    const targetIdSet = new Set<string>();
+    const targetIds = targetIdsRaw.filter(id => {
+      if (targetIdSet.has(id)) return false;
+      targetIdSet.add(id);
+      return true;
+    });
+    if (targetIds.length < 2) continue;
+    targetIds.sort((a, b) =>
+      new Date(msgById.get(a)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime() -
+      new Date(msgById.get(b)?.createdAt ?? Number.MAX_SAFE_INTEGER).getTime()
+    );
+    const uniqueCols = Array.from(new Set(targetIds.map(id => col[id] ?? 0))).sort((a, b) => a - b);
+    const minCol = uniqueCols[0] ?? 0;
+    const compressedColByOriginal = new Map<number, number>();
+    uniqueCols.forEach((originalCol, index) => compressedColByOriginal.set(originalCol, minCol + index));
+    for (const targetId of targetIds) {
+      const originalCol = col[targetId] ?? 0;
+      col[targetId] = compressedColByOriginal.get(originalCol) ?? originalCol;
+    }
+    const targetsByCol = new Map<number, string[]>();
+    for (const targetId of targetIds) {
+      const targetCol = col[targetId] ?? 0;
+      const ids = targetsByCol.get(targetCol) ?? [];
+      ids.push(targetId);
+      targetsByCol.set(targetCol, ids);
+    }
+    for (const ids of targetsByCol.values()) {
+      if (ids.length < 2) continue;
+      for (let i = 1; i < ids.length; i++) {
+        if (!groupSourceToTarget.has(ids[i])) {
+          groupSourceToTarget.set(ids[i], ids[i - 1]);
+        }
       }
     }
   }

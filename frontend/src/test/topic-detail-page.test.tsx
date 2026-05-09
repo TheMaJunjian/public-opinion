@@ -705,3 +705,180 @@ describe('TopicDetailPage MERGE with nested relation target graph visibility', (
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-b')).toBe(true);
   });
 });
+
+describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    // msg-orig: original message classified by rel-classify
+    // msg-corr: correcting message (source of rel-correct targeting msg-orig)
+    // msg-other: unrelated message that should not appear in the topic view
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-orig', '原始消息'),
+        makeMessage('msg-corr', '更正消息'),
+        makeMessage('msg-other', '无关消息'),
+      ],
+    });
+    // rel-correct: CORRECT (source=msg-corr, target=msg-orig)
+    // rel-classify: CLASSIFY (targets=[msg-orig])
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-correct',
+          topicId: 'topic-1',
+          relationType: 'CORRECT',
+          sourceMessageId: 'msg-corr',
+          targetRefs: [{ kind: 'message', messageId: 'msg-orig' }],
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-classify',
+          topicId: 'topic-1',
+          relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-orig' }],
+          payload: { title: '分类话题' },
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('hides both the classified message and its CORRECT-related message from list view', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    });
+
+    // msg-orig is classified, so it should be hidden
+    expect(screen.queryByText('消息 msg-orig')).not.toBeInTheDocument();
+    // msg-corr is CORRECT-related to msg-orig, so it should also be hidden
+    expect(screen.queryByText('消息 msg-corr')).not.toBeInTheDocument();
+    // msg-other is unrelated and should still be visible
+    expect(screen.getByText('消息 msg-other')).toBeInTheDocument();
+  });
+
+  it('shows classified message and its CORRECT-related message when entering classify topic', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    });
+
+    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
+    });
+    // msg-orig (direct target) must be visible
+    expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
+    // msg-corr (CORRECT-related to msg-orig) must be automatically included
+    expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
+    // rel-correct (CORRECT relation message) must also be visible
+    expect(screen.getByText('关系消息 rel-correct')).toBeInTheDocument();
+    // msg-other (unrelated) must NOT appear
+    expect(screen.queryByText('消息 msg-other')).not.toBeInTheDocument();
+  });
+});
+
+describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-orig', '原始消息'),
+        makeMessage('msg-corr', '更正消息'),
+      ],
+    });
+    // rel-correct: CORRECT (source=msg-corr, target=msg-orig)
+    // rel-summary: SUMMARY (targets=[msg-orig])
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-correct',
+          topicId: 'topic-1',
+          relationType: 'CORRECT',
+          sourceMessageId: 'msg-corr',
+          targetRefs: [{ kind: 'message', messageId: 'msg-orig' }],
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-summary',
+          topicId: 'topic-1',
+          relationType: 'SUMMARY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-orig' }],
+          payload: { title: '总结观点', targetLayout: 'multi-column' },
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('shows summarized message and its CORRECT-related message when entering summary topic', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+    });
+
+    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
+    });
+    // msg-orig (direct target) must be visible
+    expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
+    // msg-corr (CORRECT-related to msg-orig) must be automatically included
+    expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
+    // rel-correct (CORRECT relation message) must also be visible
+    expect(screen.getByText('关系消息 rel-correct')).toBeInTheDocument();
+  });
+
+  it('hides CORRECT-related message from graph view when its counterpart is summarized', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    await waitFor(() => {
+      expect(mockGraphView).toHaveBeenCalled();
+    });
+    const latestProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    // msg-orig is summarized → hidden from graph view
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-orig')).toBe(false);
+    // msg-corr is CORRECT-related to msg-orig → also hidden from graph view
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-corr')).toBe(false);
+    // rel-summary itself is visible (it's the topic card)
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-summary')).toBe(true);
+  });
+});

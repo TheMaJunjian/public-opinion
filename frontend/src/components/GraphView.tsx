@@ -1419,7 +1419,7 @@ export default function GraphView(props: GraphViewProps) {
     }
     return ids;
   }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
-  const { layout: baseLayout } = useMemo(
+  const { layout: baseLayout, canvasHeight: baseCanvasHeight } = useMemo(
     () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: hiddenCorrectedTargetIds }),
     [normals, colOf, measuredHeights, maxCol, groupSourceToTarget, hiddenCorrectedTargetIds]
   );
@@ -1433,9 +1433,9 @@ export default function GraphView(props: GraphViewProps) {
       normals,
       colOf,
       reservations: frameAvoidanceReservations,
-      minCanvasHeight: 0,
+      minCanvasHeight: baseCanvasHeight,
     }),
-    [baseLayout, normals, colOf, frameAvoidanceReservations]
+    [baseLayout, normals, colOf, frameAvoidanceReservations, baseCanvasHeight]
   );
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
@@ -1522,7 +1522,12 @@ export default function GraphView(props: GraphViewProps) {
       const cardEl = cardRefs.current[id];
       if (cardEl) {
         const r = cardEl.getBoundingClientRect();
-        return { box:{x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height}, col:colOf[id]??0 };
+        // Only trust the DOM rect when the element has real dimensions (>1px).
+        // After a focus-mode transition, stale refs to unmounted cards may return
+        // zero-area rects, which would place edges at (0,0) making them invisible.
+        if (r.width > 1 && r.height > 1) {
+          return { box:{x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height}, col:colOf[id]??0 };
+        }
       }
       const box = layout[id]; if (!box) return null;
       return { box, col:colOf[id]??0 };

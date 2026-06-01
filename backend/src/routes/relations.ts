@@ -413,6 +413,10 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
 
         for (const relMsg of relationMessages) {
           if (relMsg.relationType === 'REFERENCE') continue;
+          // Skip relations that are themselves direct targets of this classification
+          // (e.g., when classifying a SUPPLEMENT or MERGE, its own edges should not
+          // trigger cross-link errors — Bug 3 fix).
+          if (targetRelationIds.includes(relMsg.id)) continue;
           const sourceTextId =
             relMsg.relSourceId && sourceTextIdSet.has(relMsg.relSourceId)
               ? relMsg.relSourceId
@@ -432,7 +436,9 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
             (sourceTextId !== null && selectedTargetTextIdSet.has(sourceTextId)) ||
             targetTextIds.some(id => selectedTargetTextIdSet.has(id));
           if (!hasSelectedEndpoint) continue;
-          // Only block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY.
+          // Only block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY
+          // AND is NOT part of the same expanded selection (e.g., when a SUPPLEMENT bridges
+          // between selected and already-classified messages, allow it — Bug 3 fix).
           if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId) && alreadyClassifiedTextIds.has(sourceTextId)) {
             res.status(400).json({ error: crossLinkError });
             return;
@@ -475,6 +481,94 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       payload: message.relationPayload ?? undefined,
       createdAt: message.createdAt,
       createdBy: message.createdBy,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/topics/:topicId/relations/:relationId
+// Update a relation's targetRefs (e.g. add a new message to a classify topic).
+const patchRelationSchema = z.object({
+  targetRefs: z.array(targetRefSchema).max(20),
+});
+
+relationsRouter.patch('/:relationId', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const topicId = req.params.topicId as string;
+    const relationId = req.params.relationId as string;
+    const data = patchRelationSchema.parse(req.body);
+
+    const topic = await prisma.topic.findUnique({ where: { id: topicId } });
+    if (!topic) {
+      res.status(404).json({ error: '话题不存在' });
+      return;
+    }
+    if (topic.status === 'ARCHIVED') {
+      res.status(403).json({ error: '该话题已归档，不允许修改关系' });
+      return;
+    }
+
+    const existing = await prisma.message.findFirst({
+      where: { id: relationId, topicId, kind: 'RELATION' },
+    });
+    if (!existing) {
+      res.status(404).json({ error: '关系消息不存在或不属于该话题' });
+      return;
+    }
+
+    // Only CLASSIFY and SUMMARY relations support updating targets
+    if (existing.relationType !== 'CLASSIFY' && existing.relationType !== 'SUMMARY') {
+      res.status(400).json({ error: '仅分类和总结关系支持更新目标' });
+      return;
+    }
+
+    // Validate new targets exist in this topic
+    const targetMessageIds = data.targetRefs
+      .filter(r => r.kind === 'message' || r.kind === 'text-fragment')
+      .map(r => (r as { kind: 'message' | 'text-fragment'; messageId: string }).messageId);
+    const targetRelationIds = data.targetRefs
+      .filter(r => r.kind === 'relation')
+      .map(r => (r as { kind: 'relation'; relationId: string }).relationId);
+
+    if (targetMessageIds.length > 0) {
+      const uniqueMessageIds = [...new Set(targetMessageIds)];
+      const foundMessages = await prisma.message.findMany({
+        where: { id: { in: uniqueMessageIds }, topicId, kind: 'TEXT' },
+        select: { id: true },
+      });
+      if (foundMessages.length !== uniqueMessageIds.length) {
+        res.status(404).json({ error: '部分目标消息不存在或不属于该话题' });
+        return;
+      }
+    }
+    if (targetRelationIds.length > 0) {
+      const uniqueRelationIds = [...new Set(targetRelationIds)];
+      const foundRelations = await prisma.message.findMany({
+        where: { id: { in: uniqueRelationIds }, topicId, kind: 'RELATION' },
+        select: { id: true },
+      });
+      if (foundRelations.length !== uniqueRelationIds.length) {
+        res.status(404).json({ error: '部分目标关系消息不存在或不属于该话题' });
+        return;
+      }
+    }
+
+    const updated = await prisma.message.update({
+      where: { id: relationId },
+      data: { targetRefs: data.targetRefs },
+      include: { createdBy: { select: { id: true, username: true } } },
+    });
+
+    res.json({
+      id: updated.id,
+      topicId: updated.topicId,
+      relationType: updated.relationType!,
+      sourceMessageId: updated.relSourceId ?? null,
+      targetRefs: updated.targetRefs,
+      payload: updated.relationPayload ?? undefined,
+      createdAt: updated.createdAt,
+      createdBy: updated.createdBy,
     });
   } catch (err) {
     next(err);

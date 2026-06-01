@@ -261,21 +261,24 @@ function generateCorrectionContent(
   const targetMsg = msgMap.get(targetMid);
   if (!targetMsg || targetMsg.kind !== "normal") return null;
 
-  const wholeSelected = targetUnits.some(u => u.selection.kind === "whole");
-  if (wholeSelected) return replacementText;
-
+  // Collect text-fragment selections; if any exist, prefer fragment-level correction
+  // even when a whole-message selection is also present (Bug 4 fix: whole→fragment support).
   const textFragments = targetUnits
     .filter(u => u.selection.kind === "text")
     .map(u => u.selection as { kind: "text"; start: number; len: number; text: string });
-  if (textFragments.length === 0) return replacementText;
 
-  // Apply replacements in reverse order so earlier positions remain valid
-  const sorted = [...textFragments].sort((a, b) => b.start - a.start);
-  let content = targetMsg.content;
-  for (const frag of sorted) {
-    content = content.slice(0, frag.start) + replacementText + content.slice(frag.start + frag.len);
+  if (textFragments.length > 0) {
+    // Apply replacements in reverse order so earlier positions remain valid
+    const sorted = [...textFragments].sort((a, b) => b.start - a.start);
+    let content = targetMsg.content;
+    for (const frag of sorted) {
+      content = content.slice(0, frag.start) + replacementText + content.slice(frag.start + frag.len);
+    }
+    return content;
   }
-  return content;
+
+  // Whole-message selection only: full replacement
+  return replacementText;
 }
 
 function buildTextCorrectionReplacementMap(
@@ -900,21 +903,24 @@ export default function TopicDetailPage() {
   }
 
   function exitFocus() {
+    // Capture snapshot BEFORE the state update so we restore the correct pre-focus state.
+    // Calling restoreSnapshot inside setFocusEntries updater is an anti-pattern that can
+    // cause React to process state updates in an unexpected order, resulting in a blank page.
+    const snapshot = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].snapshot : null;
     setFocusEntries(prev => {
       if (prev.length === 0) return prev;
-      const last = prev[prev.length - 1];
-      const rest = prev.slice(0, -1);
-      restoreSnapshot(last.snapshot);
-      return rest;
+      return prev.slice(0, -1);
     });
+    if (snapshot) restoreSnapshot(snapshot);
   }
 
   function exitAllFocus() {
+    const snapshot = focusEntries.length > 0 ? focusEntries[0].snapshot : null;
     setFocusEntries(prev => {
       if (prev.length === 0) return prev;
-      restoreSnapshot(prev[0].snapshot);
       return [];
     });
+    if (snapshot) restoreSnapshot(snapshot);
   }
 
   function clearDraftAll() {
@@ -956,21 +962,36 @@ export default function TopicDetailPage() {
           return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
         });
         if (topicFocusRelMsgId) {
+          // Persist the new message as a target of the classify topic in the backend,
+          // so the message remains inside the topic after page reload.
+          const topicRelation = relationById.get(topicFocusRelMsgId);
+          if (topicRelation) {
+            const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
+            const newTargetRef: TargetRef = { kind: 'message', messageId: msg.id };
+            const updatedRefs = [...existingRefs, newTargetRef];
+            api.updateRelation(topicId!, topicFocusRelMsgId, { targetRefs: updatedRefs })
+              .then(updatedRel => {
+                setRelations(prev => prev.map(r => r.id === updatedRel.id ? updatedRel : r));
+              })
+              .catch(e => console.warn('更新分类目标失败:', e));
+          }
+          // Also update local edges state so the UI reflects the change immediately.
           setEdges(prev => {
             const alreadyLinked = prev.some(e =>
-              e.relationType === "classify" &&
+              (e.relationType === "classify" || e.relationType === "summary") &&
               e.relationMessageId === topicFocusRelMsgId &&
               e.to.messageId === msg.id &&
               e.to.selection.kind === "whole"
             );
             if (alreadyLinked) return prev;
+            const relType = (topicFocusRelType === "summary" ? "summary" : "classify") as RelationType;
             return [...prev, {
               id: nextId("edge"),
               relationMessageId: topicFocusRelMsgId,
-              relationType: "classify",
+              relationType: relType,
               from: { messageId: `anon:${topicFocusRelMsgId}`, selection: { kind: "whole" } },
               to: { messageId: msg.id, selection: { kind: "whole" } },
-              relationLabel: relationTypeName("classify"),
+              relationLabel: relationTypeName(relType),
             }];
           });
         }
@@ -1843,7 +1864,33 @@ export default function TopicDetailPage() {
         alert("更正关系目前仅支持单个目标消息");
         return;
       }
-      const generated = generateCorrectionContent(effectiveTargets, text, msgMap);
+      const rawTargetMid = uniqueTargetMids[0];
+
+      // Resolve correction chain: if the target is itself a correction source
+      // (i.e., it corrects another message), find the ultimate ancestor so the
+      // new CORRECT points directly to the origin, avoiding orphaned intermediate
+      // correction messages (Bug 4 fix: chain corrections).
+      let ancestorTargetMid = rawTargetMid;
+      const visited = new Set<string>();
+      while (true) {
+        if (visited.has(ancestorTargetMid)) break; // cycle guard
+        visited.add(ancestorTargetMid);
+        const parentEdge = edges.find(e =>
+          e.relationType === 'correct' &&
+          e.from.messageId === ancestorTargetMid &&
+          !e.from.messageId.startsWith('anon:') &&
+          msgMap.get(e.to.messageId)?.kind === 'normal'
+        );
+        if (!parentEdge) break;
+        ancestorTargetMid = parentEdge.to.messageId;
+      }
+
+      // Build effective targets pointing to the ancestor
+      const resolvedTargets: UnitSelection[] = ancestorTargetMid === rawTargetMid
+        ? effectiveTargets
+        : effectiveTargets.map(u => ({ ...u, messageId: ancestorTargetMid }));
+
+      const generated = generateCorrectionContent(resolvedTargets, text, msgMap);
       if (generated === null) {
         alert("更正关系目标必须是普通文本消息");
         return;
@@ -1851,8 +1898,7 @@ export default function TopicDetailPage() {
       const msg = await handleSendMessageOnly(generated);
       if (!msg) return;
       const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-      const targets: UnitSelection[] = [...effectiveTargets];
-      await handleCreateRelationWithSourcesAndTargets({ sources, targets, label });
+      await handleCreateRelationWithSourcesAndTargets({ sources, targets: resolvedTargets, label });
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
       setRelationType(null); setSecondaryRelationType("none");
@@ -2123,14 +2169,28 @@ export default function TopicDetailPage() {
       const fromIsNormal = msgMap.get(e.from.messageId)?.kind === "normal";
       const toIsNormal = msgMap.get(e.to.messageId)?.kind === "normal";
       if (fromIsNormal || toIsNormal) addEdgeAdj(e.from.messageId, e.to.messageId);
-      addEdgeAdj(e.relationMessageId, e.from.messageId); addEdgeAdj(e.relationMessageId, e.to.messageId);
+      // Connect the relation message to both endpoints so BFS can traverse through
+      // relation messages (including those with anon: sources).  Skip anon: IDs
+      // since they are not real messages and should not appear as BFS nodes.
+      const fromId = e.from.messageId;
+      const toId = e.to.messageId;
+      if (!fromId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, fromId);
+      if (!toId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, toId);
     }
-    // When a relation message is the focus, use its connected normal (text) messages as BFS roots.
-    // This ensures focusHop correctly measures distance from the relation's text messages,
-    // so hop=0 shows only those text messages and hop=1 shows their 1-hop neighbors.
-    // For CORRECT relations whose source/target are also relation messages, we recursively
-    // resolve through the chain until we reach normal text messages.
+    // When a relation message is the focus, resolve it to its connected normal (text)
+    // messages and use those as BFS roots.  This preserves the original hop semantics:
+    //   1 hop = one relation message connecting two text messages.
+    // Distance is measured TEXT-MESSAGE to TEXT-MESSAGE through relation messages.
+    // The relation message itself does NOT act as a BFS node — it is the connector.
+    //
+    // The relation edges are always shown when their text-message endpoints are visible
+    // (ensured by the edge filter below with relationFocusIds / focusRelationMsgIds guards).
+    //
+    // This way:
+    //   hop=0 → text messages directly connected to the focused relation
+    //   hop=1 → those text messages + their 1-hop neighbours through other relations
     const effectiveStartIds = new Set<string>();
+    const relationFocusIds = new Set<string>();
     function collectNormalMessagesForRelation(relId: string, seen: Set<string>): void {
       if (seen.has(relId)) return;
       seen.add(relId);
@@ -2147,10 +2207,12 @@ export default function TopicDetailPage() {
     for (const id of startIds) {
       const m = msgMap.get(id);
       if (m && m.kind === "relation") {
+        relationFocusIds.add(id);
         const sizeBefore = effectiveStartIds.size;
         collectNormalMessagesForRelation(id, new Set<string>());
-        // Fallback: relation has no connected normal messages (e.g. pure-stance with anon source);
-        // keep the relation message itself as BFS root so focus mode still shows something.
+        // Fallback: relation has no connected normal messages (e.g. pure-stance
+        // with anon source).  Keep the relation message itself as BFS root so
+        // focus mode still shows something.
         if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);
       } else {
         effectiveStartIds.add(id);
@@ -2186,7 +2248,19 @@ export default function TopicDetailPage() {
       }
     }
     const shownSet = new Set(messagesToShowArr.map(m => m.id));
-    const edgesToShowArr = edges.filter(e => shownSet.has(e.from.messageId) || shownSet.has(e.to.messageId) || shownSet.has(e.relationMessageId));
+    // An edge is visible when its relationMessageId is in shownSet AND at least one
+    // of its endpoints is either in shownSet or is an anon: placeholder.
+    // Additionally, edges belonging to a directly-focused relation message are always
+    // shown so that the relation structure is fully visible even at hop=0
+    // (Bug fix: focus mode relation message visibility).
+    const edgesToShowArr = edges.filter(e => {
+      if (!shownSet.has(e.relationMessageId)) return false;
+      // Always show all edges of a directly-focused relation message
+      if (relationFocusIds.has(e.relationMessageId)) return true;
+      const fromOk = shownSet.has(e.from.messageId) || e.from.messageId.startsWith('anon:');
+      const toOk = shownSet.has(e.to.messageId);
+      return fromOk || toOk;
+    });
     return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
   }, [messages, edges, focusEntries, focusHop, msgMap]);
 
@@ -2194,6 +2268,18 @@ export default function TopicDetailPage() {
   const canExitFocus = focusEntries.length > 0;
   const isTopicFocus = currentFocusEntry?.mode === "topic";
   const topicFocusRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
+
+  // Set of relation-message IDs that are directly in the current focus set.
+  // Used to ensure that edges of focused relations are always visible regardless
+  // of endpoint checks (fix: REFERENCE edge not showing when relation is focused).
+  const focusRelationMsgIds = useMemo(() => {
+    if (focusEntries.length === 0) return new Set<string>();
+    const ids = new Set<string>();
+    for (const id of focusEntries[focusEntries.length - 1].ids) {
+      if (msgMap.get(id)?.kind === 'relation') ids.add(id);
+    }
+    return ids;
+  }, [focusEntries, msgMap]);
   const topicFocusTargetCount = useMemo(
     () => topicFocusRelMsgId ? collectOwnedByRelation(topicFocusRelMsgId, relationById).textIds.size : 0,
     [topicFocusRelMsgId, relationById]
@@ -2330,10 +2416,16 @@ export default function TopicDetailPage() {
       };
     }
 
+    // listHiddenRelationIds: relation messages to hide in the linear list view.
+    // CLASSIFY and SUMMARY relation messages that are owned by CLASSIFY are hidden (they are
+    // the classification containers and are shown in the graph view as topic cards).
+    // MERGE owned by CLASSIFY is also hidden (intermediate grouping structure).
+    // SUPPLEMENT owned by CLASSIFY is NOT unconditionally hidden — it is only hidden when
+    // ALL its text endpoints are classified (via listExclusiveRelMsgIds).
+    // This fixes Bug 2: unrelated SUPPLEMENT relation messages were incorrectly hidden.
     const listHiddenRelationIds = new Set<string>([
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
-      ...classifiedTargetSupplementRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
@@ -2344,18 +2436,30 @@ export default function TopicDetailPage() {
       return true;
     });
     const listVisibleIds = new Set(listMessages.map(m => m.id));
-    const listEdges = baseEdges.filter(e =>
-      listVisibleIds.has(e.relationMessageId) &&
-      (e.from.messageId.startsWith("anon:") || listVisibleIds.has(e.from.messageId)) &&
-      listVisibleIds.has(e.to.messageId)
-    );
+    // Edge is visible in list view when the relation message is visible AND
+    // the edge does not connect to a classified (hidden) text endpoint.
+    // Edges of directly-focused relation messages are always included
+    // so the relation structure is fully visible (fix: REFERENCE edge focus).
+    const listEdges = baseEdges.filter(e => {
+      if (!listVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
+      // Edges of focused relations: always visible
+      if (focusRelationMsgIds.has(e.relationMessageId)) return true;
+      const fromOk = e.from.messageId.startsWith('anon:') || listVisibleIds.has(e.from.messageId);
+      const toOk = listVisibleIds.has(e.to.messageId);
+      return fromOk && toOk;
+    });
 
+    // graphHiddenRelationIds: relation messages to hide in the non-linear graph view.
+    // Unconditionally hide CLASSIFY-owned CLASSIFY/SUMMARY/MERGE containers and replaced relations.
+    // SUPPLEMENT owned by CLASSIFY is only hidden when ALL its text endpoints
+    // are in the hidden set (via graphExclusiveRelMsgIds), fixing Bug 2.
     const graphHiddenRelationIds = new Set<string>([
-      ...listHiddenRelationIds,
-      // mergeOwnership.relationIds is intentionally excluded: MERGE-owned relation messages
-      // must remain visible so GraphView can render nested sub-frames inside the MERGE frame.
+      ...classifiedTargetClassifyRelMsgIds,
+      ...classifiedTargetMergeRelMsgIds,
+      ...classifiedTargetSummaryRelMsgIds,
       ...summaryOwnership.relationIds,
       ...graphExclusiveRelMsgIds,
+      ...replacedRelationMsgIds,
     ]);
     const graphMessages = baseMessages.filter(m => {
       if (m.kind === "normal" && graphHiddenTextIds.has(m.id)) return false;
@@ -2363,18 +2467,25 @@ export default function TopicDetailPage() {
       return true;
     });
     const graphVisibleIds = new Set(graphMessages.map(m => m.id));
-    const graphEdges = baseEdges.filter(e =>
-      graphVisibleIds.has(e.relationMessageId) &&
-      (e.from.messageId.startsWith("anon:") || graphVisibleIds.has(e.from.messageId)) &&
-      graphVisibleIds.has(e.to.messageId)
-    );
+    // Edge is visible in graph view when the relation message is visible AND
+    // the edge does not connect to a classified (hidden) text endpoint.
+    // Edges of directly-focused relation messages are always included
+    // so the relation structure is fully visible (fix: REFERENCE edge focus).
+    const graphEdges = baseEdges.filter(e => {
+      if (!graphVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
+      // Edges of focused relations: always visible
+      if (focusRelationMsgIds.has(e.relationMessageId)) return true;
+      const fromOk = e.from.messageId.startsWith('anon:') || graphVisibleIds.has(e.from.messageId);
+      const toOk = graphVisibleIds.has(e.to.messageId);
+      return fromOk && toOk;
+    });
     return {
       graphMessagesToRender: graphMessages,
       graphEdgesToRender: graphEdges,
       listMessagesToRender: listMessages,
       listEdgesToRender: listEdges,
     };
-  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds]);
+  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -3091,10 +3202,15 @@ export default function TopicDetailPage() {
         // original message, so we can pinpoint the changed region without the LCS
         // algorithm incorrectly matching repeated substrings elsewhere in the text.
         // Fall back to LCS for whole-message corrections or edge cases.
+        //
+        // For whole-message corrections where the content is completely replaced,
+        // show the full original and new content side by side without diff highlights,
+        // since there's no shared structure to align (Bug 4 fix).
         let origParts: DiffPart[];
         let nextParts: DiffPart[];
         const textEdge = relEdges.find(e => e.to.selection.kind === 'text');
         const textEdges = relEdges.filter(e => e.to.selection.kind === 'text');
+        const hasWholeEdge = relEdges.some(e => e.to.selection.kind === 'whole');
         if (textEdge && textEdges.length === 1) {
           const sel = textEdge.to.selection as { kind: 'text'; start: number; len: number; text: string };
           const s = sel.start, l = sel.len;
@@ -3119,6 +3235,11 @@ export default function TopicDetailPage() {
           } else {
             ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
           }
+        } else if (hasWholeEdge && origMsg.content !== sourceMsg.content) {
+          // Whole-message correction: if the content is completely different
+          // (no common prefix/suffix), show as full replacement without diff.
+          // Otherwise use LCS diff for partial similarity (Bug 4 fix).
+          ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
         } else {
           ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
         }

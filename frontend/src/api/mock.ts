@@ -405,3 +405,14 @@ export async function createRelation(topicId: string, data: {
   relations.push(rel);
   return rel;
 }
+
+export async function updateRelation(topicId: string, relationId: string, data: {
+  targetRefs: TargetRef[];
+}) {
+  await delay();
+  if (!mockUser) throw new Error('请先登录');
+  const idx = relations.findIndex(r => r.id === relationId && r.topicId === topicId);
+  if (idx === -1) throw new Error('关系消息不存在');
+  relations[idx] = { ...relations[idx], targetRefs: data.targetRefs };
+  return relations[idx];
+}

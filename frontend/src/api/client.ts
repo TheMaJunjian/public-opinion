@@ -99,3 +99,12 @@ export function createRelation(topicId: string, data: {
     body: JSON.stringify(data),
   });
 }
+
+export function updateRelation(topicId: string, relationId: string, data: {
+  targetRefs: import('../types').TargetRef[];
+}) {
+  return request<import('../types').Relation>(`/topics/${topicId}/relations/${relationId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}

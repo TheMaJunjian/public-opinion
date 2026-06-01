@@ -2752,29 +2752,38 @@ export default function TopicDetailPage() {
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{
-                        borderRadius: isTopicMsg ? 10 : 6,
-                        border: isTopicMsg
-                          ? "1px solid #e5e7eb"
-                          : isActiveText ? "2px dashed #0b84ff" : isWholeSelected ? "2px solid #0b84ff" : "1px solid #444",
-                        background: isTopicMsg ? "#ffffff" : "#1f1f1f",
-                        color: isTopicMsg ? "#111827" : undefined,
+                        borderRadius: isTopicMsg ? 8 : 6,
+                        border: isWholeSelected
+                          ? "2px solid #0b84ff"
+                          : isTopicMsg
+                            ? "1px solid #334155"
+                            : isActiveText ? "2px dashed #0b84ff" : "1px solid #444",
+                        borderLeft: isWholeSelected
+                          ? "3px solid #0b84ff"
+                          : isTopicMsg ? "3px solid #6366f1" : undefined,
+                        background: isWholeSelected
+                          ? "#1e3a5f"
+                          : isTopicMsg ? "#1e293b" : "#1f1f1f",
+                        color: undefined,
                         padding: isTopicMsg ? "10px 12px" : "10px 14px",
                         cursor: "pointer",
                         fontSize: 13,
-                        boxShadow: isTopicMsg ? "0 4px 12px rgba(0,0,0,0.2)" : undefined,
+                        boxShadow: isWholeSelected
+                          ? "0 2px 12px rgba(11,132,255,0.2)"
+                          : isTopicMsg ? "0 2px 8px rgba(0,0,0,0.15)" : undefined,
                         outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none",
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
-                      <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+                      <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
                         <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
                         <span>{isTopicMsg ? "双击进入话题" : `作者：${msg.author}`}</span>
                       </div>
                       {isTopicMsg && (
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                          <div style={{ fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <div style={{ fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {topicMsgTitle}
                           </div>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: isMergeTopicMsg ? "rgba(148,163,184,0.18)" : "#dcfce7", color: isMergeTopicMsg ? "#475569" : "#15803d" }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: isMergeTopicMsg ? "rgba(148,163,184,0.18)" : "rgba(34,197,94,0.15)", color: isMergeTopicMsg ? "#94a3b8" : "#4ade80" }}>
                             {isMergeTopicMsg ? "归并" : "进行中"}
                           </span>
                         </div>
@@ -2792,8 +2801,8 @@ export default function TopicDetailPage() {
                           ? renderMessageContentWithAnchorsForList(msg)
                           : isTopicMsg
                             ? (
-                              <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                                <span>由 <span style={{ fontWeight: 600, color: "#4b5563" }}>{msg.author}</span> 发起</span>
+                              <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                                <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{msg.author}</span> 发起</span>
                                 <span>💬 {topicMsgTargetCount} 条观点</span>
                                 <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
                               </div>

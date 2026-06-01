@@ -2727,7 +2727,12 @@ export default function TopicDetailPage() {
           )}
 
           <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}
-            onClick={viewMode === "list" ? (e => { if (!(e.target as HTMLElement).closest("[data-msgid]")) handleCanvasBlankClick(); }) : undefined}>
+            onMouseDown={e => {
+              const t = e.target as HTMLElement;
+              // Skip if clicked on a message card, SVG edge, or relation overlay
+              if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
+              handleCanvasBlankClick();
+            }}>
             {viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {messagesToRender

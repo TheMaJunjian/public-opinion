@@ -178,7 +178,14 @@ function collectOwnedByRelation(
   const relation = relationById.get(relationId);
   if (!relation) return { textIds, relationIds };
 
+  // Collect text messages from targetRefs
   for (const textId of getTextTargetIds(relation.targetRefs)) textIds.add(textId);
+  // For SUPPLEMENT relations, the sourceMessageId is also an owned text message
+  // (the supplementary message is part of the supplement frame).
+  const relType = relation.relationType.toUpperCase();
+  if (relType === 'SUPPLEMENT' && relation.sourceMessageId) {
+    textIds.add(relation.sourceMessageId);
+  }
   for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
     relationIds.add(childRelationId);
     const child = relationById.get(childRelationId);
@@ -2457,13 +2464,15 @@ export default function TopicDetailPage() {
     // CLASSIFY and SUMMARY relation messages that are owned by CLASSIFY are hidden (they are
     // the classification containers and are shown in the graph view as topic cards).
     // MERGE owned by CLASSIFY is also hidden (intermediate grouping structure).
-    // SUPPLEMENT owned by CLASSIFY is NOT unconditionally hidden — it is only hidden when
-    // ALL its text endpoints are classified (via listExclusiveRelMsgIds).
-    // This fixes Bug 2: unrelated SUPPLEMENT relation messages were incorrectly hidden.
+    // SUPPLEMENT owned by CLASSIFY is unconditionally hidden — its text messages are already
+    // classified, and the SUPPLEMENT container itself should not appear in the main view.
+    // SUPPLEMENT NOT owned by CLASSIFY is only hidden when ALL its text endpoints
+    // are classified (via listExclusiveRelMsgIds).
     const listHiddenRelationIds = new Set<string>([
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
+      ...classifiedTargetSupplementRelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
@@ -2487,13 +2496,16 @@ export default function TopicDetailPage() {
     });
 
     // graphHiddenRelationIds: relation messages to hide in the non-linear graph view.
-    // Unconditionally hide CLASSIFY-owned CLASSIFY/SUMMARY/MERGE containers and replaced relations.
-    // SUPPLEMENT owned by CLASSIFY is only hidden when ALL its text endpoints
-    // are in the hidden set (via graphExclusiveRelMsgIds), fixing Bug 2.
+    // Unconditionally hide CLASSIFY-owned CLASSIFY/SUMMARY/MERGE/SUPPLEMENT containers and replaced relations.
+    // SUPPLEMENT owned by CLASSIFY is unconditionally hidden — its text messages are already
+    // classified via collectOwnedByRelation, and the SUPPLEMENT container should not appear.
+    // SUPPLEMENT NOT owned by CLASSIFY is only hidden when ALL its text endpoints
+    // are in the hidden set (via graphExclusiveRelMsgIds).
     const graphHiddenRelationIds = new Set<string>([
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
+      ...classifiedTargetSupplementRelMsgIds,
       ...summaryOwnership.relationIds,
       ...graphExclusiveRelMsgIds,
       ...replacedRelationMsgIds,

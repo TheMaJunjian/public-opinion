@@ -959,3 +959,182 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
     expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
   });
 });
+
+describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    // Simulating user's scenario: select m2, m1, m4, r10 (SUPPLEMENT), m7 → classify
+    // r10 = SUPPLEMENT(source=m5, target=m6) — this is the key case
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('m1', '消息1'),
+        makeMessage('m2', '消息2'),
+        makeMessage('m3', '消息3'),
+        makeMessage('m4', '消息4'),
+        makeMessage('m5', '消息5（补充源）'),
+        makeMessage('m6', '消息6（补充目标）'),
+        makeMessage('m7', '消息7'),
+        makeMessage('m8', '无关消息'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        // r3: REBUT (m3 → m2)
+        {
+          id: 'r3', topicId: 'topic-1', relationType: 'REBUT',
+          sourceMessageId: 'm3', targetRefs: [{ kind: 'message', messageId: 'm2' }],
+          createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+        },
+        // r4: CORRECT (m5 → m3)
+        {
+          id: 'r4', topicId: 'topic-1', relationType: 'CORRECT',
+          sourceMessageId: 'm5', targetRefs: [{ kind: 'message', messageId: 'm3' }],
+          createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+        },
+        // r8: DISAGREE (m3 → m1)
+        {
+          id: 'r8', topicId: 'topic-1', relationType: 'DISAGREE',
+          sourceMessageId: 'm3', targetRefs: [{ kind: 'message', messageId: 'm1' }],
+          createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+        },
+        // r10: SUPPLEMENT (source=m5, target=m6) — wraps m5→m6
+        {
+          id: 'r10', topicId: 'topic-1', relationType: 'SUPPLEMENT',
+          sourceMessageId: 'm5',
+          targetRefs: [{ kind: 'message', messageId: 'm6' }],
+          createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
+        },
+        // r11: REFERENCE (m7 → m5)
+        {
+          id: 'r11', topicId: 'topic-1', relationType: 'REFERENCE',
+          sourceMessageId: 'm7', targetRefs: [{ kind: 'message', messageId: 'm5' }],
+          createdAt: '2024-01-01T00:05:00.000Z', createdBy: makeUser(),
+        },
+        // CLASSIFY targeting: m2, m1, m4, r10 (SUPPLEMENT), m7
+        {
+          id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [
+            { kind: 'message', messageId: 'm2' },
+            { kind: 'message', messageId: 'm1' },
+            { kind: 'message', messageId: 'm4' },
+            { kind: 'relation', relationId: 'r10' },
+            { kind: 'message', messageId: 'm7' },
+          ],
+          payload: { title: '分类话题' },
+          createdAt: '2024-01-01T00:06:00.000Z', createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('hides SUPPLEMENT source message (m5) and cascaded CORRECT targets from graph view', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    await waitFor(() => {
+      expect(mockGraphView).toHaveBeenCalled();
+    });
+    const latestProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+
+    // Directly classified text messages → hidden
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm1')).toBe(false);
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm2')).toBe(false);
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm4')).toBe(false);
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm7')).toBe(false);
+    // m6 (SUPPLEMENT target) → hidden via collectOwnedByRelation
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm6')).toBe(false);
+    // m5 (SUPPLEMENT sourceMessageId) → MUST be hidden (was the bug!)
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm5')).toBe(false);
+    // m3 (CORRECT target of m5) → hidden via expandTextIdsWithCorrections
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm3')).toBe(false);
+    // r10 (SUPPLEMENT owned by CLASSIFY) → hidden
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'r10')).toBe(false);
+    // r4 (CORRECT m5→m3, both endpoints hidden) → hidden
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'r4')).toBe(false);
+    // r11 (REFERENCE m7→m5, both endpoints hidden) → hidden
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'r11')).toBe(false);
+    // r3 (REBUT m3→m2, both endpoints hidden) → hidden
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'r3')).toBe(false);
+    // r8 (DISAGREE m3→m1, both endpoints hidden) → hidden
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'r8')).toBe(false);
+    // rel-classify → visible (topic card)
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-classify')).toBe(true);
+    // m8 (unrelated) → visible
+    expect(latestProps.messages.some((m: { id: string }) => m.id === 'm8')).toBe(true);
+  });
+
+  it('hides SUPPLEMENT source and cascaded messages from list view', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    });
+
+    // Directly classified → hidden
+    expect(screen.queryByText('消息 m1')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 m2')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 m4')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 m7')).not.toBeInTheDocument();
+    // m6 (SUPPLEMENT target) → hidden
+    expect(screen.queryByText('消息 m6')).not.toBeInTheDocument();
+    // m5 (SUPPLEMENT sourceMessageId) → MUST be hidden (was the bug!)
+    expect(screen.queryByText('消息 m5')).not.toBeInTheDocument();
+    // m3 (CORRECT cascade) → hidden
+    expect(screen.queryByText('消息 m3')).not.toBeInTheDocument();
+    // Relation messages with all endpoints hidden → hidden
+    expect(screen.queryByText('关系消息 r10')).not.toBeInTheDocument();
+    expect(screen.queryByText('关系消息 r4')).not.toBeInTheDocument();
+    expect(screen.queryByText('关系消息 r11')).not.toBeInTheDocument();
+    expect(screen.queryByText('关系消息 r3')).not.toBeInTheDocument();
+    expect(screen.queryByText('关系消息 r8')).not.toBeInTheDocument();
+    // Topic card → visible
+    expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    // Unrelated → visible
+    expect(screen.getByText('消息 m8')).toBeInTheDocument();
+  });
+
+  it('shows all owned messages when entering classify topic', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    });
+
+    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
+    });
+
+    // Inside topic: all owned messages visible
+    expect(screen.getByText('消息 m1')).toBeInTheDocument();
+    expect(screen.getByText('消息 m2')).toBeInTheDocument();
+    expect(screen.getByText('消息 m4')).toBeInTheDocument();
+    expect(screen.getByText('消息 m7')).toBeInTheDocument();
+    // SUPPLEMENT source + target
+    expect(screen.getByText('消息 m5')).toBeInTheDocument();
+    expect(screen.getByText('消息 m6')).toBeInTheDocument();
+    // CORRECT cascade
+    expect(screen.getByText('消息 m3')).toBeInTheDocument();
+    // Relation messages
+    expect(screen.getByText('关系消息 r4')).toBeInTheDocument();
+    expect(screen.getByText('关系消息 r11')).toBeInTheDocument();
+    // Unrelated → NOT in topic
+    expect(screen.queryByText('消息 m8')).not.toBeInTheDocument();
+  });
+});

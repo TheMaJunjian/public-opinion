@@ -370,8 +370,12 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         // Build the set of text message IDs already owned by existing CLASSIFY/SUMMARY relations.
         // These are the "already classified" messages that make cross-links forbidden.
         // A single BFS processes all CLASSIFY/SUMMARY relations together to avoid redundant traversals.
+        // Skip relations that are themselves targets of this merge/classify/summary — they are
+        // being absorbed by the new relation, so their text messages should not count as
+        // "already classified" for the cross-link check.
         const allRelById = new Map(relationMessages.map(r => [r.id, r]));
         const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
+        const absorbedRelationIds = new Set(foundTargetRelations.map(r => r.id));
         const alreadyClassifiedTextIds = new Set<string>();
         const bfsQueue: string[] = [];
         const bfsVisited = new Set<string>();
@@ -384,6 +388,8 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
           const bfsId = bfsQueue.shift()!;
           if (bfsVisited.has(bfsId)) continue;
           bfsVisited.add(bfsId);
+          // Skip relations that are being absorbed by this operation
+          if (absorbedRelationIds.has(bfsId)) continue;
           const bfsRel = allRelById.get(bfsId);
           if (!bfsRel) continue;
           extractTextTargetIds(bfsRel.targetRefs).forEach(id => alreadyClassifiedTextIds.add(id));

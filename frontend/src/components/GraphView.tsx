@@ -372,6 +372,17 @@ function getRelationBoundsFromLayout(params: {
     }
   }
 
+  // Also include the relation message card itself if it is displayed as a card
+  // (classify/summary topic card).  Its own box is not covered by the edge endpoints
+  // above because relation edges use `anon:` as the source.
+  if (relationCardMsgIds.has(relMsgId)) {
+    const selfBox = params.boxFn ? (params.boxFn(relMsgId) ?? layout[relMsgId]) : layout[relMsgId];
+    if (selfBox) {
+      boxes.push(selfBox);
+      cardIds.add(relMsgId);
+    }
+  }
+
   let rect = unionBoxes(boxes);
   if (!rect) return null;
   const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
@@ -598,6 +609,14 @@ function buildFrameAvoidanceReservations(params: {
         if (nested) {
           boxes.push(nested.rect);
           nested.cardIds.forEach(id => cardIds.add(id));
+          // Also include the relation-message card itself (e.g. classify/summary
+          // topic card) so it stays inside the frame rather than being pushed
+          // below by applyFrameAvoidanceReservations.
+          if (relationCardMsgIds.has(edge.to.messageId)) {
+            const cardBox = layout[edge.to.messageId];
+            if (cardBox) boxes.push(cardBox);
+            cardIds.add(edge.to.messageId);
+          }
           continue;
         }
       }
@@ -708,17 +727,40 @@ function applyFrameAvoidanceReservations(params: {
     }
   }
 
-  // Then push unrelated cards below each reservation to avoid frame/content collisions.
+  // Collect all member IDs across all reservations so we can skip them.
+  const allMemberIds = new Set<string>();
   for (const reservation of params.reservations) {
-    const reservationRect = computeRect(reservation);
+    reservation.cardIds.forEach(id => allMemberIds.add(id));
+  }
+
+  // Compute the maximum bottom across all reservations.
+  let maxReservationBottom = GRID_TOP;
+  for (const reservation of params.reservations) {
+    const rr = computeRect(reservation);
+    maxReservationBottom = Math.max(maxReservationBottom, rr.y + rr.height);
+  }
+
+  // Push non-member messages that overlap a reservation in X below the
+  // lowest reservation bottom, maintaining per-column vertical order.
+  // Messages to the left or right of all frames are left in place.
+  if (maxReservationBottom > GRID_TOP) {
     for (const ids of byCol.values()) {
       sortIdsByY(ids);
-      let cursor = reservationRect.y + reservationRect.height + ROW_GAP;
+      let cursor = maxReservationBottom + ROW_GAP;
       for (const id of ids) {
+        if (allMemberIds.has(id)) continue;
         const box = nextLayout[id];
-        if (!box || reservation.cardIds.has(id)) continue;
-        if (!rectsOverlapX(box, reservationRect)) continue;
-        if (box.y + box.height <= reservationRect.y) continue;
+        if (!box) continue;
+        // Only push messages whose column overlaps at least one reservation in X,
+        // AND whose vertical position falls within or below that reservation.
+        const overlapsAnyFrame = params.reservations.some(r => {
+          const rr = computeRect(r);
+          if (!rectsOverlapX(box, rr)) return false;
+          // Message is entirely above this frame — leave it alone.
+          if (box.y + box.height <= rr.y) return false;
+          return true;
+        });
+        if (!overlapsAnyFrame) continue;
         if (box.y >= cursor) {
           cursor = box.y + box.height + ROW_GAP;
           continue;

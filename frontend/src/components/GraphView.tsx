@@ -1931,12 +1931,13 @@ export default function GraphView(props: GraphViewProps) {
       return "回复";
     }
     const labelText = (e: DemoEdge, author: string) => {
-      if (e.relationType === "reply") return replyEdgeLabel(e.relationLabel);
+      if (e.relationType === "reply") return `${author} · ${replyEdgeLabel(e.relationLabel)}`;
       return `${author} · ${edgeLabelName(e.relationType)}`;
     };
 
     for (const e of edges) {
-      const fromMsg=msgMap.get(e.from.messageId); if (!fromMsg||fromMsg.kind!=="normal") continue;
+      const fromMsg=msgMap.get(e.from.messageId);
+      if (!fromMsg || (fromMsg.kind !== "normal" && !relationCardMsgIds.has(fromMsg.id))) continue;
       const fromEp=endpointBoxForNormal(fromMsg.id); if (!fromEp) continue;
       const fromAuthor=fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);

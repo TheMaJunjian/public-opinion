@@ -10,6 +10,7 @@ import type {
 import type { Topic, TargetRef, Relation, RelationPayload } from '../types';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 // ========================= Helpers =========================
 
@@ -568,6 +569,10 @@ export default function TopicDetailPage() {
   const [targetUnits, setTargetUnits] = useState<UnitSelection[]>([]);
   const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
   const [focusEntries, setFocusEntries] = useState<FocusEntry[]>([]);
+  // Counter incremented on every exitFocus/exitAllFocus to force GraphView
+  // remount, avoiding React DOM reconciliation bugs (removeChild errors)
+  // that occur when the SVG canvas structure changes drastically.
+  const [focusExitKey, setFocusExitKey] = useState(0);
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [focusHop, setFocusHop] = useState<number>(1);
@@ -824,6 +829,19 @@ export default function TopicDetailPage() {
   const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
   // Ref to track the ID of a newly sent message that should be scrolled into view.
   const pendingScrollMsgIdRef = useRef<string | null>(null);
+  // Track pending requestAnimationFrame handles so they can be cancelled before
+  // React reconciles the DOM, preventing "removeChild" errors caused by stale
+  // rAF callbacks accessing nodes that React has already removed.
+  const scrollRafRef = useRef<number | null>(null);
+  const scrollRaf2Ref = useRef<number | null>(null);
+
+  function cancelScrollRafs() {
+    if (scrollRafRef.current !== null) { cancelAnimationFrame(scrollRafRef.current); scrollRafRef.current = null; }
+    if (scrollRaf2Ref.current !== null) { cancelAnimationFrame(scrollRaf2Ref.current); scrollRaf2Ref.current = null; }
+  }
+
+  // Cleanup on unmount
+  useEffect(() => () => cancelScrollRafs(), []);
 
   // Scroll the left panel canvas so the message with the given ID is centered.
   // Polls via requestAnimationFrame until the card appears in the DOM.
@@ -832,14 +850,14 @@ export default function TopicDetailPage() {
   function scrollMsgToCenter(msgId: string) {
     pendingScrollMsgIdRef.current = msgId;
     let attempts = 0;
-    function tryScroll() {
+    const tryScroll = () => {
       attempts++;
       if (attempts > MAX_SCROLL_ATTEMPTS) { pendingScrollMsgIdRef.current = null; return; }
       if (pendingScrollMsgIdRef.current !== msgId) return; // superseded by newer message
       const container = leftPanelRef.current;
-      if (!container) { requestAnimationFrame(tryScroll); return; }
+      if (!container) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const el = container.querySelector(`[data-msgid="${msgId}"]`) as HTMLElement | null;
-      if (!el) { requestAnimationFrame(tryScroll); return; }
+      if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       pendingScrollMsgIdRef.current = null;
       const elRect = el.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
@@ -847,8 +865,9 @@ export default function TopicDetailPage() {
       const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
       container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
       container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
-    }
-    requestAnimationFrame(tryScroll);
+    };
+    cancelScrollRafs();
+    scrollRafRef.current = requestAnimationFrame(tryScroll);
   }
 
   function captureSnapshot(): FocusSnapshot {
@@ -880,8 +899,13 @@ export default function TopicDetailPage() {
     setActiveTextSelectId(s.activeTextSelectId);
     setLastClickedMessageId(s.lastClickedMessageId);
     setFocusHop(s.focusHop);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    // Cancel any in-flight scroll rAF before scheduling new ones so that stale
+    // callbacks never touch DOM nodes after React has reconciled them away.
+    cancelScrollRafs();
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRaf2Ref.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        scrollRaf2Ref.current = null;
         clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
         clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
       });
@@ -903,14 +927,15 @@ export default function TopicDetailPage() {
   }
 
   function exitFocus() {
-    // Capture snapshot BEFORE the state update so we restore the correct pre-focus state.
-    // Calling restoreSnapshot inside setFocusEntries updater is an anti-pattern that can
-    // cause React to process state updates in an unexpected order, resulting in a blank page.
+    // Pop the focus stack and bump the exit key to force GraphView remount,
+    // avoiding React 18 concurrent reconciliation bugs (removeChild errors).
+    // The ErrorBoundary provides a safety net with automatic retry.
     const snapshot = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].snapshot : null;
     setFocusEntries(prev => {
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
+    setFocusExitKey(k => k + 1);
     if (snapshot) restoreSnapshot(snapshot);
   }
 
@@ -920,6 +945,7 @@ export default function TopicDetailPage() {
       if (prev.length === 0) return prev;
       return [];
     });
+    setFocusExitKey(k => k + 1);
     if (snapshot) restoreSnapshot(snapshot);
   }
 
@@ -1959,8 +1985,11 @@ export default function TopicDetailPage() {
     const entry = focusEntries[newLen - 1];
     if (!entry || entry.ids.length === 0) return;
     const focusId = entry.ids[0];
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    cancelScrollRafs();
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRaf2Ref.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        scrollRaf2Ref.current = null;
         const container = leftPanelRef.current;
         if (!container) return;
         const el = container.querySelector(`[data-msgid="${focusId}"]`) as HTMLElement | null;
@@ -1976,15 +2005,15 @@ export default function TopicDetailPage() {
   }, [focusEntries, viewMode]);
 
   // Restore saved scroll position after view mode switch so switching does not auto-scroll to top.
-  // Two nested requestAnimationFrame calls are needed: the first waits for React to commit the DOM
-  // update (replacing graph view with list view), the second waits for the browser to complete layout
-  // so the scroll container has its full scrollable extent before we set scrollTop/scrollLeft.
   useEffect(() => {
     const saved = viewModeScrollRef.current[viewMode];
     if (saved !== null) {
       viewModeScrollRef.current[viewMode] = null;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+      cancelScrollRafs();
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRaf2Ref.current = requestAnimationFrame(() => {
+          scrollRafRef.current = null;
+          scrollRaf2Ref.current = null;
           clampAndSetScroll(leftPanelRef.current, saved.top, saved.left);
         });
       });
@@ -2662,6 +2691,7 @@ export default function TopicDetailPage() {
 
   return (
     <>
+    <ErrorBoundary>
     <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2733,7 +2763,17 @@ export default function TopicDetailPage() {
               if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
               handleCanvasBlankClick();
             }}>
-            {viewMode === "list" ? (
+            {messagesToRender.length === 0 ? (
+              <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
+                <div>{isTopicFocus ? `当前${topicFocusKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
+                {canExitFocus && (
+                  <button onClick={exitFocus} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
+                    {isTopicFocus ? topicFocusExitLabel : "退出焦点"}
+                  </button>
+                )}
+              </div>
+            ) : viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {messagesToRender
                   .filter(msg => !tagSourceIdsForList.has(msg.id))
@@ -2815,6 +2855,7 @@ export default function TopicDetailPage() {
               </div>
             ) : (
               <GraphView
+                  key={`gv-${focusExitKey}`}
                   messages={messagesToRender} edges={edgesToRender} draftUnits={draftUnits}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
@@ -3025,6 +3066,7 @@ export default function TopicDetailPage() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
 
     {/* Decoration double-click popup: shows sender info for agree/disagree relations */}
     {decorationPopup && (() => {

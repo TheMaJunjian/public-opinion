@@ -882,3 +882,80 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-summary')).toBe(true);
   });
 });
+
+describe('TopicDetailPage exit classify topic restores base view', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试话题',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    // msg-a, msg-b: classified under rel-classify
+    // msg-c: unclassified (should stay visible in base view)
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-a', '分类消息A'),
+        makeMessage('msg-b', '分类消息B'),
+        makeMessage('msg-c', '未分类消息C'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-classify',
+          topicId: 'topic-1',
+          relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-a' }, { kind: 'message', messageId: 'msg-b' }],
+          payload: { title: '测试分类' },
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('restores base view correctly after entering and exiting a classify topic', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    // Switch to list view for easier assertions
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+
+    // Base view: topic card visible, classified messages hidden, unclassified visible
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
+
+    // Enter the classify topic
+    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+
+    // Topic view: classified messages visible, topic card hidden, unclassified hidden
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
+
+    // Exit the classify topic
+    fireEvent.click(screen.getAllByRole('button', { name: '退出分类' })[0]);
+
+    // After exit: base view should be restored exactly as before
+    await waitFor(() => {
+      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
+  });
+});

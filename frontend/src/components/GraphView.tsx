@@ -68,6 +68,8 @@ const GROUP_HEADER_MIN_W = 180;
 const GROUP_HEADER_MAX_W = 320;
 const GROUP_HEADER_X_OFFSET = 6;
 const GROUP_HEADER_HEIGHT = 56;
+// MERGE cards get a more compact header (half the height of classify/summary group headers)
+const MERGE_CARD_H = 36;
 
 // Shared empty map to avoid allocating a new one on every render
 const EMPTY_MAP: Map<string, string> = new Map();
@@ -326,7 +328,7 @@ function getMergeCardHeaderRect(frameRect: Rect): Rect {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
     y: frameRect.y + SUPP_FRAME_PAD,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
-    height: GROUP_HEADER_HEIGHT,
+    height: MERGE_CARD_H,
   };
 }
 
@@ -374,7 +376,7 @@ function getRelationBoundsFromLayout(params: {
   const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
   if (relMsg?.relationType === 'merge') {
     // Header is now inside the frame at the top; reserve headerTopPad space at the top.
-    const headerTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
+    const headerTopPad = MERGE_CARD_H + SUPP_FRAME_PAD;
     rect = {
       x: rect.x - SUPP_FRAME_PAD,
       y: rect.y - SUPP_FRAME_PAD - headerTopPad,
@@ -607,7 +609,7 @@ function buildFrameAvoidanceReservations(params: {
     if (!union) continue;
     // For MERGE frames, reserve extra space above the frame content for the card-style header.
     const isMergeFrame = relEdges[0].relationType === "merge";
-    const headerTopPad = isMergeFrame ? GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD : 0;
+    const headerTopPad = isMergeFrame ? MERGE_CARD_H + SUPP_FRAME_PAD : 0;
     reservations.push({
       relMsgId,
       cardIds,
@@ -2704,7 +2706,7 @@ export default function GraphView(props: GraphViewProps) {
                           border: isRelWholeSel(gf.relMsgId) ? "2px solid #0b84ff" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
                           boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(11,132,255,0.22)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
                           outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
-                          padding: "8px 10px",
+                          padding: "4px 10px",
                         } as React.CSSProperties;
                       })()
                     : {
@@ -2744,21 +2746,17 @@ export default function GraphView(props: GraphViewProps) {
                   );
                   if (isMergeTopic) {
                     return (
-                      <>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {topicTitle}
-                          </span>
-                          <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 999, background: "rgba(148,163,184,0.22)", color: "#cbd5e1" }}>
-                            归并
-                          </span>
-                        </div>
-                        <div style={{ marginTop: 4, fontSize: 10, color: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>由 {relMsg?.author ?? "系统"} 发起</span>
-                          <span style={{ flexShrink: 0 }}>💬 {targetIds.length}</span>
-                          <span style={{ flexShrink: 0 }}>{relMsg ? new Date(relMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
-                        </div>
-                      </>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, height: "100%" }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+                          {topicTitle}
+                        </span>
+                        <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 500, color: "#9ca3af" }}>
+                          💬{targetIds.length}
+                        </span>
+                        <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "0 5px", borderRadius: 999, background: "rgba(148,163,184,0.22)", color: "#cbd5e1", lineHeight: "16px" }}>
+                          归并
+                        </span>
+                      </div>
                     );
                   }
                   return (

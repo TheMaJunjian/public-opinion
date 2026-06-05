@@ -32,7 +32,7 @@ type PositionedEdge = {
 const CARD_W = 320;
 const MIN_CARD_H = 86;
 const GRID_LEFT = 18;
-const GRID_TOP = 18;
+const GRID_TOP = 48;
 const COL_GAP = 80;      // right-side decorations need ~58px (DEC_RIGHT_GAP=6 + DEC_W=56 + buffer)
 const ROW_GAP = 32;
 const CANVAS_BOTTOM_PAD = 120;
@@ -2229,9 +2229,9 @@ export default function GraphView(props: GraphViewProps) {
 
 
   return (
-    <div ref={canvasRef} style={{position:"relative",width:canvasWidth,height:canvasHeight}}
+    <div ref={canvasRef} style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:0}}
       onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
-      <div style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:2}}>
+      <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:1}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
           if (hideMessageIds?.has(msg.id)) return null;
@@ -2254,7 +2254,7 @@ export default function GraphView(props: GraphViewProps) {
                 style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,
                   border:isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
                   padding:"12px 16px",boxShadow:isWhole?"0 8px 20px rgba(11,132,255,0.22)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
-                  gap:8,cursor:"pointer",outline:isActive?"1px dashed #0b84ff":"none",userSelect:"auto",color:"#f5f5f5"}}>
+                  gap:8,cursor:"pointer",outline:isActive?"1px dashed #0b84ff":"none",userSelect:"none",color:"#f5f5f5"}}>
                 <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
                   <span>{`${isSummaryTopic ? "总结" : "分类"} ${msg.id}`}</span>
                   <span>{isSummaryTopic ? "双击进入总结" : "双击进入分类"}</span>
@@ -2368,7 +2368,7 @@ export default function GraphView(props: GraphViewProps) {
       {/* SVG layer: supplement frame visuals + edge paths.
           Gate on either having edges or frames so frames render even with no other edges. */}
       {(positionedEdges.length>0||supplementFrames.length>0||groupFrames.length>0)&&(
-        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:3,pointerEvents:"none"}}>
+        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
           {/* SUPPLEMENT frames — stroke and fill reflect selection state; hidden when blank-corrected */}
           {supplementFrames.map(sf=>{
             if (sf.isBlankCorrected) return null;

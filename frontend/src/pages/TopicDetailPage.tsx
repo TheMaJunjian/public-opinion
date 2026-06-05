@@ -1103,8 +1103,11 @@ export default function TopicDetailPage() {
     if (m?.kind === "relation") {
       const relType = relationTypeByRelMsgId.get(messageId);
       if (relType === "classify" || relType === "summary") {
+        // Always clear any text selection before entering classification to prevent
+        // the browser's native double-click text selection from persisting into the new view.
+        setActiveTextSelectId(null);
+        clearBrowserSelection();
         enterClassifyTopic(messageId);
-        if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
         return;
       }
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }

@@ -178,15 +178,16 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     // Enter the outer topic by double-clicking its card
     fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
 
-    // After entering outer-topic focus, only the outer target relation (rel-inner)
-    // and its related messages should be shown.
+    // After entering outer-topic focus, only the direct CLASSIFY target (rel-inner)
+    // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
+    // internal content (rel-merge, msg-a, msg-b) should NOT be expanded into this view.
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
     });
     expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.getByText('归并 rel-merge')).toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
   });
 });
 
@@ -268,15 +269,16 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     // Enter the outer topic by double-clicking its card.
     fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
 
-    // After entering outer-topic focus, the middle topic card (direct target) and
-    // its related relation/text messages should be visible.
+    // After entering outer-topic focus, only the direct CLASSIFY target (rel-middle)
+    // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
+    // internal content (rel-inner, rel-merge, msg-a, msg-b) should NOT be expanded.
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-middle')).toBeInTheDocument();
     });
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.getByText('归并 rel-merge')).toBeInTheDocument();
-    expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
   });
 });
 
@@ -459,12 +461,18 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     });
     fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
 
+    // After entering outer-topic focus:
+    // - msg-b is a direct text target, should be visible
+    // - rel-merge (MERGE) is a direct relation target, should be expanded as a frame
+    // - msg-a is inside rel-merge, should be visible (MERGE frames expand)
+    // - rel-inner (CLASSIFY) is inside rel-merge, shown as topic card only
+    // - msg-c is inside rel-inner, should NOT be visible (CLASSIFY is opaque)
     await waitFor(() => {
       expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
     });
     expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
     expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
+    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
   });
 });
 

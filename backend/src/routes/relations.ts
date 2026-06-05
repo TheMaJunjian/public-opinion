@@ -418,7 +418,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
           : SUMMARY_CROSS_LINK_ERROR;
 
         for (const relMsg of relationMessages) {
-          if (relMsg.relationType === 'REFERENCE') continue;
+          // Skip REFERENCE (citation) and CORRECT (correction) relations:
+          // - REFERENCE does not imply semantic grouping
+          // - CORRECT edges are already handled by expandTextIdsWithCorrections
+          //   and should not trigger cross-link blocks
+          if (relMsg.relationType === 'REFERENCE' || relMsg.relationType === 'CORRECT') continue;
           // Skip relations that are themselves direct targets of this classification
           // (e.g., when classifying a SUPPLEMENT or MERGE, its own edges should not
           // trigger cross-link errors — Bug 3 fix).

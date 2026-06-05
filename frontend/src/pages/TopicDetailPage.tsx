@@ -1202,13 +1202,50 @@ export default function TopicDetailPage() {
     return res;
   }
 
+  /**
+   * Check whether any selected text messages have non-reference edges to
+   * already-classified text messages that are NOT part of the current selection.
+   *
+   * Defensive expansion: when a selected text message is connected via an edge
+   * to a classify/merge/supplement/summary relation message, the relation's
+   * owned text messages are also treated as "selected".  This prevents false
+   * positives when getGroupedTargetTextMessageIds has already expanded the
+   * selection but an edge exists between a selected text and a classified text
+   * that belongs to the same relation group.
+   */
   function hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds: string[]): boolean {
     if (targetTextIds.length === 0) return false;
     const selected = new Set(targetTextIds);
+
+    // Defensive expansion: when a selected normal message has an edge to an
+    // expandable relation message (classify/merge/supplement/summary), treat
+    // that relation's owned text messages as also selected.
+    const expandableTypes = new Set(['classify', 'merge', 'supplement', 'summary']);
     for (const e of edges) {
-      if (e.relationType === "reference") continue;
-      if (msgMap.get(e.from.messageId)?.kind !== "normal") continue;
-      if (msgMap.get(e.to.messageId)?.kind !== "normal") continue;
+      const fromMsg = msgMap.get(e.from.messageId);
+      const toMsg = msgMap.get(e.to.messageId);
+      const fromIsSelectedNormal = fromMsg?.kind === 'normal' && selected.has(e.from.messageId);
+      const toIsSelectedNormal = toMsg?.kind === 'normal' && selected.has(e.to.messageId);
+      const relationEndpoint = fromIsSelectedNormal
+        ? (toMsg?.kind === 'relation' && expandableTypes.has(toMsg.relationType ?? '') ? e.to.messageId : null)
+        : toIsSelectedNormal
+          ? (fromMsg?.kind === 'relation' && expandableTypes.has(fromMsg.relationType ?? '') ? e.from.messageId : null)
+          : null;
+      if (!relationEndpoint) continue;
+      const owned = collectOwnedByRelation(relationEndpoint, relationById);
+      for (const ownedTextId of owned.textIds) {
+        if (!selected.has(ownedTextId)) selected.add(ownedTextId);
+      }
+    }
+
+    for (const e of edges) {
+      // Skip reference and correct edges: reference is a citation that does
+      // not imply semantic grouping; correct edges are already handled by
+      // expandTextIdsWithCorrections and should not trigger cross-link blocks.
+      if (e.relationType === "reference" || e.relationType === "correct") continue;
+      const fromKind = msgMap.get(e.from.messageId)?.kind;
+      const toKind = msgMap.get(e.to.messageId)?.kind;
+      if (fromKind !== "normal" || toKind !== "normal") continue;
       const fromSelected = selected.has(e.from.messageId);
       const toSelected = selected.has(e.to.messageId);
       if (fromSelected !== toSelected) {
@@ -2381,11 +2418,11 @@ export default function TopicDetailPage() {
               }
             }
           }
-          if (relType === 'SUPPLEMENT') {
-            // SUPPLEMENT is a user-to-message relation: all content (including any supplementary
-            // text message) is stored in targetRefs. Include all text targets and expand nested
-            // SUPPLEMENT/MERGE relation targets. CLASSIFY and SUMMARY targets are shown as topic
-            // cards but not recursively expanded (user must double-click to enter them).
+          if (relType === 'SUPPLEMENT' || relType === 'MERGE') {
+            // SUPPLEMENT and MERGE are framing relations: all content (text targets and
+            // nested framing relations) is expanded inline. CLASSIFY and SUMMARY targets
+            // are shown as topic cards but not recursively expanded (user must double-click
+            // to enter them).
             getTextTargetIds(rel.targetRefs).forEach(id => topicTextIds.add(id));
             getRelationTargetIds(rel.targetRefs).forEach(id => {
               topicRelationIds.add(id);
@@ -2396,12 +2433,10 @@ export default function TopicDetailPage() {
               // CLASSIFY and SUMMARY targets are shown as topic cards but not recursively expanded.
             });
           } else {
-            const owned = collectOwnedByRelation(relId, relationById);
-            owned.textIds.forEach(id => topicTextIds.add(id));
-            owned.relationIds.forEach(id => {
-              if (!topicRelationIds.has(id)) queue.push(id);
-              topicRelationIds.add(id);
-            });
+            // CLASSIFY and SUMMARY: these are opaque topic cards — they are already in
+            // topicRelationIds (added when first encountered as targets), and GraphView
+            // will render them as cards. Do NOT recursively expand their internal content
+            // into the current view; the user must double-click to enter them.
           }
         }
       }

@@ -632,6 +632,9 @@ function applyFrameAvoidanceReservations(params: {
   colOf: Record<string, number>;
   reservations: FrameAvoidanceReservation[];
   minCanvasHeight: number;
+  msgMap: Map<string, DemoMessage>;
+  edgesByRelMsg: Map<string, DemoEdge[]>;
+  relationCardMsgIds: Set<string>;
 }) {
   if (params.reservations.length === 0) {
     return { layout: params.layout, canvasHeight: params.minCanvasHeight };
@@ -651,10 +654,27 @@ function applyFrameAvoidanceReservations(params: {
 
   function computeRect(reservation: FrameAvoidanceReservation): Rect {
     const boxes: LayoutBox[] = [];
+    // Track which cardIds belong to relation messages so we can resolve their nested-frame bounds.
+    const relCardIds: string[] = [];
     reservation.cardIds.forEach(id => {
-      const box = nextLayout[id];
-      if (box) boxes.push(box);
+      if (params.msgMap.get(id)?.kind === 'relation') {
+        relCardIds.push(id);
+      } else {
+        const box = nextLayout[id];
+        if (box) boxes.push(box);
+      }
     });
+    // For relation-message cardIds, resolve the full nested-frame bounds (including padding).
+    for (const relId of relCardIds) {
+      const nested = getRelationBoundsFromLayout({
+        relMsgId: relId,
+        edgesByRelMsg: params.edgesByRelMsg,
+        layout: nextLayout,
+        msgMap: params.msgMap,
+        relationCardMsgIds: params.relationCardMsgIds,
+      });
+      if (nested) boxes.push(nested.rect);
+    }
     const union = unionBoxes(boxes);
     if (!union) return reservation.rect;
     const pad = reservation.headerTopPad ?? 0;
@@ -1436,8 +1456,11 @@ export default function GraphView(props: GraphViewProps) {
       colOf,
       reservations: frameAvoidanceReservations,
       minCanvasHeight: baseCanvasHeight,
+      msgMap,
+      edgesByRelMsg,
+      relationCardMsgIds,
     }),
-    [baseLayout, normals, colOf, frameAvoidanceReservations, baseCanvasHeight]
+    [baseLayout, normals, colOf, frameAvoidanceReservations, baseCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds]
   );
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.

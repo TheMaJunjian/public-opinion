@@ -1831,7 +1831,15 @@ export default function TopicDetailPage() {
 
     // MERGE relation: user-to-message relation with no source message.
     // Targets may be text messages or relation messages; fragments are folded up to whole targets.
+    // If text is present, create a standalone text message first — it appears outside the merge frame.
     if (relationType === "merge") {
+      // Create a standalone text message if text is present (outside the merge frame).
+      if (text.length > 0) {
+        const msg = await handleSendMessageOnly(text);
+        if (!msg) return; // message creation failed, keep UI state for retry
+        // The new message is NOT added to merge targets — it stays outside the frame.
+      }
+
       const mergeTargetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
       if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
         alert("归并目标与已分类消息存在非引用关联，无法建立归并关系");

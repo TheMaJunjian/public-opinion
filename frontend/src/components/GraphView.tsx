@@ -377,7 +377,8 @@ function getRelationBoundsFromLayout(params: {
   const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
   if (relMsg?.relationType === 'merge') {
     // Header is now inside the frame at the top; reserve headerTopPad space at the top.
-    const headerTopPad = MERGE_CARD_H + SUPP_FRAME_PAD;
+    // Must match GROUP_HEADER_HEIGHT used in the group frame rendering (line ~1751).
+    const headerTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
     rect = {
       x: rect.x - SUPP_FRAME_PAD,
       y: rect.y - SUPP_FRAME_PAD - headerTopPad,
@@ -609,8 +610,10 @@ function buildFrameAvoidanceReservations(params: {
     const union = unionBoxes(boxes);
     if (!union) continue;
     // For MERGE frames, reserve extra space above the frame content for the card-style header.
+    // Must match the GROUP_HEADER_HEIGHT used in the group frame rendering (line ~1751)
+    // so the reservation exactly covers the rendered frame + merge card header.
     const isMergeFrame = relEdges[0].relationType === "merge";
-    const headerTopPad = isMergeFrame ? MERGE_CARD_H + SUPP_FRAME_PAD : 0;
+    const headerTopPad = isMergeFrame ? GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD : 0;
     reservations.push({
       relMsgId,
       cardIds,
@@ -723,6 +726,25 @@ function applyFrameAvoidanceReservations(params: {
         nextLayout[id] = { ...box, y: cursor };
         cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
       }
+    }
+  }
+
+  // Ensure no element (especially merge frame headers) protrudes above GRID_TOP.
+  // When merge frames extend above the content union, the reservation rect's y can go
+  // negative even though the layout boxes are at GRID_TOP.  Check reservation rects
+  // in addition to layout boxes, then shift everything down so the topmost element
+  // stays at exactly GRID_TOP.
+  let minTop = GRID_TOP;
+  for (const box of Object.values(nextLayout)) minTop = Math.min(minTop, box.y);
+  // Also check reservation rects — these extend above the layout boxes for merge frames.
+  for (const reservation of params.reservations) {
+    const rr = computeRect(reservation);
+    minTop = Math.min(minTop, rr.y);
+  }
+  if (minTop < GRID_TOP) {
+    const shift = GRID_TOP - minTop;
+    for (const id of Object.keys(nextLayout)) {
+      nextLayout[id] = { ...nextLayout[id], y: nextLayout[id].y + shift };
     }
   }
 

@@ -50,6 +50,7 @@ const TAG_MIN_W = 36;        // minimum width
 const TAG_V_GAP = 3;         // vertical gap between stacked tag labels
 const TAG_RIGHT_GAP = 6;     // horizontal gap from card right edge
 const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
+const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> SUPP_FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
 // SUPPLEMENT frame constants
 const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pairs (wide enough to click)
 const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
@@ -2447,7 +2448,7 @@ export default function GraphView(props: GraphViewProps) {
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
             <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{
                 // Prefer newCorrInfo (this relation IS the replacement) over corrInfo (this relation was corrected)
@@ -2503,9 +2504,10 @@ export default function GraphView(props: GraphViewProps) {
             const label=kind==="agree"?"赞":"反";
             items.push(
               <div key={`reldec-${kind}-${relId}`} data-rel-overlay="true"
+                onClick={ev=>{ev.stopPropagation();}}
                 onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,relId,kind);}}
                 title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-                style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:5,
+                style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:7,
                   background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                   fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
                   overflow:"hidden"}}>
@@ -2539,13 +2541,19 @@ export default function GraphView(props: GraphViewProps) {
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,relMsgIds);}}
                 title={`标注：${displayLabel}；单击选中，双击展开详情`}
-                style={{position:"absolute",left:decLeft,top:decTop,width:tagW,height:TAG_H,zIndex:5,
+                style={{position:"absolute",left:decLeft-TAG_HIT_PAD,top:decTop-TAG_HIT_PAD,
+                  width:tagW+2*TAG_HIT_PAD,height:TAG_H+2*TAG_HIT_PAD,
+                  zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
+                <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
+                  width:tagW,height:TAG_H,boxSizing:"border-box",
                   background:isTagSel?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
-                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,pointerEvents:"auto",
-                  cursor:"pointer",padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
+                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
                   border:isTagSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                🏷{displayLabel}
+                  🏷{displayLabel}
+                </span>
               </div>
             );
             decTop+=TAG_H+TAG_V_GAP;
@@ -2585,9 +2593,10 @@ export default function GraphView(props: GraphViewProps) {
               const label=kind==="agree"?"赞":"反";
               items.push(
                 <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                  onClick={ev=>{ev.stopPropagation();}}
                   onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,ci.corrRelMsgId,kind);}}
                   title={`${kind==="agree"?"赞同":"反对"}更正：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-                  style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:5,
+                  style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:7,
                     background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                     fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
                     overflow:"hidden"}}>
@@ -2824,9 +2833,10 @@ export default function GraphView(props: GraphViewProps) {
           const label=kind==="agree"?"赞":"反";
           nodes.push(
             <div key={`sf-${kind}-${sf.relMsgId}`} data-rel-overlay="true"
+              onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-              style={{position:"absolute",left:sfDecLeft,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:5,
+              style={{position:"absolute",left:sfDecLeft,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
                 background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                 fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
                 overflow:"hidden"}}>
@@ -2860,13 +2870,19 @@ export default function GraphView(props: GraphViewProps) {
               onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               title={`标注：${displayLabel}；单击选中，双击展开详情`}
-              style={{position:"absolute",left:sfDecLeft,top:sfDecTop,width:tagW,height:TAG_H,zIndex:5,
+              style={{position:"absolute",left:sfDecLeft-TAG_HIT_PAD,top:sfDecTop-TAG_HIT_PAD,
+                width:tagW+2*TAG_HIT_PAD,height:TAG_H+2*TAG_HIT_PAD,
+                zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
+                display:"flex",alignItems:"center",justifyContent:"center",
+                padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
+              <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
+                width:tagW,height:TAG_H,boxSizing:"border-box",
                 background:isTagSel?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,pointerEvents:"auto",
-                cursor:"pointer",padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
+                fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
                 border:isTagSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-              🏷{displayLabel}
+                🏷{displayLabel}
+              </span>
             </div>
           );
           sfDecTop+=TAG_H+TAG_V_GAP;
@@ -2888,9 +2904,10 @@ export default function GraphView(props: GraphViewProps) {
           const label=kind==="agree"?"赞":"反";
           nodes.push(
             <div key={`gf-${kind}-${gf.relMsgId}`} data-rel-overlay="true"
+              onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,gf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-              style={{position:"absolute",left:gfDecLeft,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:5,
+              style={{position:"absolute",left:gfDecLeft,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
                 background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                 fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
                 overflow:"hidden"}}>
@@ -2929,12 +2946,20 @@ export default function GraphView(props: GraphViewProps) {
                 data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
-                style={{position:"absolute",left:group.rect.x,top:group.rect.y,width:group.rect.width,height:group.rect.height,zIndex:5,
-                  background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
-                  justifyContent:"center",fontSize:10,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
-                  boxShadow:"0 1px 4px rgba(0,0,0,0.4)",border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
-                title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}>
-                🏷{displayLabel}
+                title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
+                style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD,top:group.rect.y-TAG_HIT_PAD,
+                  width:group.rect.width+2*TAG_HIT_PAD,height:group.rect.height+2*TAG_HIT_PAD,
+                  zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
+                <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
+                  width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
+                  background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
+                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
+                  border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                  whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                  🏷{displayLabel}
+                </span>
               </div>
             </React.Fragment>
           );
@@ -2944,12 +2969,20 @@ export default function GraphView(props: GraphViewProps) {
                 data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
-                style={{position:"absolute",left:group.rect.x,top:group.rect.y,width:group.rect.width,height:group.rect.height,zIndex:5,
-                  background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,display:"flex",alignItems:"center",
-                  justifyContent:"center",fontSize:10,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
-                  boxShadow:"0 1px 4px rgba(0,0,0,0.4)",border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
-                title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}>
-                🏷{displayLabel}
+                title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
+                style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD,top:group.rect.y-TAG_HIT_PAD,
+                  width:group.rect.width+2*TAG_HIT_PAD,height:group.rect.height+2*TAG_HIT_PAD,
+                  zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
+                <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
+                  width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
+                  background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
+                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
+                  border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                  whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                  🏷{displayLabel}
+                </span>
               </div>
               {/* Full-size AGREE/DISAGREE decoration badges on this TAG relation group, stacked vertically */}
               {(()=>{
@@ -2964,9 +2997,10 @@ export default function GraphView(props: GraphViewProps) {
                   const label=kind==="agree"?"赞":"反";
                   return (
                     <div key={`tag-dec-${kind}-${_mid}-${group.label}`} data-rel-overlay="true"
+                      onClick={ev=>{ev.stopPropagation();}}
                       onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,tagIconRelMsgId,kind);}}
                       title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-                      style={{position:"absolute",left:tagDecLeft,top:top,width:DEC_W,height:DEC_H,zIndex:5,
+                      style={{position:"absolute",left:tagDecLeft,top:top,width:DEC_W,height:DEC_H,zIndex:7,
                         background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                         fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
                         overflow:"hidden"}}>
@@ -2997,9 +3031,10 @@ export default function GraphView(props: GraphViewProps) {
         return (
           <div key={`dec-${v.key}`}
             data-rel-overlay="true"
+            onClick={ev=>{ev.stopPropagation();}}
             onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}
             title={`${v.kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-            style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:5,
+            style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:7,
               background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
               fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
               overflow:"hidden"}}>

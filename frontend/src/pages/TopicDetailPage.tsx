@@ -15,20 +15,22 @@ import ErrorBoundary from '../components/ErrorBoundary';
 // ========================= Helpers =========================
 
 const ALL_RELATION_TYPES: RelationType[] = [
-  "annotation", "reference", "reply", "agree", "disagree", "tag", "supplement",
+  "annotation", "reference", "reply", "agree", "disagree", "tag", "arrange",
   "correct", "classify", "merge", "summary",
   // "recommend" and "archive" are now accessible via TAG's secondary relation selector
 ];
 
 /** Max characters to display for an existing tag label in the secondary relation selector. */
 const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
-const CLASSIFY_TARGET_HINT = "文本消息、补充关系消息、分类话题消息或归并关系消息";
+const CLASSIFY_TARGET_HINT = "文本消息、排列关系消息、分类话题消息或归并关系消息";
 
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
   if (t === "none") return "无";
   if (t === "question") return "疑问";
   if (t === "answer") return "回答";
+  if (t === "vertical") return "纵";
+  if (t === "horizontal") return "横";
   if (t === "recommend" || t === "archive") return relationTypeName(t);
   if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
   return t; // existing tag label text
@@ -180,10 +182,10 @@ function collectOwnedByRelation(
 
   // Collect text messages from targetRefs
   for (const textId of getTextTargetIds(relation.targetRefs)) textIds.add(textId);
-  // For SUPPLEMENT relations, the sourceMessageId is also an owned text message
-  // (the supplementary message is part of the supplement frame).
+  // For ARRANGE relations, the sourceMessageId is also an owned text message
+  // (the arranged message is part of the arrange frame).
   const relType = relation.relationType.toUpperCase();
-  if (relType === 'SUPPLEMENT' && relation.sourceMessageId) {
+  if (relType === 'ARRANGE' && relation.sourceMessageId) {
     textIds.add(relation.sourceMessageId);
   }
   for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
@@ -191,7 +193,7 @@ function collectOwnedByRelation(
     const child = relationById.get(childRelationId);
     if (!child) continue;
     const childType = child.relationType.toUpperCase();
-    if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'SUPPLEMENT' && childType !== 'SUMMARY') continue;
+    if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'ARRANGE' && childType !== 'SUMMARY') continue;
     const nested = collectOwnedByRelation(childRelationId, relationById, visited);
     nested.textIds.forEach(id => textIds.add(id));
     nested.relationIds.forEach(id => relationIds.add(id));
@@ -762,10 +764,10 @@ export default function TopicDetailPage() {
     });
     return ids;
   }, [classifyOwnership, relationById]);
-  const classifiedTargetSupplementRelMsgIds = useMemo(() => {
+  const classifiedTargetARRANGERelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     classifyOwnership.relationIds.forEach(id => {
-      if (relationById.get(id)?.relationType === 'SUPPLEMENT') ids.add(id);
+      if (relationById.get(id)?.relationType === 'ARRANGE') ids.add(id);
     });
     return ids;
   }, [classifyOwnership, relationById]);
@@ -1176,7 +1178,7 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(unit.messageId);
-      if (relType !== "classify" && relType !== "merge" && relType !== "supplement" && relType !== "summary") continue;
+      if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") continue;
       const owned = collectOwnedByRelation(unit.messageId, relationById);
       owned.textIds.forEach(id => ids.add(id));
     }
@@ -1198,7 +1200,7 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(mid);
-      if (relType !== "classify" && relType !== "merge" && relType !== "supplement" && relType !== "summary") continue;
+      if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") continue;
       const key = `relation:${mid}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1212,7 +1214,7 @@ export default function TopicDetailPage() {
    * already-classified text messages that are NOT part of the current selection.
    *
    * Defensive expansion: when a selected text message is connected via an edge
-   * to a classify/merge/supplement/summary relation message, the relation's
+   * to a classify/merge/arrange/summary relation message, the relation's
    * owned text messages are also treated as "selected".  This prevents false
    * positives when getGroupedTargetTextMessageIds has already expanded the
    * selection but an edge exists between a selected text and a classified text
@@ -1223,9 +1225,9 @@ export default function TopicDetailPage() {
     const selected = new Set(targetTextIds);
 
     // Defensive expansion: when a selected normal message has an edge to an
-    // expandable relation message (classify/merge/supplement/summary), treat
+    // expandable relation message (classify/merge/arrange/summary), treat
     // that relation's owned text messages as also selected.
-    const expandableTypes = new Set(['classify', 'merge', 'supplement', 'summary']);
+    const expandableTypes = new Set(['classify', 'merge', 'arrange', 'summary']);
     for (const e of edges) {
       const fromMsg = msgMap.get(e.from.messageId);
       const toMsg = msgMap.get(e.to.messageId);
@@ -1274,7 +1276,7 @@ export default function TopicDetailPage() {
           (
             relationTypeByRelMsgId.get(mid) === "classify" ||
             relationTypeByRelMsgId.get(mid) === "merge" ||
-            relationTypeByRelMsgId.get(mid) === "supplement" ||
+            relationTypeByRelMsgId.get(mid) === "arrange" ||
             relationTypeByRelMsgId.get(mid) === "summary"
           )
         )
@@ -1548,7 +1550,7 @@ export default function TopicDetailPage() {
 
     if (effectiveTargets.length === 0 && relationType !== "classify") return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
-    const isSupplement = relationType === "supplement";
+    const isArrange = relationType === "arrange";
     // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
     const isInlineBadge = false;
 
@@ -1726,37 +1728,46 @@ export default function TopicDetailPage() {
       return;
     }
 
-    // SUPPLEMENT relation: user-to-message relation (like CLASSIFY/MERGE/SUMMARY), no source message.
+    // ARRANGE relation: user-to-message relation (like CLASSIFY/MERGE/SUMMARY), no source message.
     // If text is present, create a text message first and include it as a target of the frame.
     // This avoids creating normal→normal edges that could falsely trigger cross-link checks.
-    if (isSupplement) {
+    // Targets are collected as-is; the layout engine handles nested ARRANGE frames via
+    // buildFrameBlocks subset detection (treating arrange messages as whole units).
+    if (isArrange) {
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       let extraTargetMid: string | null = null;
       if (text.length > 0) {
         const msg = await handleSendMessageOnly(text);
-        // If message creation fails, handleSendMessageOnly shows an alert.
-        // Keep UI state intact (selections, relation type) so the user can retry.
         if (!msg) return;
         extraTargetMid = msg.id;
       }
       const allTargetMids = extraTargetMid ? [...uniqueTargetMids, extraTargetMid] : uniqueTargetMids;
       const targetRefs = allTargetMids.map(mid => unitSelectionToTargetRef({ messageId: mid, selection: { kind: "whole" } }, msgMap));
+      // Determine targetLayout from secondaryRelationType: 'single-column' (纵) or 'single-row' (横)
+      const targetLayout = secondaryRelationType === 'horizontal' ? 'single-row' as const : 'single-column' as const;
       try {
-        const backendRel = await api.createRelation(topicId!, { relationType: 'SUPPLEMENT', sourceMessageId: null, targetRefs });
+        const backendRel = await api.createRelation(topicId!, {
+          relationType: 'ARRANGE',
+          sourceMessageId: null,
+          targetRefs,
+          payload: buildRelationPayload({ relationType: 'ARRANGE', targetLayout }),
+        });
         const relId = backendRel.id;
-        const typeName = relationTypeName("supplement");
+        const typeName = relationTypeName("arrange");
+        // Encode layout direction in relationLabel so layout engine can read it directly
+        const edgeLabel = secondaryRelationType === 'horizontal' ? 'arrange-h' : 'arrange-v';
         appendCreatedRelation(backendRel);
         const anonSrcId = `anon:${backendRel.id}`;
         for (const tgtMid of allTargetMids) {
           newEdgesList.push({
-            id: nextId("edge"), relationMessageId: relId, relationType: "supplement",
+            id: nextId("edge"), relationMessageId: relId, relationType: "arrange",
             from: { messageId: anonSrcId, selection: { kind: "whole" } },
             to: { messageId: tgtMid, selection: { kind: "whole" } },
-            relationLabel: typeName,
+            relationLabel: edgeLabel,
           } as DemoEdge);
         }
-      } catch (e: any) { alert(`建立补充关系失败: ${e?.message ?? e}`); }
+      } catch (e: any) { alert(`建立排列关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
@@ -1773,20 +1784,20 @@ export default function TopicDetailPage() {
         return;
       }
       const selectedSet = new Set(targetTextIds);
-      const supplementTargetsByRelMsg = new Map<string, string[]>();
+      const arrangeTargetsByRelMsg = new Map<string, string[]>();
       for (const e of edges) {
-        if (e.relationType !== "supplement") continue;
+        if (e.relationType !== "arrange") continue;
         if (msgMap.get(e.to.messageId)?.kind !== "normal") continue;
-        const arr = supplementTargetsByRelMsg.get(e.relationMessageId) ?? [];
+        const arr = arrangeTargetsByRelMsg.get(e.relationMessageId) ?? [];
         arr.push(e.to.messageId);
-        supplementTargetsByRelMsg.set(e.relationMessageId, arr);
+        arrangeTargetsByRelMsg.set(e.relationMessageId, arr);
       }
-      for (const [, mids] of supplementTargetsByRelMsg) {
+      for (const [, mids] of arrangeTargetsByRelMsg) {
         const uniqueMids = Array.from(new Set(mids));
         if (uniqueMids.length <= 1) continue;
         const selectedCount = uniqueMids.filter(mid => selectedSet.has(mid)).length;
         if (selectedCount > 0 && selectedCount < uniqueMids.length) {
-          alert(`同一条补充关系关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
+          alert(`同一条排列关系关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
           return;
         }
       }
@@ -2086,7 +2097,7 @@ export default function TopicDetailPage() {
   const recentNormals = useMemo(() => messages.filter(m => m.kind === "normal").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
-  const isSupplementType = relationType === "supplement";
+  const isArrangeType = relationType === "arrange";
   const isClassifyType = relationType === "classify";
   const isMergeType = relationType === "merge";
   const isSummaryType = relationType === "summary";
@@ -2103,15 +2114,17 @@ export default function TopicDetailPage() {
   // - REPLY: always available (none/question/answer)
   // - CORRECT: only when targeting relation messages
   // - TAG: always available (none/recommend/archive/existing-tag shortcuts)
+  // - ARRANGE: always available (vertical/horizontal)
   const hasSecondaryRelationSelector =
     relationType === "reply"
     || (relationType === "correct" && draftHasRelationTarget)
-    || relationType === "tag";
+    || relationType === "tag"
+    || relationType === "arrange";
 
   // Send button enabled logic (single button):
   //   - No relation type: just send message → need text
   //   - Relation target + reply/correct with secondary selector: text must be empty, source must be empty
-  //   - agree/disagree/supplement (pure-stance): draft or target collection not empty
+  //   - agree/disagree/arrange (pure-stance): draft or target collection not empty
   //   - sourceUnits + targetUnits explicitly set (draft empty): can build relation without new text
   //   - Other types: (draft or target collection) not empty AND text not empty
   // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
@@ -2126,7 +2139,7 @@ export default function TopicDetailPage() {
     if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
-    if (isAgreeDisagreeType || isSupplementType || isTagWithQuickAnnotate) return hasTargetsAvailable;
+    if (isAgreeDisagreeType || isArrangeType || isTagWithQuickAnnotate) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
     return hasTargetsAvailable && newMessageContent.trim().length > 0;
@@ -2169,11 +2182,12 @@ export default function TopicDetailPage() {
         ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
         : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
-    if (isSupplementType) {
+    if (isArrangeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
+      const layoutLabel = secondaryRelationType === 'horizontal' ? '横排' : '纵排';
       return newMessageContent.trim().length > 0
-        ? `发送消息并建立「${typeName}」关系（文本消息加入补充框架）`
-        : `建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+        ? `发送消息并建立「${typeName}」关系（${layoutLabel}，文本消息加入排列框架）`
+        : `建立「${typeName}」关系（${layoutLabel}，用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
     // TAG + secondary = recommend/archive: quick inline-badge shortcut
     if (isTagWithInlineBadge) {
@@ -2407,8 +2421,8 @@ export default function TopicDetailPage() {
           const rel = relationById.get(relId);
           if (!rel) continue;
           const relType = rel.relationType.toUpperCase();
-          if (relType !== 'CLASSIFY' && relType !== 'MERGE' && relType !== 'SUPPLEMENT' && relType !== 'SUMMARY') continue;
-          // Include the source message of nested relations (not applicable to SUPPLEMENT/CLASSIFY/MERGE/SUMMARY
+          if (relType !== 'CLASSIFY' && relType !== 'MERGE' && relType !== 'ARRANGE' && relType !== 'SUMMARY') continue;
+          // Include the source message of nested relations (not applicable to ARRANGE/CLASSIFY/MERGE/SUMMARY
           // which are user-to-message relations with no sourceMessageId, but may apply to other relation
           // types that appear as nested targets via future extensions).
           if (rel.sourceMessageId) {
@@ -2423,8 +2437,8 @@ export default function TopicDetailPage() {
               }
             }
           }
-          if (relType === 'SUPPLEMENT' || relType === 'MERGE') {
-            // SUPPLEMENT and MERGE are framing relations: all content (text targets and
+          if (relType === 'ARRANGE' || relType === 'MERGE') {
+            // ARRANGE and MERGE are framing relations: all content (text targets and
             // nested framing relations) is expanded inline. CLASSIFY and SUMMARY targets
             // are shown as topic cards but not recursively expanded (user must double-click
             // to enter them).
@@ -2432,7 +2446,7 @@ export default function TopicDetailPage() {
             getRelationTargetIds(rel.targetRefs).forEach(id => {
               topicRelationIds.add(id);
               const childRelType = relationById.get(id)?.relationType?.toUpperCase();
-              if ((childRelType === 'SUPPLEMENT' || childRelType === 'MERGE') && !visited.has(id)) {
+              if ((childRelType === 'ARRANGE' || childRelType === 'MERGE') && !visited.has(id)) {
                 queue.push(id);
               }
               // CLASSIFY and SUMMARY targets are shown as topic cards but not recursively expanded.
@@ -2504,15 +2518,15 @@ export default function TopicDetailPage() {
     // CLASSIFY and SUMMARY relation messages that are owned by CLASSIFY are hidden (they are
     // the classification containers and are shown in the graph view as topic cards).
     // MERGE owned by CLASSIFY is also hidden (intermediate grouping structure).
-    // SUPPLEMENT owned by CLASSIFY is unconditionally hidden — its text messages are already
-    // classified, and the SUPPLEMENT container itself should not appear in the main view.
-    // SUPPLEMENT NOT owned by CLASSIFY is only hidden when ALL its text endpoints
+    // arrange owned by CLASSIFY is unconditionally hidden — its text messages are already
+    // classified, and the arrange container itself should not appear in the main view.
+    // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are classified (via listExclusiveRelMsgIds).
     const listHiddenRelationIds = new Set<string>([
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
-      ...classifiedTargetSupplementRelMsgIds,
+      ...classifiedTargetARRANGERelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
@@ -2536,16 +2550,16 @@ export default function TopicDetailPage() {
     });
 
     // graphHiddenRelationIds: relation messages to hide in the non-linear graph view.
-    // Unconditionally hide CLASSIFY-owned CLASSIFY/SUMMARY/MERGE/SUPPLEMENT containers and replaced relations.
-    // SUPPLEMENT owned by CLASSIFY is unconditionally hidden — its text messages are already
-    // classified via collectOwnedByRelation, and the SUPPLEMENT container should not appear.
-    // SUPPLEMENT NOT owned by CLASSIFY is only hidden when ALL its text endpoints
+    // Unconditionally hide CLASSIFY-owned CLASSIFY/SUMMARY/MERGE/arrange containers and replaced relations.
+    // arrange owned by CLASSIFY is unconditionally hidden — its text messages are already
+    // classified via collectOwnedByRelation, and the arrange container should not appear.
+    // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are in the hidden set (via graphExclusiveRelMsgIds).
     const graphHiddenRelationIds = new Set<string>([
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
-      ...classifiedTargetSupplementRelMsgIds,
+      ...classifiedTargetARRANGERelMsgIds,
       ...summaryOwnership.relationIds,
       ...graphExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
@@ -2574,7 +2588,7 @@ export default function TopicDetailPage() {
       listMessagesToRender: listMessages,
       listEdgesToRender: listEdges,
     };
-  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetSupplementRelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
+  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -2765,7 +2779,7 @@ export default function TopicDetailPage() {
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
-            <button key={rt} onClick={() => { setRelationType(prev => prev === rt ? null : rt); setSecondaryRelationType("none"); }}
+            <button key={rt} onClick={() => { setRelationType(prev => prev === rt ? null : rt); setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); }}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
             </button>
@@ -3050,7 +3064,9 @@ export default function TopicDetailPage() {
                   ? ["none", "question", "answer"]
                   : relationType === "tag"
                     ? tagSecondaryOptions
-                    : correctSecondaryOptions;
+                    : relationType === "arrange"
+                      ? ["vertical", "horizontal"]
+                      : correctSecondaryOptions;
                 return (
                   <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
                     <span style={{ opacity: 0.85 }}>附加关系：</span>

@@ -39,9 +39,9 @@ describe('getPresentationSpec', () => {
     expect(spec.label).toBe('标注');
   });
 
-  it('returns the correct spec for SUPPLEMENT (supplement-frame)', () => {
-    const spec = getPresentationSpec('SUPPLEMENT');
-    expect(spec.kind).toBe('supplement-frame');
+  it('returns the correct spec for ARRANGE (arrange-frame)', () => {
+    const spec = getPresentationSpec('ARRANGE');
+    expect(spec.kind).toBe('arrange-frame');
     expect(spec.formsTrees).toBe(true);
   });
 
@@ -55,7 +55,7 @@ describe('getPresentationSpec', () => {
   it('covers all 13 required relation types', () => {
     const required = [
       'ANNOTATION', 'REFERENCE', 'REPLY', 'AGREE', 'DISAGREE',
-      'TAG', 'CORRECT', 'SUPPLEMENT', 'CLASSIFY',
+      'TAG', 'CORRECT', 'ARRANGE', 'CLASSIFY',
       'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE',
     ];
     for (const type of required) {
@@ -132,8 +132,8 @@ describe('PRESENTATION_SPECS completeness', () => {
   });
 
   it('all tree-forming relations have formsTrees=true', () => {
-    // REPLY, CORRECT, SUPPLEMENT are expected to form trees
-    const treeForms = ['REPLY', 'CORRECT', 'SUPPLEMENT'];
+    // REPLY, CORRECT, ARRANGE are expected to form trees
+    const treeForms = ['REPLY', 'CORRECT', 'ARRANGE'];
     for (const type of treeForms) {
       expect(PRESENTATION_SPECS[type]?.formsTrees, `${type} should have formsTrees=true`).toBe(true);
     }

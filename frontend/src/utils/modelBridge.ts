@@ -10,7 +10,7 @@ export type RelationType =
   | "disagree"
   | "tag"
   | "correct"
-  | "supplement"
+  | "arrange"
   | "classify"
   | "merge"
   | "summary"

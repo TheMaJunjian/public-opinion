@@ -43,16 +43,16 @@ describe('merge canvas helpers', () => {
     expect(reservations[0].contentRect.height).toBeGreaterThan(250);
   });
 
-  it('nests supplement frames when supplement relations are merge targets', () => {
+  it('nests arrange frames when arrange relations are merge targets', () => {
     const messages: DemoMessage[] = [
       makeNormal('msg-1'),
       makeNormal('msg-2'),
       makeNormal('msg-3'),
-      { id: 'supp-1', author: 'tester', createdAt: '2024-01-01T00:01:00.000Z', content: 'supp', kind: 'relation', relationType: 'supplement' },
+      { id: 'supp-1', author: 'tester', createdAt: '2024-01-01T00:01:00.000Z', content: 'supp', kind: 'relation', relationType: 'arrange' },
       { id: 'merge-1', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'merge', kind: 'relation', relationType: 'merge', relationPayload: { title: '归并' } },
     ];
     const edges: DemoEdge[] = [
-      { id: 'supp-1::0', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'msg-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-2', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
+      { id: 'supp-1::0', relationMessageId: 'supp-1', relationType: 'arrange', from: { messageId: 'msg-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-2', selection: { kind: 'whole' } }, relationLabel: 'arrange' },
       { id: 'merge-1::0', relationMessageId: 'merge-1', relationType: 'merge', from: { messageId: 'anon:merge-1', selection: { kind: 'whole' } }, to: { messageId: 'supp-1', selection: { kind: 'whole' } }, relationLabel: 'merge' },
       { id: 'merge-1::1', relationMessageId: 'merge-1', relationType: 'merge', from: { messageId: 'anon:merge-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-3', selection: { kind: 'whole' } }, relationLabel: 'merge' },
     ];
@@ -109,7 +109,7 @@ describe('merge canvas helpers', () => {
 });
 
 describe('grouping column override', () => {
-  it('keeps supplement targets in different original columns while compacting used columns/rows', () => {
+  it('keeps arrange targets in different original columns while compacting used columns/rows', () => {
     const normals: DemoMessage[] = [
       { ...makeNormal('msg-1'), createdAt: '2024-01-01T00:00:00.000Z' },
       { ...makeNormal('msg-2'), createdAt: '2024-01-01T00:01:00.000Z' },
@@ -117,9 +117,9 @@ describe('grouping column override', () => {
       { ...makeNormal('msg-4'), createdAt: '2024-01-01T00:03:00.000Z' },
     ];
     const edges: DemoEdge[] = [
-      { id: 'supp-1::0', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-1', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
-      { id: 'supp-1::1', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-2', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
-      { id: 'supp-1::2', relationMessageId: 'supp-1', relationType: 'supplement', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-3', selection: { kind: 'whole' } }, relationLabel: 'supplement' },
+      { id: 'supp-1::0', relationMessageId: 'supp-1', relationType: 'arrange', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-1', selection: { kind: 'whole' } }, relationLabel: 'arrange' },
+      { id: 'supp-1::1', relationMessageId: 'supp-1', relationType: 'arrange', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-2', selection: { kind: 'whole' } }, relationLabel: 'arrange' },
+      { id: 'supp-1::2', relationMessageId: 'supp-1', relationType: 'arrange', from: { messageId: 'anon:supp-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-3', selection: { kind: 'whole' } }, relationLabel: 'arrange' },
     ];
     const { col, maxCol, groupSourceToTarget } = applyGroupingColumnOverride({
       normals,

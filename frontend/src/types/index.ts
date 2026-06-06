@@ -44,7 +44,7 @@ export interface Message {
  *   Edge-label (directed connector): ANNOTATION, REFERENCE, REPLY
  *   Decoration (badge on target):    AGREE, DISAGREE
  *   Decoration-label (text tag):     TAG
- *   Supplement-frame (border wrap):  SUPPLEMENT
+ *   Arrange-frame (border wrap):      ARRANGE
  *   Replace/Overlay:                 CORRECT
  *   Frame/Group:                     CLASSIFY, MERGE, SUMMARY
  *   Inline badge:                    RECOMMEND, ARCHIVE
@@ -61,7 +61,7 @@ export type RelationType =
   | 'DISAGREE'     // 反对（有文本时视为反驳）
   | 'TAG'          // 标注（消息旁的装饰标签）
   | 'CORRECT'      // 更正
-  | 'SUPPLEMENT'   // 补充（边框包裹目标+来源消息）
+  | 'ARRANGE'      // 排列（边框包裹目标消息；payload.targetLayout 控制横/纵排列）
   | 'CLASSIFY'     // 分类
   | 'MERGE'        // 归并
   | 'SUMMARY'      // 总结
@@ -97,7 +97,7 @@ export type TargetRef =
       part?: 'label' | 'decoration' | 'frame' | 'whole';
     };
 
-export type RelationTargetLayout = 'single-column' | 'multi-column';
+export type RelationTargetLayout = 'single-column' | 'multi-column' | 'single-row';
 
 export interface RelationPayload {
   label?: string;
@@ -138,7 +138,7 @@ export type PresentationKind =
   | 'edge-label'        // Directed connector with a clickable label
   | 'decoration'        // Badge/decoration attached to target message card (right side)
   | 'decoration-label'  // Text label badge attached to target message card
-  | 'supplement-frame'  // Border frame wrapping target + source messages (source below target)
+  | 'arrange-frame'     // Border frame wrapping target messages (vertical or horizontal layout)
   | 'frame-group'       // Frames a group of messages
   | 'replace-overlay'   // Overlays / replaces the target message display (e.g. SUMMARY)
   | 'correction-badge'  // Small badge inside source message card; source replaces target (CORRECT)
@@ -162,7 +162,7 @@ export interface PresentationSpec {
    */
   formsTrees?: boolean;
   /**
-   * True for supplement-frame and frame-group types.
+   * True for arrange-frame and frame-group types.
    * These relations cluster all their target messages into the same column
    * and wrap them in a visible border frame.
    * Layout pipeline: target messages are stacked with zero gap (same column).
@@ -172,7 +172,7 @@ export interface PresentationSpec {
    * True for replace-overlay types (SUMMARY) and correction-badge types (CORRECT).
    * The source message visually replaces / covers the target message(s) in the
    * non-linear view.  The source is still placed in the same column as the
-   * target (same-column stacking, like supplement), but is presented as the
+   * target (same-column stacking, like arrange), but is presented as the
    * authoritative content with the original dimmed or accessible via double-click.
    */
   replacesTarget?: boolean;
@@ -190,7 +190,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
   CORRECT:     { kind: 'correction-badge',  label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
-  SUPPLEMENT:  { kind: 'supplement-frame',  label: '补充', color: 'purple', formsTrees: true,  groupsTargets: true   },
+  ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true   },
   CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true   },
   MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },
   SUMMARY:     { kind: 'frame-group',       label: '总结', color: 'amber',  formsTrees: false, groupsTargets: true   },

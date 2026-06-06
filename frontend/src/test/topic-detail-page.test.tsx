@@ -522,7 +522,7 @@ describe('TopicDetailPage MERGE graph frame visibility', () => {
   });
 });
 
-describe('TopicDetailPage CLASSIFY topic with supplement source visibility', () => {
+describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => {
   const topic: Topic = {
     id: 'topic-1',
     title: '测试话题',
@@ -538,18 +538,18 @@ describe('TopicDetailPage CLASSIFY topic with supplement source visibility', () 
     // msg-a is the source of rel-supp; msg-b is the target
     mockApi.getMessages.mockResolvedValue({
       data: [
-        makeMessage('msg-a', '补充来源'),
-        makeMessage('msg-b', '被补充消息'),
+        makeMessage('msg-a', '排列来源'),
+        makeMessage('msg-b', '被排列消息'),
       ],
     });
-    // rel-supp: SUPPLEMENT (source=msg-a, target=msg-b)
+    // rel-supp: arrange (source=msg-a, target=msg-b)
     // rel-classify: CLASSIFY (targets=[rel-supp])
     mockApi.getRelations.mockResolvedValue({
       data: [
         {
           id: 'rel-supp',
           topicId: 'topic-1',
-          relationType: 'SUPPLEMENT',
+          relationType: 'arrange',
           sourceMessageId: 'msg-a',
           targetRefs: [{ kind: 'message', messageId: 'msg-b' }],
           createdAt: '2024-01-01T00:01:00.000Z',
@@ -569,7 +569,7 @@ describe('TopicDetailPage CLASSIFY topic with supplement source visibility', () 
     });
   });
 
-  it('shows supplement relation and its source text when entering classify topic', async () => {
+  it('shows arrange relation and its source text when entering classify topic', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -582,17 +582,17 @@ describe('TopicDetailPage CLASSIFY topic with supplement source visibility', () 
     fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
 
     await waitFor(() => {
-      // The SUPPLEMENT relation message must be visible in the topic view
+      // The arrange relation message must be visible in the topic view
       expect(screen.getByText('关系消息 rel-supp')).toBeInTheDocument();
     });
-    // The supplement's source text (msg-a) must also be visible so its frame can render
+    // The arrange's source text (msg-a) must also be visible so its frame can render
     expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    // The supplement's target text (msg-b) must be visible
+    // The arrange's target text (msg-b) must be visible
     expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
   });
 });
 
-describe('TopicDetailPage SUMMARY topic with supplement source visibility', () => {
+describe('TopicDetailPage SUMMARY topic with arrange source visibility', () => {
   const topic: Topic = {
     id: 'topic-1',
     title: '测试话题',
@@ -607,8 +607,8 @@ describe('TopicDetailPage SUMMARY topic with supplement source visibility', () =
     mockApi.getTopic.mockResolvedValue(topic);
     mockApi.getMessages.mockResolvedValue({
       data: [
-        makeMessage('msg-a', '补充来源'),
-        makeMessage('msg-b', '被补充消息'),
+        makeMessage('msg-a', '排列来源'),
+        makeMessage('msg-b', '被排列消息'),
       ],
     });
     mockApi.getRelations.mockResolvedValue({
@@ -616,7 +616,7 @@ describe('TopicDetailPage SUMMARY topic with supplement source visibility', () =
         {
           id: 'rel-supp',
           topicId: 'topic-1',
-          relationType: 'SUPPLEMENT',
+          relationType: 'arrange',
           sourceMessageId: 'msg-a',
           targetRefs: [{ kind: 'message', messageId: 'msg-b' }],
           createdAt: '2024-01-01T00:01:00.000Z',
@@ -636,7 +636,7 @@ describe('TopicDetailPage SUMMARY topic with supplement source visibility', () =
     });
   });
 
-  it('shows supplement relation and its source text when entering summary topic', async () => {
+  it('shows arrange relation and its source text when entering summary topic', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -672,14 +672,14 @@ describe('TopicDetailPage MERGE with nested relation target graph visibility', (
     mockApi.getMessages.mockResolvedValue({
       data: [makeMessage('msg-a', '消息A'), makeMessage('msg-b', '消息B')],
     });
-    // rel-supp: SUPPLEMENT (source=msg-a, target=msg-b)
+    // rel-supp: arrange (source=msg-a, target=msg-b)
     // rel-merge: MERGE targeting [rel-supp]
     mockApi.getRelations.mockResolvedValue({
       data: [
         {
           id: 'rel-supp',
           topicId: 'topic-1',
-          relationType: 'SUPPLEMENT',
+          relationType: 'arrange',
           sourceMessageId: 'msg-a',
           targetRefs: [{ kind: 'message', messageId: 'msg-b' }],
           createdAt: '2024-01-01T00:01:00.000Z',
@@ -707,7 +707,7 @@ describe('TopicDetailPage MERGE with nested relation target graph visibility', (
     const latestProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
     // The MERGE relation message must be visible
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-merge')).toBe(true);
-    // The MERGE-owned SUPPLEMENT and its text targets must also be in graphMessages
+    // The MERGE-owned arrange and its text targets must also be in graphMessages
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-supp')).toBe(true);
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-a')).toBe(true);
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'msg-b')).toBe(true);
@@ -968,7 +968,7 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
   });
 });
 
-describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', () => {
+describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () => {
   const topic: Topic = {
     id: 'topic-1',
     title: '测试话题',
@@ -981,16 +981,16 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getTopic.mockResolvedValue(topic);
-    // Simulating user's scenario: select m2, m1, m4, r10 (SUPPLEMENT), m7 → classify
-    // r10 = SUPPLEMENT(source=m5, target=m6) — this is the key case
+    // Simulating user's scenario: select m2, m1, m4, r10 (arrange), m7 → classify
+    // r10 = arrange(source=m5, target=m6) — this is the key case
     mockApi.getMessages.mockResolvedValue({
       data: [
         makeMessage('m1', '消息1'),
         makeMessage('m2', '消息2'),
         makeMessage('m3', '消息3'),
         makeMessage('m4', '消息4'),
-        makeMessage('m5', '消息5（补充源）'),
-        makeMessage('m6', '消息6（补充目标）'),
+        makeMessage('m5', '消息5（排列源）'),
+        makeMessage('m6', '消息6（排列目标）'),
         makeMessage('m7', '消息7'),
         makeMessage('m8', '无关消息'),
       ],
@@ -1015,9 +1015,9 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
           sourceMessageId: 'm3', targetRefs: [{ kind: 'message', messageId: 'm1' }],
           createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
         },
-        // r10: SUPPLEMENT (source=m5, target=m6) — wraps m5→m6
+        // r10: arrange (source=m5, target=m6) — wraps m5→m6
         {
-          id: 'r10', topicId: 'topic-1', relationType: 'SUPPLEMENT',
+          id: 'r10', topicId: 'topic-1', relationType: 'arrange',
           sourceMessageId: 'm5',
           targetRefs: [{ kind: 'message', messageId: 'm6' }],
           createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
@@ -1028,7 +1028,7 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
           sourceMessageId: 'm7', targetRefs: [{ kind: 'message', messageId: 'm5' }],
           createdAt: '2024-01-01T00:05:00.000Z', createdBy: makeUser(),
         },
-        // CLASSIFY targeting: m2, m1, m4, r10 (SUPPLEMENT), m7
+        // CLASSIFY targeting: m2, m1, m4, r10 (arrange), m7
         {
           id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY',
           sourceMessageId: null,
@@ -1046,7 +1046,7 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
     });
   });
 
-  it('hides SUPPLEMENT source message (m5) and cascaded CORRECT targets from graph view', async () => {
+  it('hides arrange source message (m5) and cascaded CORRECT targets from graph view', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -1060,13 +1060,13 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'm2')).toBe(false);
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'm4')).toBe(false);
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'm7')).toBe(false);
-    // m6 (SUPPLEMENT target) → hidden via collectOwnedByRelation
+    // m6 (arrange target) → hidden via collectOwnedByRelation
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'm6')).toBe(false);
-    // m5 (SUPPLEMENT sourceMessageId) → MUST be hidden (was the bug!)
+    // m5 (arrange sourceMessageId) → MUST be hidden (was the bug!)
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'm5')).toBe(false);
     // m3 (CORRECT target of m5) → hidden via expandTextIdsWithCorrections
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'm3')).toBe(false);
-    // r10 (SUPPLEMENT owned by CLASSIFY) → hidden
+    // r10 (arrange owned by CLASSIFY) → hidden
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'r10')).toBe(false);
     // r4 (CORRECT m5→m3, both endpoints hidden) → hidden
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'r4')).toBe(false);
@@ -1082,7 +1082,7 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'm8')).toBe(true);
   });
 
-  it('hides SUPPLEMENT source and cascaded messages from list view', async () => {
+  it('hides arrange source and cascaded messages from list view', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
@@ -1096,9 +1096,9 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
     expect(screen.queryByText('消息 m2')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 m4')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 m7')).not.toBeInTheDocument();
-    // m6 (SUPPLEMENT target) → hidden
+    // m6 (arrange target) → hidden
     expect(screen.queryByText('消息 m6')).not.toBeInTheDocument();
-    // m5 (SUPPLEMENT sourceMessageId) → MUST be hidden (was the bug!)
+    // m5 (arrange sourceMessageId) → MUST be hidden (was the bug!)
     expect(screen.queryByText('消息 m5')).not.toBeInTheDocument();
     // m3 (CORRECT cascade) → hidden
     expect(screen.queryByText('消息 m3')).not.toBeInTheDocument();
@@ -1134,7 +1134,7 @@ describe('TopicDetailPage CLASSIFY targeting SUPPLEMENT with nested CORRECT', ()
     expect(screen.getByText('消息 m2')).toBeInTheDocument();
     expect(screen.getByText('消息 m4')).toBeInTheDocument();
     expect(screen.getByText('消息 m7')).toBeInTheDocument();
-    // SUPPLEMENT source + target
+    // arrange source + target
     expect(screen.getByText('消息 m5')).toBeInTheDocument();
     expect(screen.getByText('消息 m6')).toBeInTheDocument();
     // CORRECT cascade

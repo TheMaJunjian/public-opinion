@@ -48,7 +48,7 @@ const createRelationSchema = z.object({
     errorMap: () => ({ message: `关系类型必须是以下之一: ${RELATION_TYPES.join(', ')}` }),
   }),
   // sourceMessageId is required for most relation types, but optional for
-  // relation types that support source-less semantics (AGREE, DISAGREE, SUPPLEMENT,
+  // relation types that support source-less semantics (AGREE, DISAGREE, ARRANGE,
   // CORRECT, REPLY, TAG, CLASSIFY, MERGE).
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
   // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
@@ -57,7 +57,7 @@ const createRelationSchema = z.object({
   payload: z.object({
     label: z.string().trim().min(1).max(200).optional(),
     title: z.string().trim().min(1).max(200).optional(),
-    targetLayout: z.enum(['single-column', 'multi-column']).optional(),
+    targetLayout: z.enum(['single-column', 'multi-column', 'single-row']).optional(),
   }).strict().optional(),
 }).superRefine((data, ctx) => {
   if (data.relationType === 'TAG' && !(data.payload && data.payload.label)) {
@@ -83,7 +83,7 @@ const createRelationSchema = z.object({
   }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'SUPPLEMENT', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
 const CLASSIFY_CROSS_LINK_ERROR = '分类目标与已分类消息存在非引用关联，无法建立分类关系';
 const MERGE_CROSS_LINK_ERROR = '归并目标与已分类消息存在非引用关联，无法建立归并关系';
@@ -125,7 +125,7 @@ function collectSelectedGroupTargetTextIds(params: {
   const relationById = new Map(
     params.targetRelations.map(rel => [rel.id, rel] as const)
   );
-  const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
+  const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY']);
   const queue = params.targetRelations
     .filter(rel => expandableRelationTypes.has(rel.relationType ?? ''))
     .map(rel => rel.id);
@@ -220,7 +220,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
 
     // Relation types that require a source message (non-stance types and TAG which needs content)
     // AGREE/DISAGREE: optional (pure-stance declaration without text)
-    // SUPPLEMENT: always null source — user-to-message relation; supplementary text is a target, not a source
+    // ARRANGE: always null source — user-to-message relation; arranged messages are targets, not a source
     // CORRECT: optional (can be used to mark a relation message as needing correction without a source text)
     // REPLY: optional (can express a pure-stance reply to a relation message without source text)
     // TAG: optional (user-to-message relation; label text is stored in tagLabel instead of sourceMessageId)
@@ -236,10 +236,10 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // CLASSIFY, MERGE, SUMMARY, and SUPPLEMENT are user-to-message relations: no source text message.
-    // For SUPPLEMENT: the supplementary text (if any) is stored as a target, not a source.
+    // CLASSIFY, MERGE, SUMMARY, and ARRANGE are user-to-message relations: no source text message.
+    // For ARRANGE: the arranged text messages are stored as targets, not sources.
     const noSourceRelTypeNames: Record<string, string> = {
-      CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', SUPPLEMENT: '补充',
+      CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', ARRANGE: '排列',
     };
     if (data.relationType in noSourceRelTypeNames && data.sourceMessageId) {
       res.status(400).json({ error: `${noSourceRelTypeNames[data.relationType]}关系不应提供来源消息 ID` });
@@ -302,10 +302,10 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       }
 
       // Expand nested relation-message targets for grouping relations so CLASSIFY/MERGE can
-      // treat SUPPLEMENT/MERGE/CLASSIFY target relations as their owned text targets.
+      // treat ARRANGE/MERGE/CLASSIFY target relations as their owned text targets.
       const relationById = new Map<string, { id: string; relationType: string | null; targetRefs: unknown }>();
       directTargetRelations.forEach(rel => relationById.set(rel.id, rel));
-      const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
+      const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY']);
       const queued = new Set<string>();
       const queue: string[] = [];
       const enqueue = (id: string) => {
@@ -336,12 +336,12 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       foundTargetRelations = [...relationById.values()];
     }
 
-    // SUMMARY targets must be text messages, SUPPLEMENT, MERGE, or CLASSIFY relation messages.
+    // SUMMARY targets must be text messages, ARRANGE, MERGE, or CLASSIFY relation messages.
     if (data.relationType === 'SUMMARY' && foundTargetRelations.length > 0) {
-      const allowedSummaryTargetRelTypes = new Set(['SUPPLEMENT', 'MERGE', 'CLASSIFY']);
+      const allowedSummaryTargetRelTypes = new Set(['ARRANGE', 'MERGE', 'CLASSIFY']);
       for (const rel of foundTargetRelations.filter(r => targetRelationIds.includes(r.id))) {
         if (!allowedSummaryTargetRelTypes.has(rel.relationType ?? '')) {
-          res.status(400).json({ error: '总结关系的目标关系消息只能是补充、归并或分类关系消息' });
+          res.status(400).json({ error: '总结关系的目标关系消息只能是排列、归并或分类关系消息' });
           return;
         }
       }
@@ -374,7 +374,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         // being absorbed by the new relation, so their text messages should not count as
         // "already classified" for the cross-link check.
         const allRelById = new Map(relationMessages.map(r => [r.id, r]));
-        const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'SUPPLEMENT', 'SUMMARY']);
+        const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY']);
         const absorbedRelationIds = new Set(foundTargetRelations.map(r => r.id));
         const alreadyClassifiedTextIds = new Set<string>();
         const bfsQueue: string[] = [];
@@ -424,7 +424,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
           //   and should not trigger cross-link blocks
           if (relMsg.relationType === 'REFERENCE' || relMsg.relationType === 'CORRECT') continue;
           // Skip relations that are themselves direct targets of this classification
-          // (e.g., when classifying a SUPPLEMENT or MERGE, its own edges should not
+          // (e.g., when classifying a ARRANGE or MERGE, its own edges should not
           // trigger cross-link errors — Bug 3 fix).
           if (targetRelationIds.includes(relMsg.id)) continue;
           const sourceTextId =
@@ -447,7 +447,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
             targetTextIds.some(id => selectedTargetTextIdSet.has(id));
           if (!hasSelectedEndpoint) continue;
           // Only block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY
-          // AND is NOT part of the same expanded selection (e.g., when a SUPPLEMENT bridges
+          // AND is NOT part of the same expanded selection (e.g., when a ARRANGE bridges
           // between selected and already-classified messages, allow it — Bug 3 fix).
           if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId) && alreadyClassifiedTextIds.has(sourceTextId)) {
             res.status(400).json({ error: crossLinkError });

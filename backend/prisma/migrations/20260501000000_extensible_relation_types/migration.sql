@@ -4,7 +4,7 @@
 --
 -- Supported relation types (enforced at application layer, not DB layer):
 --   ANNOTATION, REFERENCE, REPLY, AGREE, DISAGREE, SUPPORT, REBUT,
---   CORRECT, SUPPLEMENT, CLASSIFY, MERGE, SUMMARY, RECOMMEND, ARCHIVE
+--   CORRECT, ARRANGE, CLASSIFY, MERGE, SUMMARY, RECOMMEND, ARCHIVE
 --
 -- Also updates the targetRefs JSON column: the new format uses a discriminated union:
 --   { "kind": "message",      "messageId": "...", ... }

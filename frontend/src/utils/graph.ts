@@ -20,7 +20,7 @@ import { getPresentationSpec, getTargetMessageIds } from '../types';
 /**
  * buildMessageTree — Convert a flat message list + relations into a tree structure.
  *
- * Only relations with formsTrees=true (REPLY, SUPPORT, REBUT, CORRECT, SUPPLEMENT)
+ * Only relations with formsTrees=true (REPLY, SUPPORT, REBUT, CORRECT, ARRANGE)
  * form parent-child tree connections.
  *
  * Convention:

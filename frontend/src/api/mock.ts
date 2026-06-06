@@ -7,7 +7,7 @@
  *   { kind: 'relation', relationId, part? }
  *
  * Includes examples of relation-targeting-relation (recursive relations),
- * new relation types (ANNOTATION, AGREE, DISAGREE, REBUT, SUPPLEMENT),
+ * new relation types (ANNOTATION, AGREE, DISAGREE, REBUT, ARRANGE),
  * and focus-mode-relevant hop structures.
  */
 
@@ -69,7 +69,7 @@ const topics: Topic[] = [
  *   r7: bob AGREE → m4 (赞同)
  *   r8: charlie DISAGREE → m1 (反对)
  *   r9: alice ANNOTATION → r1 (对"m2回复m1"这条关系消息本身的注释 — recursive!)
- *   r10: bob SUPPLEMENT → m6 (补充)
+ *   r10: bob ARRANGE → m6 (排列)
  *   r11: charlie REFERENCE → m5 (引用)
  */
 const messages: Message[] = [
@@ -148,7 +148,7 @@ const messages: Message[] = [
  * r1–r5: tree-forming relations (REPLY, SUPPORT, REBUT, CORRECT)
  * r6–r8: decoration-type relations (ANNOTATION, AGREE, DISAGREE)
  * r9:    RECURSIVE relation — targets relation r1 (relation-as-target fix demo)
- * r10:   SUPPLEMENT (non-tree edge-label)
+ * r10:   ARRANGE (non-tree edge-label)
  * r11:   REFERENCE
  */
 const relations: Relation[] = [
@@ -233,9 +233,9 @@ const relations: Relation[] = [
     }],
     createdAt: '2024-02-05T12:00:00Z', createdBy: users[0],
   },
-  // r10: bob SUPPLEMENT → m6
+  // r10: bob ARRANGE → m6
   {
-    id: 'r10', topicId: 't1', relationType: 'SUPPLEMENT',
+    id: 'r10', topicId: 't1', relationType: 'ARRANGE',
     sourceMessageId: 'm5',
     targetRefs: [{ kind: 'message', messageId: 'm6' }],
     createdAt: '2024-02-06T16:00:00Z', createdBy: users[1],

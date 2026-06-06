@@ -221,21 +221,21 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
-  it('allows SUPPLEMENT without sourceMessageId', async () => {
+  it('allows ARRANGE without sourceMessageId', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'SUPPLEMENT', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'ARRANGE', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(201);
   });
 
-  it('rejects SUPPLEMENT with sourceMessageId', async () => {
+  it('rejects ARRANGE with sourceMessageId', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'SUPPLEMENT', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'ARRANGE', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain('补充关系');
+    expect(res.body.error).toContain('排列关系');
   });
 
   it('rejects MERGE with sourceMessageId', async () => {
@@ -422,17 +422,17 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
-  it('allows CLASSIFY with SUPPLEMENT relation target', async () => {
-    const mockSupplementRel = {
+  it('allows CLASSIFY with ARRANGE relation target', async () => {
+    const mockARRANGERel = {
       id: 'rel-supp',
       topicId: 'topic-1',
       kind: 'RELATION',
-      relationType: 'SUPPLEMENT',
+      relationType: 'ARRANGE',
       relSourceId: null,
       targetRefs: [{ kind: 'message', messageId: 'msg-1' }, { kind: 'message', messageId: 'msg-2' }],
     };
     (prisma.message.findMany as jest.Mock)
-      .mockResolvedValueOnce([mockSupplementRel])
+      .mockResolvedValueOnce([mockARRANGERel])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     const res = await request(app)
@@ -498,17 +498,17 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
-  it('rejects MERGE when SUPPLEMENT relation target text messages have cross links to already-classified messages', async () => {
-    const mockSupplementRel = {
+  it('rejects MERGE when ARRANGE relation target text messages have cross links to already-classified messages', async () => {
+    const mockARRANGERel = {
       id: 'rel-supp',
       topicId: 'topic-1',
       kind: 'RELATION',
-      relationType: 'SUPPLEMENT',
+      relationType: 'ARRANGE',
       relSourceId: null,
       targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
     };
     (prisma.message.findMany as jest.Mock)
-      .mockResolvedValueOnce([mockSupplementRel])
+      .mockResolvedValueOnce([mockARRANGERel])
       .mockResolvedValueOnce([{
         id: 'rel-classify-existing',
         relationType: 'CLASSIFY',
@@ -529,17 +529,17 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows MERGE when SUPPLEMENT relation target text messages cross-link only to unclassified messages', async () => {
-    const mockSupplementRel = {
+  it('allows MERGE when ARRANGE relation target text messages cross-link only to unclassified messages', async () => {
+    const mockARRANGERel = {
       id: 'rel-supp',
       topicId: 'topic-1',
       kind: 'RELATION',
-      relationType: 'SUPPLEMENT',
+      relationType: 'ARRANGE',
       relSourceId: null,
       targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
     };
     (prisma.message.findMany as jest.Mock)
-      .mockResolvedValueOnce([mockSupplementRel])
+      .mockResolvedValueOnce([mockARRANGERel])
       .mockResolvedValueOnce([{
         id: 'rel-existing',
         relationType: 'REPLY',

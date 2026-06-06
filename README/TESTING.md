@@ -335,7 +335,7 @@ JWT_SECRET=local-ci-test npm test
 | 目标可以是文本消息、文本片段或关系消息 | ✅ `TargetRef` 完整支持三种 kind |
 | 关系消息可递归（对关系建立关系） | ✅ `kind: 'relation'` 的 target 支持，后端校验目标关系是否存在 |
 | `PresentationSpec` 抽象层 | ✅ `PRESENTATION_SPECS` registry + `getPresentationSpec()` 函数；新增关系类型只需添加一条记录 |
-| 所有 14 种关系类型 | ✅ ANNOTATION/REFERENCE/REPLY/AGREE/DISAGREE/SUPPORT/REBUT/CORRECT/SUPPLEMENT/CLASSIFY/MERGE/SUMMARY/RECOMMEND/ARCHIVE |
+| 所有 14 种关系类型 | ✅ ANNOTATION/REFERENCE/REPLY/AGREE/DISAGREE/SUPPORT/REBUT/CORRECT/ARRANGE/CLASSIFY/MERGE/SUMMARY/RECOMMEND/ARCHIVE |
 | 焦点模式 hop 语义正确 | ✅ `computeTextHops()` 以文本消息为节点做 BFS；关系消息仅在两端文本消息都可见时才显示 |
 | `buildFocusSubgraph` 递归关系处理 | ✅ 使用 fixed-point 迭代确保 relation→relation 目标正确传播 |
 | 数据格式基于新架构 | ✅ `targetRefs: Json`（discriminated union），抛弃了旧 `targetMessageId` 格式 |

@@ -50,10 +50,10 @@ const TAG_MIN_W = 36;        // minimum width
 const TAG_V_GAP = 3;         // vertical gap between stacked tag labels
 const TAG_RIGHT_GAP = 6;     // horizontal gap from card right edge
 const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
-const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> SUPP_FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
-// SUPPLEMENT frame constants
-const SUPP_FRAME_PAD = 12; // padding around the frame that wraps supplement pairs (wide enough to click)
-const SUPP_FRAME_RADIUS = 8; // border-radius of supplement frame
+const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
+// Frame constants (shared by arrange, classify, merge, summary frames)
+const FRAME_PAD = 12; // padding around the frame that wraps grouped messages (wide enough to click)
+const FRAME_RADIUS = 8; // border-radius of group frames
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
 const MERGE_CANVAS_LABEL_H = 24;
@@ -253,15 +253,15 @@ function getRelKind(relType: string): PresentationKind {
   return getPresentationSpec(relType).kind;
 }
 
-/** True for relation types that use the supplement-frame kind specifically. */
-function isSuppFrameRel(relType: string): boolean {
-  return getRelKind(relType) === 'supplement-frame';
+/** True for relation types that use the arrange-frame kind specifically. */
+function isArrangeFrameRel(relType: string): boolean {
+  return getRelKind(relType) === 'arrange-frame';
 }
 
-/** True for relation types that render as a frame (supplement-frame OR frame-group OR replace-overlay). */
+/** True for relation types that render as a frame (arrange-frame OR frame-group OR replace-overlay). */
 function isAnyFrameRel(relType: string): boolean {
   const k = getRelKind(relType);
-  return k === 'supplement-frame' || k === 'frame-group' || k === 'replace-overlay';
+  return k === 'arrange-frame' || k === 'frame-group' || k === 'replace-overlay';
 }
 
 /** True for correction-badge relations (CORRECT): badge inside source card, same-column stacking. */
@@ -307,7 +307,7 @@ function getMergeHeaderWidth(text: string): number {
 function getGroupHeaderRect(frameRect: Rect): Rect {
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y - SUPP_FRAME_PAD - Math.max(4, Math.round(SUPP_FRAME_PAD / 2)),
+    y: frameRect.y - FRAME_PAD - Math.max(4, Math.round(FRAME_PAD / 2)),
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
     height: GROUP_HEADER_HEIGHT,
   };
@@ -317,7 +317,7 @@ function getGroupHeaderRect(frameRect: Rect): Rect {
 function getMergeCardHeaderRect(frameRect: Rect): Rect {
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y + SUPP_FRAME_PAD,
+    y: frameRect.y + FRAME_PAD,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
     height: MERGE_CARD_H,
   };
@@ -379,21 +379,21 @@ function getRelationBoundsFromLayout(params: {
   if (relMsg?.relationType === 'merge') {
     // Header is now inside the frame at the top; reserve headerTopPad space at the top.
     // Must match GROUP_HEADER_HEIGHT used in the group frame rendering (line ~1751).
-    // Left SUPP_FRAME_PAD is preserved here; card x-shifting in applyFrameAvoidanceReservations
+    // Left FRAME_PAD is preserved here; card x-shifting in applyFrameAvoidanceReservations
     // ensures the frame left border aligns with text message cards outside the frame.
-    const headerTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
+    const headerTopPad = GROUP_HEADER_HEIGHT + FRAME_PAD;
     rect = {
-      x: rect.x - SUPP_FRAME_PAD,
-      y: rect.y - SUPP_FRAME_PAD - headerTopPad,
-      width: rect.width + SUPP_FRAME_PAD * 2,
-      height: rect.height + SUPP_FRAME_PAD * 2 + headerTopPad,
+      x: rect.x - FRAME_PAD,
+      y: rect.y - FRAME_PAD - headerTopPad,
+      width: rect.width + FRAME_PAD * 2,
+      height: rect.height + FRAME_PAD * 2 + headerTopPad,
     };
-  } else if (relKind === 'supplement-frame' || relKind === 'frame-group' || relKind === 'replace-overlay') {
+  } else if (relKind === 'arrange-frame' || relKind === 'frame-group' || relKind === 'replace-overlay') {
     rect = {
-      x: rect.x - SUPP_FRAME_PAD,
-      y: rect.y - SUPP_FRAME_PAD,
-      width: rect.width + SUPP_FRAME_PAD * 2,
-      height: rect.height + SUPP_FRAME_PAD * 2,
+      x: rect.x - FRAME_PAD,
+      y: rect.y - FRAME_PAD,
+      width: rect.width + FRAME_PAD * 2,
+      height: rect.height + FRAME_PAD * 2,
     };
   }
   return { rect, cardIds };
@@ -437,13 +437,13 @@ export function buildMergeCanvasReservations(params: {
     const contentUnion = unionBoxes(boxes);
     if (!contentUnion) continue;
     const headerWidth = getMergeHeaderWidth(getMergeHeaderText(msgMap.get(relMsgId)));
-    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
+    // Left FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
     // ensures the merge canvas left border aligns with text message cards outside the frame.
     const contentRect = {
-      x: contentUnion.x - SUPP_FRAME_PAD,
-      y: contentUnion.y - SUPP_FRAME_PAD,
-      width: contentUnion.width + SUPP_FRAME_PAD * 2,
-      height: contentUnion.height + SUPP_FRAME_PAD * 2,
+      x: contentUnion.x - FRAME_PAD,
+      y: contentUnion.y - FRAME_PAD,
+      width: contentUnion.width + FRAME_PAD * 2,
+      height: contentUnion.height + FRAME_PAD * 2,
     };
     const headerRect = {
       x: contentRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
@@ -494,13 +494,13 @@ export function applyMergeCanvasReservations(params: {
     });
     const union = unionBoxes(boxes);
     if (!union) return reservation.rect;
-    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
+    // Left FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
     // ensures the merge canvas left border aligns with text message cards outside the frame.
     const contentRect = {
-      x: union.x - SUPP_FRAME_PAD,
-      y: union.y - SUPP_FRAME_PAD,
-      width: union.width + SUPP_FRAME_PAD * 2,
-      height: union.height + SUPP_FRAME_PAD * 2,
+      x: union.x - FRAME_PAD,
+      y: union.y - FRAME_PAD,
+      width: union.width + FRAME_PAD * 2,
+      height: union.height + FRAME_PAD * 2,
     };
     const headerRect = {
       x: contentRect.x + MERGE_CANVAS_LABEL_LEFT_OFFSET,
@@ -580,7 +580,7 @@ function buildFrameAvoidanceReservations(params: {
   for (const [relMsgId, relEdges] of edgesByRelMsg) {
     if (relEdges.length === 0) continue;
     const relKind = getRelKind(relEdges[0].relationType);
-    if (relKind !== 'supplement-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') continue;
+    if (relKind !== 'arrange-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') continue;
     const boxes: LayoutBox[] = [];
     const cardIds = new Set<string>();
     const sourceId = relEdges[0].from.messageId;
@@ -627,19 +627,19 @@ function buildFrameAvoidanceReservations(params: {
     // For MERGE frames, reserve extra space above the frame content for the card-style header.
     // Must match the GROUP_HEADER_HEIGHT used in the group frame rendering (line ~1751)
     // so the reservation exactly covers the rendered frame + merge card header.
-    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
+    // Left FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
     // ensures the frame left border aligns with text message cards outside the frame.
     const isMergeFrame = relEdges[0].relationType === "merge";
-    const headerTopPad = isMergeFrame ? GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD : 0;
+    const headerTopPad = isMergeFrame ? GROUP_HEADER_HEIGHT + FRAME_PAD : 0;
     reservations.push({
       relMsgId,
       cardIds,
       headerTopPad: isMergeFrame ? headerTopPad : undefined,
       rect: {
-        x: union.x - SUPP_FRAME_PAD,
-        y: union.y - SUPP_FRAME_PAD - headerTopPad,
-        width: union.width + SUPP_FRAME_PAD * 2,
-        height: union.height + SUPP_FRAME_PAD * 2 + headerTopPad,
+        x: union.x - FRAME_PAD,
+        y: union.y - FRAME_PAD - headerTopPad,
+        width: union.width + FRAME_PAD * 2,
+        height: union.height + FRAME_PAD * 2 + headerTopPad,
       },
     });
   }
@@ -664,14 +664,14 @@ function applyFrameAvoidanceReservations(params: {
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
 
   // Apply base x-shift for merge frames: all cards inside a merge get
-  // SUPP_FRAME_PAD shift for the merge frame's visual border padding.
+  // FRAME_PAD shift for the merge frame's visual border padding.
   // buildFrameAvoidanceReservations already expands nested frame cardIds into
   // the parent reservation's cardIds, so a single pass covers all nested cards.
   for (const reservation of params.reservations) {
     if (!reservation.headerTopPad) continue;
     for (const id of reservation.cardIds) {
       const box = nextLayout[id];
-      if (box) nextLayout[id] = { ...box, x: box.x + SUPP_FRAME_PAD };
+      if (box) nextLayout[id] = { ...box, x: box.x + FRAME_PAD };
     }
   }
 
@@ -866,7 +866,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
 /**
  * High-priority grouping column rule.
  *
- * Applies to ALL relation types with `groupsTargets=true` (supplement-frame, frame-group)
+ * Applies to ALL relation types with `groupsTargets=true` (arrange-frame, frame-group)
  * and to replace-overlay types that also group targets (SUMMARY).
  * For CORRECT (correction-badge), only the source→target pair is handled (no frame).
  *
@@ -874,7 +874,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
  *   - Source message (if real, not anon:) → same column as its first target.
  *   - No-source framing relations with multiple targets → all targets chained into the same column,
  *     except MERGE which keeps its natural multi-column layout.
- *   - All framing-type relations (supplement-frame, frame-group, replace-overlay) participate.
+ *   - All framing-type relations (arrange-frame, frame-group, replace-overlay) participate.
  *   - correction-badge (CORRECT) also uses same-column stacking without a frame.
  */
 export function applyGroupingColumnOverride(params: {
@@ -882,8 +882,9 @@ export function applyGroupingColumnOverride(params: {
   edges: DemoEdge[];
   col: Record<string, number>;
   maxCol: number;
+  allMsgMap: Map<string, DemoMessage>;
 }): { col: Record<string, number>; maxCol: number; groupSourceToTarget: Map<string, string> } {
-  const { normals, edges } = params;
+  const { normals, edges, allMsgMap } = params;
   const col = { ...params.col };
   const normalSet = new Set(normals.map(m => m.id));
   const msgById = new Map(normals.map(m => [m.id, m]));
@@ -895,7 +896,7 @@ export function applyGroupingColumnOverride(params: {
   };
 
   // groupSourceToTarget: maps a "child" message to the message it should be stacked below.
-  // For supplement/correct: source message → target message.
+  // For arrange/correct: source message → target message.
   // For frame-group / no-source framing: target[i] → target[i-1] (chain).
   const groupSourceToTarget = new Map<string, string>();
   for (const e of edges) {
@@ -911,17 +912,17 @@ export function applyGroupingColumnOverride(params: {
   // or a real message), collect all *target* message IDs per relation message and chain
   // them together so that multiple targets within the same relation are placed in the same
   // column and stacked tightly (zero gap).  This also covers the previously-anon-only case
-  // where an explicit-source supplement has more than one target: those targets now also get
+  // where an explicit-source arrange has more than one target: those targets now also get
   // chained, so they are stacked below the first target together with the source message.
   const frameTargetsByRelMsg = new Map<string, { targetIds: string[]; relationType: string }>();
-  const supplementTargetsByRelMsg = new Map<string, string[]>();
+  const arrangeTargetsByRelMsg = new Map<string, string[]>();
   for (const e of edges) {
     if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
     if (!normalSet.has(e.to.messageId)) continue;
-    if (e.relationType === 'supplement') {
-      const ids = supplementTargetsByRelMsg.get(e.relationMessageId) ?? [];
+    if (e.relationType === 'arrange') {
+      const ids = arrangeTargetsByRelMsg.get(e.relationMessageId) ?? [];
       ids.push(e.to.messageId);
-      supplementTargetsByRelMsg.set(e.relationMessageId, ids);
+      arrangeTargetsByRelMsg.set(e.relationMessageId, ids);
       continue;
     }
     const entry = frameTargetsByRelMsg.get(e.relationMessageId) ?? { targetIds: [], relationType: e.relationType };
@@ -941,9 +942,9 @@ export function applyGroupingColumnOverride(params: {
     }
   }
 
-  // SUPPLEMENT relations keep targets that were originally in different columns separated,
-  // while compacting the occupied columns and rows among those targets.
-  for (const [, targetIdsRaw] of supplementTargetsByRelMsg) {
+  // ARRANGE relations: compact columns and chain targets for vertical layout;
+  // for horizontal layout (single-row), keep targets in separate columns without chaining.
+  for (const [relMsgId, targetIdsRaw] of arrangeTargetsByRelMsg) {
     const targetIdSet = new Set<string>();
     const targetIds = targetIdsRaw.filter(id => {
       if (targetIdSet.has(id)) return false;
@@ -960,6 +961,17 @@ export function applyGroupingColumnOverride(params: {
       const originalCol = col[targetId] ?? 0;
       col[targetId] = compressedColByOriginal.get(originalCol) ?? originalCol;
     }
+    // Horizontal layout: check the relation message's payload or edge label
+    const relMsg = allMsgMap.get(relMsgId);
+    const isSingleRow = (relMsg?.kind === 'relation' && relMsg.relationPayload?.targetLayout === 'single-row')
+      || edges.some(e => e.relationMessageId === relMsgId && e.relationType === 'arrange' && e.relationLabel === 'arrange-h');
+    if (isSingleRow) {
+      targetIds.forEach((targetId, index) => {
+        col[targetId] = minCol + index;
+      });
+      continue;
+    }
+    // Vertical layout (single-column, default): chain targets within the same column.
     const targetsByCol = new Map<number, string[]>();
     for (const targetId of targetIds) {
       const targetCol = col[targetId] ?? 0;
@@ -1058,7 +1070,7 @@ type FrameBlock = {
 };
 
 /** Identify frame blocks from edges and build parent-child hierarchy.
- *  Frame types: supplement, frame-group (classify/merge), replace-overlay (summary). */
+ *  Frame types: arrange, frame-group (classify/merge), replace-overlay (summary). */
 function buildFrameBlocks(params: {
   edges: DemoEdge[];
   visibleCardIds: Set<string>;
@@ -1074,7 +1086,7 @@ function buildFrameBlocks(params: {
   for (const [relMsgId, relEdges] of edgesByRelMsg) {
     if (relEdges.length === 0) continue;
     const relKind = getRelKind(relEdges[0].relationType);
-    if (relKind !== 'supplement-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') continue;
+    if (relKind !== 'arrange-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') continue;
     const cardIds = new Set<string>();
     const sourceId = relEdges[0].from.messageId;
     if (!sourceId.startsWith('anon:') && visibleCardIds.has(sourceId)) cardIds.add(sourceId);
@@ -1097,11 +1109,26 @@ function buildFrameBlocks(params: {
       }
     }
   }
+  // Transitive expansion: when a frame's text-message cards are fully covered
+  // by another frame, add the covered frame's relMsgId to the covering frame's cardIds.
+  // This allows subset detection to nest arrange-inside-arrange properly.
+  for (const block of blocks) {
+    for (const other of blocks) {
+      if (block.relMsgId === other.relMsgId) continue;
+      const otherRelMsgIds = new Set(blocks.filter(b => b.relMsgId !== other.relMsgId).map(b => b.relMsgId));
+      const otherTextCards = new Set([...other.cardIds].filter(id => !otherRelMsgIds.has(id)));
+      if (otherTextCards.size === 0) continue;
+      const allInBlock = [...otherTextCards].every(id => block.cardIds.has(id));
+      if (allInBlock) {
+        block.cardIds.add(other.relMsgId);
+      }
+    }
+  }
   // Subset-relationship detection: when a smaller frame's cardIds are fully
-  // contained within a larger frame-group (merge/classify) frame's cardIds,
+  // contained within a larger frame's cardIds (frame-group or arrange-frame),
   // the smaller frame should be a child of the larger one.  This handles the
-  // case where a merge targets text messages directly rather than targeting
-  // the supplement relation message that groups those same text messages.
+  // case where a frame targets text messages directly rather than targeting
+  // the arrange relation message that groups those same text messages.
   // Without this, both frames become root frames and overwrite each other's
   // card positions, causing inconsistent layout.
   // Sort blocks by cardIds size ascending so smaller (more specific) frames
@@ -1110,13 +1137,13 @@ function buildFrameBlocks(params: {
   for (let i = 0; i < sortedBySize.length; i++) {
     const small = sortedBySize[i];
     const smallKind = getRelKind(edgesByRelMsg.get(small.relMsgId)?.[0]?.relationType ?? '');
-    // Only supplement-frame and replace-overlay can be nested inside frame-group
-    if (smallKind !== 'supplement-frame' && smallKind !== 'replace-overlay') continue;
+    // arrange-frame and replace-overlay can be nested inside frame-group or arrange-frame
+    if (smallKind !== 'arrange-frame' && smallKind !== 'replace-overlay') continue;
     for (let j = sortedBySize.length - 1; j > i; j--) {
       const large = sortedBySize[j];
       const largeKind = getRelKind(edgesByRelMsg.get(large.relMsgId)?.[0]?.relationType ?? '');
-      // Only frame-group (merge/classify) can contain other frames
-      if (largeKind !== 'frame-group') continue;
+      // frame-group and arrange-frame can contain other frames
+      if (largeKind !== 'frame-group' && largeKind !== 'arrange-frame') continue;
       // Check subset: all of small's cardIds are in large's cardIds
       let isSubset = small.cardIds.size > 0;
       for (const cid of small.cardIds) {
@@ -1168,10 +1195,13 @@ function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
   correctedTargetIds?: Set<string>;
   frameBlocks?: FrameBlock[];
+  edges: DemoEdge[];
+  allMessages: DemoMessage[];
 }) {
-  const { normals, colOf, measuredHeights, maxCol } = params;
+  const { normals, colOf, measuredHeights, edges } = params;
   const correctedTargetIds = params.correctedTargetIds ?? new Set<string>();
   const frameBlocks = params.frameBlocks ?? [];
+  const allMsgMap = new Map(params.allMessages.map(m => [m.id, m]));
 
   const layout: Record<string, LayoutBox> = {};
   let maxBottom = GRID_TOP;
@@ -1195,76 +1225,68 @@ function computeNoOverlapLayout(params: {
   }
 
   // --- Recursive frame layout ---
-  // Lays out a frame's direct members + child frames in chronological order.
-  // Returns the frame's bottom y.
-  function layoutFrameBlock(fb: FrameBlock, startY: number, xShift: number): number {
-    // Per-column cursors within this frame
-    const colY: Record<number, number> = {};
-    const frameCols = new Set<number>();
-
-    // Build combined items: direct cards + child frames
+  // All items (cards + child frames) treated uniformly: assigned to consecutive
+  // local columns. Returns { bottom, colSpan } where colSpan is the number of
+  // columns this frame occupies (for parent to skip).
+  function layoutFrameBlock(fb: FrameBlock, startY: number, xShift: number, baseCol: number, horizontal: boolean): { bottom: number; colSpan: number } {
     type FrameItem = { kind: 'card'; msg: DemoMessage } | { kind: 'childFrame'; child: FrameBlock };
     const items: FrameItem[] = [];
     for (const cid of fb.directCardIds) {
       const m = normals.find(x => x.id === cid);
-      if (m) { items.push({ kind: 'card', msg: m }); frameCols.add(colOf[m.id] ?? 0); }
+      if (m) items.push({ kind: 'card', msg: m });
     }
     for (const childId of fb.childRelMsgIds) {
       const child = frameById.get(childId);
-      if (child) {
-        items.push({ kind: 'childFrame', child });
-        for (const cid of child.cardIds) frameCols.add(colOf[cid] ?? 0);
-      }
+      if (child) items.push({ kind: 'childFrame', child });
     }
 
-    // Sort by earliest createdAt
     items.sort((a, b) => {
       const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
-        : Math.min(...[...a.child.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+        : Math.min(...[...a.child.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
       const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
-        : Math.min(...[...b.child.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+        : Math.min(...[...b.child.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
       return ta - tb;
     });
 
-    // Initialize cursors
-    for (const c of frameCols) colY[c] = startY;
-
     let frameBottom = startY;
+    let colCursor = baseCol;
+    let yCursor = startY;
+
     for (const item of items) {
       if (item.kind === 'card') {
         const m = item.msg;
-        const c = colOf[m.id] ?? 0;
         const h = cardHeight(m.id);
-        layout[m.id] = { x: colX(c) + xShift, y: colY[c], width: CARD_W, height: h };
-        colY[c] = colY[c] + h + ROW_GAP;
+        if (horizontal) {
+          layout[m.id] = { x: colX(colCursor) + xShift, y: startY, width: CARD_W, height: h };
+          colCursor++;
+        } else {
+          layout[m.id] = { x: colX(baseCol) + xShift, y: yCursor, width: CARD_W, height: h };
+          yCursor += h + ROW_GAP;
+        }
         maxBottom = Math.max(maxBottom, layout[m.id].y + h);
-        frameBottom = Math.max(frameBottom, colY[c] - ROW_GAP);
+        frameBottom = Math.max(frameBottom, layout[m.id].y + h);
       } else {
-        // Child frame: start at max cursor across its columns
         const child = item.child;
-        let childTop = startY;
-        for (const cid of child.cardIds) {
-          const c = colOf[cid] ?? 0;
-          childTop = Math.max(childTop, colY[c] ?? startY);
+        const childXShift = xShift + FRAME_PAD;
+        if (horizontal) {
+          const result = layoutFrameBlock(child, startY, childXShift, colCursor, horizontal);
+          frameBottom = Math.max(frameBottom, result.bottom);
+          colCursor += result.colSpan;
+        } else {
+          const result = layoutFrameBlock(child, yCursor, childXShift, baseCol, horizontal);
+          frameBottom = Math.max(frameBottom, result.bottom);
+          yCursor = result.bottom + ROW_GAP;
         }
-        const childXShift = xShift + SUPP_FRAME_PAD;
-        const childBottom = layoutFrameBlock(child, childTop, childXShift);
-        // Advance ALL parent-frame columns past this child frame,
-        // so cards in non-overlapping columns don't appear above it.
-        for (const c of frameCols) {
-          colY[c] = Math.max(colY[c] ?? startY, childBottom + ROW_GAP);
-        }
-        frameBottom = Math.max(frameBottom, childBottom);
       }
     }
-    return frameBottom;
+
+    return { bottom: frameBottom, colSpan: horizontal ? (colCursor - baseCol) : 1 };
   }
 
-  // --- Top-level layout: standalone cards + root frames, in chronological order ---
-  const colCursor: Record<number, number> = {};
-  for (let c = 0; c <= maxCol; c++) colCursor[c] = GRID_TOP;
+  // --- Top-level layout: simple chronological placement with rectangle collision ---
+  // Each item (card or root frame) finds the first Y where it does not overlap
+  // any previously placed rectangle. No column cursors, no complex state.
 
-  // Identify root frames (no parent) and standalone cards
   const childFrameIds = new Set<string>();
   for (const fb of frameBlocks) fb.childRelMsgIds.forEach(id => childFrameIds.add(id));
   const rootFrames = frameBlocks.filter(fb => !childFrameIds.has(fb.relMsgId));
@@ -1273,53 +1295,75 @@ function computeNoOverlapLayout(params: {
   const standaloneCards = normals.filter(m => !allFrameCardIds.has(m.id));
 
   type LayoutItem = 
-    | { kind: 'card'; msg: DemoMessage }
+    | { kind: 'card'; msg: DemoMessage; col: number }
     | { kind: 'frame'; block: FrameBlock };
 
   const items: LayoutItem[] = [];
-  for (const m of standaloneCards) items.push({ kind: 'card', msg: m });
+  for (const m of standaloneCards) items.push({ kind: 'card', msg: m, col: colOf[m.id] ?? 0 });
   for (const fb of rootFrames) items.push({ kind: 'frame', block: fb });
 
   items.sort((a, b) => {
     const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
-      : Math.min(...[...a.block.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+      : Math.min(...[...a.block.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
     const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
-      : Math.min(...[...b.block.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+      : Math.min(...[...b.block.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
     return ta - tb;
   });
 
-  // Place items sequentially at the top level
+  const placedRects: Rect[] = [];
+
+  function findY(x: number, w: number): number {
+    let y = GRID_TOP;
+    for (const r of placedRects) {
+      if (x + w <= r.x || r.x + r.width <= x) continue;
+      y = Math.max(y, r.y + r.height + ROW_GAP);
+    }
+    return y;
+  }
+
   for (const item of items) {
     if (item.kind === 'card') {
       const m = item.msg;
-      const c = colOf[m.id] ?? 0;
       const h = cardHeight(m.id);
-      layout[m.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
-      colCursor[c] = colCursor[c] + h + ROW_GAP;
-      maxBottom = Math.max(maxBottom, layout[m.id].y + h);
+      const x = colX(item.col);
+      const y = findY(x, CARD_W);
+      layout[m.id] = { x, y, width: CARD_W, height: h };
+      placedRects.push({ x, y, width: CARD_W, height: h });
+      maxBottom = Math.max(maxBottom, y + h);
     } else {
       const fb = item.block;
-      // Determine frameTop via collision detection
-      let frameTop = GRID_TOP;
+      let fMinX = Infinity, fMaxX = -Infinity;
       for (const cid of fb.cardIds) {
-        const c = colOf[cid] ?? 0;
-        const mx = colX(c);
-        let minY = GRID_TOP;
-        for (const [oid, obox] of Object.entries(layout)) {
-          if (fb.cardIds.has(oid)) continue;
-          if (mx + CARD_W <= obox.x || obox.x + obox.width <= mx) continue;
-          if (obox.y + obox.height > minY) minY = obox.y + obox.height;
-        }
-        minY = Math.max(minY, colCursor[c] - ROW_GAP);
-        frameTop = Math.max(frameTop, minY + ROW_GAP);
+        const c = colOf[cid];
+        if (c === undefined) continue;
+        const cx = colX(c);
+        fMinX = Math.min(fMinX, cx);
+        fMaxX = Math.max(fMaxX, cx + CARD_W);
       }
-      if (fb.isMerge) frameTop += GROUP_HEADER_HEIGHT;
-      const xShift = SUPP_FRAME_PAD;
-      const frameBottom = layoutFrameBlock(fb, frameTop, xShift);
-      // Advance all column cursors past this frame
-      for (let c = 0; c <= maxCol; c++) {
-        colCursor[c] = Math.max(colCursor[c], frameBottom + ROW_GAP);
+      if (!isFinite(fMinX)) { fMinX = GRID_LEFT; fMaxX = GRID_LEFT + CARD_W; }
+
+      const isHorizontal = edges.some(e => e.relationMessageId === fb.relMsgId && e.relationLabel === 'arrange-h');
+      const frameTop = findY(fMinX - FRAME_PAD, fMaxX - fMinX + FRAME_PAD * 2);
+      if (fb.isMerge) { /* merge header space reserved in layoutFrameBlock */ }
+      const result = layoutFrameBlock(fb, frameTop, FRAME_PAD, 0, isHorizontal);
+
+      let frMinX = Infinity, frMinY = Infinity, frMaxX = -Infinity, frMaxY = -Infinity;
+      for (const cid of fb.cardIds) {
+        const box = layout[cid];
+        if (!box) continue;
+        frMinX = Math.min(frMinX, box.x);
+        frMinY = Math.min(frMinY, box.y);
+        frMaxX = Math.max(frMaxX, box.x + box.width);
+        frMaxY = Math.max(frMaxY, box.y + box.height);
       }
+      if (isFinite(frMinX)) {
+        placedRects.push({
+          x: frMinX - FRAME_PAD, y: frMinY - FRAME_PAD,
+          width: frMaxX - frMinX + FRAME_PAD * 2,
+          height: frMaxY - frMinY + FRAME_PAD * 2,
+        });
+      }
+      maxBottom = Math.max(maxBottom, result.bottom);
     }
   }
 
@@ -1328,8 +1372,10 @@ function computeNoOverlapLayout(params: {
     if (layout[m.id]) continue;
     const c = colOf[m.id] ?? 0;
     const h = cardHeight(m.id);
-    layout[m.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
-    maxBottom = Math.max(maxBottom, layout[m.id].y + h);
+    const x = colX(c);
+    const y = findY(x, CARD_W);
+    layout[m.id] = { x, y, width: CARD_W, height: h };
+    maxBottom = Math.max(maxBottom, y + h);
   }
 
   return { layout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
@@ -1528,7 +1574,7 @@ export default function GraphView(props: GraphViewProps) {
     (m.kind === "relation" && relationCardMsgIds.has(m.id))
   ), [messages, tagSourceIds, relationCardMsgIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
-  // Exclude CLASSIFY messages from relIds — they are now in normals and should not be
+  // Exclude CLASSIFY/SUMMARY/ARRANGE messages from relIds — they are now in normals and should not be
   // treated as relation-message endpoints for edge-routing constraint algorithms.
   const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation" && !relationCardMsgIds.has(m.id)).map(m => m.id)), [messages, relationCardMsgIds]);
 
@@ -1536,9 +1582,10 @@ export default function GraphView(props: GraphViewProps) {
   const { col: replyCol, maxCol: replyMaxCol } = useMemo(() => applyReplyLayoutAdjustmentsWithConstraints({ normals, edges, baseCol, baseMaxCol, relIds }), [normals, edges, baseCol, baseMaxCol, relIds]);
   // AGREE/DISAGREE column override: applied before grouping so grouping can override it
   const { col: agreeDisCol, maxCol: agreeDisMaxCol } = useMemo(() => applyAgreeDisagreeColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
-  // Grouping column override: highest priority — supplement/frame-group/replace-overlay/correction-badge source must
+  // Grouping column override: highest priority — arrange/frame-group/replace-overlay/correction-badge source must
   // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
-  const { col: colOf, maxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
+  const allMsgMapForCol = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
+  const { col: colOf, maxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol, allMsgMap: allMsgMapForCol }), [normals, edges, agreeDisCol, agreeDisMaxCol, allMsgMapForCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
@@ -1547,19 +1594,19 @@ export default function GraphView(props: GraphViewProps) {
   const [decorationsByMsgState, setDecorationsByMsgState] = useState<Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>|null>(null);
   // TAG decorations: aggregated by label text — map from messageId → list of {label, relMsgIds, rect, relAgreeCount, relDisagreeCount, relAgreeMsgIds, relDisagreeMsgIds}
   const [tagDecorationsByMsg, setTagDecorationsByMsg] = useState<Record<string,{label:string;relMsgIds:string[];rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>>({});
-  // SUPPLEMENT frames: list of {targetId, sourceId, frame rect, isBlankCorrected, relAgreeCount, ...}
-  // isBlankCorrected: true when the supplement is targeted by a CORRECT with no replacement (anon source) —
+  // ARRANGE frames: list of {targetId, sourceId, frame rect, isBlankCorrected, relAgreeCount, ...}
+  // isBlankCorrected: true when the arrange is targeted by a CORRECT with no replacement (anon source) —
   // the SVG frame border is hidden but the correction badge remains visible.
-  const [supplementFrames, setSupplementFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
-  // GROUP frames: frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY) — same visual structure as supplement frames
-  // relKind field distinguishes supplement-frame / frame-group / replace-overlay for styling
-  // isBlankCorrected: same semantics as for supplementFrames above.
+  const [arrangeFrames, setArrangeFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
+  // GROUP frames: frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY) — same visual structure as arrange frames
+  // relKind field distinguishes arrange-frame / frame-group / replace-overlay for styling
+  // isBlankCorrected: same semantics as for arrangeFrames above.
   const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
   const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
   const [relDecByRelMsgState, setRelDecByRelMsgState] = useState<Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>>(new Map());
-  // TAG relations targeting relation messages — for rendering next to edge labels / supplement frames
+  // TAG relations targeting relation messages — for rendering next to edge labels / arrange frames
   const [tagsByRelMsgState, setTagsByRelMsgState] = useState<Map<string,Array<{label:string;relMsgId:string}>>>(new Map());
 
   const canvasWidth = GRID_LEFT + (maxCol+1)*CARD_W + maxCol*COL_GAP + CANVAS_RIGHT_PAD;
@@ -1611,7 +1658,7 @@ export default function GraphView(props: GraphViewProps) {
     return ids;
   }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
 
-  // Build frame blocks: identify which cards belong to which frames (supplement/merge/classify/summary).
+  // Build frame blocks: identify which cards belong to which frames (arrange/merge/classify/summary).
   // This is computed before the layout so frames are placed as atomic units.
   // visibleCardIds includes all cards that endpointBoxForNormal can find (normals + tag sources).
   const visibleCardIds = useMemo(() => {
@@ -1625,10 +1672,26 @@ export default function GraphView(props: GraphViewProps) {
     () => buildFrameBlocks({ edges, visibleCardIds }),
     [edges, visibleCardIds]
   );
+  // Compute nesting depth for each frame: root=0, child=parentDepth+1
+  const frameDepthMap = useMemo(() => {
+    const depth = new Map<string, number>();
+    const computeDepth = (relMsgId: string, d: number) => {
+      if (depth.has(relMsgId)) return;
+      depth.set(relMsgId, d);
+      const block = frameBlocks.find(b => b.relMsgId === relMsgId);
+      if (block) block.childRelMsgIds.forEach(cid => computeDepth(cid, d + 1));
+    };
+    for (const fb of frameBlocks) {
+      if (!frameBlocks.some(other => other.childRelMsgIds.includes(fb.relMsgId))) {
+        computeDepth(fb.relMsgId, 0);
+      }
+    }
+    return depth;
+  }, [frameBlocks]);
 
   const { layout: baseLayout, canvasHeight: baseCanvasHeight } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks }),
-    [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks]
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, edges, allMessages: messages }),
+    [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks, edges, messages]
   );
   const frameAvoidanceReservations = useMemo(
     () => buildFrameAvoidanceReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
@@ -1862,15 +1925,15 @@ export default function GraphView(props: GraphViewProps) {
       }
     }
 
-    // Compute SUPPLEMENT frames — one frame per relation message (relMsgId), wrapping all target
+    // Compute ARRANGE frames — one frame per relation message (relMsgId), wrapping all target
     // messages and the source message (if any) within a single border frame.
-    const newSupplementFrames: {targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
+    const newArrangeFrames: {targetId:string;sourceId:string;relMsgId:string;isBlankCorrected:boolean;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
     // Compute GROUP frames — frame-group (CLASSIFY/MERGE) and replace-overlay (SUMMARY).
-    // Same structure as supplement frames; relKind/relLabel/relColor distinguish them for styling.
+    // Same structure as arrange frames; relKind/relLabel/relColor distinguish them for styling.
     // Note: CORRECT uses correction-badge kind (not replace-overlay) — no frame, badge only.
     const newGroupFrames: {targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[] = [];
 
-    // Generic frame computation — shared logic for supplement, frame-group, replace-overlay.
+    // Generic frame computation — shared logic for arrange, frame-group, replace-overlay.
     function computeFramesForRelType(
       filterFn: (relType: string) => boolean,
       appendFn: (f: {targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}) => void
@@ -1901,7 +1964,7 @@ export default function GraphView(props: GraphViewProps) {
           minX = Math.min(minX, sourceBox.x); minY = Math.min(minY, sourceBox.y);
           maxX = Math.max(maxX, sourceBox.x + sourceBox.width); maxY = Math.max(maxY, sourceBox.y + sourceBox.height);
         }
-        // DOM-aware box lookup: use actual rendered positions so SUPPLEMENT frames fully contain
+        // DOM-aware box lookup: use actual rendered positions so ARRANGE frames fully contain
         // nested relation frames whose card heights may exceed their initial layout estimates.
         const domBoxFn = (id: string) => endpointBoxForNormal(id)?.box ?? layout[id];
         let anyTarget = false;
@@ -1918,33 +1981,33 @@ export default function GraphView(props: GraphViewProps) {
         if (!anyTarget && !sourceBox) continue;
         if (minX === Infinity) continue;
         const rect = {
-          x: minX - SUPP_FRAME_PAD, y: minY - SUPP_FRAME_PAD,
-          width: maxX - minX + SUPP_FRAME_PAD * 2, height: maxY - minY + SUPP_FRAME_PAD * 2,
+          x: minX - FRAME_PAD, y: minY - FRAME_PAD,
+          width: maxX - minX + FRAME_PAD * 2, height: maxY - minY + FRAME_PAD * 2,
         };
         const targetId = frameEdges[0].to.messageId;
         appendFn({ targetId, sourceId, relMsgId, relType, isBlankCorrected, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect, relAgreeCount:0, relDisagreeCount:0, relAgreeMsgIds:[], relDisagreeMsgIds:[] });
       }
     }
 
-    computeFramesForRelType(isSuppFrameRel, f => newSupplementFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
-    computeFramesForRelType(t => !isSuppFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
+    computeFramesForRelType(isArrangeFrameRel, f => newArrangeFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
+    computeFramesForRelType(t => !isArrangeFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
 
     // For MERGE group frames, extend the frame rect upward to include the header inside
     // the frame, and pin the left edge to GRID_LEFT so it aligns with text cards outside.
-    // Also extend the right edge past any nested supplement / replace-overlay frames by
-    // SUPP_FRAME_PAD * 2 — one level for the nested frame's own border and one for the
+    // Also extend the right edge past any nested arrange / replace-overlay frames by
+    // FRAME_PAD * 2 — one level for the nested frame's own border and one for the
     // merge frame's own border.  This keeps the visual gap consistent regardless of
     // whether the merge edges targeted text messages directly or a relation message.
     // Nested frames naturally shift with their (already-shifted) source/target cards.
-    const mergeHeaderTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
+    const mergeHeaderTopPad = GROUP_HEADER_HEIGHT + FRAME_PAD;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
         let rightEdge = gf.rect.x + gf.rect.width;
-        // Extend past nested supplement frames geometrically contained in this merge
-        for (const sf of newSupplementFrames) {
-          if (sf.rect.x >= gf.rect.x && sf.rect.y >= gf.rect.y &&
-              sf.rect.y + sf.rect.height <= gf.rect.y + gf.rect.height) {
-            rightEdge = Math.max(rightEdge, sf.rect.x + sf.rect.width + SUPP_FRAME_PAD * 2);
+        // Extend past nested arrange frames geometrically contained in this merge
+        for (const af of newArrangeFrames) {
+          if (af.rect.x >= gf.rect.x && af.rect.y >= gf.rect.y &&
+              af.rect.y + af.rect.height <= gf.rect.y + gf.rect.height) {
+            rightEdge = Math.max(rightEdge, af.rect.x + af.rect.width + FRAME_PAD * 2);
           }
         }
         // Also extend past nested group frames (e.g. classify / summary) inside this merge
@@ -1952,7 +2015,7 @@ export default function GraphView(props: GraphViewProps) {
           if (ogf.relMsgId === gf.relMsgId) continue;
           if (ogf.rect.x >= gf.rect.x && ogf.rect.y >= gf.rect.y &&
               ogf.rect.y + ogf.rect.height <= gf.rect.y + gf.rect.height) {
-            rightEdge = Math.max(rightEdge, ogf.rect.x + ogf.rect.width + SUPP_FRAME_PAD * 2);
+            rightEdge = Math.max(rightEdge, ogf.rect.x + ogf.rect.width + FRAME_PAD * 2);
           }
         }
         gf.rect = { ...gf.rect, x: GRID_LEFT, width: rightEdge - GRID_LEFT, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
@@ -1983,7 +2046,7 @@ export default function GraphView(props: GraphViewProps) {
     }
 
     // Compute AGREE/DISAGREE decorations targeting relation messages (relDecByRelMsgId)
-    // These are displayed next to the relation's visual element (tag badge, supplement frame, edge label)
+    // These are displayed next to the relation's visual element (tag badge, arrange frame, edge label)
     const relDecByRelMsgId = new Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>();
     for (const e of edges) {
       if (e.relationType!=="agree"&&e.relationType!=="disagree") continue;
@@ -1995,7 +2058,7 @@ export default function GraphView(props: GraphViewProps) {
       else { cur.disagreeCount++; cur.disagreeRelMsgIds.push(e.relationMessageId); }
       relDecByRelMsgId.set(toId, cur);
     }
-    // Propagate counts and IDs to tag groups, supplement frames, and group frames
+    // Propagate counts and IDs to tag groups, arrange frames, and group frames
     for (const groups of Object.values(newTagDecorationsByMsg)) {
       for (const group of groups) {
         for (const rmId of group.relMsgIds) {
@@ -2007,7 +2070,7 @@ export default function GraphView(props: GraphViewProps) {
         }
       }
     }
-    for (const sf of [...newSupplementFrames, ...newGroupFrames]) {
+    for (const sf of [...newArrangeFrames, ...newGroupFrames]) {
       const dec=relDecByRelMsgId.get(sf.relMsgId);
       if (dec) {
         sf.relAgreeCount+=dec.agreeCount; sf.relDisagreeCount+=dec.disagreeCount;
@@ -2016,7 +2079,7 @@ export default function GraphView(props: GraphViewProps) {
     }
     setRelDecByRelMsgState(relDecByRelMsgId);
     setTagDecorationsByMsg(newTagDecorationsByMsg);
-    setSupplementFrames(newSupplementFrames);
+    setArrangeFrames(newArrangeFrames);
     setGroupFrames(newGroupFrames);
     setInlineBadgesByMsg(newInlineBadgesByMsg);
 
@@ -2032,7 +2095,7 @@ export default function GraphView(props: GraphViewProps) {
       const resInfo: string[] = [];
       for (const [rid, redges] of edgesByRelMsg2) {
         const rk = getRelKind(redges[0]?.relationType ?? '');
-        if (rk !== 'supplement-frame' && rk !== 'frame-group' && rk !== 'replace-overlay') continue;
+        if (rk !== 'arrange-frame' && rk !== 'frame-group' && rk !== 'replace-overlay') continue;
         const cids = new Set<string>();
         // Include source
         const srcId = redges[0].from.messageId;
@@ -2055,7 +2118,7 @@ export default function GraphView(props: GraphViewProps) {
         const rm = msgMap.get(gf.relMsgId);
         lines.push(`${gf.relMsgId}(${rm?.relationType??'?'}) rect={x:${gf.rect.x},y:${gf.rect.y},w:${gf.rect.width},h:${gf.rect.height}} bottom=${gf.rect.y+gf.rect.height}`);
       }
-      for (const sf of newSupplementFrames) {
+      for (const sf of newArrangeFrames) {
         lines.push(`${sf.relMsgId}(supp) rect={x:${sf.rect.x},y:${sf.rect.y},w:${sf.rect.width},h:${sf.rect.height}} bottom=${sf.rect.y+sf.rect.height}`);
       }
       lines.push('--- CARDS ---');
@@ -2084,8 +2147,8 @@ export default function GraphView(props: GraphViewProps) {
     setTagsByRelMsgState(newTagsByRelMsg);
 
     // Build lookup maps for visual positions of relation messages (used in edge targeting)
-    const suppFrameByRelMsgId = new Map<string,Rect>();
-    for (const sf of newSupplementFrames) suppFrameByRelMsgId.set(sf.relMsgId, sf.rect);
+    const frameByRelMsgId = new Map<string,Rect>();
+    for (const sf of newArrangeFrames) frameByRelMsgId.set(sf.relMsgId, sf.rect);
 
     const groupFrameByRelMsgId = new Map<string,Rect>();
     for (const gf of newGroupFrames) groupFrameByRelMsgId.set(gf.relMsgId, gf.rect);
@@ -2110,8 +2173,8 @@ export default function GraphView(props: GraphViewProps) {
       }
       const te0 = relEdges[0];
       const relType = te0.relationType;
-      if (relType === "supplement") {
-        const fr = suppFrameByRelMsgId.get(relId);
+      if (relType === "arrange") {
+        const fr = frameByRelMsgId.get(relId);
         return fr ? { x: fr.x, y: fr.y, width: fr.width, height: fr.height } : null;
       }
       // frame-group or replace-overlay: use the computed group frame rect
@@ -2219,10 +2282,10 @@ export default function GraphView(props: GraphViewProps) {
       const fromAuthor=fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);
 
-      // Tag and supplement relations are rendered as decorations/frames — no directed arrows.
+      // Tag and arrange relations are rendered as decorations/frames — no directed arrows.
       // Agree/disagree: pure-stance (anon: source) → decoration only;
       //   with real source → directed arrow pointing to the decorated message (not the badge).
-      if (e.relationType==="tag"||e.relationType==="supplement") continue;
+      if (e.relationType==="tag"||e.relationType==="arrange") continue;
       // frame-group, replace-overlay, and correction-badge relations are rendered as frames/badges, not arrows
       const eSpec = getPresentationSpec(e.relationType);
       if (eSpec.kind === 'frame-group' || eSpec.kind === 'replace-overlay' || eSpec.kind === 'correction-badge') continue;
@@ -2255,9 +2318,9 @@ export default function GraphView(props: GraphViewProps) {
         // (a relation has exactly one type), so using the first edge is always correct.
         const targetRelType = targetRelEdges[0]?.relationType ?? "";
 
-        // Supplement frame: edge should point to the frame border (the relation's clickable area)
-        if (targetRelType === "supplement") {
-          const frameRect = suppFrameByRelMsgId.get(relId);
+        // arrange frame: edge should point to the frame border (the relation's clickable area)
+        if (targetRelType === "arrange") {
+          const frameRect = frameByRelMsgId.get(relId);
           if (frameRect) {
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
@@ -2618,17 +2681,17 @@ export default function GraphView(props: GraphViewProps) {
         })}
       </div>
       {/* SVG layer: frame visuals (behind cards, zIndex:0) so cards float above frames.
-          Wide supplement frames (spanning multiple columns) no longer visually encompass
+          Wide arrange frames (spanning multiple columns) no longer visually encompass
           unrelated cards that happen to share the same horizontal range. */}
-      {(supplementFrames.length>0||groupFrames.length>0)&&(
+      {(arrangeFrames.length>0||groupFrames.length>0)&&(
         <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
-          {/* SUPPLEMENT frames — stroke and fill reflect selection state; hidden when blank-corrected */}
-          {supplementFrames.map(sf=>{
+          {/* arrange frames — stroke and fill reflect selection state; hidden when blank-corrected */}
+          {arrangeFrames.map(sf=>{
             if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
               <rect key={`supp-frame-${sf.relMsgId}`} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
-                rx={SUPP_FRAME_RADIUS} ry={SUPP_FRAME_RADIUS}
+                rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={isWhole?"rgba(11,132,255,0.08)":"rgba(130,80,200,0.04)"}
                 stroke={isWhole?"rgba(11,132,255,0.9)":"rgba(130,80,200,0.55)"}
                 strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
@@ -2645,7 +2708,7 @@ export default function GraphView(props: GraphViewProps) {
             const fillColor = isWhole ? 'rgba(11,132,255,0.06)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
             return (
               <rect key={`gf-${gf.relMsgId}`} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
-                rx={SUPP_FRAME_RADIUS} ry={SUPP_FRAME_RADIUS}
+                rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={fillColor} stroke={strokeColor}
                 strokeWidth={isWhole?3:2} strokeDasharray={isReplaceOverlay?undefined:(isWhole?undefined:"6 3")}/>
             );
@@ -2875,20 +2938,22 @@ export default function GraphView(props: GraphViewProps) {
         return items;
       })()}
 
-      {/* Supplement frame border-strip hit areas — 4 thin divs at zIndex:4 covering the frame border,
-          one strip per side.  Each strip is SUPP_FRAME_PAD wide (half inside, half outside the rect),
+      {/* arrange frame border-strip hit areas — 4 thin divs at zIndex:4 covering the frame border,
+          one strip per side.  Each strip is FRAME_PAD wide (half inside, half outside the rect),
           so it exactly covers the padding zone between the visible SVG border and the message cards.
-          Supplement relation messages are treated as first-class messages: single-click toggles whole
+          arrange relation messages are treated as first-class messages: single-click toggles whole
           selection (like a normal message card), double-click uses the message double-click handler.
           When isBlankCorrected, the frame border is invisible so border strips are omitted; only the
           correction badge is rendered so users can interact with the correction. */}
-      {supplementFrames.map(sf=>{
+      {arrangeFrames.map(sf=>{
         const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageClick(e,sf.relMsgId);};
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageDoubleClick(e,sf.relMsgId);};
         const {x,y,width,height}=sf.rect;
-        const HH=SUPP_FRAME_PAD; // half-width of each border strip
-        const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
-        const title=`补充关系：${sf.relMsgId}；单击选中，双击展开详情`;
+        const HH=FRAME_PAD;
+        // Nested frames need higher zIndex so clicks hit inner frame before outer
+        const frameZ = 4 + (frameDepthMap.get(sf.relMsgId) ?? 0);
+        const stripBase: React.CSSProperties={position:"absolute",zIndex:frameZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
+        const title=`排列关系：${sf.relMsgId}；单击选中，双击展开详情`;
         const sfCorrInfo=correctedRelMsgTargets.get(sf.relMsgId);
         return (
           <React.Fragment key={`supp-hit-${sf.relMsgId}`}>
@@ -2907,7 +2972,7 @@ export default function GraphView(props: GraphViewProps) {
               <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             </>}
-            {/* Correction badge — embedded in frame top border when this supplement is a CORRECT target */}
+            {/* Correction badge — embedded in frame top border when this arrange is a CORRECT target */}
             {sfCorrInfo&&(()=>{
               const ci=sfCorrInfo[0];
               const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
@@ -2936,8 +3001,9 @@ export default function GraphView(props: GraphViewProps) {
         const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameClick??onMessageClick)(e,gf.relMsgId);};
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameDoubleClick??onMessageDoubleClick)(e,gf.relMsgId);};
         const {x,y,width,height}=gf.rect;
-        const HH=SUPP_FRAME_PAD;
-        const stripBase: React.CSSProperties={position:"absolute",zIndex:4,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
+        const HH=FRAME_PAD;
+        const gfZ = 4 + (frameDepthMap.get(gf.relMsgId) ?? 0);
+        const stripBase: React.CSSProperties={position:"absolute",zIndex:gfZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=(gf.relType === "classify" || gf.relType === "summary")
           ? `${gf.relType === "summary" ? "总结" : "分类"}：${gf.relMsgId}；单击选中，双击进入${gf.relType === "summary" ? "总结" : "分类"}`
           : `${gf.relLabel}关系：${gf.relMsgId}；单击选中，双击展开详情`;
@@ -3072,11 +3138,11 @@ export default function GraphView(props: GraphViewProps) {
         );
       })}
 
-      {/* Supplement frame decoration badges — full-size AGREE/DISAGREE badges to the RIGHT of the frame,
+      {/* arrange frame decoration badges — full-size AGREE/DISAGREE badges to the RIGHT of the frame,
           styled and interactive identically to text-message decoration badges.
-          Icon area: quick-send agree/disagree targeting the supplement relation message.
-          Body area: toggle selection of all agree/disagree relation messages on this supplement. */}
-      {supplementFrames.map(sf=>{
+          Icon area: quick-send agree/disagree targeting the arrange relation message.
+          Body area: toggle selection of all agree/disagree relation messages on this arrange. */}
+      {arrangeFrames.map(sf=>{
         const sfTagItems=tagsByRelMsgState.get(sf.relMsgId)??[];
         if (sf.relAgreeCount===0&&sf.relDisagreeCount===0&&sfTagItems.length===0) return null;
         const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
@@ -3110,7 +3176,7 @@ export default function GraphView(props: GraphViewProps) {
           );
           sfDecTop+=DEC_H+DEC_GAP;
         }
-        // TAG badges on this supplement relation message — aggregated by label text
+        // TAG badges on this arrange relation message — aggregated by label text
         const sfTagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
         for (const {label:itemLabel,relMsgId:tagRelMsgId} of sfTagItems) {
           const existing=sfTagGroupMap.get(itemLabel);

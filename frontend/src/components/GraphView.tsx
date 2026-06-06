@@ -72,8 +72,7 @@ const GROUP_HEADER_HEIGHT = 56;
 // MERGE cards get a more compact header (half the height of classify/summary group headers)
 const MERGE_CARD_H = 36;
 
-// Shared empty map to avoid allocating a new one on every render
-const EMPTY_MAP: Map<string, string> = new Map();
+// Shared empty set for fallback
 
 // Group frame stroke colors by relColor value
 const GROUP_FRAME_STROKE: Record<string,string> = {
@@ -288,15 +287,6 @@ function unionBoxes(boxes: LayoutBox[]): LayoutBox | null {
 
 function rectsOverlapX(a: Rect, b: Rect): boolean {
   return !(a.x + a.width <= b.x || b.x + b.width <= a.x);
-}
-
-function rectContains(outer: Rect, inner: Rect): boolean {
-  return (
-    outer.x <= inner.x &&
-    outer.y <= inner.y &&
-    outer.x + outer.width >= inner.x + inner.width &&
-    outer.y + outer.height >= inner.y + inner.height
-  );
 }
 
 /** Resolve the merge header text with fallback priority: payload title → payload label → relation type label. */
@@ -657,6 +647,9 @@ function buildFrameAvoidanceReservations(params: {
   return reservations;
 }
 
+/** Apply remaining merge-frame x-shifts for nested frames and ensure min canvas height.
+ *  Frame blocks are already placed as atomic units by computeNoOverlapLayout;
+ *  this function only handles nested x-shifts and final adjustments. */
 function applyFrameAvoidanceReservations(params: {
   layout: Record<string, LayoutBox>;
   normals: DemoMessage[];
@@ -667,45 +660,25 @@ function applyFrameAvoidanceReservations(params: {
   edgesByRelMsg: Map<string, DemoEdge[]>;
   relationCardMsgIds: Set<string>;
 }) {
-  if (params.reservations.length === 0) {
-    return { layout: params.layout, canvasHeight: params.minCanvasHeight };
-  }
   const nextLayout: Record<string, LayoutBox> = {};
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
 
-  const byCol = new Map<number, string[]>();
-  for (const msg of params.normals) {
-    const col = params.colOf[msg.id] ?? 0;
-    const arr = byCol.get(col) ?? [];
-    arr.push(msg.id);
-    byCol.set(col, arr);
-  }
-  const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
-  for (const ids of byCol.values()) sortIdsByY(ids);
-
-  // Shift merge frame member cards right so the frame and all its contents move
-  // as a whole.  Cards directly owned by the merge shift by SUPP_FRAME_PAD; cards
-  // inside nested relation frames (targets AND sources of relations that are
-  // themselves merge targets) shift by an additional SUPP_FRAME_PAD per nesting
-  // level, preserving padding at every level.
+  // Apply nested x-shifts for merge frames: cards inside nested frames get
+  // an additional SUPP_FRAME_PAD per nesting level.
   for (const reservation of params.reservations) {
     if (!reservation.headerTopPad) continue;
-    // Build per-card shift, starting with base SUPP_FRAME_PAD for every member.
     const cardShift = new Map<string, number>();
     for (const id of reservation.cardIds) cardShift.set(id, SUPP_FRAME_PAD);
-    // Find nested relation targets of this merge and add extra shift for their cards.
     const mergeEdges = params.edgesByRelMsg.get(reservation.relMsgId) ?? [];
     for (const e of mergeEdges) {
       const targetRel = params.msgMap.get(e.to.messageId);
       if (targetRel?.kind !== 'relation') continue;
       const nestedReservation = params.reservations.find(r => r.relMsgId === e.to.messageId);
-      // Cards in the nested frame's cardIds get extra shift.
       if (nestedReservation) {
         for (const nestedId of nestedReservation.cardIds) {
           cardShift.set(nestedId, (cardShift.get(nestedId) ?? SUPP_FRAME_PAD) + SUPP_FRAME_PAD);
         }
       }
-      // The nested frame's source card also gets extra shift (it is inside the nested frame).
       const nestedEdges = params.edgesByRelMsg.get(e.to.messageId) ?? [];
       for (const ne of nestedEdges) {
         const srcId = ne.from.messageId;
@@ -717,116 +690,6 @@ function applyFrameAvoidanceReservations(params: {
     for (const [id, shift] of cardShift) {
       const box = nextLayout[id];
       if (box) nextLayout[id] = { ...box, x: box.x + shift };
-    }
-  }
-
-  function computeRect(reservation: FrameAvoidanceReservation): Rect {
-    const boxes: LayoutBox[] = [];
-    // Track which cardIds belong to relation messages so we can resolve their nested-frame bounds.
-    const relCardIds: string[] = [];
-    reservation.cardIds.forEach(id => {
-      if (params.msgMap.get(id)?.kind === 'relation') {
-        relCardIds.push(id);
-      } else {
-        const box = nextLayout[id];
-        if (box) boxes.push(box);
-      }
-    });
-    // For relation-message cardIds, resolve the full nested-frame bounds (including padding).
-    for (const relId of relCardIds) {
-      const nested = getRelationBoundsFromLayout({
-        relMsgId: relId,
-        edgesByRelMsg: params.edgesByRelMsg,
-        layout: nextLayout,
-        msgMap: params.msgMap,
-        relationCardMsgIds: params.relationCardMsgIds,
-      });
-      if (nested) boxes.push(nested.rect);
-    }
-    const union = unionBoxes(boxes);
-    if (!union) return reservation.rect;
-    const pad = reservation.headerTopPad ?? 0;
-    return {
-      x: union.x - SUPP_FRAME_PAD,
-      y: union.y - SUPP_FRAME_PAD - pad,
-      width: union.width + SUPP_FRAME_PAD * 2,
-      height: union.height + SUPP_FRAME_PAD * 2 + pad,
-    };
-  }
-
-  // Non-containing reservations should not overlap; move the lower one downward.
-  for (let i = 0; i < params.reservations.length; i++) {
-    const upperRect = computeRect(params.reservations[i]);
-    for (let j = i + 1; j < params.reservations.length; j++) {
-      const lower = params.reservations[j];
-      const lowerRect = computeRect(lower);
-      if (!rectsIntersect(upperRect, lowerRect)) continue;
-      if (rectContains(upperRect, lowerRect) || rectContains(lowerRect, upperRect)) continue;
-      const deltaY = upperRect.y + upperRect.height + ROW_GAP - lowerRect.y;
-      if (deltaY <= 0) continue;
-      for (const id of lower.cardIds) {
-        const box = nextLayout[id];
-        if (!box) continue;
-        nextLayout[id] = { ...box, y: box.y + deltaY };
-      }
-    }
-  }
-
-  // DEBUG: log reservation rects and message boxes
-  console.log('=== applyFrameAvoidanceReservations ===');
-  for (const reservation of params.reservations) {
-    const rr = computeRect(reservation);
-    const relMsg = params.msgMap.get(reservation.relMsgId);
-    console.log(`  frame ${reservation.relMsgId} (${relMsg?.relationType ?? '?'}): rect=`, rr, ' cardIds=', [...reservation.cardIds]);
-  }
-
-  // Push non-member messages below each reservation, per-reservation.
-  for (const reservation of params.reservations) {
-    const reservationRect = computeRect(reservation);
-    const relMsg = params.msgMap.get(reservation.relMsgId);
-    for (const ids of byCol.values()) {
-      sortIdsByY(ids);
-      // Merge frames need extra bottom clearance because their reservation
-      // rect uses layout heights (without CSS padding), while the rendered
-      // frame uses DOM heights (with 12px vertical card padding).
-      const extraPad = reservation.headerTopPad ? ROW_GAP * 4 : 0;
-      let cursor = reservationRect.y + reservationRect.height + ROW_GAP + extraPad;
-      for (const id of ids) {
-        const box = nextLayout[id];
-        // DEBUG: track mock-102
-        if (id === 'mock-102' || id.startsWith('mock-102')) {
-          console.log(`[DEBUG mock-102] in push for ${reservation.relMsgId}: inCardIds=${reservation.cardIds.has(id)} cursor=${cursor} rect=(y=${reservationRect.y},h=${reservationRect.height}) box=(y=${box?.y},h=${box?.height})`);
-        }
-        if (!box || reservation.cardIds.has(id)) continue;
-        if (box.y + box.height <= reservationRect.y) continue;
-        if (box.y >= cursor) {
-          cursor = box.y + box.height + ROW_GAP;
-          continue;
-        }
-        const msg = params.msgMap.get(id);
-        console.log(`  PUSH ${id} y ${box.y} -> ${cursor} below ${reservation.relMsgId}`);
-        nextLayout[id] = { ...box, y: cursor };
-        cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
-      }
-    }
-  }
-
-  // Ensure no element (especially merge frame headers) protrudes above GRID_TOP.
-  // When merge frames extend above the content union, the reservation rect's y can go
-  // negative even though the layout boxes are at GRID_TOP.  Check reservation rects
-  // in addition to layout boxes, then shift everything down so the topmost element
-  // stays at exactly GRID_TOP.
-  let minTop = GRID_TOP;
-  for (const box of Object.values(nextLayout)) minTop = Math.min(minTop, box.y);
-  // Also check reservation rects — these extend above the layout boxes for merge frames.
-  for (const reservation of params.reservations) {
-    const rr = computeRect(reservation);
-    minTop = Math.min(minTop, rr.y);
-  }
-  if (minTop < GRID_TOP) {
-    const shift = GRID_TOP - minTop;
-    for (const id of Object.keys(nextLayout)) {
-      nextLayout[id] = { ...nextLayout[id], y: nextLayout[id].y + shift };
     }
   }
 
@@ -1200,77 +1063,264 @@ function applyAgreeDisagreeColumnOverride(params: {
   return { col, maxCol };
 }
 
+type FrameBlock = {
+  relMsgId: string;
+  /** All card IDs in this frame (source + targets + nested frame cards). */
+  cardIds: Set<string>;
+  /** Card IDs directly in this frame (not in any child frame). */
+  directCardIds: Set<string>;
+  /** IDs of child frames (frames nested inside this one). */
+  childRelMsgIds: string[];
+  /** True for merge frames (need extra header space). */
+  isMerge: boolean;
+};
+
+/** Identify frame blocks from edges and build parent-child hierarchy.
+ *  Frame types: supplement, frame-group (classify/merge), replace-overlay (summary). */
+function buildFrameBlocks(params: {
+  edges: DemoEdge[];
+  visibleCardIds: Set<string>;
+}): FrameBlock[] {
+  const { edges, visibleCardIds } = params;
+  const edgesByRelMsg = new Map<string, DemoEdge[]>();
+  for (const e of edges) {
+    const arr = edgesByRelMsg.get(e.relationMessageId) ?? [];
+    arr.push(e);
+    edgesByRelMsg.set(e.relationMessageId, arr);
+  }
+  const blocks: FrameBlock[] = [];
+  for (const [relMsgId, relEdges] of edgesByRelMsg) {
+    if (relEdges.length === 0) continue;
+    const relKind = getRelKind(relEdges[0].relationType);
+    if (relKind !== 'supplement-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') continue;
+    const cardIds = new Set<string>();
+    const sourceId = relEdges[0].from.messageId;
+    if (!sourceId.startsWith('anon:') && visibleCardIds.has(sourceId)) cardIds.add(sourceId);
+    for (const edge of relEdges) {
+      if (visibleCardIds.has(edge.to.messageId)) cardIds.add(edge.to.messageId);
+    }
+    if (cardIds.size > 0) {
+      blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge' });
+    }
+  }
+  // Expand cardIds recursively: if a frame targets another frame (via a relation-message
+  // edge), include that frame's cardIds.  This is needed so parent-child detection works
+  // when a merge frame targets a supplement frame's relation message rather than its cards.
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const block of blocks) {
+      for (const edge of edgesByRelMsg.get(block.relMsgId) ?? []) {
+        const tgtId = edge.to.messageId;
+        // Check if target is a relation message that has its own frame block
+        const tgtBlock = blocks.find(b => b.relMsgId === tgtId);
+        if (tgtBlock) {
+          for (const cid of tgtBlock.cardIds) {
+            if (!block.cardIds.has(cid)) { block.cardIds.add(cid); expanded = true; }
+          }
+        }
+      }
+    }
+  }
+  // Build parent-child: child frames are those whose cardIds are a strict subset
+  // of the parent's cardIds.  Pick the smallest enclosing parent.
+  for (const block of blocks) {
+    let bestParent: FrameBlock | null = null;
+    let bestSize = Infinity;
+    for (const candidate of blocks) {
+      if (candidate.relMsgId === block.relMsgId) continue;
+      if (candidate.cardIds.size <= block.cardIds.size) continue;
+      let allInside = true;
+      for (const cid of block.cardIds) {
+        if (!candidate.cardIds.has(cid)) { allInside = false; break; }
+      }
+      if (allInside && candidate.cardIds.size < bestSize) { bestParent = candidate; bestSize = candidate.cardIds.size; }
+    }
+    if (bestParent) bestParent.childRelMsgIds.push(block.relMsgId);
+  }
+  // Compute directCardIds: cardIds minus cards in any child frame
+  for (const block of blocks) {
+    const childCards = new Set<string>();
+    const collectChildCards = (b: FrameBlock) => {
+      for (const cid of b.childRelMsgIds) {
+        const child = blocks.find(x => x.relMsgId === cid);
+        if (child) { child.cardIds.forEach(id => childCards.add(id)); collectChildCards(child); }
+      }
+    };
+    collectChildCards(block);
+    block.directCardIds = new Set([...block.cardIds].filter(id => !childCards.has(id)));
+  }
+  return blocks;
+}
+
 function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
-  groupSourceToTarget?: Map<string, string>;
   correctedTargetIds?: Set<string>;
+  frameBlocks?: FrameBlock[];
 }) {
   const { normals, colOf, measuredHeights, maxCol } = params;
   const correctedTargetIds = params.correctedTargetIds ?? new Set<string>();
-  const groupSourceToTarget = params.groupSourceToTarget ?? EMPTY_MAP;
+  const frameBlocks = params.frameBlocks ?? [];
 
-  // Build reverse map: target → list of grouped children (supplement sources, frame-group members, etc.)
-  const groupTargetToChildren = new Map<string, string[]>();
-  for (const [srcId, tgtId] of groupSourceToTarget) {
-    const arr = groupTargetToChildren.get(tgtId) ?? [];
-    arr.push(srcId);
-    groupTargetToChildren.set(tgtId, arr);
-  }
-
-  const byCol = new Map<number, DemoMessage[]>();
-  for (const m of normals) {
-    const c = colOf[m.id] ?? 0;
-    const arr = byCol.get(c) ?? [];
-    arr.push(m);
-    byCol.set(c, arr);
-  }
-
-  // Grouped children in the same column as their anchor are NOT "root" messages
-  const groupChildIds = new Set(groupSourceToTarget.keys());
-
-  const colCursor: Record<number, number> = {};
-  for (let c = 0; c <= maxCol; c++) colCursor[c] = GRID_TOP;
   const layout: Record<string, LayoutBox> = {};
   let maxBottom = GRID_TOP;
 
-  // Recursively place a message then its grouped children (with zero gap)
-  function placeGroup(msg: DemoMessage, c: number, gapBefore: number, visited: Set<string>) {
-    if (visited.has(msg.id)) return;
-    visited.add(msg.id);
-    colCursor[c] += gapBefore;
-    // Corrected targets are invisible placeholders with zero height; the correction source
-    // is then placed at the same y-coordinate, effectively replacing the target card.
-    const h = correctedTargetIds.has(msg.id) ? 0 : Math.max(MIN_CARD_H, measuredHeights[msg.id] ?? MIN_CARD_H);
-    layout[msg.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
-    maxBottom = Math.max(maxBottom, colCursor[c] + h);
-    colCursor[c] += h;
-    // Place grouped children directly below with zero gap
-    const colMsgs = byCol.get(c) ?? [];
-    const children = (groupTargetToChildren.get(msg.id) ?? []).filter(s => (colOf[s] ?? 0) === c);
-    children.sort((a, b) => {
-      const ma = colMsgs.find(m => m.id === a), mb = colMsgs.find(m => m.id === b);
-      return new Date(ma?.createdAt ?? 0).getTime() - new Date(mb?.createdAt ?? 0).getTime();
-    });
-    for (const childId of children) {
-      const childMsg = colMsgs.find(m => m.id === childId);
-      if (childMsg) placeGroup(childMsg, c, 0, visited);
+  function cardHeight(id: string) {
+    if (correctedTargetIds.has(id)) return 0;
+    return Math.max(MIN_CARD_H, measuredHeights[id] ?? MIN_CARD_H);
+  }
+
+  // --- Build a frame lookup and card→innermost-frame mapping ---
+  const frameById = new Map<string, FrameBlock>();
+  const cardInnermostFrame = new Map<string, string>(); // cardId → innermost frame relMsgId
+  for (const fb of frameBlocks) frameById.set(fb.relMsgId, fb);
+
+  // Assign each card to its innermost (most specific) frame
+  for (const fb of frameBlocks) {
+    for (const cid of fb.directCardIds) {
+      // directCardIds only contains cards not in child frames, so this IS the innermost
+      cardInnermostFrame.set(cid, fb.relMsgId);
     }
   }
 
-  for (let c = 0; c <= maxCol; c++) {
-    const colMsgs = byCol.get(c) ?? [];
-    // Root messages: not grouped children that have their anchor in the same column
-    const roots = colMsgs.filter(m => {
-      if (!groupChildIds.has(m.id)) return true;
-      const tgtId = groupSourceToTarget.get(m.id)!;
-      return (colOf[tgtId] ?? 0) !== c; // anchor in different col → treat as root
+  // --- Recursive frame layout ---
+  // Lays out a frame's direct members + child frames in chronological order.
+  // Returns the frame's bottom y.
+  function layoutFrameBlock(fb: FrameBlock, startY: number, xShift: number): number {
+    // Per-column cursors within this frame
+    const colY: Record<number, number> = {};
+    const frameCols = new Set<number>();
+
+    // Build combined items: direct cards + child frames
+    type FrameItem = { kind: 'card'; msg: DemoMessage } | { kind: 'childFrame'; child: FrameBlock };
+    const items: FrameItem[] = [];
+    for (const cid of fb.directCardIds) {
+      const m = normals.find(x => x.id === cid);
+      if (m) { items.push({ kind: 'card', msg: m }); frameCols.add(colOf[m.id] ?? 0); }
+    }
+    for (const childId of fb.childRelMsgIds) {
+      const child = frameById.get(childId);
+      if (child) {
+        items.push({ kind: 'childFrame', child });
+        for (const cid of child.cardIds) frameCols.add(colOf[cid] ?? 0);
+      }
+    }
+
+    // Sort by earliest createdAt
+    items.sort((a, b) => {
+      const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
+        : Math.min(...[...a.child.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+      const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
+        : Math.min(...[...b.child.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+      return ta - tb;
     });
-    roots.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    const visited = new Set<string>();
-    for (let i = 0; i < roots.length; i++) {
-      placeGroup(roots[i], c, i === 0 ? 0 : ROW_GAP, visited);
+
+    // Initialize cursors
+    for (const c of frameCols) colY[c] = startY;
+
+    let frameBottom = startY;
+    for (const item of items) {
+      if (item.kind === 'card') {
+        const m = item.msg;
+        const c = colOf[m.id] ?? 0;
+        const h = cardHeight(m.id);
+        layout[m.id] = { x: colX(c) + xShift, y: colY[c], width: CARD_W, height: h };
+        colY[c] = colY[c] + h + ROW_GAP;
+        maxBottom = Math.max(maxBottom, layout[m.id].y + h);
+        frameBottom = Math.max(frameBottom, colY[c] - ROW_GAP);
+      } else {
+        // Child frame: start at max cursor across its columns
+        const child = item.child;
+        let childTop = startY;
+        for (const cid of child.cardIds) {
+          const c = colOf[cid] ?? 0;
+          childTop = Math.max(childTop, colY[c] ?? startY);
+        }
+        const childXShift = fb.isMerge ? SUPP_FRAME_PAD : 0;
+        const childBottom = layoutFrameBlock(child, childTop, childXShift);
+        // Advance ALL parent-frame columns past this child frame,
+        // so cards in non-overlapping columns don't appear above it.
+        for (const c of frameCols) {
+          colY[c] = Math.max(colY[c] ?? startY, childBottom + ROW_GAP);
+        }
+        frameBottom = Math.max(frameBottom, childBottom);
+      }
+    }
+    return frameBottom;
+  }
+
+  // --- Top-level layout: standalone cards + root frames, in chronological order ---
+  const colCursor: Record<number, number> = {};
+  for (let c = 0; c <= maxCol; c++) colCursor[c] = GRID_TOP;
+
+  // Identify root frames (no parent) and standalone cards
+  const childFrameIds = new Set<string>();
+  for (const fb of frameBlocks) fb.childRelMsgIds.forEach(id => childFrameIds.add(id));
+  const rootFrames = frameBlocks.filter(fb => !childFrameIds.has(fb.relMsgId));
+  const allFrameCardIds = new Set<string>();
+  for (const fb of frameBlocks) fb.cardIds.forEach(id => allFrameCardIds.add(id));
+  const standaloneCards = normals.filter(m => !allFrameCardIds.has(m.id));
+
+  type LayoutItem = 
+    | { kind: 'card'; msg: DemoMessage }
+    | { kind: 'frame'; block: FrameBlock };
+
+  const items: LayoutItem[] = [];
+  for (const m of standaloneCards) items.push({ kind: 'card', msg: m });
+  for (const fb of rootFrames) items.push({ kind: 'frame', block: fb });
+
+  items.sort((a, b) => {
+    const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
+      : Math.min(...[...a.block.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+    const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
+      : Math.min(...[...b.block.cardIds].map(id => new Date(normals.find(m => m.id === id)?.createdAt ?? 0).getTime()));
+    return ta - tb;
+  });
+
+  // Place items sequentially at the top level
+  for (const item of items) {
+    if (item.kind === 'card') {
+      const m = item.msg;
+      const c = colOf[m.id] ?? 0;
+      const h = cardHeight(m.id);
+      layout[m.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
+      colCursor[c] = colCursor[c] + h + ROW_GAP;
+      maxBottom = Math.max(maxBottom, layout[m.id].y + h);
+    } else {
+      const fb = item.block;
+      // Determine frameTop via collision detection
+      let frameTop = GRID_TOP;
+      for (const cid of fb.cardIds) {
+        const c = colOf[cid] ?? 0;
+        const mx = colX(c);
+        let minY = GRID_TOP;
+        for (const [oid, obox] of Object.entries(layout)) {
+          if (fb.cardIds.has(oid)) continue;
+          if (mx + CARD_W <= obox.x || obox.x + obox.width <= mx) continue;
+          if (obox.y + obox.height > minY) minY = obox.y + obox.height;
+        }
+        minY = Math.max(minY, colCursor[c] - ROW_GAP);
+        frameTop = Math.max(frameTop, minY + ROW_GAP);
+      }
+      if (fb.isMerge) frameTop += GROUP_HEADER_HEIGHT;
+      const xShift = fb.isMerge ? SUPP_FRAME_PAD : 0;
+      const frameBottom = layoutFrameBlock(fb, frameTop, xShift);
+      // Advance all column cursors past this frame
+      for (let c = 0; c <= maxCol; c++) {
+        colCursor[c] = Math.max(colCursor[c], frameBottom + ROW_GAP);
+      }
     }
   }
+
+  // Any remaining cards (shouldn't happen with correct frame hierarchy)
+  for (const m of normals) {
+    if (layout[m.id]) continue;
+    const c = colOf[m.id] ?? 0;
+    const h = cardHeight(m.id);
+    layout[m.id] = { x: colX(c), y: colCursor[c], width: CARD_W, height: h };
+    maxBottom = Math.max(maxBottom, layout[m.id].y + h);
+  }
+
   return { layout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
 }
 
@@ -1477,7 +1527,7 @@ export default function GraphView(props: GraphViewProps) {
   const { col: agreeDisCol, maxCol: agreeDisMaxCol } = useMemo(() => applyAgreeDisagreeColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
   // Grouping column override: highest priority — supplement/frame-group/replace-overlay/correction-badge source must
   // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
-  const { col: colOf, maxCol, groupSourceToTarget } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
+  const { col: colOf, maxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
@@ -1549,9 +1599,25 @@ export default function GraphView(props: GraphViewProps) {
     }
     return ids;
   }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
+
+  // Build frame blocks: identify which cards belong to which frames (supplement/merge/classify/summary).
+  // This is computed before the layout so frames are placed as atomic units.
+  // visibleCardIds includes all cards that endpointBoxForNormal can find (normals + tag sources).
+  const visibleCardIds = useMemo(() => {
+    const ids = new Set(normalIds);
+    for (const m of messages) {
+      if (m.kind === 'normal' || relationCardMsgIds.has(m.id)) ids.add(m.id);
+    }
+    return ids;
+  }, [messages, normalIds, relationCardMsgIds]);
+  const frameBlocks = useMemo(
+    () => buildFrameBlocks({ edges, visibleCardIds }),
+    [edges, visibleCardIds]
+  );
+
   const { layout: baseLayout, canvasHeight: baseCanvasHeight } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, groupSourceToTarget, correctedTargetIds: hiddenCorrectedTargetIds }),
-    [normals, colOf, measuredHeights, maxCol, groupSourceToTarget, hiddenCorrectedTargetIds]
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks }),
+    [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks]
   );
   const frameAvoidanceReservations = useMemo(
     () => buildFrameAvoidanceReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
@@ -1938,6 +2004,9 @@ export default function GraphView(props: GraphViewProps) {
         const rk = getRelKind(redges[0]?.relationType ?? '');
         if (rk !== 'supplement-frame' && rk !== 'frame-group' && rk !== 'replace-overlay') continue;
         const cids = new Set<string>();
+        // Include source
+        const srcId = redges[0].from.messageId;
+        if (!srcId.startsWith('anon:')) cids.add(srcId);
         for (const e of redges) {
           const tm = msgMap.get(e.to.messageId);
           if (tm?.kind === 'relation') {
@@ -1957,7 +2026,6 @@ export default function GraphView(props: GraphViewProps) {
         lines.push(`${gf.relMsgId}(${rm?.relationType??'?'}) rect={x:${gf.rect.x},y:${gf.rect.y},w:${gf.rect.width},h:${gf.rect.height}} bottom=${gf.rect.y+gf.rect.height}`);
       }
       for (const sf of newSupplementFrames) {
-        const rm = msgMap.get(sf.relMsgId);
         lines.push(`${sf.relMsgId}(supp) rect={x:${sf.rect.x},y:${sf.rect.y},w:${sf.rect.width},h:${sf.rect.height}} bottom=${sf.rect.y+sf.rect.height}`);
       }
       lines.push('--- CARDS ---');
@@ -2519,10 +2587,11 @@ export default function GraphView(props: GraphViewProps) {
           );
         })}
       </div>
-      {/* SVG layer: supplement frame visuals + edge paths.
-          Gate on either having edges or frames so frames render even with no other edges. */}
-      {(positionedEdges.length>0||supplementFrames.length>0||groupFrames.length>0)&&(
-        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
+      {/* SVG layer: frame visuals (behind cards, zIndex:0) so cards float above frames.
+          Wide supplement frames (spanning multiple columns) no longer visually encompass
+          unrelated cards that happen to share the same horizontal range. */}
+      {(supplementFrames.length>0||groupFrames.length>0)&&(
+        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
           {/* SUPPLEMENT frames — stroke and fill reflect selection state; hidden when blank-corrected */}
           {supplementFrames.map(sf=>{
             if (sf.isBlankCorrected) return null;
@@ -2551,6 +2620,11 @@ export default function GraphView(props: GraphViewProps) {
                 strokeWidth={isWhole?3:2} strokeDasharray={isReplaceOverlay?undefined:(isWhole?undefined:"6 3")}/>
             );
           })}
+        </svg>
+      )}
+      {/* SVG layer: edge paths (above cards, zIndex:6) */}
+      {positionedEdges.length>0&&(
+        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
           {positionedEdges.map(pe=>{
             const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;

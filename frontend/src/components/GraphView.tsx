@@ -683,14 +683,40 @@ function applyFrameAvoidanceReservations(params: {
   const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
   for (const ids of byCol.values()) sortIdsByY(ids);
 
-  // Shift merge frame member cards right by SUPP_FRAME_PAD so the frame's left border
-  // aligns with text message cards outside the frame, while preserving SUPP_FRAME_PAD
-  // padding between the frame border and the cards inside it.
+  // Shift merge frame member cards right so the frame and all its contents move
+  // as a whole.  Cards directly owned by the merge shift by SUPP_FRAME_PAD; cards
+  // inside nested relation frames (targets AND sources of relations that are
+  // themselves merge targets) shift by an additional SUPP_FRAME_PAD per nesting
+  // level, preserving padding at every level.
   for (const reservation of params.reservations) {
-    if (!reservation.headerTopPad) continue; // not a merge frame
-    for (const id of reservation.cardIds) {
+    if (!reservation.headerTopPad) continue;
+    // Build per-card shift, starting with base SUPP_FRAME_PAD for every member.
+    const cardShift = new Map<string, number>();
+    for (const id of reservation.cardIds) cardShift.set(id, SUPP_FRAME_PAD);
+    // Find nested relation targets of this merge and add extra shift for their cards.
+    const mergeEdges = params.edgesByRelMsg.get(reservation.relMsgId) ?? [];
+    for (const e of mergeEdges) {
+      const targetRel = params.msgMap.get(e.to.messageId);
+      if (targetRel?.kind !== 'relation') continue;
+      const nestedReservation = params.reservations.find(r => r.relMsgId === e.to.messageId);
+      // Cards in the nested frame's cardIds get extra shift.
+      if (nestedReservation) {
+        for (const nestedId of nestedReservation.cardIds) {
+          cardShift.set(nestedId, (cardShift.get(nestedId) ?? SUPP_FRAME_PAD) + SUPP_FRAME_PAD);
+        }
+      }
+      // The nested frame's source card also gets extra shift (it is inside the nested frame).
+      const nestedEdges = params.edgesByRelMsg.get(e.to.messageId) ?? [];
+      for (const ne of nestedEdges) {
+        const srcId = ne.from.messageId;
+        if (srcId && !srcId.startsWith('anon:') && cardShift.has(srcId)) {
+          cardShift.set(srcId, (cardShift.get(srcId) ?? SUPP_FRAME_PAD) + SUPP_FRAME_PAD);
+        }
+      }
+    }
+    for (const [id, shift] of cardShift) {
       const box = nextLayout[id];
-      if (box) nextLayout[id] = { ...box, x: box.x + SUPP_FRAME_PAD };
+      if (box) nextLayout[id] = { ...box, x: box.x + shift };
     }
   }
 
@@ -1826,15 +1852,14 @@ export default function GraphView(props: GraphViewProps) {
     computeFramesForRelType(isSuppFrameRel, f => newSupplementFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
     computeFramesForRelType(t => !isSuppFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
 
-    // For MERGE group frames, extend the frame rect upward to include the header inside the frame.
-    // The header card is positioned at (frameRect.y + SUPP_FRAME_PAD), so the frame must start
-    // (GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD) above the union of content card positions.
-    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
-    // ensures the frame left border aligns with text message cards outside the frame.
+    // For MERGE group frames, extend the frame rect upward to include the header inside
+    // the frame, and pin the left edge to GRID_LEFT so it aligns with text cards outside.
+    // Nested frames naturally shift with their (already-shifted) source/target cards.
     const mergeHeaderTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
-        gf.rect = { ...gf.rect, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
+        const rightEdge = gf.rect.x + gf.rect.width;
+        gf.rect = { ...gf.rect, x: GRID_LEFT, width: rightEdge - GRID_LEFT, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
       }
     }
 

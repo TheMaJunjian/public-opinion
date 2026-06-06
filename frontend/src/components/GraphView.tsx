@@ -2452,7 +2452,7 @@ export default function GraphView(props: GraphViewProps) {
 
   return (
     <div ref={canvasRef} style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:0}}
-      onMouseDown={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
+      onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:1}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;

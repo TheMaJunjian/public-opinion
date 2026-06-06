@@ -601,6 +601,8 @@ export default function TopicDetailPage() {
     relMsgId: string;
     x: number; y: number;
   } | null>(null);
+  // DEBUG
+  const [debugRects, setDebugRects] = useState("");
 
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
@@ -2931,6 +2933,7 @@ export default function TopicDetailPage() {
                   onGroupFrameDoubleClick={handleGroupFrameDoubleClick}
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
+                  onDebugRects={setDebugRects}
                 />
             )}
           </div>
@@ -3120,6 +3123,11 @@ export default function TopicDetailPage() {
                 {recentRelations.map(m => <li key={m.id}>{m.id}：{m.content.slice(0, 60)}{m.content.length > 60 ? "…" : ""}</li>)}
               </ul>
             </div>
+          </div>
+          {/* DEBUG: rectangle info */}
+          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4, color: "#0f0" }}>Debug Rects</div>
+            <pre style={{ fontSize: 10, fontFamily: "monospace", color: "#0f0", margin: 0, maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap" }}>{debugRects || "等待数据..."}</pre>
           </div>
         </div>
       </div>

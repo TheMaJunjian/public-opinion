@@ -727,44 +727,39 @@ function applyFrameAvoidanceReservations(params: {
     }
   }
 
-  // Collect all member IDs across all reservations so we can skip them.
-  const allMemberIds = new Set<string>();
-  for (const reservation of params.reservations) {
-    reservation.cardIds.forEach(id => allMemberIds.add(id));
-  }
-
-  // Compute the maximum bottom across all reservations.
-  let maxReservationBottom = GRID_TOP;
+  // DEBUG: log reservation rects and message boxes
+  console.log('=== applyFrameAvoidanceReservations ===');
   for (const reservation of params.reservations) {
     const rr = computeRect(reservation);
-    maxReservationBottom = Math.max(maxReservationBottom, rr.y + rr.height);
+    const relMsg = params.msgMap.get(reservation.relMsgId);
+    console.log(`  frame ${reservation.relMsgId} (${relMsg?.relationType ?? '?'}): rect=`, rr, ' cardIds=', [...reservation.cardIds]);
   }
 
-  // Push non-member messages that overlap a reservation in X below the
-  // lowest reservation bottom, maintaining per-column vertical order.
-  // Messages to the left or right of all frames are left in place.
-  if (maxReservationBottom > GRID_TOP) {
+  // Push non-member messages below each reservation, per-reservation.
+  for (const reservation of params.reservations) {
+    const reservationRect = computeRect(reservation);
+    const relMsg = params.msgMap.get(reservation.relMsgId);
     for (const ids of byCol.values()) {
       sortIdsByY(ids);
-      let cursor = maxReservationBottom + ROW_GAP;
+      // Merge frames need extra bottom clearance because their reservation
+      // rect uses layout heights (without CSS padding), while the rendered
+      // frame uses DOM heights (with 12px vertical card padding).
+      const extraPad = reservation.headerTopPad ? ROW_GAP * 4 : 0;
+      let cursor = reservationRect.y + reservationRect.height + ROW_GAP + extraPad;
       for (const id of ids) {
-        if (allMemberIds.has(id)) continue;
         const box = nextLayout[id];
-        if (!box) continue;
-        // Only push messages whose column overlaps at least one reservation in X,
-        // AND whose vertical position falls within or below that reservation.
-        const overlapsAnyFrame = params.reservations.some(r => {
-          const rr = computeRect(r);
-          if (!rectsOverlapX(box, rr)) return false;
-          // Message is entirely above this frame — leave it alone.
-          if (box.y + box.height <= rr.y) return false;
-          return true;
-        });
-        if (!overlapsAnyFrame) continue;
+        // DEBUG: track mock-102
+        if (id === 'mock-102' || id.startsWith('mock-102')) {
+          console.log(`[DEBUG mock-102] in push for ${reservation.relMsgId}: inCardIds=${reservation.cardIds.has(id)} cursor=${cursor} rect=(y=${reservationRect.y},h=${reservationRect.height}) box=(y=${box?.y},h=${box?.height})`);
+        }
+        if (!box || reservation.cardIds.has(id)) continue;
+        if (box.y + box.height <= reservationRect.y) continue;
         if (box.y >= cursor) {
           cursor = box.y + box.height + ROW_GAP;
           continue;
         }
+        const msg = params.msgMap.get(id);
+        console.log(`  PUSH ${id} y ${box.y} -> ${cursor} below ${reservation.relMsgId}`);
         nextLayout[id] = { ...box, y: cursor };
         cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
       }
@@ -1360,6 +1355,8 @@ export interface GraphViewProps {
   onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
   /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
   hideMessageIds?: Set<string>;
+  /** DEBUG: callback to report frame/card rectangles */
+  onDebugRects?: (text: string) => void;
 }
 
 export default function GraphView(props: GraphViewProps) {
@@ -1374,6 +1371,7 @@ export default function GraphView(props: GraphViewProps) {
     onGroupFrameClick, onGroupFrameDoubleClick,
     onInlineBadgeClick, onInlineBadgeDoubleClick,
     hideMessageIds,
+    onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
@@ -1879,6 +1877,51 @@ export default function GraphView(props: GraphViewProps) {
     setSupplementFrames(newSupplementFrames);
     setGroupFrames(newGroupFrames);
     setInlineBadgesByMsg(newInlineBadgesByMsg);
+
+    // DEBUG: send rects + cardIds to parent
+    if (onDebugRects) {
+      const lines: string[] = [];
+      // Compute cardIds per reservation
+      const edgesByRelMsg2 = new Map<string, DemoEdge[]>();
+      for (const e of edges) {
+        const arr = edgesByRelMsg2.get(e.relationMessageId) ?? [];
+        arr.push(e); edgesByRelMsg2.set(e.relationMessageId, arr);
+      }
+      const resInfo: string[] = [];
+      for (const [rid, redges] of edgesByRelMsg2) {
+        const rk = getRelKind(redges[0]?.relationType ?? '');
+        if (rk !== 'supplement-frame' && rk !== 'frame-group' && rk !== 'replace-overlay') continue;
+        const cids = new Set<string>();
+        for (const e of redges) {
+          const tm = msgMap.get(e.to.messageId);
+          if (tm?.kind === 'relation') {
+            const nb = getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg: edgesByRelMsg2, layout, msgMap, relationCardMsgIds });
+            if (nb) nb.cardIds.forEach(id => cids.add(id));
+          } else if (tm?.kind === 'normal') {
+            cids.add(e.to.messageId);
+          }
+        }
+        resInfo.push(`${rid} cardIds=[${[...cids].join(',')}]`);
+      }
+      lines.push('--- RESERVATIONS ---');
+      lines.push(...resInfo);
+      lines.push('--- FRAMES ---');
+      for (const gf of newGroupFrames) {
+        const rm = msgMap.get(gf.relMsgId);
+        lines.push(`${gf.relMsgId}(${rm?.relationType??'?'}) rect={x:${gf.rect.x},y:${gf.rect.y},w:${gf.rect.width},h:${gf.rect.height}} bottom=${gf.rect.y+gf.rect.height}`);
+      }
+      for (const sf of newSupplementFrames) {
+        const rm = msgMap.get(sf.relMsgId);
+        lines.push(`${sf.relMsgId}(supp) rect={x:${sf.rect.x},y:${sf.rect.y},w:${sf.rect.width},h:${sf.rect.height}} bottom=${sf.rect.y+sf.rect.height}`);
+      }
+      lines.push('--- CARDS ---');
+      for (const m of normals) {
+        const b = layout[m.id];
+        if (!b) continue;
+        lines.push(`${m.id}(${m.kind}) box={x:${b.x},y:${b.y},w:${b.width},h:${b.height}} bottom=${b.y+b.height}`);
+      }
+      onDebugRects(lines.join('\n'));
+    }
 
     // Collect TAG relations targeting relation messages (for display next to edge labels / frames)
     const newTagsByRelMsg = new Map<string,Array<{label:string;relMsgId:string}>>();

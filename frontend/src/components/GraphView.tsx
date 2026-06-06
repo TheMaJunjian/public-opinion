@@ -1097,6 +1097,47 @@ function buildFrameBlocks(params: {
       }
     }
   }
+  // Subset-relationship detection: when a smaller frame's cardIds are fully
+  // contained within a larger frame-group (merge/classify) frame's cardIds,
+  // the smaller frame should be a child of the larger one.  This handles the
+  // case where a merge targets text messages directly rather than targeting
+  // the supplement relation message that groups those same text messages.
+  // Without this, both frames become root frames and overwrite each other's
+  // card positions, causing inconsistent layout.
+  // Sort blocks by cardIds size ascending so smaller (more specific) frames
+  // are processed first.
+  const sortedBySize = [...blocks].sort((a, b) => a.cardIds.size - b.cardIds.size);
+  for (let i = 0; i < sortedBySize.length; i++) {
+    const small = sortedBySize[i];
+    const smallKind = getRelKind(edgesByRelMsg.get(small.relMsgId)?.[0]?.relationType ?? '');
+    // Only supplement-frame and replace-overlay can be nested inside frame-group
+    if (smallKind !== 'supplement-frame' && smallKind !== 'replace-overlay') continue;
+    for (let j = sortedBySize.length - 1; j > i; j--) {
+      const large = sortedBySize[j];
+      const largeKind = getRelKind(edgesByRelMsg.get(large.relMsgId)?.[0]?.relationType ?? '');
+      // Only frame-group (merge/classify) can contain other frames
+      if (largeKind !== 'frame-group') continue;
+      // Check subset: all of small's cardIds are in large's cardIds
+      let isSubset = small.cardIds.size > 0;
+      for (const cid of small.cardIds) {
+        if (!large.cardIds.has(cid)) { isSubset = false; break; }
+      }
+      if (!isSubset) continue;
+      // Avoid creating a cycle
+      const isDescendant = (ancestor: FrameBlock, descendantId: string): boolean => {
+        if (ancestor.relMsgId === descendantId) return true;
+        return ancestor.childRelMsgIds.some(cid => {
+          const c = blocks.find(b => b.relMsgId === cid);
+          return c ? isDescendant(c, descendantId) : false;
+        });
+      };
+      if (isDescendant(small, large.relMsgId)) continue;
+      if (!large.childRelMsgIds.includes(small.relMsgId)) {
+        large.childRelMsgIds.push(small.relMsgId);
+      }
+      break; // small only gets one parent
+    }
+  }
   // Include child frame relMsgIds in parent cardIds — relation messages are also messages.
   for (const block of blocks) {
     for (const childId of block.childRelMsgIds) {
@@ -1890,11 +1931,30 @@ export default function GraphView(props: GraphViewProps) {
 
     // For MERGE group frames, extend the frame rect upward to include the header inside
     // the frame, and pin the left edge to GRID_LEFT so it aligns with text cards outside.
+    // Also extend the right edge past any nested supplement / replace-overlay frames by
+    // SUPP_FRAME_PAD * 2 — one level for the nested frame's own border and one for the
+    // merge frame's own border.  This keeps the visual gap consistent regardless of
+    // whether the merge edges targeted text messages directly or a relation message.
     // Nested frames naturally shift with their (already-shifted) source/target cards.
     const mergeHeaderTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
-        const rightEdge = gf.rect.x + gf.rect.width;
+        let rightEdge = gf.rect.x + gf.rect.width;
+        // Extend past nested supplement frames geometrically contained in this merge
+        for (const sf of newSupplementFrames) {
+          if (sf.rect.x >= gf.rect.x && sf.rect.y >= gf.rect.y &&
+              sf.rect.y + sf.rect.height <= gf.rect.y + gf.rect.height) {
+            rightEdge = Math.max(rightEdge, sf.rect.x + sf.rect.width + SUPP_FRAME_PAD * 2);
+          }
+        }
+        // Also extend past nested group frames (e.g. classify / summary) inside this merge
+        for (const ogf of newGroupFrames) {
+          if (ogf.relMsgId === gf.relMsgId) continue;
+          if (ogf.rect.x >= gf.rect.x && ogf.rect.y >= gf.rect.y &&
+              ogf.rect.y + ogf.rect.height <= gf.rect.y + gf.rect.height) {
+            rightEdge = Math.max(rightEdge, ogf.rect.x + ogf.rect.width + SUPP_FRAME_PAD * 2);
+          }
+        }
         gf.rect = { ...gf.rect, x: GRID_LEFT, width: rightEdge - GRID_LEFT, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
       }
     }

@@ -663,33 +663,15 @@ function applyFrameAvoidanceReservations(params: {
   const nextLayout: Record<string, LayoutBox> = {};
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
 
-  // Apply nested x-shifts for merge frames: cards inside nested frames get
-  // an additional SUPP_FRAME_PAD per nesting level.
+  // Apply base x-shift for merge frames: all cards inside a merge get
+  // SUPP_FRAME_PAD shift for the merge frame's visual border padding.
+  // buildFrameAvoidanceReservations already expands nested frame cardIds into
+  // the parent reservation's cardIds, so a single pass covers all nested cards.
   for (const reservation of params.reservations) {
     if (!reservation.headerTopPad) continue;
-    const cardShift = new Map<string, number>();
-    for (const id of reservation.cardIds) cardShift.set(id, SUPP_FRAME_PAD);
-    const mergeEdges = params.edgesByRelMsg.get(reservation.relMsgId) ?? [];
-    for (const e of mergeEdges) {
-      const targetRel = params.msgMap.get(e.to.messageId);
-      if (targetRel?.kind !== 'relation') continue;
-      const nestedReservation = params.reservations.find(r => r.relMsgId === e.to.messageId);
-      if (nestedReservation) {
-        for (const nestedId of nestedReservation.cardIds) {
-          cardShift.set(nestedId, (cardShift.get(nestedId) ?? SUPP_FRAME_PAD) + SUPP_FRAME_PAD);
-        }
-      }
-      const nestedEdges = params.edgesByRelMsg.get(e.to.messageId) ?? [];
-      for (const ne of nestedEdges) {
-        const srcId = ne.from.messageId;
-        if (srcId && !srcId.startsWith('anon:') && cardShift.has(srcId)) {
-          cardShift.set(srcId, (cardShift.get(srcId) ?? SUPP_FRAME_PAD) + SUPP_FRAME_PAD);
-        }
-      }
-    }
-    for (const [id, shift] of cardShift) {
+    for (const id of reservation.cardIds) {
       const box = nextLayout[id];
-      if (box) nextLayout[id] = { ...box, x: box.x + shift };
+      if (box) nextLayout[id] = { ...box, x: box.x + SUPP_FRAME_PAD };
     }
   }
 
@@ -1103,42 +1085,26 @@ function buildFrameBlocks(params: {
       blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge' });
     }
   }
-  // Expand cardIds recursively: if a frame targets another frame (via a relation-message
-  // edge), include that frame's cardIds.  This is needed so parent-child detection works
-  // when a merge frame targets a supplement frame's relation message rather than its cards.
-  let expanded = true;
-  while (expanded) {
-    expanded = false;
-    for (const block of blocks) {
-      for (const edge of edgesByRelMsg.get(block.relMsgId) ?? []) {
-        const tgtId = edge.to.messageId;
-        // Check if target is a relation message that has its own frame block
-        const tgtBlock = blocks.find(b => b.relMsgId === tgtId);
-        if (tgtBlock) {
-          for (const cid of tgtBlock.cardIds) {
-            if (!block.cardIds.has(cid)) { block.cardIds.add(cid); expanded = true; }
-          }
-        }
-      }
-    }
-  }
-  // Build parent-child: child frames are those whose cardIds are a strict subset
-  // of the parent's cardIds.  Pick the smallest enclosing parent.
+  // Build parent-child: a block B is a child of block A if A has an edge
+  // that targets B's relMsgId.  Relation messages are also messages —
+  // child frames appear as cards inside their parent frame.
   for (const block of blocks) {
-    let bestParent: FrameBlock | null = null;
-    let bestSize = Infinity;
-    for (const candidate of blocks) {
-      if (candidate.relMsgId === block.relMsgId) continue;
-      if (candidate.cardIds.size <= block.cardIds.size) continue;
-      let allInside = true;
-      for (const cid of block.cardIds) {
-        if (!candidate.cardIds.has(cid)) { allInside = false; break; }
+    for (const edge of edgesByRelMsg.get(block.relMsgId) ?? []) {
+      const tgtId = edge.to.messageId;
+      const childBlock = blocks.find(b => b.relMsgId === tgtId && b.relMsgId !== block.relMsgId);
+      if (childBlock && !block.childRelMsgIds.includes(childBlock.relMsgId)) {
+        block.childRelMsgIds.push(childBlock.relMsgId);
       }
-      if (allInside && candidate.cardIds.size < bestSize) { bestParent = candidate; bestSize = candidate.cardIds.size; }
     }
-    if (bestParent) bestParent.childRelMsgIds.push(block.relMsgId);
   }
-  // Compute directCardIds: cardIds minus cards in any child frame
+  // Include child frame relMsgIds in parent cardIds — relation messages are also messages.
+  for (const block of blocks) {
+    for (const childId of block.childRelMsgIds) {
+      block.cardIds.add(childId);
+    }
+  }
+  // Compute directCardIds: cardIds minus cards in any child frame, AND minus
+  // child frame relMsgIds themselves (they are laid out as child frames, not direct cards).
   for (const block of blocks) {
     const childCards = new Set<string>();
     const collectChildCards = (b: FrameBlock) => {
@@ -1148,7 +1114,11 @@ function buildFrameBlocks(params: {
       }
     };
     collectChildCards(block);
-    block.directCardIds = new Set([...block.cardIds].filter(id => !childCards.has(id)));
+    block.directCardIds = new Set([...block.cardIds].filter(id => {
+      if (childCards.has(id)) return false;
+      if (block.childRelMsgIds.includes(id)) return false;
+      return true;
+    }));
   }
   return blocks;
 }
@@ -1236,7 +1206,7 @@ function computeNoOverlapLayout(params: {
           const c = colOf[cid] ?? 0;
           childTop = Math.max(childTop, colY[c] ?? startY);
         }
-        const childXShift = fb.isMerge ? SUPP_FRAME_PAD : 0;
+        const childXShift = xShift + SUPP_FRAME_PAD;
         const childBottom = layoutFrameBlock(child, childTop, childXShift);
         // Advance ALL parent-frame columns past this child frame,
         // so cards in non-overlapping columns don't appear above it.
@@ -1303,7 +1273,7 @@ function computeNoOverlapLayout(params: {
         frameTop = Math.max(frameTop, minY + ROW_GAP);
       }
       if (fb.isMerge) frameTop += GROUP_HEADER_HEIGHT;
-      const xShift = fb.isMerge ? SUPP_FRAME_PAD : 0;
+      const xShift = SUPP_FRAME_PAD;
       const frameBottom = layoutFrameBlock(fb, frameTop, xShift);
       // Advance all column cursors past this frame
       for (let c = 0; c <= maxCol; c++) {

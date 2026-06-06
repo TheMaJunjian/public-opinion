@@ -377,11 +377,7 @@ function getRelationBoundsFromLayout(params: {
   if (!rect) return null;
   const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
   if (relMsg?.relationType === 'merge') {
-    // Header is now inside the frame at the top; reserve headerTopPad space at the top.
-    // Must match GROUP_HEADER_HEIGHT used in the group frame rendering (line ~1751).
-    // Left FRAME_PAD is preserved here; card x-shifting in applyFrameAvoidanceReservations
-    // ensures the frame left border aligns with text message cards outside the frame.
-    const headerTopPad = GROUP_HEADER_HEIGHT + FRAME_PAD;
+    const headerTopPad = MERGE_CARD_H + FRAME_PAD;
     rect = {
       x: rect.x - FRAME_PAD,
       y: rect.y - FRAME_PAD - headerTopPad,
@@ -630,7 +626,7 @@ function buildFrameAvoidanceReservations(params: {
     // Left FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
     // ensures the frame left border aligns with text message cards outside the frame.
     const isMergeFrame = relEdges[0].relationType === "merge";
-    const headerTopPad = isMergeFrame ? GROUP_HEADER_HEIGHT + FRAME_PAD : 0;
+    const headerTopPad = isMergeFrame ? MERGE_CARD_H + FRAME_PAD : 0;
     reservations.push({
       relMsgId,
       cardIds,
@@ -893,9 +889,8 @@ export function applyGroupingColumnOverride(params: {
   edges: DemoEdge[];
   col: Record<string, number>;
   maxCol: number;
-  allMsgMap: Map<string, DemoMessage>;
 }): { col: Record<string, number>; maxCol: number; groupSourceToTarget: Map<string, string> } {
-  const { normals, edges, allMsgMap } = params;
+  const { normals, edges } = params;
   const col = { ...params.col };
   const normalSet = new Set(normals.map(m => m.id));
   const msgById = new Map(normals.map(m => [m.id, m]));
@@ -922,20 +917,11 @@ export function applyGroupingColumnOverride(params: {
   // For ALL framing / correction-badge relations (regardless of whether the source is anon:
   // or a real message), collect all *target* message IDs per relation message and chain
   // them together so that multiple targets within the same relation are placed in the same
-  // column and stacked tightly (zero gap).  This also covers the previously-anon-only case
-  // where an explicit-source arrange has more than one target: those targets now also get
-  // chained, so they are stacked below the first target together with the source message.
+  // column and stacked tightly (zero gap).
   const frameTargetsByRelMsg = new Map<string, { targetIds: string[]; relationType: string }>();
-  const arrangeTargetsByRelMsg = new Map<string, string[]>();
   for (const e of edges) {
     if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
     if (!normalSet.has(e.to.messageId)) continue;
-    if (e.relationType === 'arrange') {
-      const ids = arrangeTargetsByRelMsg.get(e.relationMessageId) ?? [];
-      ids.push(e.to.messageId);
-      arrangeTargetsByRelMsg.set(e.relationMessageId, ids);
-      continue;
-    }
     const entry = frameTargetsByRelMsg.get(e.relationMessageId) ?? { targetIds: [], relationType: e.relationType };
     entry.targetIds.push(e.to.messageId);
     frameTargetsByRelMsg.set(e.relationMessageId, entry);
@@ -949,53 +935,6 @@ export function applyGroupingColumnOverride(params: {
     for (let i = 1; i < targetIds.length; i++) {
       if (!groupSourceToTarget.has(targetIds[i])) {
         groupSourceToTarget.set(targetIds[i], targetIds[i - 1]);
-      }
-    }
-  }
-
-  // ARRANGE relations: compact columns and chain targets for vertical layout;
-  // for horizontal layout (single-row), keep targets in separate columns without chaining.
-  for (const [relMsgId, targetIdsRaw] of arrangeTargetsByRelMsg) {
-    const targetIdSet = new Set<string>();
-    const targetIds = targetIdsRaw.filter(id => {
-      if (targetIdSet.has(id)) return false;
-      targetIdSet.add(id);
-      return true;
-    });
-    if (targetIds.length < 2) continue;
-    targetIds.sort((a, b) => createdAtMs(a) - createdAtMs(b));
-    const uniqueCols = Array.from(new Set(targetIds.map(id => col[id] ?? 0))).sort((a, b) => a - b);
-    const minCol = uniqueCols[0] ?? 0;
-    const compressedColByOriginal = new Map<number, number>();
-    uniqueCols.forEach((originalCol, index) => compressedColByOriginal.set(originalCol, minCol + index));
-    for (const targetId of targetIds) {
-      const originalCol = col[targetId] ?? 0;
-      col[targetId] = compressedColByOriginal.get(originalCol) ?? originalCol;
-    }
-    // Horizontal layout: check the relation message's payload or edge label
-    const relMsg = allMsgMap.get(relMsgId);
-    const isSingleRow = (relMsg?.kind === 'relation' && relMsg.relationPayload?.targetLayout === 'single-row')
-      || edges.some(e => e.relationMessageId === relMsgId && e.relationType === 'arrange' && e.relationLabel === 'arrange-h');
-    if (isSingleRow) {
-      targetIds.forEach((targetId, index) => {
-        col[targetId] = minCol + index;
-      });
-      continue;
-    }
-    // Vertical layout (single-column, default): chain targets within the same column.
-    const targetsByCol = new Map<number, string[]>();
-    for (const targetId of targetIds) {
-      const targetCol = col[targetId] ?? 0;
-      const ids = targetsByCol.get(targetCol) ?? [];
-      ids.push(targetId);
-      targetsByCol.set(targetCol, ids);
-    }
-    for (const ids of targetsByCol.values()) {
-      if (ids.length < 2) continue;
-      for (let i = 1; i < ids.length; i++) {
-        if (!groupSourceToTarget.has(ids[i])) {
-          groupSourceToTarget.set(ids[i], ids[i - 1]);
-        }
       }
     }
   }
@@ -1206,10 +1145,9 @@ function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
   correctedTargetIds?: Set<string>;
   frameBlocks?: FrameBlock[];
-  edges: DemoEdge[];
   allMessages: DemoMessage[];
 }) {
-  const { normals, colOf, measuredHeights, edges } = params;
+  const { normals, colOf, measuredHeights } = params;
   const correctedTargetIds = params.correctedTargetIds ?? new Set<string>();
   const frameBlocks = params.frameBlocks ?? [];
   const allMsgMap = new Map(params.allMessages.map(m => [m.id, m]));
@@ -1239,7 +1177,7 @@ function computeNoOverlapLayout(params: {
   // All items (cards + child frames) treated uniformly: assigned to consecutive
   // local columns. Returns { bottom, colSpan } where colSpan is the number of
   // columns this frame occupies (for parent to skip).
-  function layoutFrameBlock(fb: FrameBlock, startY: number, xShift: number, baseCol: number, horizontal: boolean): { bottom: number; colSpan: number } {
+  function layoutFrameBlock(fb: FrameBlock, startY: number, xShift: number, baseCol: number): { bottom: number; colSpan: number } {
     type FrameItem = { kind: 'card'; msg: DemoMessage } | { kind: 'childFrame'; child: FrameBlock };
     const items: FrameItem[] = [];
     for (const cid of fb.directCardIds) {
@@ -1260,7 +1198,6 @@ function computeNoOverlapLayout(params: {
     });
 
     let frameBottom = startY;
-    let colCursor = baseCol;
     let yCursor = startY;
     // Merge frames: preserve each card's original column and compact vertically.
     // Per-column y-cursors track independent vertical placement per column.
@@ -1270,10 +1207,7 @@ function computeNoOverlapLayout(params: {
       if (item.kind === 'card') {
         const m = item.msg;
         const h = cardHeight(m.id);
-        if (horizontal) {
-          layout[m.id] = { x: colX(colCursor) + xShift, y: startY, width: CARD_W, height: h };
-          colCursor++;
-        } else if (fb.isMerge) {
+        if (fb.isMerge) {
           const col = colOf[m.id] ?? baseCol;
           const curY = colYCursor.get(col) ?? startY;
           layout[m.id] = { x: colX(col) + xShift, y: curY, width: CARD_W, height: h };
@@ -1287,11 +1221,7 @@ function computeNoOverlapLayout(params: {
       } else {
         const child = item.child;
         const childXShift = xShift + FRAME_PAD;
-        if (horizontal) {
-          const result = layoutFrameBlock(child, startY, childXShift, colCursor, horizontal);
-          frameBottom = Math.max(frameBottom, result.bottom);
-          colCursor += result.colSpan;
-        } else if (fb.isMerge) {
+        if (fb.isMerge) {
           // Place child frame in the column of its earliest card.
           let childBaseCol = baseCol;
           let minCol = Infinity;
@@ -1301,11 +1231,11 @@ function computeNoOverlapLayout(params: {
           }
           if (isFinite(minCol)) childBaseCol = minCol;
           const childStartY = colYCursor.get(childBaseCol) ?? startY;
-          const result = layoutFrameBlock(child, childStartY, childXShift, childBaseCol, horizontal);
+          const result = layoutFrameBlock(child, childStartY, childXShift, childBaseCol);
           colYCursor.set(childBaseCol, result.bottom + ROW_GAP);
           frameBottom = Math.max(frameBottom, result.bottom);
         } else {
-          const result = layoutFrameBlock(child, yCursor, childXShift, baseCol, horizontal);
+          const result = layoutFrameBlock(child, yCursor, childXShift, baseCol);
           frameBottom = Math.max(frameBottom, result.bottom);
           yCursor = result.bottom + ROW_GAP;
         }
@@ -1314,7 +1244,7 @@ function computeNoOverlapLayout(params: {
 
     const colSpan = fb.isMerge
       ? Math.max(1, Math.max(...colYCursor.keys(), baseCol) - baseCol + 1)
-      : (horizontal ? (colCursor - baseCol) : 1);
+      : 1;
     return { bottom: frameBottom, colSpan };
   }
 
@@ -1377,10 +1307,14 @@ function computeNoOverlapLayout(params: {
       }
       if (!isFinite(fMinX)) { fMinX = GRID_LEFT; fMaxX = GRID_LEFT + CARD_W; }
 
-      const isHorizontal = edges.some(e => e.relationMessageId === fb.relMsgId && e.relationLabel === 'arrange-h');
+      // All frames placed uniformly: find first Y where the frame's bounding box (cards + padding)
+      // does not overlap any previously placed item.
       const frameTop = findY(fMinX - FRAME_PAD, fMaxX - fMinX + FRAME_PAD * 2);
-      if (fb.isMerge) { /* merge header space reserved in layoutFrameBlock */ }
-      const result = layoutFrameBlock(fb, frameTop, FRAME_PAD, 0, isHorizontal);
+      // Merge frames need room for the card-style header inside the frame at the top.
+      // Shift cards down so the header sits above them, inside the frame border.
+      const mergeHeaderPad = MERGE_CARD_H + FRAME_PAD;
+      const adjustedTop = fb.isMerge ? frameTop + mergeHeaderPad : frameTop;
+      const result = layoutFrameBlock(fb, adjustedTop, FRAME_PAD, 0);
 
       let frMinX = Infinity, frMinY = Infinity, frMaxX = -Infinity, frMaxY = -Infinity;
       for (const cid of fb.cardIds) {
@@ -1393,13 +1327,13 @@ function computeNoOverlapLayout(params: {
       }
       if (isFinite(frMinX)) {
         if (fb.isMerge) {
-          // Include merge header in placedRect so subsequent items avoid the full visual frame.
-          const headerPad = GROUP_HEADER_HEIGHT + FRAME_PAD;
+          // Merge frames are taller (include card-style header inside the frame).
+          // Cards are already shifted down by mergeHeaderPad; placedRect reflects the full height.
           placedRects.push({
             x: frMinX - FRAME_PAD,
-            y: frMinY - FRAME_PAD - headerPad,
+            y: frMinY - FRAME_PAD - mergeHeaderPad,
             width: frMaxX - frMinX + FRAME_PAD * 2,
-            height: frMaxY - frMinY + FRAME_PAD * 2 + headerPad,
+            height: frMaxY - frMinY + FRAME_PAD * 2 + mergeHeaderPad,
           });
         } else {
           placedRects.push({
@@ -1630,8 +1564,7 @@ export default function GraphView(props: GraphViewProps) {
   const { col: agreeDisCol, maxCol: agreeDisMaxCol } = useMemo(() => applyAgreeDisagreeColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
   // Grouping column override: highest priority — arrange/frame-group/replace-overlay/correction-badge source must
   // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
-  const allMsgMapForCol = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
-  const { col: colOf, maxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol, allMsgMap: allMsgMapForCol }), [normals, edges, agreeDisCol, agreeDisMaxCol, allMsgMapForCol]);
+  const { col: colOf, maxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
@@ -1736,8 +1669,8 @@ export default function GraphView(props: GraphViewProps) {
   }, [frameBlocks]);
 
   const { layout: baseLayout, canvasHeight: baseCanvasHeight } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, edges, allMessages: messages }),
-    [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks, edges, messages]
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
+    [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
   );
   const frameAvoidanceReservations = useMemo(
     () => buildFrameAvoidanceReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
@@ -2038,14 +1971,10 @@ export default function GraphView(props: GraphViewProps) {
     computeFramesForRelType(isArrangeFrameRel, f => newArrangeFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
     computeFramesForRelType(t => !isArrangeFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
 
-    // For MERGE group frames, extend the frame rect upward to include the header inside
-    // the frame, and pin the left edge to GRID_LEFT so it aligns with text cards outside.
-    // Also extend the right edge past any nested arrange / replace-overlay frames by
-    // FRAME_PAD * 2 — one level for the nested frame's own border and one for the
-    // merge frame's own border.  This keeps the visual gap consistent regardless of
-    // whether the merge edges targeted text messages directly or a relation message.
-    // Nested frames naturally shift with their (already-shifted) source/target cards.
-    const mergeHeaderTopPad = GROUP_HEADER_HEIGHT + FRAME_PAD;
+    // For MERGE group frames: extend upward to include the card-style header inside the frame.
+    // Cards were shifted down by mergeHeaderPad in layoutFrameBlock, so the header sits
+    // in the gap above the cards. Keep computed x (natural frame bounds, no GRID_LEFT forcing).
+    const mergeHeaderTopPad = MERGE_CARD_H + FRAME_PAD;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
         let rightEdge = gf.rect.x + gf.rect.width;
@@ -2064,7 +1993,8 @@ export default function GraphView(props: GraphViewProps) {
             rightEdge = Math.max(rightEdge, ogf.rect.x + ogf.rect.width + FRAME_PAD * 2);
           }
         }
-        gf.rect = { ...gf.rect, x: GRID_LEFT, width: rightEdge - GRID_LEFT, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
+        // Extend upward for header, extend rightward for nested frames.
+        gf.rect = { ...gf.rect, width: rightEdge - gf.rect.x, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
       }
     }
 

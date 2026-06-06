@@ -191,9 +191,9 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
   CORRECT:     { kind: 'correction-badge',  label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
   ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true   },
-  CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true   },
+  CLASSIFY:    { kind: 'edge-label',        label: '分类', color: 'gray',   formsTrees: false },
   MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },
-  SUMMARY:     { kind: 'frame-group',       label: '总结', color: 'amber',  formsTrees: false, groupsTargets: true   },
+  SUMMARY:     { kind: 'edge-label',        label: '总结', color: 'amber',  formsTrees: false },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
 };

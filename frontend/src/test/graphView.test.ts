@@ -109,7 +109,7 @@ describe('merge canvas helpers', () => {
 });
 
 describe('grouping column override', () => {
-  it('keeps arrange targets in different original columns while compacting used columns/rows', () => {
+  it('keeps arrange targets in their original columns (arrange is frame but no column compaction)', () => {
     const normals: DemoMessage[] = [
       { ...makeNormal('msg-1'), createdAt: '2024-01-01T00:00:00.000Z' },
       { ...makeNormal('msg-2'), createdAt: '2024-01-01T00:01:00.000Z' },
@@ -128,12 +128,14 @@ describe('grouping column override', () => {
       maxCol: 5,
     });
 
+    // ARRANGE has groupsTargets=true: targets chain by time, column propagates to first target.
+    // msg-2→msg-1 (col 0), msg-3→msg-2 (col 0). All end up in column 0.
     expect(col['msg-1']).toBe(0);
-    expect(col['msg-2']).toBe(1);
-    expect(col['msg-3']).toBe(1);
+    expect(col['msg-2']).toBe(0);
+    expect(col['msg-3']).toBe(0);
     expect(col['msg-4']).toBe(5);
     expect(maxCol).toBe(5);
+    expect(groupSourceToTarget.get('msg-2')).toBe('msg-1');
     expect(groupSourceToTarget.get('msg-3')).toBe('msg-2');
-    expect(groupSourceToTarget.has('msg-2')).toBe(false);
   });
 });

@@ -647,9 +647,9 @@ function buildFrameAvoidanceReservations(params: {
   return reservations;
 }
 
-/** Apply remaining merge-frame x-shifts for nested frames and ensure min canvas height.
- *  Frame blocks are already placed as atomic units by computeNoOverlapLayout;
- *  this function only handles nested x-shifts and final adjustments. */
+/** Apply frame-avoidance: push cards that overlap merge frames below them,
+ *  and compute final canvas height.  Frame blocks are already placed by
+ *  computeNoOverlapLayout; this function acts as a safety net for collisions. */
 function applyFrameAvoidanceReservations(params: {
   layout: Record<string, LayoutBox>;
   normals: DemoMessage[];
@@ -663,15 +663,26 @@ function applyFrameAvoidanceReservations(params: {
   const nextLayout: Record<string, LayoutBox> = {};
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
 
-  // Apply base x-shift for merge frames: all cards inside a merge get
-  // FRAME_PAD shift for the merge frame's visual border padding.
-  // buildFrameAvoidanceReservations already expands nested frame cardIds into
-  // the parent reservation's cardIds, so a single pass covers all nested cards.
+  // Push cards that overlap merge frames below them (safety net for collision avoidance).
   for (const reservation of params.reservations) {
-    if (!reservation.headerTopPad) continue;
-    for (const id of reservation.cardIds) {
-      const box = nextLayout[id];
-      if (box) nextLayout[id] = { ...box, x: box.x + FRAME_PAD };
+    if (!reservation.headerTopPad) continue; // only merge frames
+    const frameBottom = reservation.rect.y + reservation.rect.height;
+
+    // Collect overlapping cards not in this merge frame, sorted by original y
+    const toPush: { id: string; box: LayoutBox }[] = [];
+    for (const [id, box] of Object.entries(nextLayout)) {
+      if (reservation.cardIds.has(id)) continue; // skip cards inside this merge frame
+      if (box.x + box.width <= reservation.rect.x || reservation.rect.x + reservation.rect.width <= box.x) continue;
+      if (box.y + box.height <= reservation.rect.y) continue;
+      if (box.y >= frameBottom + ROW_GAP) continue;
+      toPush.push({ id, box });
+    }
+    toPush.sort((a, b) => a.box.y - b.box.y);
+
+    let pushY = frameBottom + ROW_GAP;
+    for (const { id, box } of toPush) {
+      nextLayout[id] = { ...box, y: pushY };
+      pushY += box.height + ROW_GAP;
     }
   }
 
@@ -1251,6 +1262,9 @@ function computeNoOverlapLayout(params: {
     let frameBottom = startY;
     let colCursor = baseCol;
     let yCursor = startY;
+    // Merge frames: preserve each card's original column and compact vertically.
+    // Per-column y-cursors track independent vertical placement per column.
+    const colYCursor = new Map<number, number>();
 
     for (const item of items) {
       if (item.kind === 'card') {
@@ -1259,6 +1273,11 @@ function computeNoOverlapLayout(params: {
         if (horizontal) {
           layout[m.id] = { x: colX(colCursor) + xShift, y: startY, width: CARD_W, height: h };
           colCursor++;
+        } else if (fb.isMerge) {
+          const col = colOf[m.id] ?? baseCol;
+          const curY = colYCursor.get(col) ?? startY;
+          layout[m.id] = { x: colX(col) + xShift, y: curY, width: CARD_W, height: h };
+          colYCursor.set(col, curY + h + ROW_GAP);
         } else {
           layout[m.id] = { x: colX(baseCol) + xShift, y: yCursor, width: CARD_W, height: h };
           yCursor += h + ROW_GAP;
@@ -1272,6 +1291,19 @@ function computeNoOverlapLayout(params: {
           const result = layoutFrameBlock(child, startY, childXShift, colCursor, horizontal);
           frameBottom = Math.max(frameBottom, result.bottom);
           colCursor += result.colSpan;
+        } else if (fb.isMerge) {
+          // Place child frame in the column of its earliest card.
+          let childBaseCol = baseCol;
+          let minCol = Infinity;
+          for (const cid of child.cardIds) {
+            const c = colOf[cid];
+            if (c !== undefined && c < minCol) minCol = c;
+          }
+          if (isFinite(minCol)) childBaseCol = minCol;
+          const childStartY = colYCursor.get(childBaseCol) ?? startY;
+          const result = layoutFrameBlock(child, childStartY, childXShift, childBaseCol, horizontal);
+          colYCursor.set(childBaseCol, result.bottom + ROW_GAP);
+          frameBottom = Math.max(frameBottom, result.bottom);
         } else {
           const result = layoutFrameBlock(child, yCursor, childXShift, baseCol, horizontal);
           frameBottom = Math.max(frameBottom, result.bottom);
@@ -1280,7 +1312,10 @@ function computeNoOverlapLayout(params: {
       }
     }
 
-    return { bottom: frameBottom, colSpan: horizontal ? (colCursor - baseCol) : 1 };
+    const colSpan = fb.isMerge
+      ? Math.max(1, Math.max(...colYCursor.keys(), baseCol) - baseCol + 1)
+      : (horizontal ? (colCursor - baseCol) : 1);
+    return { bottom: frameBottom, colSpan };
   }
 
   // --- Top-level layout: simple chronological placement with rectangle collision ---
@@ -1357,11 +1392,22 @@ function computeNoOverlapLayout(params: {
         frMaxY = Math.max(frMaxY, box.y + box.height);
       }
       if (isFinite(frMinX)) {
-        placedRects.push({
-          x: frMinX - FRAME_PAD, y: frMinY - FRAME_PAD,
-          width: frMaxX - frMinX + FRAME_PAD * 2,
-          height: frMaxY - frMinY + FRAME_PAD * 2,
-        });
+        if (fb.isMerge) {
+          // Include merge header in placedRect so subsequent items avoid the full visual frame.
+          const headerPad = GROUP_HEADER_HEIGHT + FRAME_PAD;
+          placedRects.push({
+            x: frMinX - FRAME_PAD,
+            y: frMinY - FRAME_PAD - headerPad,
+            width: frMaxX - frMinX + FRAME_PAD * 2,
+            height: frMaxY - frMinY + FRAME_PAD * 2 + headerPad,
+          });
+        } else {
+          placedRects.push({
+            x: frMinX - FRAME_PAD, y: frMinY - FRAME_PAD,
+            width: frMaxX - frMinX + FRAME_PAD * 2,
+            height: frMaxY - frMinY + FRAME_PAD * 2,
+          });
+        }
       }
       maxBottom = Math.max(maxBottom, result.bottom);
     }

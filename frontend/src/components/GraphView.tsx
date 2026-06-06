@@ -389,6 +389,8 @@ function getRelationBoundsFromLayout(params: {
   if (relMsg?.relationType === 'merge') {
     // Header is now inside the frame at the top; reserve headerTopPad space at the top.
     // Must match GROUP_HEADER_HEIGHT used in the group frame rendering (line ~1751).
+    // Left SUPP_FRAME_PAD is preserved here; card x-shifting in applyFrameAvoidanceReservations
+    // ensures the frame left border aligns with text message cards outside the frame.
     const headerTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
     rect = {
       x: rect.x - SUPP_FRAME_PAD,
@@ -445,6 +447,8 @@ export function buildMergeCanvasReservations(params: {
     const contentUnion = unionBoxes(boxes);
     if (!contentUnion) continue;
     const headerWidth = getMergeHeaderWidth(getMergeHeaderText(msgMap.get(relMsgId)));
+    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
+    // ensures the merge canvas left border aligns with text message cards outside the frame.
     const contentRect = {
       x: contentUnion.x - SUPP_FRAME_PAD,
       y: contentUnion.y - SUPP_FRAME_PAD,
@@ -500,6 +504,8 @@ export function applyMergeCanvasReservations(params: {
     });
     const union = unionBoxes(boxes);
     if (!union) return reservation.rect;
+    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
+    // ensures the merge canvas left border aligns with text message cards outside the frame.
     const contentRect = {
       x: union.x - SUPP_FRAME_PAD,
       y: union.y - SUPP_FRAME_PAD,
@@ -631,6 +637,8 @@ function buildFrameAvoidanceReservations(params: {
     // For MERGE frames, reserve extra space above the frame content for the card-style header.
     // Must match the GROUP_HEADER_HEIGHT used in the group frame rendering (line ~1751)
     // so the reservation exactly covers the rendered frame + merge card header.
+    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
+    // ensures the frame left border aligns with text message cards outside the frame.
     const isMergeFrame = relEdges[0].relationType === "merge";
     const headerTopPad = isMergeFrame ? GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD : 0;
     reservations.push({
@@ -674,6 +682,17 @@ function applyFrameAvoidanceReservations(params: {
   }
   const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
   for (const ids of byCol.values()) sortIdsByY(ids);
+
+  // Shift merge frame member cards right by SUPP_FRAME_PAD so the frame's left border
+  // aligns with text message cards outside the frame, while preserving SUPP_FRAME_PAD
+  // padding between the frame border and the cards inside it.
+  for (const reservation of params.reservations) {
+    if (!reservation.headerTopPad) continue; // not a merge frame
+    for (const id of reservation.cardIds) {
+      const box = nextLayout[id];
+      if (box) nextLayout[id] = { ...box, x: box.x + SUPP_FRAME_PAD };
+    }
+  }
 
   function computeRect(reservation: FrameAvoidanceReservation): Rect {
     const boxes: LayoutBox[] = [];
@@ -1810,6 +1829,8 @@ export default function GraphView(props: GraphViewProps) {
     // For MERGE group frames, extend the frame rect upward to include the header inside the frame.
     // The header card is positioned at (frameRect.y + SUPP_FRAME_PAD), so the frame must start
     // (GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD) above the union of content card positions.
+    // Left SUPP_FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
+    // ensures the frame left border aligns with text message cards outside the frame.
     const mergeHeaderTopPad = GROUP_HEADER_HEIGHT + SUPP_FRAME_PAD;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {

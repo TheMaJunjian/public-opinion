@@ -753,28 +753,28 @@ export default function TopicDetailPage() {
   const classifiedTargetClassifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     classifyOwnership.relationIds.forEach(id => {
-      if (relationById.get(id)?.relationType === 'CLASSIFY') ids.add(id);
+      if (relationById.get(id)?.relationType.toUpperCase() === 'CLASSIFY') ids.add(id);
     });
     return ids;
   }, [classifyOwnership, relationById]);
   const classifiedTargetMergeRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     classifyOwnership.relationIds.forEach(id => {
-      if (relationById.get(id)?.relationType === 'MERGE') ids.add(id);
+      if (relationById.get(id)?.relationType.toUpperCase() === 'MERGE') ids.add(id);
     });
     return ids;
   }, [classifyOwnership, relationById]);
   const classifiedTargetARRANGERelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     classifyOwnership.relationIds.forEach(id => {
-      if (relationById.get(id)?.relationType === 'ARRANGE') ids.add(id);
+      if (relationById.get(id)?.relationType.toUpperCase() === 'ARRANGE') ids.add(id);
     });
     return ids;
   }, [classifyOwnership, relationById]);
   const classifiedTargetSummaryRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     classifyOwnership.relationIds.forEach(id => {
-      if (relationById.get(id)?.relationType === 'SUMMARY') ids.add(id);
+      if (relationById.get(id)?.relationType.toUpperCase() === 'SUMMARY') ids.add(id);
     });
     return ids;
   }, [classifyOwnership, relationById]);

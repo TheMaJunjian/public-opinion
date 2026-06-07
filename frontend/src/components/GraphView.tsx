@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import { computeCorrectedEdgeMap } from '../utils/modelBridge';
-import type { PresentationKind } from '../types';
+import type { PresentationKind, RelationTargetLayout } from '../types';
 
 // ========================= Layout types =========================
 
@@ -52,7 +52,7 @@ const TAG_RIGHT_GAP = 6;     // horizontal gap from card right edge
 const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
 // Frame constants (shared by arrange, classify, merge, summary frames)
-const FRAME_PAD = 12; // padding around the frame that wraps grouped messages (wide enough to click)
+const FRAME_PAD = 16; // padding around the frame that wraps grouped messages
 const FRAME_RADIUS = 8; // border-radius of group frames
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
@@ -1017,6 +1017,8 @@ type FrameBlock = {
   childRelMsgIds: string[];
   /** True for merge frames (need extra header space). */
   isMerge: boolean;
+  /** Layout direction for arrange frames: 'single-row' (horizontal) or 'single-column' (vertical, default). */
+  targetLayout?: RelationTargetLayout;
 };
 
 /** Identify frame blocks from edges and build parent-child hierarchy.
@@ -1024,8 +1026,9 @@ type FrameBlock = {
 function buildFrameBlocks(params: {
   edges: DemoEdge[];
   visibleCardIds: Set<string>;
+  msgMap: Map<string, DemoMessage>;
 }): FrameBlock[] {
-  const { edges, visibleCardIds } = params;
+  const { edges, visibleCardIds, msgMap } = params;
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   for (const e of edges) {
     const arr = edgesByRelMsg.get(e.relationMessageId) ?? [];
@@ -1044,7 +1047,11 @@ function buildFrameBlocks(params: {
       if (visibleCardIds.has(edge.to.messageId)) cardIds.add(edge.to.messageId);
     }
     if (cardIds.size > 0) {
-      blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge' });
+      // Extract targetLayout from the arrange relation message's payload
+      const relMsg = msgMap.get(relMsgId);
+      const isArrange = getRelKind(relEdges[0].relationType) === 'arrange-frame';
+      const targetLayout = isArrange ? (relMsg?.relationPayload?.targetLayout) : undefined;
+      blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge', targetLayout });
     }
   }
   // Build parent-child: a block B is a child of block A if A has an edge
@@ -1087,8 +1094,9 @@ function buildFrameBlocks(params: {
   for (let i = 0; i < sortedBySize.length; i++) {
     const small = sortedBySize[i];
     const smallKind = getRelKind(edgesByRelMsg.get(small.relMsgId)?.[0]?.relationType ?? '');
-    // arrange-frame and replace-overlay can be nested inside frame-group or arrange-frame
-    if (smallKind !== 'arrange-frame' && smallKind !== 'replace-overlay') continue;
+    // arrange-frame, replace-overlay, and frame-group can be nested inside
+    // frame-group or arrange-frame (handles merge-inside-merge, etc.)
+    if (smallKind !== 'arrange-frame' && smallKind !== 'replace-overlay' && smallKind !== 'frame-group') continue;
     for (let j = sortedBySize.length - 1; j > i; j--) {
       const large = sortedBySize[j];
       const largeKind = getRelKind(edgesByRelMsg.get(large.relMsgId)?.[0]?.relationType ?? '');
@@ -1153,6 +1161,7 @@ function computeNoOverlapLayout(params: {
   const allMsgMap = new Map(params.allMessages.map(m => [m.id, m]));
 
   const layout: Record<string, LayoutBox> = {};
+  const frameRectMap = new Map<string, Rect>();
   let maxBottom = GRID_TOP;
 
   function cardHeight(id: string) {
@@ -1174,10 +1183,11 @@ function computeNoOverlapLayout(params: {
   }
 
   // --- Recursive frame layout ---
-  // All items (cards + child frames) treated uniformly: assigned to consecutive
-  // local columns. Returns { bottom, colSpan } where colSpan is the number of
-  // columns this frame occupies (for parent to skip).
-  function layoutFrameBlock(fb: FrameBlock, startY: number, xShift: number, baseCol: number): { bottom: number; colSpan: number } {
+  // All items (cards + child frames) treated uniformly.
+  // Returns { bottom, colSpan, totalWidth, rect } where:
+  //   rect = union(child frame rects + direct card boxes) + FRAME_PAD (+ merge header)
+  interface FrameLayoutResult { bottom: number; colSpan: number; totalWidth: number; rect: Rect; }
+  function layoutFrameBlock(fb: FrameBlock, startY: number, xShift: number, baseCol: number): FrameLayoutResult {
     type FrameItem = { kind: 'card'; msg: DemoMessage } | { kind: 'childFrame'; child: FrameBlock };
     const items: FrameItem[] = [];
     for (const cid of fb.directCardIds) {
@@ -1200,8 +1210,31 @@ function computeNoOverlapLayout(params: {
     let frameBottom = startY;
     let yCursor = startY;
     // Merge frames: preserve each card's original column and compact vertically.
-    // Per-column y-cursors track independent vertical placement per column.
     const colYCursor = new Map<number, number>();
+
+    // Horizontal layout (single-row): all items on the same y, incrementing x.
+    const isHorizontal = !fb.isMerge && fb.targetLayout === 'single-row';
+    let xCursor = colX(baseCol) + xShift;
+    let rowMaxHeight = 0;
+
+    // Track bounding rect of all content items (cards + child frames).
+    let contentLeft = Infinity, contentTop = Infinity, contentRight = -Infinity, contentBottom = -Infinity;
+    /** Add a card box to the content union. */
+    function unionCard(mid: string) {
+      const box = layout[mid];
+      if (!box) return;
+      contentLeft   = Math.min(contentLeft,   box.x);
+      contentTop    = Math.min(contentTop,    box.y);
+      contentRight  = Math.max(contentRight,  box.x + box.width);
+      contentBottom = Math.max(contentBottom, box.y + box.height);
+    }
+    /** Add a child frame rect to the content union. */
+    function unionChildRect(r: Rect) {
+      contentLeft   = Math.min(contentLeft,   r.x);
+      contentTop    = Math.min(contentTop,    r.y);
+      contentRight  = Math.max(contentRight,  r.x + r.width);
+      contentBottom = Math.max(contentBottom, r.y + r.height);
+    }
 
     for (const item of items) {
       if (item.kind === 'card') {
@@ -1212,17 +1245,21 @@ function computeNoOverlapLayout(params: {
           const curY = colYCursor.get(col) ?? startY;
           layout[m.id] = { x: colX(col) + xShift, y: curY, width: CARD_W, height: h };
           colYCursor.set(col, curY + h + ROW_GAP);
+        } else if (isHorizontal) {
+          layout[m.id] = { x: xCursor, y: yCursor, width: CARD_W, height: h };
+          xCursor += CARD_W + COL_GAP;
+          rowMaxHeight = Math.max(rowMaxHeight, h);
         } else {
           layout[m.id] = { x: colX(baseCol) + xShift, y: yCursor, width: CARD_W, height: h };
           yCursor += h + ROW_GAP;
         }
+        unionCard(m.id);
         maxBottom = Math.max(maxBottom, layout[m.id].y + h);
         frameBottom = Math.max(frameBottom, layout[m.id].y + h);
       } else {
         const child = item.child;
         const childXShift = xShift + FRAME_PAD;
         if (fb.isMerge) {
-          // Place child frame in the column of its earliest card.
           let childBaseCol = baseCol;
           let minCol = Infinity;
           for (const cid of child.cardIds) {
@@ -1233,41 +1270,99 @@ function computeNoOverlapLayout(params: {
           const childStartY = colYCursor.get(childBaseCol) ?? startY;
           const result = layoutFrameBlock(child, childStartY, childXShift, childBaseCol);
           colYCursor.set(childBaseCol, result.bottom + ROW_GAP);
+          frameBottom = Math.max(frameBottom, result.bottom + FRAME_PAD);
+          unionChildRect(result.rect);
+        } else if (isHorizontal) {
+          const result = layoutFrameBlock(child, yCursor, 0, baseCol);
+          const childTotalWidth = result.totalWidth;
+          const childOffsetX = xCursor + FRAME_PAD - colX(baseCol);
+          for (const cid of child.cardIds) {
+            const box = layout[cid];
+            if (box) layout[cid] = { ...box, x: box.x + childOffsetX };
+          }
+          // Shift the child's own frame rect and all nested descendant frame rects
+          const shiftedChildRect: Rect = { ...result.rect, x: result.rect.x + childOffsetX };
+          frameRectMap.set(child.relMsgId, shiftedChildRect);
+          const collectDescX = (block: FrameBlock) => {
+            for (const cid of block.childRelMsgIds) {
+              const nestedRect = frameRectMap.get(cid);
+              if (nestedRect) frameRectMap.set(cid, { ...nestedRect, x: nestedRect.x + childOffsetX });
+              const nestedBlock = frameById.get(cid);
+              if (nestedBlock) collectDescX(nestedBlock);
+            }
+          };
+          collectDescX(child);
+          unionChildRect(shiftedChildRect);
+          xCursor += childTotalWidth + COL_GAP;
+          rowMaxHeight = Math.max(rowMaxHeight, result.bottom - yCursor);
           frameBottom = Math.max(frameBottom, result.bottom);
         } else {
           const result = layoutFrameBlock(child, yCursor, childXShift, baseCol);
           frameBottom = Math.max(frameBottom, result.bottom);
           yCursor = result.bottom + ROW_GAP;
+          unionChildRect(result.rect);
         }
       }
+    }
+
+    // Build frame rect from the content union + FRAME_PAD (+ merge header pad)
+    let frameRect: Rect;
+    if (isHorizontal) {
+      frameBottom = yCursor + rowMaxHeight;
+      const actualContentWidth = contentRight - contentLeft;
+      const totalWidth = actualContentWidth + FRAME_PAD * 2;
+      frameRect = {
+        x: contentLeft - FRAME_PAD,
+        y: contentTop - FRAME_PAD,
+        width: totalWidth,
+        height: contentBottom - contentTop + FRAME_PAD * 2,
+      };
+      frameRectMap.set(fb.relMsgId, frameRect);
+      return { bottom: frameBottom, colSpan: 1, totalWidth, rect: frameRect };
     }
 
     const colSpan = fb.isMerge
       ? Math.max(1, Math.max(...colYCursor.keys(), baseCol) - baseCol + 1)
       : 1;
-    return { bottom: frameBottom, colSpan };
+    // Frame width from actual content bounds, not a hardcoded CARD_W.
+    // Vertical frames may contain wide horizontal children.
+    const actualContentWidth = contentRight - contentLeft;
+    const totalWidth = fb.isMerge
+      ? (colX(baseCol + colSpan - 1) + CARD_W) - colX(baseCol) + FRAME_PAD * 2
+      : Math.max(actualContentWidth + FRAME_PAD * 2, CARD_W + FRAME_PAD * 2);
+    frameRect = {
+      x: contentLeft - FRAME_PAD,
+      y: contentTop - FRAME_PAD,
+      width: Math.max(actualContentWidth + FRAME_PAD * 2, CARD_W + FRAME_PAD * 2),
+      height: contentBottom - contentTop + FRAME_PAD * 2,
+    };
+    // Merge frames: shift rect up to encompass the card-style header
+    if (fb.isMerge) {
+      const mergeHeaderPad = MERGE_CARD_H + FRAME_PAD;
+      frameRect.y -= mergeHeaderPad;
+      frameRect.height += mergeHeaderPad;
+    }
+    // Store in frameRectMap so visual rendering uses the exact rect (incl. child FRAME_PAD)
+    frameRectMap.set(fb.relMsgId, frameRect);
+    return { bottom: frameBottom, colSpan, totalWidth, rect: frameRect };
   }
 
-  // --- Top-level layout: simple chronological placement with rectangle collision ---
-  // Each item (card or root frame) finds the first Y where it does not overlap
-  // any previously placed rectangle. No column cursors, no complex state.
 
-  const childFrameIds = new Set<string>();
-  for (const fb of frameBlocks) fb.childRelMsgIds.forEach(id => childFrameIds.add(id));
-  const rootFrames = frameBlocks.filter(fb => !childFrameIds.has(fb.relMsgId));
-  const allFrameCardIds = new Set<string>();
-  for (const fb of frameBlocks) fb.cardIds.forEach(id => allFrameCardIds.add(id));
-  const standaloneCards = normals.filter(m => !allFrameCardIds.has(m.id));
+  // --- Top-level layout ---
+  // Single pass: estimate-based findY for placement, actual frameRect for placedRects.
 
-  type LayoutItem = 
-    | { kind: 'card'; msg: DemoMessage; col: number }
-    | { kind: 'frame'; block: FrameBlock };
+  const childFrameIds2 = new Set<string>();
+  for (const fb of frameBlocks) fb.childRelMsgIds.forEach(id => childFrameIds2.add(id));
+  const rootFrames2 = frameBlocks.filter(fb => !childFrameIds2.has(fb.relMsgId));
+  const allFrameCardIds2 = new Set<string>();
+  for (const fb of frameBlocks) fb.cardIds.forEach(id => allFrameCardIds2.add(id));
+  const standaloneCards2 = normals.filter(m => !allFrameCardIds2.has(m.id));
 
-  const items: LayoutItem[] = [];
-  for (const m of standaloneCards) items.push({ kind: 'card', msg: m, col: colOf[m.id] ?? 0 });
-  for (const fb of rootFrames) items.push({ kind: 'frame', block: fb });
-
-  items.sort((a, b) => {
+  type LayoutItem = { kind: 'card'; msg: DemoMessage; col: number } | { kind: 'frame'; block: FrameBlock };
+  const items2: LayoutItem[] = [];
+  for (const m of standaloneCards2) items2.push({ kind: 'card', msg: m, col: colOf[m.id] ?? 0 });
+  for (const fb of rootFrames2) items2.push({ kind: 'frame', block: fb });
+  items2.sort((a, b) => {
     const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
       : Math.min(...[...a.block.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
     const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
@@ -1275,25 +1370,25 @@ function computeNoOverlapLayout(params: {
     return ta - tb;
   });
 
-  const placedRects: Rect[] = [];
+  const placedRects2: Rect[] = [];
 
-  function findY(x: number, w: number): number {
+  function findY2(x: number, w: number): number {
     let y = GRID_TOP;
-    for (const r of placedRects) {
+    for (const r of placedRects2) {
       if (x + w <= r.x || r.x + r.width <= x) continue;
       y = Math.max(y, r.y + r.height + ROW_GAP);
     }
     return y;
   }
 
-  for (const item of items) {
+  for (const item of items2) {
     if (item.kind === 'card') {
       const m = item.msg;
       const h = cardHeight(m.id);
       const x = colX(item.col);
-      const y = findY(x, CARD_W);
+      const y = findY2(x, CARD_W);
       layout[m.id] = { x, y, width: CARD_W, height: h };
-      placedRects.push({ x, y, width: CARD_W, height: h });
+      placedRects2.push({ x, y, width: CARD_W, height: h });
       maxBottom = Math.max(maxBottom, y + h);
     } else {
       const fb = item.block;
@@ -1301,52 +1396,25 @@ function computeNoOverlapLayout(params: {
       for (const cid of fb.cardIds) {
         const c = colOf[cid];
         if (c === undefined) continue;
-        const cx = colX(c);
-        fMinX = Math.min(fMinX, cx);
-        fMaxX = Math.max(fMaxX, cx + CARD_W);
+        fMinX = Math.min(fMinX, colX(c));
+        fMaxX = Math.max(fMaxX, colX(c) + CARD_W);
       }
+      if (!fb.isMerge && fb.targetLayout === 'single-row' && isFinite(fMinX))
+        fMaxX = fMinX + fb.cardIds.size * (CARD_W + COL_GAP);
       if (!isFinite(fMinX)) { fMinX = GRID_LEFT; fMaxX = GRID_LEFT + CARD_W; }
 
-      // All frames placed uniformly: find first Y where the frame's bounding box (cards + padding)
-      // does not overlap any previously placed item.
-      const frameTop = findY(fMinX - FRAME_PAD, fMaxX - fMinX + FRAME_PAD * 2);
-      // Merge frames need room for the card-style header inside the frame at the top.
-      // Shift cards down so the header sits above them, inside the frame border.
-      const mergeHeaderPad = MERGE_CARD_H + FRAME_PAD;
-      const adjustedTop = fb.isMerge ? frameTop + mergeHeaderPad : frameTop;
-      const result = layoutFrameBlock(fb, adjustedTop, FRAME_PAD, 0);
-
-      let frMinX = Infinity, frMinY = Infinity, frMaxX = -Infinity, frMaxY = -Infinity;
-      for (const cid of fb.cardIds) {
-        const box = layout[cid];
-        if (!box) continue;
-        frMinX = Math.min(frMinX, box.x);
-        frMinY = Math.min(frMinY, box.y);
-        frMaxX = Math.max(frMaxX, box.x + box.width);
-        frMaxY = Math.max(frMaxY, box.y + box.height);
-      }
-      if (isFinite(frMinX)) {
-        if (fb.isMerge) {
-          // Merge frames are taller (include card-style header inside the frame).
-          // Cards are already shifted down by mergeHeaderPad; placedRect reflects the full height.
-          placedRects.push({
-            x: frMinX - FRAME_PAD,
-            y: frMinY - FRAME_PAD - mergeHeaderPad,
-            width: frMaxX - frMinX + FRAME_PAD * 2,
-            height: frMaxY - frMinY + FRAME_PAD * 2 + mergeHeaderPad,
-          });
-        } else {
-          placedRects.push({
-            x: frMinX - FRAME_PAD, y: frMinY - FRAME_PAD,
-            width: frMaxX - frMinX + FRAME_PAD * 2,
-            height: frMaxY - frMinY + FRAME_PAD * 2,
-          });
-        }
-      }
-      maxBottom = Math.max(maxBottom, result.bottom);
+      const frameTop2 = findY2(fMinX - FRAME_PAD, fMaxX - fMinX + FRAME_PAD * 2);
+      const mergeHeaderPad2 = MERGE_CARD_H + FRAME_PAD;
+      const adjustedTop2 = fb.isMerge ? frameTop2 + mergeHeaderPad2 : frameTop2;
+      const result2 = layoutFrameBlock(fb, adjustedTop2, FRAME_PAD, 0);
+      const rect2 = { ...result2.rect, y: frameTop2 - FRAME_PAD };
+      if (result2.rect.y < rect2.y)
+        rect2.height += rect2.y - result2.rect.y;
+      placedRects2.push(rect2);
+      frameRectMap.set(fb.relMsgId, rect2);
+      maxBottom = Math.max(maxBottom, rect2.y + rect2.height);
     }
   }
-
   // Any remaining cards (shouldn't happen with correct frame hierarchy)
   for (const m of normals) {
     if (layout[m.id]) continue;
@@ -1358,7 +1426,7 @@ function computeNoOverlapLayout(params: {
     maxBottom = Math.max(maxBottom, y + h);
   }
 
-  return { layout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
+  return { layout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD, frameRects: Object.fromEntries(frameRectMap) };
 }
 
 function quadAt(p0: Point, p1: Point, p2: Point, t: number): Point {
@@ -1648,8 +1716,8 @@ export default function GraphView(props: GraphViewProps) {
     return ids;
   }, [messages, normalIds, relationCardMsgIds]);
   const frameBlocks = useMemo(
-    () => buildFrameBlocks({ edges, visibleCardIds }),
-    [edges, visibleCardIds]
+    () => buildFrameBlocks({ edges, visibleCardIds, msgMap }),
+    [edges, visibleCardIds, msgMap]
   );
   // Compute nesting depth for each frame: root=0, child=parentDepth+1
   const frameDepthMap = useMemo(() => {
@@ -1668,7 +1736,7 @@ export default function GraphView(props: GraphViewProps) {
     return depth;
   }, [frameBlocks]);
 
-  const { layout: baseLayout, canvasHeight: baseCanvasHeight } = useMemo(
+  const { layout: baseLayout, canvasHeight: baseCanvasHeight, frameRects: baseFrameRects } = useMemo(
     () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
     [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
   );
@@ -1689,6 +1757,45 @@ export default function GraphView(props: GraphViewProps) {
     }),
     [baseLayout, normals, colOf, frameAvoidanceReservations, baseCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds]
   );
+  
+  const finalFrameRects = useMemo(() => {
+    const expanded: Record<string, Rect> = { ...baseFrameRects };
+    for (const fb of frameBlocks) {
+      const rect = expanded[fb.relMsgId];
+      if (!rect) continue;
+      let r = { ...rect };
+      for (const cid of fb.cardIds) {
+        const box = layout[cid];
+        if (box) {
+          const boxRight = box.x + box.width;
+          const boxBottom = box.y + box.height;
+          if (boxRight > r.x + r.width) r.width = boxRight - r.x;
+          if (boxBottom > r.y + r.height) r.height = boxBottom - r.y;
+        }
+        const childRect = baseFrameRects[cid];
+        if (childRect) {
+          const crRight = childRect.x + childRect.width;
+          const crBottom = childRect.y + childRect.height;
+          if (crRight > r.x + r.width) r.width = crRight - r.x;
+          if (crBottom > r.y + r.height) r.height = crBottom - r.y;
+        }
+      }
+      expanded[fb.relMsgId] = r;
+    }
+    return expanded;
+  }, [baseFrameRects, layout, frameBlocks]);
+  const actualCanvasWidth = useMemo(() => {
+    let w = canvasWidth;
+    for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + CANVAS_RIGHT_PAD);
+    for (const r of Object.values(finalFrameRects)) w = Math.max(w, r.x + r.width + CANVAS_RIGHT_PAD);
+    return w;
+  }, [canvasWidth, layout, finalFrameRects]);
+  const actualCanvasHeight = useMemo(() => {
+    let h = canvasHeight;
+    for (const box of Object.values(layout)) h = Math.max(h, box.y + box.height + CANVAS_BOTTOM_PAD);
+    for (const r of Object.values(finalFrameRects)) h = Math.max(h, r.y + r.height + CANVAS_BOTTOM_PAD);
+    return h;
+  }, [canvasHeight, layout, finalFrameRects]);
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
   // Used to embed correction badge in the target relation's hit area.
@@ -1959,7 +2066,9 @@ export default function GraphView(props: GraphViewProps) {
         }
         if (!anyTarget && !sourceBox) continue;
         if (minX === Infinity) continue;
-        const rect = {
+        // Prefer the frame rect computed by layoutFrameBlock (union of child rects + cards + FRAME_PAD).
+        // Fall back to per-edge union for frames not yet covered by the layout pipeline.
+        const rect = finalFrameRects[relMsgId] ?? {
           x: minX - FRAME_PAD, y: minY - FRAME_PAD,
           width: maxX - minX + FRAME_PAD * 2, height: maxY - minY + FRAME_PAD * 2,
         };
@@ -1972,17 +2081,19 @@ export default function GraphView(props: GraphViewProps) {
     computeFramesForRelType(t => !isArrangeFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
 
     // For MERGE group frames: extend upward to include the card-style header inside the frame.
-    // Cards were shifted down by mergeHeaderPad in layoutFrameBlock, so the header sits
-    // in the gap above the cards. Keep computed x (natural frame bounds, no GRID_LEFT forcing).
+    // Skip when the rect already comes from baseFrameRects (header already applied).
     const mergeHeaderTopPad = MERGE_CARD_H + FRAME_PAD;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
+        const fromBaseRects = !!finalFrameRects[gf.relMsgId];
         let rightEdge = gf.rect.x + gf.rect.width;
+        let bottomEdge = gf.rect.y + gf.rect.height;
         // Extend past nested arrange frames geometrically contained in this merge
         for (const af of newArrangeFrames) {
           if (af.rect.x >= gf.rect.x && af.rect.y >= gf.rect.y &&
               af.rect.y + af.rect.height <= gf.rect.y + gf.rect.height) {
             rightEdge = Math.max(rightEdge, af.rect.x + af.rect.width + FRAME_PAD * 2);
+            bottomEdge = Math.max(bottomEdge, af.rect.y + af.rect.height + FRAME_PAD);
           }
         }
         // Also extend past nested group frames (e.g. classify / summary) inside this merge
@@ -1991,10 +2102,17 @@ export default function GraphView(props: GraphViewProps) {
           if (ogf.rect.x >= gf.rect.x && ogf.rect.y >= gf.rect.y &&
               ogf.rect.y + ogf.rect.height <= gf.rect.y + gf.rect.height) {
             rightEdge = Math.max(rightEdge, ogf.rect.x + ogf.rect.width + FRAME_PAD * 2);
+            bottomEdge = Math.max(bottomEdge, ogf.rect.y + ogf.rect.height + FRAME_PAD);
           }
         }
-        // Extend upward for header, extend rightward for nested frames.
-        gf.rect = { ...gf.rect, width: rightEdge - gf.rect.x, y: gf.rect.y - mergeHeaderTopPad, height: gf.rect.height + mergeHeaderTopPad };
+        const expandedHeight = Math.max(gf.rect.height, bottomEdge - gf.rect.y);
+        if (fromBaseRects) {
+          // baseFrameRects already includes merge header; only apply right/bottom extensions
+          gf.rect = { ...gf.rect, width: rightEdge - gf.rect.x, height: expandedHeight };
+        } else {
+          // Fallback: computed via per-edge union, need to add header pad
+          gf.rect = { ...gf.rect, width: rightEdge - gf.rect.x, y: gf.rect.y - mergeHeaderTopPad, height: expandedHeight + mergeHeaderTopPad };
+        }
       }
     }
 
@@ -2472,7 +2590,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, canvasWidth, canvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds]);
+  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, actualCanvasWidth, actualCanvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -2496,7 +2614,7 @@ export default function GraphView(props: GraphViewProps) {
       }
       return prev;
     });
-  }, [positionedEdges, canvasWidth, canvasHeight]);
+  }, [positionedEdges, actualCanvasWidth, actualCanvasHeight]);
 
   function isEdgeLabelFragSel(relId:string,edgeId:string) {
     return draftUnits.some(x=>unitEquals(x,{messageId:relId,selection:{kind:"edge",edgeId}}));
@@ -2520,9 +2638,9 @@ export default function GraphView(props: GraphViewProps) {
 
 
   return (
-    <div ref={canvasRef} style={{position:"relative",width:canvasWidth,height:canvasHeight,zIndex:0}}
+    <div ref={canvasRef} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
-      <div style={{position:"absolute",left:0,top:0,width:canvasWidth,height:canvasHeight,zIndex:1}}>
+      <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
           if (hideMessageIds?.has(msg.id)) return null;
@@ -2660,7 +2778,7 @@ export default function GraphView(props: GraphViewProps) {
           Wide arrange frames (spanning multiple columns) no longer visually encompass
           unrelated cards that happen to share the same horizontal range. */}
       {(arrangeFrames.length>0||groupFrames.length>0)&&(
-        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
+        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
           {/* arrange frames — stroke and fill reflect selection state; hidden when blank-corrected */}
           {arrangeFrames.map(sf=>{
             if (sf.isBlankCorrected) return null;
@@ -2693,7 +2811,7 @@ export default function GraphView(props: GraphViewProps) {
       )}
       {/* SVG layer: edge paths (above cards, zIndex:6) */}
       {positionedEdges.length>0&&(
-        <svg width={canvasWidth} height={canvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
+        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
           {positionedEdges.map(pe=>{
             const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
@@ -3381,3 +3499,13 @@ export default function GraphView(props: GraphViewProps) {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+

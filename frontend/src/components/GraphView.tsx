@@ -1043,11 +1043,37 @@ function buildFrameBlocks(params: {
     const cardIds = new Set<string>();
     const sourceId = relEdges[0].from.messageId;
     if (!sourceId.startsWith('anon:') && visibleCardIds.has(sourceId)) cardIds.add(sourceId);
+    // Collect card IDs, recursively expanding through relation-message targets.
+    // When a frame targets another frame (e.g. arrange→arrange), the target
+    // frame's relMsgId won't be in visibleCardIds (it's not a text card).
+    // We need to recurse into the target frame's edges to find the actual
+    // text-message cards, and also include the target frame's relMsgId so the
+    // subset detection later can nest it as a child frame.
+    const collectNestedCardIds = (targetMsgId: string, visited: Set<string>) => {
+      if (visited.has(targetMsgId)) return;
+      visited.add(targetMsgId);
+      if (visibleCardIds.has(targetMsgId)) {
+        cardIds.add(targetMsgId);
+        return;
+      }
+      // Check if target is itself a frame-type relation message
+      const nestedEdges = edgesByRelMsg.get(targetMsgId);
+      if (nestedEdges && nestedEdges.length > 0) {
+        const nk = getRelKind(nestedEdges[0].relationType);
+        if (nk === 'arrange-frame' || nk === 'frame-group' || nk === 'replace-overlay') {
+          // Include the nested frame's relMsgId so subset detection can nest it
+          cardIds.add(targetMsgId);
+          // Recurse into its edges to find text-message cards
+          for (const ne of nestedEdges) {
+            collectNestedCardIds(ne.to.messageId, visited);
+          }
+        }
+      }
+    };
     for (const edge of relEdges) {
-      if (visibleCardIds.has(edge.to.messageId)) cardIds.add(edge.to.messageId);
+      collectNestedCardIds(edge.to.messageId, new Set());
     }
     if (cardIds.size > 0) {
-      // Extract targetLayout from the arrange relation message's payload
       const relMsg = msgMap.get(relMsgId);
       const isArrange = getRelKind(relEdges[0].relationType) === 'arrange-frame';
       const targetLayout = isArrange ? (relMsg?.relationPayload?.targetLayout) : undefined;
@@ -1088,6 +1114,13 @@ function buildFrameBlocks(params: {
   // the arrange relation message that groups those same text messages.
   // Without this, both frames become root frames and overwrite each other's
   // card positions, causing inconsistent layout.
+  //
+  // We compare against the ORIGINAL edge-derived cardIds (before transitive
+  // expansion added relMsgIds), because the expansion may have already
+  // modified large.cardIds.  The subset relationship is about text-message
+  // containment; two arrange frames that each target [A,B] and [A,B,C,D]
+  // should nest regardless of which relMsgIds were added during expansion.
+  //
   // Sort blocks by cardIds size ascending so smaller (more specific) frames
   // are processed first.
   const sortedBySize = [...blocks].sort((a, b) => a.cardIds.size - b.cardIds.size);
@@ -1102,7 +1135,9 @@ function buildFrameBlocks(params: {
       const largeKind = getRelKind(edgesByRelMsg.get(large.relMsgId)?.[0]?.relationType ?? '');
       // frame-group and arrange-frame can contain other frames
       if (largeKind !== 'frame-group' && largeKind !== 'arrange-frame') continue;
-      // Check subset: all of small's cardIds are in large's cardIds
+      // Check subset: all of small's cardIds (text + relMsgIds) are in large's cardIds.
+      // Use the expanded cardIds because large.cardIds was augmented during
+      // transitive expansion, and small.cardIds may include nested relMsgIds.
       let isSubset = small.cardIds.size > 0;
       for (const cid of small.cardIds) {
         if (!large.cardIds.has(cid)) { isSubset = false; break; }
@@ -1347,6 +1382,48 @@ function computeNoOverlapLayout(params: {
     return { bottom: frameBottom, colSpan, totalWidth, rect: frameRect };
   }
 
+  // --- Second-pass nesting check ---
+  // Ensure all subset relationships between frames are captured, even when
+  // the primary detection in buildFrameBlocks missed them.  This is critical
+  // for arrange-inside-arrange (horizontal) and merge-containing-arrange layouts.
+  // Without this, nested frames are placed as independent root frames, causing
+  // vertical stacking when horizontal alignment is expected.
+  for (const fb of frameBlocks) {
+    for (const other of frameBlocks) {
+      if (fb.relMsgId === other.relMsgId) continue;
+      if (fb.childRelMsgIds.includes(other.relMsgId)) continue;
+      if (other.childRelMsgIds.includes(fb.relMsgId)) continue;
+      // Check if other's text-only cards are fully contained in fb's cardIds.
+      // We filter out relMsgIds from the comparison because transitive expansion
+      // in buildFrameBlocks may have added them asymmetrically.
+      const allBlockIds = new Set(frameBlocks.map(b => b.relMsgId));
+      const otherTextOnly = [...other.cardIds].filter(id => !allBlockIds.has(id));
+      if (otherTextOnly.length === 0) continue;
+      const allInFb = otherTextOnly.every(id => fb.cardIds.has(id));
+      if (allInFb && fb.cardIds.size > other.cardIds.size) {
+        fb.childRelMsgIds.push(other.relMsgId);
+        // Also add to cardIds so directCardIds recomputation below works
+        if (!fb.cardIds.has(other.relMsgId)) fb.cardIds.add(other.relMsgId);
+      }
+    }
+  }
+  // Recompute directCardIds for any blocks that gained children above
+  for (const fb of frameBlocks) {
+    if (fb.childRelMsgIds.length === 0) continue;
+    const childCards = new Set<string>();
+    const collectChildCards = (b: FrameBlock) => {
+      for (const cid of b.childRelMsgIds) {
+        const child = frameBlocks.find(x => x.relMsgId === cid);
+        if (child) { child.cardIds.forEach(id => childCards.add(id)); collectChildCards(child); }
+      }
+    };
+    collectChildCards(fb);
+    fb.directCardIds = new Set([...fb.cardIds].filter(id => {
+      if (childCards.has(id)) return false;
+      if (fb.childRelMsgIds.includes(id)) return false;
+      return true;
+    }));
+  }
 
   // --- Top-level layout ---
   // Single pass: estimate-based findY for placement, actual frameRect for placedRects.
@@ -1421,7 +1498,7 @@ function computeNoOverlapLayout(params: {
     const c = colOf[m.id] ?? 0;
     const h = cardHeight(m.id);
     const x = colX(c);
-    const y = findY(x, CARD_W);
+    const y = findY2(x, CARD_W);
     layout[m.id] = { x, y, width: CARD_W, height: h };
     maxBottom = Math.max(maxBottom, y + h);
   }

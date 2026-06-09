@@ -2277,54 +2277,6 @@ export default function TopicDetailPage() {
       if (!fromId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, fromId);
       if (!toId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, toId);
     }
-    // Frame-type relations (groupsTargets: ARRANGE, MERGE, etc.): connect all normal
-    // messages that share the same frame relation message directly to each other, so
-    // they appear at the same hop distance.  Also connect any normal message that is
-    // adjacent to the frame relation to all contained normal messages.
-    // Fix: when a text message references a merge frame, hop=1 should show the entire
-    // merged group, not just the relation message.
-    {
-      const edgesByRel = new Map<string, DemoEdge[]>();
-      for (const e of edges) {
-        const arr = edgesByRel.get(e.relationMessageId) ?? [];
-        arr.push(e);
-        edgesByRel.set(e.relationMessageId, arr);
-      }
-      for (const [relMsgId, relEdges] of edgesByRel) {
-        const relMsg = msgMap.get(relMsgId);
-        if (!relMsg || relMsg.kind !== 'relation' || !relMsg.relationType) continue;
-        const spec = getPresentationSpec(relMsg.relationType);
-        if (!spec.groupsTargets) continue;
-        // Collect all normal message IDs in this frame
-        const normalInFrame = new Set<string>();
-        for (const re of relEdges) {
-          if (msgMap.get(re.from.messageId)?.kind === 'normal') normalInFrame.add(re.from.messageId);
-          if (msgMap.get(re.to.messageId)?.kind === 'normal') normalInFrame.add(re.to.messageId);
-        }
-        if (normalInFrame.size <= 1) continue;
-        // Connect all normal messages in the frame to each other
-        const normalArr = Array.from(normalInFrame);
-        for (let i = 0; i < normalArr.length; i++) {
-          for (let j = i + 1; j < normalArr.length; j++) {
-            addEdgeAdj(normalArr[i], normalArr[j]);
-          }
-        }
-        // Also connect any normal message that is already adjacent to the frame
-        // relation (via adj) to all normal messages in the frame — this is the key
-        // fix: a text message referencing the frame gets direct adjacency to all
-        // contained messages, so at hop=1 the entire merged group is visible.
-        const frameNeighbors = adj.get(relMsgId);
-        if (frameNeighbors) {
-          for (const neighbor of frameNeighbors) {
-            if (msgMap.get(neighbor)?.kind === 'normal') {
-              for (const n of normalInFrame) {
-                addEdgeAdj(neighbor, n);
-              }
-            }
-          }
-        }
-      }
-    }
     // When a relation message is the focus, resolve it to its connected normal (text)
     // messages and use those as BFS roots.  This preserves the original hop semantics:
     //   1 hop = one relation message connecting two text messages.
@@ -2362,27 +2314,123 @@ export default function TopicDetailPage() {
         // with anon source).  Keep the relation message itself as BFS root so
         // focus mode still shows something.
         if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);
+        // Also include the relation message itself as a BFS root so that
+        // external messages connected directly to the relation (not via its
+        // resolved normal messages) are reachable at hop=1.
+        effectiveStartIds.add(id);
       } else {
         effectiveStartIds.add(id);
       }
     }
     const dist = new Map<string, number>(); const q: string[] = [];
     for (const id of Array.from(effectiveStartIds)) { if (!dist.has(id)) { dist.set(id, 0); q.push(id); } }
+    // Pre-compute frame membership: for each frame-type relation message, the set of
+    // normal message IDs that belong to that frame (endpoints of edges whose
+    // relationMessageId is the frame itself).  Used during BFS boundary expansion
+    // to avoid pulling in external messages that merely reference the frame.
+    const frameMembers = new Map<string, Set<string>>();
+    for (const e of edges) {
+      const relMsg = msgMap.get(e.relationMessageId);
+      if (!relMsg || relMsg.kind !== 'relation' || !relMsg.relationType) continue;
+      const spec = getPresentationSpec(relMsg.relationType);
+      if (!spec.groupsTargets) continue;
+      let members = frameMembers.get(e.relationMessageId);
+      if (!members) { members = new Set<string>(); frameMembers.set(e.relationMessageId, members); }
+      if (msgMap.get(e.from.messageId)?.kind === 'normal') members.add(e.from.messageId);
+      if (msgMap.get(e.to.messageId)?.kind === 'normal') members.add(e.to.messageId);
+    }
+    // Reverse index: for each normal message, which frame IDs contain it.
+    const msgFrameMap = new Map<string, Set<string>>();
+    for (const [frameId, members] of frameMembers) {
+      for (const m of members) {
+        let frames = msgFrameMap.get(m);
+        if (!frames) { frames = new Set<string>(); msgFrameMap.set(m, frames); }
+        frames.add(frameId);
+      }
+    }
     while (q.length > 0) {
       const cur = q.shift()!; const d = dist.get(cur)!;
-      if (d >= focusHop) continue;
+      if (d >= focusHop) {
+        // Frame-type relations (ARRANGE, MERGE, etc.) at the boundary: expand to
+        // contained normal messages at the same distance so the entire frame group
+        // appears at hop=1 when a contained message or an external reference is
+        // the focus.  Only include messages that are actual members of this frame
+        // (endpoints of edges with relationMessageId === cur), not external messages
+        // that merely reference the frame via other relations.
+        const curMsg = msgMap.get(cur);
+        if (d === focusHop && curMsg?.kind === 'relation' && curMsg.relationType) {
+          const spec = getPresentationSpec(curMsg.relationType);
+          if (spec.groupsTargets) {
+            const members = frameMembers.get(cur);
+            if (members) {
+              for (const m of members) {
+                if (!dist.has(m)) dist.set(m, d);
+              }
+            }
+          }
+        }
+        continue;
+      }
       const neighbors = adj.get(cur); if (!neighbors) continue;
-      for (const nb of neighbors) { if (!dist.has(nb)) { dist.set(nb, d + 1); q.push(nb); } }
+      const curMsg = msgMap.get(cur);
+      // When the frame itself is the focus (relationFocusIds contains a frame that
+      // contains cur), external connections should NOT be deferred — hop=1 should
+      // expand one hop beyond the frame group.
+      const frameIsFocus = curMsg?.kind === 'normal' &&
+        (msgFrameMap.get(cur) ? Array.from(msgFrameMap.get(cur)!).some(f => relationFocusIds.has(f)) : false);
+      for (const nb of neighbors) {
+        if (dist.has(nb)) continue;
+        // When the current node is a normal message inside a frame at d=0,
+        // defer direct edges to external normal messages to d+2 so they
+        // only appear at hop=2.  The frame relation and same-frame messages
+        // get d+1 normally (they appear at hop=1 as part of the frame group).
+        // Exception: when the containing frame itself is the focus, external
+        // messages should appear at hop=1 (no deferral).
+        let hopDelta = 1;
+        if (d === 0 && curMsg?.kind === 'normal' && !frameIsFocus) {
+          const curFrames = msgFrameMap.get(cur);
+          if (curFrames && curFrames.size > 0) {
+            const nbMsg = msgMap.get(nb);
+            if (nbMsg?.kind === 'normal') {
+              const nbFrames = msgFrameMap.get(nb);
+              if (!nbFrames || !Array.from(curFrames).some(f => nbFrames.has(f))) {
+                hopDelta = 2;
+              }
+            }
+          }
+        }
+        dist.set(nb, d + hopDelta);
+        q.push(nb);
+      }
     }
     const messagesToShowArr = messages.filter(m => dist.has(m.id));
     const shownIds = new Set(messagesToShowArr.map(m => m.id));
     const relationMessagesToAdd = new Set<string>();
     for (const e of edges) {
-      if (shownIds.has(e.from.messageId) || shownIds.has(e.to.messageId)) relationMessagesToAdd.add(e.relationMessageId);
+      // Auto-add a relation message when:
+      //   - At least one endpoint is strictly within the hop window (dist < focusHop), OR
+      //   - Both endpoints are "visible" (in dist or an anon: placeholder).  This
+      //     ensures relations whose text-message endpoints are all shown (e.g. a
+      //     pure-stance MERGE/ARRANGE frame or AGREE badge whose targets are visible)
+      //     appear even when every endpoint is at the hop boundary.
+      const fromDist = dist.get(e.from.messageId);
+      const toDist = dist.get(e.to.messageId);
+      const fromTriggers = fromDist !== undefined && fromDist < focusHop;
+      const toTriggers = toDist !== undefined && toDist < focusHop;
+      // bothVisible only applies when focusHop > 0 (normal expansion) OR when a
+      // relation message is the focus (relationFocusIds > 0) — in that case all
+      // resolved text messages are intentionally shown, so nested frames whose
+      // endpoints are all visible should also appear at hop=0.
+      const fromOk = fromDist !== undefined || e.from.messageId.startsWith('anon:');
+      const toOk = toDist !== undefined || e.to.messageId.startsWith('anon:');
+      const bothVisible = (focusHop > 0 || relationFocusIds.size > 0) && fromOk && toOk;
+      if (fromTriggers || toTriggers || bothVisible) relationMessagesToAdd.add(e.relationMessageId);
     }
     const relationMsgsAdded = new Set<string>();
     for (const rmId of relationMessagesToAdd) {
-      if (!shownIds.has(rmId)) { const m = messages.find(x => x.id === rmId); if (m) { messagesToShowArr.push(m); relationMsgsAdded.add(rmId); } }
+      if (shownIds.has(rmId)) continue;
+      const m = messages.find(x => x.id === rmId);
+      if (m) { messagesToShowArr.push(m); relationMsgsAdded.add(rmId); }
     }
     // Always ensure the original focus-entry IDs are in messagesToShow.
     // When a startId is a classify relation message, collectNormalMessagesForRelation resolves

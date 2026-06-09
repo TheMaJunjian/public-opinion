@@ -273,3 +273,375 @@ export function computeCorrectedEdgeMap(edges: DemoEdge[]): Map<string, Set<stri
   }
   return result;
 }
+
+/**
+ * Build a map from stance relation message ID → { targetId, type }.
+ * A relation message is a "stance" if its relationType is agree or disagree.
+ * Used by computeUserSuppressedRelIds and computeTransitiveVoteStats to walk
+ * stance chains to their ultimate target.
+ */
+function buildStanceTargetMap(
+  edges: DemoEdge[],
+  msgMap: Map<string, DemoMessage>
+): Map<string, { targetId: string; type: 'agree' | 'disagree' }> {
+  const stanceMap = new Map<string, { targetId: string; type: 'agree' | 'disagree' }>();
+  for (const [id, msg] of msgMap) {
+    if (msg.kind !== 'relation') continue;
+    if (msg.relationType !== 'agree' && msg.relationType !== 'disagree') continue;
+    for (const e of edges) {
+      if (e.relationMessageId === id && e.relationType === msg.relationType) {
+        stanceMap.set(id, { targetId: e.to.messageId, type: msg.relationType as 'agree' | 'disagree' });
+        break;
+      }
+    }
+  }
+  return stanceMap;
+}
+
+/**
+ * Walk up the stance chain to find the ultimate non-stance target and effective type.
+ * Each DISAGREE hop flips the effective stance.
+ * Returns null if chain is too deep or circular.
+ */
+function resolveUltimateStance(
+  startTargetId: string,
+  startType: 'agree' | 'disagree',
+  stanceMap: Map<string, { targetId: string; type: 'agree' | 'disagree' }>
+): { targetId: string; type: 'agree' | 'disagree' } | null {
+  const MAX_DEPTH = 20;
+  const visited = new Set<string>();
+  let currentId = startTargetId;
+  let effectiveType: 'agree' | 'disagree' = startType;
+
+  for (let depth = 0; depth < MAX_DEPTH; depth++) {
+    const next = stanceMap.get(currentId);
+    if (!next) break;
+    if (visited.has(currentId)) return null;
+    visited.add(currentId);
+
+    if (next.type === 'disagree') {
+      effectiveType = effectiveType === 'agree' ? 'disagree' : 'agree';
+    }
+    currentId = next.targetId;
+  }
+  return { targetId: currentId, type: effectiveType };
+}
+
+/**
+ * Compute the set of relation message IDs that are suppressed for the current user.
+ *
+ * Walks the user's entire stance chain transitively: for every AGREE/DISAGREE
+ * the user has sent, the chain is followed to its ultimate target, flipping
+ * the effective stance on each DISAGREE hop.  The latest (by time) effective
+ * stance on each ultimate target determines whether it is suppressed.
+ *
+ * Examples:
+ *   DISAGREE rel-arr                          → suppress rel-arr
+ *   AGREE rel-arr                             → don't suppress
+ *   DISAGREE (AGREE rel-arr)                  → suppress rel-arr (flip once)
+ *   DISAGREE (DISAGREE rel-arr)               → don't suppress (flip twice)
+ *   AGREE (DISAGREE rel-arr)                  → suppress rel-arr (flip once)
+ *   AGREE (AGREE rel-arr)                     → don't suppress
+ */
+export function computeUserSuppressedRelIds(
+  edges: DemoEdge[],
+  messages: DemoMessage[],
+  currentUsername: string | null
+): Set<string> {
+  const empty = new Set<string>();
+  if (!currentUsername) return empty;
+
+  const msgMap = new Map(messages.map(m => [m.id, m]));
+  const stanceMap = buildStanceTargetMap(edges, msgMap);
+
+  // For each ultimate target, track the user's latest effective stance.
+  const latestEffective = new Map<string, { type: 'agree' | 'disagree'; time: number }>();
+
+  for (const e of edges) {
+    if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
+
+    // Determine author.
+    let author: string | undefined;
+    const fromMsg = msgMap.get(e.from.messageId);
+    if (fromMsg) {
+      author = fromMsg.author;
+    } else if (e.from.messageId.startsWith('anon:')) {
+      const relMsg = msgMap.get(e.relationMessageId);
+      author = relMsg?.author;
+    }
+    if (!author || author !== currentUsername) continue;
+
+    // Determine time.
+    let time = 0;
+    if (fromMsg) {
+      time = new Date(fromMsg.createdAt).getTime();
+    } else {
+      const relMsg = msgMap.get(e.relationMessageId);
+      time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
+    }
+
+    // Walk the chain to the ultimate target.
+    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
+    const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
+
+    const prev = latestEffective.get(ultimateTarget);
+    if (!prev || time > prev.time) {
+      latestEffective.set(ultimateTarget, { type: effectiveType, time });
+    }
+  }
+
+  const suppressed = new Set<string>();
+  for (const [relId, stance] of latestEffective) {
+    if (stance.type === 'disagree') suppressed.add(relId);
+  }
+  return suppressed;
+}
+
+/**
+ * Compute the current user's active stance relation message for each ultimate target.
+ *
+ * Walks the user's stance chains transitively (same as computeUserSuppressedRelIds).
+ * Returns a Map from ultimate target ID → the user's own relation message that is
+ * the latest effective stance, along with the effective type.
+ *
+ * This enables bidirectional visual linking in the list view:
+ *   - The target shows "已反对" / "已赞同"
+ *   - The active stance message shows "你的反对生效中" / "你的赞同生效中"
+ */
+export function computeUserActiveStanceRelIds(
+  edges: DemoEdge[],
+  messages: DemoMessage[],
+  currentUsername: string | null
+): Map<string, { relMsgId: string; type: 'agree' | 'disagree' }> {
+  const empty = new Map<string, { relMsgId: string; type: 'agree' | 'disagree' }>();
+  if (!currentUsername) return empty;
+
+  const msgMap = new Map(messages.map(m => [m.id, m]));
+  const stanceMap = buildStanceTargetMap(edges, msgMap);
+
+  // For each ultimate target, track the user's latest effective stance and which
+  // of the user's own stance messages caused it.
+  const latest = new Map<string, { relMsgId: string; type: 'agree' | 'disagree'; time: number }>();
+
+  for (const e of edges) {
+    if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
+
+    let author: string | undefined;
+    const fromMsg = msgMap.get(e.from.messageId);
+    if (fromMsg) {
+      author = fromMsg.author;
+    } else if (e.from.messageId.startsWith('anon:')) {
+      const relMsg = msgMap.get(e.relationMessageId);
+      author = relMsg?.author;
+    }
+    if (!author || author !== currentUsername) continue;
+
+    let time = 0;
+    if (fromMsg) {
+      time = new Date(fromMsg.createdAt).getTime();
+    } else {
+      const relMsg = msgMap.get(e.relationMessageId);
+      time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
+    }
+
+    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
+    const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
+
+    const prev = latest.get(ultimateTarget);
+    if (!prev || time > prev.time) {
+      latest.set(ultimateTarget, { relMsgId: e.relationMessageId, type: effectiveType, time });
+    }
+  }
+
+  return latest;
+}
+
+/**
+ * Compute the set of the current user's stance relation message IDs that are
+ * overridden (no longer the active stance for their target).
+ *
+ * A stance message is "overridden" when the user has sent a later stance that
+ * supersedes it — either directly on the same target or transitively through
+ * the stance chain.  These messages are marked "已失效" in the list view.
+ */
+export function computeUserOverriddenStanceRelIds(
+  edges: DemoEdge[],
+  messages: DemoMessage[],
+  currentUsername: string | null
+): Set<string> {
+  const empty = new Set<string>();
+  if (!currentUsername) return empty;
+
+  const msgMap = new Map(messages.map(m => [m.id, m]));
+  const stanceMap = buildStanceTargetMap(edges, msgMap);
+
+  // Collect ALL of the user's stance relation message IDs.
+  const userStanceRelIds = new Set<string>();
+  // For each, also record the ultimate target and time.
+  const userStanceInfo = new Map<string, { ultimateTarget: string; time: number }>();
+
+  for (const e of edges) {
+    if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
+
+    let author: string | undefined;
+    const fromMsg = msgMap.get(e.from.messageId);
+    if (fromMsg) {
+      author = fromMsg.author;
+    } else if (e.from.messageId.startsWith('anon:')) {
+      const relMsg = msgMap.get(e.relationMessageId);
+      author = relMsg?.author;
+    }
+    if (!author || author !== currentUsername) continue;
+
+    let time = 0;
+    if (fromMsg) {
+      time = new Date(fromMsg.createdAt).getTime();
+    } else {
+      const relMsg = msgMap.get(e.relationMessageId);
+      time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
+    }
+
+    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
+
+    userStanceRelIds.add(e.relationMessageId);
+    const prev = userStanceInfo.get(e.relationMessageId);
+    if (!prev || time > prev.time) {
+      userStanceInfo.set(e.relationMessageId, { ultimateTarget, time });
+    }
+  }
+
+  // For each ultimate target, find the latest stance (the active one).
+  const activePerTarget = new Map<string, string>(); // ultimateTarget → active relMsgId
+  for (const [relMsgId, info] of userStanceInfo) {
+    const prev = activePerTarget.get(info.ultimateTarget);
+    if (!prev) {
+      activePerTarget.set(info.ultimateTarget, relMsgId);
+    } else {
+      const prevTime = userStanceInfo.get(prev)?.time ?? 0;
+      if (info.time > prevTime) {
+        activePerTarget.set(info.ultimateTarget, relMsgId);
+      }
+    }
+  }
+
+  const activeIds = new Set(activePerTarget.values());
+  const overridden = new Set<string>();
+  for (const id of userStanceRelIds) {
+    if (!activeIds.has(id)) overridden.add(id);
+  }
+  return overridden;
+}
+
+/**
+ * Filter edges based on the current user's latest stance on each relation message.
+ *
+ * Delegates to computeUserSuppressedRelIds for the suppression logic,
+ * then filters out all edges whose relationMessageId is suppressed.
+ *
+ * Returns the filtered edge array.  When currentUsername is null (not logged in),
+ * all edges are returned unfiltered.
+ */
+export function computeUserFilteredEdges(
+  edges: DemoEdge[],
+  messages: DemoMessage[],
+  currentUsername: string | null
+): DemoEdge[] {
+  const suppressedRelIds = computeUserSuppressedRelIds(edges, messages, currentUsername);
+  if (suppressedRelIds.size === 0) return edges;
+  return edges.filter(e => !suppressedRelIds.has(e.relationMessageId));
+}
+
+/**
+ * Compute transitive agree/disagree stats for relation-message decorations.
+ *
+ * Like computeTransitiveVoteStats, but returns a Map keyed by ultimate target
+ * relation ID, with both the transitive counts AND the original (direct)
+ * stance relation message IDs for use in detail popups.
+ */
+export function computeTransitiveRelDecStats(
+  edges: DemoEdge[],
+  messages: DemoMessage[]
+): Map<string, { agreeCount: number; disagreeCount: number; agreeRelMsgIds: string[]; disagreeRelMsgIds: string[] }> {
+  const msgMap = new Map(messages.map(m => [m.id, m]));
+  const stanceMap = buildStanceTargetMap(edges, msgMap);
+
+  const result = new Map<string, { agreeCount: number; disagreeCount: number; agreeRelMsgIds: string[]; disagreeRelMsgIds: string[] }>();
+  const ensure = (mid: string) => {
+    let entry = result.get(mid);
+    if (!entry) { entry = { agreeCount: 0, disagreeCount: 0, agreeRelMsgIds: [], disagreeRelMsgIds: [] }; result.set(mid, entry); }
+    return entry;
+  };
+
+  for (const e of edges) {
+    if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
+    if (e.to.selection.kind !== 'whole') continue;
+    const toMsg = msgMap.get(e.to.messageId);
+    if (toMsg?.kind !== 'relation') continue;
+
+    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const targetId = resolved ? resolved.targetId : e.to.messageId;
+    const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
+
+    const entry = ensure(targetId);
+    if (effectiveType === 'agree') {
+      entry.agreeCount++;
+      entry.agreeRelMsgIds.push(e.relationMessageId);
+    } else {
+      entry.disagreeCount++;
+      entry.disagreeRelMsgIds.push(e.relationMessageId);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Compute transitive agree/disagree counts for each message.
+ *
+ * Unlike simple voteStats (which only counts direct stances), this follows
+ * chains of meta-stances and projects them onto the original target.
+ *
+ * Rule: for each agree/disagree edge, walk the target chain upward using
+ * resolveUltimateStance.  Each DISAGREE hop flips the effective stance.
+ * The final effective stance is counted against the ultimate target.
+ *
+ * Examples:
+ *   DISAGREE on rel-arr                       → +1 disagree on rel-arr
+ *   AGREE on DISAGREE on rel-arr              → +1 disagree on rel-arr
+ *   DISAGREE on DISAGREE on rel-arr           → +1 agree on rel-arr
+ *   DISAGREE on AGREE on rel-arr              → +1 disagree on rel-arr
+ *   AGREE on AGREE on rel-arr                 → +1 agree on rel-arr
+ *
+ * Returns: Record<messageId, { agreeCount, disagreeCount, agreeKey, disagreeKey }>
+ */
+export function computeTransitiveVoteStats(
+  edges: DemoEdge[],
+  messages: DemoMessage[]
+): Record<string, { agreeCount: number; disagreeCount: number; agreeKey: string; disagreeKey: string }> {
+  const msgMap = new Map(messages.map(m => [m.id, m]));
+  const stanceMap = buildStanceTargetMap(edges, msgMap);
+
+  const res: Record<string, { agreeCount: number; disagreeCount: number; agreeKey: string; disagreeKey: string }> = {};
+  const ensure = (mid: string) => {
+    if (!res[mid]) res[mid] = { agreeCount: 0, disagreeCount: 0, agreeKey: `dec:agree:${mid}`, disagreeKey: `dec:disagree:${mid}` };
+    return res[mid];
+  };
+
+  for (const e of edges) {
+    if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
+    if (e.to.selection.kind !== 'whole') continue;
+
+    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const targetId = resolved ? resolved.targetId : e.to.messageId;
+    const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
+
+    const entry = ensure(targetId);
+    if (effectiveType === 'agree') entry.agreeCount++;
+    else entry.disagreeCount++;
+  }
+
+  return res;
+}

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
-import { computeCorrectedEdgeMap } from '../utils/modelBridge';
+import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
 import type { PresentationKind, RelationTargetLayout } from '../types';
 
@@ -2052,31 +2052,7 @@ export default function GraphView(props: GraphViewProps) {
       return cnt;
     }
 
-    const decorationsByMsg: Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}> = {};
-    for (const e of edges) {
-      if (e.to.selection.kind==="edge") {
-        const eid=e.to.selection.edgeId||"";
-        if (eid.startsWith("dec:")) {
-          const parts=eid.split(":");
-          if (parts.length>=3) {
-            const mid=parts.slice(2).join(":");
-            if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
-            if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
-            else if (e.relationType==="disagree") decorationsByMsg[mid].disagreeCount++;
-          }
-        }
-      } else if (e.to.selection.kind==="whole") {
-        const mid=e.to.messageId;
-        // Relation message targets are tracked separately in relDecByRelMsgId below,
-        // except relation messages that are rendered as cards.
-        if (msgMap.get(mid)?.kind === "relation" && !relationCardMsgIds.has(mid)) continue;
-        if (e.relationType==="agree"||e.relationType==="disagree") {
-          if (!decorationsByMsg[mid]) decorationsByMsg[mid]={agreeCount:0,disagreeCount:0,agreeKey:`dec:agree:${mid}`,disagreeKey:`dec:disagree:${mid}`};
-          if (e.relationType==="agree") decorationsByMsg[mid].agreeCount++;
-          else decorationsByMsg[mid].disagreeCount++;
-        }
-      }
-    }
+    const decorationsByMsg = computeTransitiveVoteStats(edges, messages);
 
     // Decorations are now placed to the RIGHT of the card, stacked vertically (agree on top, disagree below).
     // Each badge is split into icon area (left DEC_ICON_W px) and body area (rest).
@@ -2261,18 +2237,9 @@ export default function GraphView(props: GraphViewProps) {
     }
 
     // Compute AGREE/DISAGREE decorations targeting relation messages (relDecByRelMsgId)
-    // These are displayed next to the relation's visual element (tag badge, arrange frame, edge label)
-    const relDecByRelMsgId = new Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>();
-    for (const e of edges) {
-      if (e.relationType!=="agree"&&e.relationType!=="disagree") continue;
-      if (e.to.selection.kind!=="whole") continue;
-      const toId=e.to.messageId;
-      if (msgMap.get(toId)?.kind !== "relation") continue;
-      const cur=relDecByRelMsgId.get(toId)??{agreeCount:0,disagreeCount:0,agreeRelMsgIds:[],disagreeRelMsgIds:[]};
-      if (e.relationType==="agree") { cur.agreeCount++; cur.agreeRelMsgIds.push(e.relationMessageId); }
-      else { cur.disagreeCount++; cur.disagreeRelMsgIds.push(e.relationMessageId); }
-      relDecByRelMsgId.set(toId, cur);
-    }
+    // These are displayed next to the relation's visual element (tag badge, arrange frame, edge label).
+    // Uses transitive resolution: disagree-on-disagree projects as agree on the original target.
+    const relDecByRelMsgId = computeTransitiveRelDecStats(edges, messages);
     // Propagate counts and IDs to tag groups, arrange frames, and group frames
     for (const groups of Object.values(newTagDecorationsByMsg)) {
       for (const group of groups) {

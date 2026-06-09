@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType,
@@ -661,29 +661,12 @@ export default function TopicDetailPage() {
     return hiddenTagSourceIds;
   }, [edges, msgMap]);
 
-  const voteStats = useMemo(() => {
-    const res: Record<string, { agreeCount: number; disagreeCount: number; agreeKey: string; disagreeKey: string }> = {};
-    for (const e of edges) {
-      if (e.to.selection.kind === "edge") {
-        const eid = e.to.selection.edgeId || "";
-        if (eid.startsWith("dec:")) {
-          const parts = eid.split(":");
-          if (parts.length >= 3) {
-            const mid = parts.slice(2).join(":");
-            if (!res[mid]) res[mid] = { agreeCount: 0, disagreeCount: 0, agreeKey: `dec:agree:${mid}`, disagreeKey: `dec:disagree:${mid}` };
-            if (e.relationType === "agree") res[mid].agreeCount++;
-            if (e.relationType === "disagree") res[mid].disagreeCount++;
-          }
-        }
-      } else if (e.to.selection.kind === "whole") {
-        const mid = e.to.messageId;
-        if (!res[mid]) res[mid] = { agreeCount: 0, disagreeCount: 0, agreeKey: `dec:agree:${mid}`, disagreeKey: `dec:disagree:${mid}` };
-        if (e.relationType === "agree") res[mid].agreeCount++;
-        if (e.relationType === "disagree") res[mid].disagreeCount++;
-      }
-    }
-    return res;
-  }, [edges]);
+  // Transitive vote stats: agree/disagree counts projected through stance chains
+  // to the ultimate target, so "agree on disagree on rel-arr" counts as disagree on rel-arr.
+  const voteStats = useMemo(
+    () => computeTransitiveVoteStats(edges, messages),
+    [edges, messages]
+  );
   const relationTypeByRelMsgId = useMemo(() => {
     const map = new Map<string, RelationType>();
     for (const relation of relations) {
@@ -2856,7 +2839,26 @@ export default function TopicDetailPage() {
   }
 
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
-  const edgesToRender = viewMode === "list" ? listEdgesToRender : graphEdgesToRender;
+  const rawEdgesToRender = viewMode === "list" ? listEdgesToRender : graphEdgesToRender;
+  // Filter edges based on current user's DISAGREE stances on relation messages.
+  // When the user disagrees with a relation message, all edges produced by that
+  // relation are suppressed from this user's view (per-user branch semantics).
+  const edgesToRender = computeUserFilteredEdges(rawEdgesToRender, messages, user?.username ?? null);
+  // Also compute which relation messages are suppressed, for visual indicators in the list view.
+  const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  // And the active stance messages: which of the user's own agree/disagree messages
+  // are the "current" stance on each target, for bidirectional visual linking.
+  const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  // Precomputed set of relation message IDs that are active stances.
+  const activeStanceRelIds = new Set([...activeStanceMap.values()].map(v => v.relMsgId));
+  // Reverse map: stance relation message ID → { target, type } for quick lookup.
+  const activeStanceByRelMsgId = (() => {
+    const m = new Map<string, { targetRelId: string; type: 'agree' | 'disagree' }>();
+    for (const [targetId, v] of activeStanceMap) m.set(v.relMsgId, { targetRelId: targetId, type: v.type });
+    return m;
+  })();
+  // Overridden stances: the user's previous stance messages that are no longer active.
+  const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, user?.username ?? null);
   const isOwner = user && topic && (topic as any).author?.id === user.id;
 
   return (
@@ -2999,10 +3001,33 @@ export default function TopicDetailPage() {
                         </div>
                       )}
                       {!isTopicMsg && msg.kind === "relation" && (
-                        <div style={{ marginBottom: 4 }}>
+                        <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                           <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#9ca3af" }}>
                             {relType ? String(relType) : "关系"}
                           </span>
+                          {suppressedRelIds.has(msg.id) && (
+                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>
+                              你已反对 · 点赞同恢复
+                            </span>
+                          )}
+                          {activeStanceRelIds.has(msg.id) && (() => {
+                            const info = activeStanceByRelMsgId.get(msg.id);
+                            if (!info) return null;
+                            return info.type === 'disagree' ? (
+                              <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.15)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.3)" }}>
+                                你的反对生效中
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>
+                                你的赞同生效中
+                              </span>
+                            );
+                          })()}
+                          {overriddenStanceRelIds.has(msg.id) && (
+                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#6b7280", border: "1px solid rgba(255,255,255,0.1)" }}>
+                              已失效
+                            </span>
+                          )}
                         </div>
                       )}
                       {isActiveText && msg.kind === "normal" && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}

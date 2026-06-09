@@ -2277,6 +2277,54 @@ export default function TopicDetailPage() {
       if (!fromId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, fromId);
       if (!toId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, toId);
     }
+    // Frame-type relations (groupsTargets: ARRANGE, MERGE, etc.): connect all normal
+    // messages that share the same frame relation message directly to each other, so
+    // they appear at the same hop distance.  Also connect any normal message that is
+    // adjacent to the frame relation to all contained normal messages.
+    // Fix: when a text message references a merge frame, hop=1 should show the entire
+    // merged group, not just the relation message.
+    {
+      const edgesByRel = new Map<string, DemoEdge[]>();
+      for (const e of edges) {
+        const arr = edgesByRel.get(e.relationMessageId) ?? [];
+        arr.push(e);
+        edgesByRel.set(e.relationMessageId, arr);
+      }
+      for (const [relMsgId, relEdges] of edgesByRel) {
+        const relMsg = msgMap.get(relMsgId);
+        if (!relMsg || relMsg.kind !== 'relation' || !relMsg.relationType) continue;
+        const spec = getPresentationSpec(relMsg.relationType);
+        if (!spec.groupsTargets) continue;
+        // Collect all normal message IDs in this frame
+        const normalInFrame = new Set<string>();
+        for (const re of relEdges) {
+          if (msgMap.get(re.from.messageId)?.kind === 'normal') normalInFrame.add(re.from.messageId);
+          if (msgMap.get(re.to.messageId)?.kind === 'normal') normalInFrame.add(re.to.messageId);
+        }
+        if (normalInFrame.size <= 1) continue;
+        // Connect all normal messages in the frame to each other
+        const normalArr = Array.from(normalInFrame);
+        for (let i = 0; i < normalArr.length; i++) {
+          for (let j = i + 1; j < normalArr.length; j++) {
+            addEdgeAdj(normalArr[i], normalArr[j]);
+          }
+        }
+        // Also connect any normal message that is already adjacent to the frame
+        // relation (via adj) to all normal messages in the frame — this is the key
+        // fix: a text message referencing the frame gets direct adjacency to all
+        // contained messages, so at hop=1 the entire merged group is visible.
+        const frameNeighbors = adj.get(relMsgId);
+        if (frameNeighbors) {
+          for (const neighbor of frameNeighbors) {
+            if (msgMap.get(neighbor)?.kind === 'normal') {
+              for (const n of normalInFrame) {
+                addEdgeAdj(neighbor, n);
+              }
+            }
+          }
+        }
+      }
+    }
     // When a relation message is the focus, resolve it to its connected normal (text)
     // messages and use those as BFS roots.  This preserves the original hop semantics:
     //   1 hop = one relation message connecting two text messages.

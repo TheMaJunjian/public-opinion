@@ -55,11 +55,11 @@ const topics: Topic[] = [
 ];
 
 /**
- * t1 tree structure (formed by REPLY/SUPPORT/REBUT/CORRECT):
+ * t1 tree structure (formed by REPLY/AGREE/DISAGREE/CORRECT):
  *   m1 (root: AI取代论)
  *     └─[REPLY]  m2 (AI创造新职业)
- *         ├─[SUPPORT]  m4 (历史比较论支持m2)
- *         └─[REBUT]    m3 (不平等论反驳m2)
+ *         ├─[AGREE]    m4 (历史比较论支持m2)
+ *         └─[DISAGREE] m3 (不平等论反驳m2)
  *             └─[CORRECT] m5 (数据纠正m3)
  *   m6 (root: 政策建议)
  *     └─[REPLY] m7 (追问政策细节)
@@ -145,7 +145,7 @@ const messages: Message[] = [
 /**
  * Relations — using new TargetRef format with discriminated unions.
  *
- * r1–r5: tree-forming relations (REPLY, SUPPORT, REBUT, CORRECT)
+ * r1–r5: tree-forming relations (REPLY, AGREE, DISAGREE, CORRECT)
  * r6–r8: decoration-type relations (ANNOTATION, AGREE, DISAGREE)
  * r9:    RECURSIVE relation — targets relation r1 (relation-as-target fix demo)
  * r10:   ARRANGE (non-tree edge-label)
@@ -160,16 +160,16 @@ const relations: Relation[] = [
     targetRefs: [{ kind: 'message', messageId: 'm1' }],
     createdAt: '2024-02-03T11:30:00Z', createdBy: users[1],
   },
-  // r2: m4 SUPPORT → m2
+  // r2: m4 AGREE → m2
   {
-    id: 'r2', topicId: 't1', relationType: 'SUPPORT',
+    id: 'r2', topicId: 't1', relationType: 'AGREE',
     sourceMessageId: 'm4',
     targetRefs: [{ kind: 'message', messageId: 'm2' }],
     createdAt: '2024-02-05T10:00:00Z', createdBy: users[0],
   },
-  // r3: m3 REBUT → m2
+  // r3: m3 DISAGREE → m2
   {
-    id: 'r3', topicId: 't1', relationType: 'REBUT',
+    id: 'r3', topicId: 't1', relationType: 'DISAGREE',
     sourceMessageId: 'm3',
     targetRefs: [{ kind: 'message', messageId: 'm2' }],
     createdAt: '2024-02-04T13:00:00Z', createdBy: users[2],
@@ -238,6 +238,7 @@ const relations: Relation[] = [
     id: 'r10', topicId: 't1', relationType: 'ARRANGE',
     sourceMessageId: 'm5',
     targetRefs: [{ kind: 'message', messageId: 'm6' }],
+    payload: { targetLayout: 'single-row' },
     createdAt: '2024-02-06T16:00:00Z', createdBy: users[1],
   },
   // r11: charlie REFERENCE → m5
@@ -250,7 +251,7 @@ const relations: Relation[] = [
 
   // t2 relations
   {
-    id: 'r12', topicId: 't2', relationType: 'REBUT',
+    id: 'r12', topicId: 't2', relationType: 'DISAGREE',
     sourceMessageId: 'm9',
     targetRefs: [{ kind: 'message', messageId: 'm8' }],
     createdAt: '2024-02-07T15:00:00Z', createdBy: users[2],
@@ -264,7 +265,7 @@ const relations: Relation[] = [
 
   // t3 relations
   {
-    id: 'r14', topicId: 't3', relationType: 'REBUT',
+    id: 'r14', topicId: 't3', relationType: 'DISAGREE',
     sourceMessageId: 'm12',
     targetRefs: [{ kind: 'message', messageId: 'm11' }],
     createdAt: '2024-01-20T12:00:00Z', createdBy: users[2],

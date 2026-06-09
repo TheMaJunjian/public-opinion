@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
-import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
+import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap } from '../utils/modelBridge';
 import type { PresentationKind, RelationTargetLayout } from '../types';
 
@@ -471,6 +471,9 @@ export function applyMergeCanvasReservations(params: {
   normals: DemoMessage[];
   colOf: Record<string, number>;
   reservations: MergeCanvasReservation[];
+  edgesByRelMsg: Map<string, DemoEdge[]>;
+  msgMap: Map<string, DemoMessage>;
+  relationCardMsgIds: Set<string>;
 }) {
   const nextLayout: Record<string, LayoutBox> = {};
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
@@ -484,16 +487,73 @@ export function applyMergeCanvasReservations(params: {
   }
   const sortIdsByY = (ids: string[]) => ids.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
 
+  // ── Identify cards that belong to inner relation frames ──
+  // Any relation message that is targeted by a merge edge has its member
+  // cards managed by computeNoOverlapLayout (or the relation's own layout).
+  // The merge must not move them individually — their relative positions
+  // are determined by the inner relation, not by the merge compaction.
+  const innerFrameCards = new Map<string, Set<string>>();   // innerFrameRelMsgId → cardIds
+  const innerFrameCardSet = new Set<string>();               // all cards in any inner frame
+
+  for (const [relMsgId] of params.edgesByRelMsg) {
+    if (innerFrameCards.has(relMsgId)) continue;
+    const relMsg = params.msgMap.get(relMsgId);
+    if (!relMsg || relMsg.kind !== 'relation') continue;
+    // Check whether this relation is a direct or indirect target of a merge edge.
+    // We intentionally do NOT filter by presentation kind — custom relation types
+    // (e.g. 'supp') may form frames without being in PRESENTATION_SPECS.
+    const isMergeTarget = Array.from(params.edgesByRelMsg.values()).some(edges =>
+      edges.some(e => e.relationType === 'merge' && e.to.messageId === relMsgId)
+    );
+    if (!isMergeTarget) continue;
+
+    const innerBounds = getRelationBoundsFromLayout({
+      relMsgId,
+      edgesByRelMsg: params.edgesByRelMsg,
+      layout: params.layout,  // use ORIGINAL layout to identify members
+      msgMap: params.msgMap,
+      relationCardMsgIds: params.relationCardMsgIds,
+    });
+    if (!innerBounds || innerBounds.cardIds.size === 0) continue;
+
+    innerFrameCards.set(relMsgId, innerBounds.cardIds);
+    for (const cid of innerBounds.cardIds) {
+      innerFrameCardSet.add(cid);
+    }
+  }
+
   function computeCurrentReservationRect(reservation: MergeCanvasReservation): Rect {
     const boxes: LayoutBox[] = [];
+    const seenInnerFrames = new Set<string>();
     reservation.cardIds.forEach(id => {
+      if (innerFrameCardSet.has(id)) {
+        // Inner-frame card: defer to the frame-level bounding box
+        const innerFrameId = [...innerFrameCards.entries()]
+          .find(([, cids]) => cids.has(id))?.[0];
+        if (innerFrameId && !seenInnerFrames.has(innerFrameId)) {
+          seenInnerFrames.add(innerFrameId);
+          const frameCardIds = innerFrameCards.get(innerFrameId);
+          if (frameCardIds) {
+            const frameUnion = unionBoxes(
+              [...frameCardIds].map(cid => nextLayout[cid]).filter(Boolean) as LayoutBox[]
+            );
+            if (frameUnion) {
+              boxes.push({
+                x: frameUnion.x - FRAME_PAD,
+                y: frameUnion.y - FRAME_PAD,
+                width: frameUnion.width + FRAME_PAD * 2,
+                height: frameUnion.height + FRAME_PAD * 2,
+              });
+            }
+          }
+        }
+        return;
+      }
       const box = nextLayout[id];
       if (box) boxes.push(box);
     });
     const union = unionBoxes(boxes);
     if (!union) return reservation.rect;
-    // Left FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
-    // ensures the merge canvas left border aligns with text message cards outside the frame.
     const contentRect = {
       x: union.x - FRAME_PAD,
       y: union.y - FRAME_PAD,
@@ -516,8 +576,9 @@ export function applyMergeCanvasReservations(params: {
 
   const finalReservationRects: Rect[] = [];
   for (const reservation of params.reservations) {
-    // Compact reservation targets inside each original column while preserving per-column order
-    // and avoiding overlaps with non-target cards in that column.
+    // Compact ONLY direct merge-target cards upward within each column.
+    // Cards inside inner relation frames are skipped — their layout is
+    // determined by computeNoOverlapLayout and must not be altered here.
     for (const ids of byCol.values()) {
       sortIdsByY(ids);
       let cursor = GRID_TOP;
@@ -528,7 +589,12 @@ export function applyMergeCanvasReservations(params: {
           cursor = Math.max(cursor, box.y + box.height + ROW_GAP);
           continue;
         }
-        // Compact upward only: never push a reserved target further down during compaction.
+        // Skip cards belonging to inner relation frames
+        if (innerFrameCardSet.has(id)) {
+          cursor = Math.max(cursor, box.y + box.height + ROW_GAP);
+          continue;
+        }
+        // Compact upward only: never push a reserved target further down.
         const nextY = box.y > cursor ? cursor : box.y;
         nextLayout[id] = { ...box, y: nextY };
         cursor = nextLayout[id].y + nextLayout[id].height + ROW_GAP;
@@ -558,6 +624,7 @@ export function applyMergeCanvasReservations(params: {
   let maxBottom = GRID_TOP;
   for (const box of Object.values(nextLayout)) maxBottom = Math.max(maxBottom, box.y + box.height);
   for (const reservationRect of finalReservationRects) maxBottom = Math.max(maxBottom, reservationRect.y + reservationRect.height);
+
   return { layout: nextLayout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
 }
 
@@ -1003,7 +1070,15 @@ function buildFrameBlocks(params: {
   for (const [relMsgId, relEdges] of edgesByRelMsg) {
     if (relEdges.length === 0) continue;
     const relKind = getRelKind(relEdges[0].relationType);
-    if (relKind !== 'arrange-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') continue;
+    const relType = relEdges[0].relationType;
+    // A type is "known" if it exists in PRESENTATION_SPECS (case-insensitive).
+    // Removed types (e.g. SUPPORT) are NOT in specs and get the default edge-label kind,
+    // but they are known non-frame types — NOT custom frame types.
+    const isKnownType = relType in PRESENTATION_SPECS || relType.toUpperCase() in PRESENTATION_SPECS;
+    // Known non-frame types → skip.  Custom types → treat as arrange-frame.
+    if (relKind !== 'arrange-frame' && relKind !== 'frame-group' && relKind !== 'replace-overlay') {
+      if (isKnownType) continue;
+    }
     const cardIds = new Set<string>();
     const sourceId = relEdges[0].from.messageId;
     if (!sourceId.startsWith('anon:') && visibleCardIds.has(sourceId)) cardIds.add(sourceId);
@@ -1024,7 +1099,11 @@ function buildFrameBlocks(params: {
       const nestedEdges = edgesByRelMsg.get(targetMsgId);
       if (nestedEdges && nestedEdges.length > 0) {
         const nk = getRelKind(nestedEdges[0].relationType);
-        if (nk === 'arrange-frame' || nk === 'frame-group' || nk === 'replace-overlay') {
+        const nrt = nestedEdges[0].relationType;
+        const nIsKnown = nrt in PRESENTATION_SPECS || nrt.toUpperCase() in PRESENTATION_SPECS;
+        const nIsFrame = nk === 'arrange-frame' || nk === 'frame-group' || nk === 'replace-overlay'
+          || !nIsKnown;
+        if (nIsFrame) {
           // Include the nested frame's relMsgId so subset detection can nest it
           cardIds.add(targetMsgId);
           // Recurse into its edges to find text-message cards
@@ -1039,7 +1118,7 @@ function buildFrameBlocks(params: {
     }
     if (cardIds.size > 0) {
       const relMsg = msgMap.get(relMsgId);
-      const isArrange = getRelKind(relEdges[0].relationType) === 'arrange-frame';
+      const isArrange = isKnownType ? (relKind === 'arrange-frame') : true;
       const targetLayout = isArrange ? (relMsg?.relationPayload?.targetLayout) : undefined;
       blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge', targetLayout });
     }
@@ -1278,7 +1357,12 @@ function computeNoOverlapLayout(params: {
         if (isMerge) {
           const childStartY = colYCursor.get(0) ?? contentY;
           const result = layoutFrameBlock(child, contentX, childStartY);
-          colYCursor.set(0, result.rect.y + result.rect.height + ROW_GAP);
+          const childBottom = result.rect.y + result.rect.height + ROW_GAP;
+          // Sync all column cursors below the child frame so items in other
+          // columns don't end up visually above it.
+          for (const [col] of colYCursor) {
+            colYCursor.set(col, Math.max(colYCursor.get(col) ?? contentY, childBottom));
+          }
           trackChildRect(result.rect);
         } else if (isHorizontal) {
           const result = layoutFrameBlock(child, xCursor, yCursor);
@@ -1397,6 +1481,7 @@ function computeNoOverlapLayout(params: {
       maxBottom = Math.max(maxBottom, result2.rect.y + result2.rect.height);
     }
   }
+
   // Any remaining cards (shouldn't happen with correct frame hierarchy)
   for (const m of normals) {
     if (layout[m.id]) continue;
@@ -1722,6 +1807,7 @@ export default function GraphView(props: GraphViewProps) {
     () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
     [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
   );
+  // Frame avoidance — safety net ensuring frames don't overlap with cards below
   const frameAvoidanceReservations = useMemo(
     () => buildFrameAvoidanceReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
     [edges, baseLayout, msgMap, relationCardMsgIds]
@@ -1741,30 +1827,49 @@ export default function GraphView(props: GraphViewProps) {
   );
   
   const finalFrameRects = useMemo(() => {
-    const expanded: Record<string, Rect> = { ...baseFrameRects };
+    const result: Record<string, Rect> = {};
     for (const fb of frameBlocks) {
-      const rect = expanded[fb.relMsgId];
-      if (!rect) continue;
-      let r = { ...rect };
-      for (const cid of fb.cardIds) {
-        const box = layout[cid];
+      // Recompute frame rect from current card positions so it stays tight
+      // even after upstream compaction / push-down moves cards.
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+      const collectBounds = (cardId: string) => {
+        const box = layout[cardId];
         if (box) {
-          const boxRight = box.x + box.width;
-          const boxBottom = box.y + box.height;
-          if (boxRight > r.x + r.width) r.width = boxRight - r.x;
-          if (boxBottom > r.y + r.height) r.height = boxBottom - r.y;
+          minX = Math.min(minX, box.x);
+          minY = Math.min(minY, box.y);
+          maxX = Math.max(maxX, box.x + box.width);
+          maxY = Math.max(maxY, box.y + box.height);
         }
-        const childRect = baseFrameRects[cid];
+        // Also encompass child frame rects
+        const childRect = result[cardId];
         if (childRect) {
-          const crRight = childRect.x + childRect.width;
-          const crBottom = childRect.y + childRect.height;
-          if (crRight > r.x + r.width) r.width = crRight - r.x;
-          if (crBottom > r.y + r.height) r.height = crBottom - r.y;
+          minX = Math.min(minX, childRect.x);
+          minY = Math.min(minY, childRect.y);
+          maxX = Math.max(maxX, childRect.x + childRect.width);
+          maxY = Math.max(maxY, childRect.y + childRect.height);
         }
+      };
+
+      for (const cid of fb.cardIds) {
+        collectBounds(cid);
       }
-      expanded[fb.relMsgId] = r;
+
+      if (!isFinite(minX)) {
+        result[fb.relMsgId] = { ...baseFrameRects[fb.relMsgId] };
+        continue;
+      }
+
+      const isMerge = fb.isMerge;
+      const mergeHeaderPad = isMerge ? MERGE_CARD_H : 0;
+      result[fb.relMsgId] = {
+        x: minX - FRAME_PAD_X,
+        y: minY - FRAME_PAD_Y - mergeHeaderPad,
+        width: maxX - minX + FRAME_PAD_X * 2,
+        height: maxY - minY + FRAME_PAD_Y * 2 + mergeHeaderPad,
+      };
     }
-    return expanded;
+    return result;
   }, [baseFrameRects, layout, frameBlocks]);
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;

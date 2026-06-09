@@ -16,7 +16,7 @@
 
 import type { DemoMessage, DemoEdge } from './modelBridge';
 import type { PresentationKind, RelationTargetLayout } from '../types';
-import { getPresentationSpec } from '../types';
+import { getPresentationSpec, PRESENTATION_SPECS } from '../types';
 
 // ============================================================
 // Layout Constants (mirrored from GraphView.tsx)
@@ -434,7 +434,14 @@ export function applyGroupingColumnOverride(params: {
 
   // Source → first target (for arrange, correct with real source)
   for (const e of edges) {
-    if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
+    if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) {
+      // Also group targets for custom relation types (e.g. 'supp').
+      // These form frames but aren't in PRESENTATION_SPECS.
+      const isCustomType = !(e.relationType in PRESENTATION_SPECS || e.relationType.toUpperCase() in PRESENTATION_SPECS);
+      if (!isCustomType || !normalSet.has(e.to.messageId)) continue;
+      // Custom types that target text messages → group like arrange
+      if (!normalSet.has(e.from.messageId) && !e.from.messageId.startsWith('anon:')) continue;
+    }
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     if (!groupSourceToTarget.has(e.from.messageId)) {
       groupSourceToTarget.set(e.from.messageId, e.to.messageId);
@@ -444,7 +451,10 @@ export function applyGroupingColumnOverride(params: {
   // Frame targets chain: target[i] → target[i-1] (except merge)
   const frameTargetsByRelMsg = new Map<string, { targetIds: string[]; relationType: string }>();
   for (const e of edges) {
-    if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) continue;
+    if (!isAnyFrameRel(e.relationType) && !isCorrectionBadgeRel(e.relationType)) {
+      const isCustomType = !(e.relationType in PRESENTATION_SPECS || e.relationType.toUpperCase() in PRESENTATION_SPECS);
+      if (!isCustomType) continue;
+    }
     if (!normalSet.has(e.to.messageId)) continue;
     const entry = frameTargetsByRelMsg.get(e.relationMessageId) ?? { targetIds: [], relationType: e.relationType };
     entry.targetIds.push(e.to.messageId);

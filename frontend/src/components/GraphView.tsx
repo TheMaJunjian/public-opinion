@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap } from '../utils/modelBridge';
+import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
 import type { PresentationKind, RelationTargetLayout } from '../types';
 
 // ========================= Layout types =========================
@@ -1230,12 +1231,12 @@ function buildFrameBlocks(params: {
 }
 
 function computeNoOverlapLayout(params: {
-  normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; maxCol: number;
+  normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; measuredWidths: Record<string, number>; maxCol: number;
   correctedTargetIds?: Set<string>;
   frameBlocks?: FrameBlock[];
   allMessages: DemoMessage[];
 }) {
-  const { normals, colOf, measuredHeights } = params;
+  const { normals, colOf, measuredHeights, measuredWidths } = params;
   const correctedTargetIds = params.correctedTargetIds ?? new Set<string>();
   const frameBlocks = params.frameBlocks ?? [];
   const allMsgMap = new Map(params.allMessages.map(m => [m.id, m]));
@@ -1247,6 +1248,10 @@ function computeNoOverlapLayout(params: {
   function cardHeight(id: string) {
     if (correctedTargetIds.has(id)) return 0;
     return Math.max(MIN_CARD_H, measuredHeights[id] ?? MIN_CARD_H);
+  }
+
+  function cardWidth(id: string) {
+    return Math.max(CARD_W, measuredWidths[id] ?? CARD_W);
   }
 
   // --- Build a frame lookup and card→innermost-frame mapping ---
@@ -1330,17 +1335,18 @@ function computeNoOverlapLayout(params: {
       if (item.kind === 'card') {
         const m = item.msg;
         const h = cardHeight(m.id);
+        const w = cardWidth(m.id);
         if (isMerge) {
           const col = localColOf[m.id] ?? 0;
           const curY = colYCursor.get(col) ?? contentY;
-          layout[m.id] = { x: contentX + colX(col) - colX(0), y: curY, width: CARD_W, height: h };
+          layout[m.id] = { x: contentX + colX(col) - colX(0), y: curY, width: w, height: h };
           colYCursor.set(col, curY + h + ROW_GAP);
         } else if (isHorizontal) {
-          layout[m.id] = { x: xCursor, y: yCursor, width: CARD_W, height: h };
-          xCursor += CARD_W + COL_GAP;
+          layout[m.id] = { x: xCursor, y: yCursor, width: w, height: h };
+          xCursor += w + COL_GAP;
           rowMaxHeight = Math.max(rowMaxHeight, h);
         } else {
-          layout[m.id] = { x: contentX, y: yCursor, width: CARD_W, height: h };
+          layout[m.id] = { x: contentX, y: yCursor, width: w, height: h };
           yCursor += h + ROW_GAP;
         }
         unionCard(m.id);
@@ -1466,10 +1472,11 @@ function computeNoOverlapLayout(params: {
     if (item.kind === 'card') {
       const m = item.msg;
       const h = cardHeight(m.id);
+      const w = cardWidth(m.id);
       const x = colX(item.col);
-      const y = findY2(x, CARD_W);
-      layout[m.id] = { x, y, width: CARD_W, height: h };
-      placedRects2.push({ x, y, width: CARD_W, height: h });
+      const y = findY2(x, w);
+      layout[m.id] = { x, y, width: w, height: h };
+      placedRects2.push({ x, y, width: w, height: h });
       maxBottom = Math.max(maxBottom, y + h);
     } else {
       const fb = item.block;
@@ -1487,9 +1494,10 @@ function computeNoOverlapLayout(params: {
     if (layout[m.id]) continue;
     const c = colOf[m.id] ?? 0;
     const h = cardHeight(m.id);
+    const w = cardWidth(m.id);
     const x = colX(c);
-    const y = findY2(x, CARD_W);
-    layout[m.id] = { x, y, width: CARD_W, height: h };
+    const y = findY2(x, w);
+    layout[m.id] = { x, y, width: w, height: h };
     maxBottom = Math.max(maxBottom, y + h);
   }
 
@@ -1699,9 +1707,12 @@ export default function GraphView(props: GraphViewProps) {
   const { col: agreeDisCol, maxCol: agreeDisMaxCol } = useMemo(() => applyAgreeDisagreeColumnOverride({ normals, edges, col: replyCol, maxCol: replyMaxCol }), [normals, edges, replyCol, replyMaxCol]);
   // Grouping column override: highest priority — arrange/frame-group/replace-overlay/correction-badge source must
   // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
-  const { col: colOf, maxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
+  const { col: pipelineCol, maxCol: pipelineMaxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
+  // Reserved: populate via ResizeObserver when cards need variable widths (e.g. MERGE headers).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [measuredWidths, setMeasuredWidths] = useState<Record<string,number>>({});
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
   const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
   const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}>|null>(null);
@@ -1723,7 +1734,7 @@ export default function GraphView(props: GraphViewProps) {
   // TAG relations targeting relation messages — for rendering next to edge labels / arrange frames
   const [tagsByRelMsgState, setTagsByRelMsgState] = useState<Map<string,Array<{label:string;relMsgId:string}>>>(new Map());
 
-  const canvasWidth = GRID_LEFT + (maxCol+1)*CARD_W + maxCol*COL_GAP + CANVAS_RIGHT_PAD;
+  const canvasWidth = GRID_LEFT + (pipelineMaxCol+1)*CARD_W + pipelineMaxCol*COL_GAP + CANVAS_RIGHT_PAD;
   const edgesByRelMsg = useMemo(() => {
     const map = new Map<string,DemoEdge[]>();
     for (const e of edges) { const arr=map.get(e.relationMessageId)??[]; arr.push(e); map.set(e.relationMessageId,arr); }
@@ -1803,27 +1814,50 @@ export default function GraphView(props: GraphViewProps) {
     return depth;
   }, [frameBlocks]);
 
-  const { layout: baseLayout, canvasHeight: baseCanvasHeight, frameRects: baseFrameRects } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
-    [normals, colOf, measuredHeights, maxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
+  // ── Two-pass layout: pass 1 gets frame rects, correct columns, pass 2 is final ──
+  // Pass 1: compute initial layout solely to obtain actual frame rects
+  const { frameRects: pass1FrameRects } = useMemo(
+    () => computeNoOverlapLayout({ normals, colOf: pipelineCol, measuredHeights, measuredWidths, maxCol: pipelineMaxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
+    [normals, pipelineCol, measuredHeights, measuredWidths, pipelineMaxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
   );
+
+  // Column correction: push anno/ref/reply sources targeting frames to the right of the frame's actual visual boundary
+  const correctedResult = useMemo(
+    () => computeFrameAwareColumnCorrection({ normals, edges, colOf: pipelineCol, maxCol: pipelineMaxCol, frameRects: pass1FrameRects }),
+    [normals, edges, pipelineCol, pipelineMaxCol, pass1FrameRects]
+  );
+  const colOf = correctedResult.col;
+  const maxCol = correctedResult.maxCol;
+
+  // Pass 2: final layout with corrected columns
+  const { layout: pass2Layout, canvasHeight: pass2CanvasHeight, frameRects: baseFrameRects } = useMemo(
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, measuredWidths, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
+    [normals, colOf, measuredHeights, measuredWidths, maxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
+  );
+
+  // Compact: shift anno/ref source clusters toward their targets
+  const { layout: compactedLayout, canvasHeight: compactedCanvasHeight } = useMemo(
+    () => compactAnnoRefClusters({ layout: pass2Layout, normals, colOf, edges, allFrameRects: { ...baseFrameRects, ...pass1FrameRects }, canvasHeight: pass2CanvasHeight }),
+    [pass2Layout, normals, colOf, edges, baseFrameRects, pass1FrameRects, pass2CanvasHeight]
+  );
+
   // Frame avoidance — safety net ensuring frames don't overlap with cards below
   const frameAvoidanceReservations = useMemo(
-    () => buildFrameAvoidanceReservations({ edges, layout: baseLayout, msgMap, relationCardMsgIds }),
-    [edges, baseLayout, msgMap, relationCardMsgIds]
+    () => buildFrameAvoidanceReservations({ edges, layout: compactedLayout, msgMap, relationCardMsgIds }),
+    [edges, compactedLayout, msgMap, relationCardMsgIds]
   );
   const { layout, canvasHeight } = useMemo(
     () => applyFrameAvoidanceReservations({
-      layout: baseLayout,
+      layout: compactedLayout,
       normals,
       colOf,
       reservations: frameAvoidanceReservations,
-      minCanvasHeight: baseCanvasHeight,
+      minCanvasHeight: compactedCanvasHeight,
       msgMap,
       edgesByRelMsg,
       relationCardMsgIds,
     }),
-    [baseLayout, normals, colOf, frameAvoidanceReservations, baseCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds]
+    [compactedLayout, normals, colOf, frameAvoidanceReservations, compactedCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds]
   );
   
   const finalFrameRects = useMemo(() => {
@@ -2590,7 +2624,7 @@ export default function GraphView(props: GraphViewProps) {
 
     for (let idx=0;idx<rawEdges.length;idx++) {
       const pe=rawEdges[idx];
-      const { fromBox, toBox, fromCol, toCol, fragRectCanvas, edge } = pe;
+      const { fromBox, toBox, fragRectCanvas, edge } = pe;
       const fromCenter={x:fromBox.x+fromBox.width/2,y:fromBox.y+fromBox.height/2};
       const toRect: Rect=fragRectCanvas ? {x:fragRectCanvas.x,y:fragRectCanvas.y,width:fragRectCanvas.width,height:fragRectCanvas.height} : {x:toBox.x,y:toBox.y,width:toBox.width,height:toBox.height};
       const toCenter={x:toRect.x+toRect.width/2,y:toRect.y+toRect.height/2};
@@ -2630,11 +2664,27 @@ export default function GraphView(props: GraphViewProps) {
       }
       const sC=uniq(sCands).slice(0,24), eC=uniq(eCands).slice(0,24);
 
-      const lC=Math.min(fromCol,toCol), rC=Math.max(fromCol,toCol);
-      const gapMidX=(colX(lC)+CARD_W+colX(rC))/2;
-      const fanBase=(idx-(rawEdges.length-1)/2)*6;
-      const ctrlBase={x:gapMidX,y:(fromCenter.y+toCenter.y)/2+fanBase};
-      const ctrlCands=[ctrlBase,...[-120,-80,-40,0,40,80,120].map(o=>({x:gapMidX+o*0.5,y:ctrlBase.y+o})),...[-120,-60,-30,30,60,120].map(ox=>({x:gapMidX+ox,y:ctrlBase.y}))];
+      // Control point base: offset perpendicular to start→end direction,
+      // so the curve arcs outward from both cards rather than hugging their edges.
+      const midX = (startP.x + endP.x) / 2;
+      const midY = (startP.y + endP.y) / 2;
+      const dx = endP.x - startP.x;
+      const dy = endP.y - startP.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const perpX = -dy / dist;  // perpendicular (rotate 90° CCW)
+      const perpY = dx / dist;
+      const fanBase = (idx - (rawEdges.length - 1) / 2) * 6;
+      const arcOffset = Math.min(60, dist * 0.3);
+      const ctrlBase = {
+        x: midX + perpX * arcOffset + perpX * fanBase,
+        y: midY + perpY * arcOffset + perpY * fanBase,
+      };
+      // Candidates: vary along perpendicular + along the line direction
+      const ctrlCands = [
+        ctrlBase,
+        ...[ -120, -80, -40, 0, 40, 80, 120 ].map(o => ({ x: ctrlBase.x + perpX * o, y: ctrlBase.y + perpY * o })),
+        ...[ -60, -30, 30, 60 ].map(o => ({ x: ctrlBase.x + (dx/dist) * o, y: ctrlBase.y + (dy/dist) * o })),
+      ];
 
       const connFR=[...getMessageRects(edge.from.messageId),...getMessageRects(edge.to.messageId)];
       if (fragRectCanvas) connFR.push({x:fragRectCanvas.x,y:fragRectCanvas.y,width:fragRectCanvas.width,height:fragRectCanvas.height});

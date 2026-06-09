@@ -26,6 +26,8 @@ import {
   applyAgreeDisagreeColumnOverride,
   applyGroupingColumnOverride,
   computeSimpleNoOverlapLayout,
+  computeFrameAwareColumnCorrection,
+  compactAnnoRefClusters,
   findOverlaps,
   verifyColumnOrder,
 } from '../utils/layout';
@@ -1388,5 +1390,392 @@ describe('Frame-as-card placement invariants', () => {
     // If child rect is included: minX=18, frame.x=2 ← BUG
     const withChild = unionBoxes([...parentCards, childRect])!;
     expect(withChild.x - FRAME_PAD).toBe(2);
+  });
+});
+
+// ============================================================
+// Stage 1½: computeFrameAwareColumnCorrection
+// ============================================================
+
+describe('computeFrameAwareColumnCorrection', () => {
+  it('returns unchanged columns when no frame rects are provided', () => {
+    const normals = [makeNormal('a'), makeNormal('b')];
+    const colOf = { a: 0, b: 0 };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges: [], colOf, maxCol: 0, frameRects: {},
+    });
+    expect(result.col).toEqual(colOf);
+    expect(result.maxCol).toBe(0);
+  });
+
+  it('pushes annotation source right of a wide frame (mock-101 → r10 scenario)', () => {
+    // r10 is a horizontal arrange frame spanning from x=18 to x=774 (width=756)
+    // mock-101 annotates r10 and should go to col ≥ ceil((774-18)/400) = ceil(756/400) = 2
+    const normals = [makeNormal('mock-101'), makeNormal('m5'), makeNormal('m6')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-anno', 'mock-101', 'r10'),
+    ];
+    const colOf = { 'mock-101': 1, m5: 0, m6: 1 };
+    const frameRects: Record<string, { x: number; y: number; width: number; height: number }> = {
+      r10: { x: 18, y: 362, width: 756, height: 244 }, // right edge = 774
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 1, frameRects,
+    });
+    // minCol = ceil((774 - 18) / 400) = ceil(756/400) = 2
+    expect(result.col['mock-101']).toBeGreaterThanOrEqual(2);
+  });
+
+  it('pushes reference source right of a frame', () => {
+    const normals = [makeNormal('src'), makeNormal('a')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'reference', 'rel-ref', 'src', 'frame1'),
+    ];
+    const colOf = { src: 0, a: 0 };
+    const frameRects = {
+      frame1: { x: colX(0), y: 0, width: CARD_W + FRAME_PAD * 2, height: 200 }, // right edge = 18+352=370
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 0, frameRects,
+    });
+    // minCol = ceil((370 - 18) / 400) = ceil(352/400) = 1
+    expect(result.col['src']).toBeGreaterThanOrEqual(1);
+  });
+
+  it('pushes reply source right of a frame target', () => {
+    const normals = [makeNormal('replySrc'), makeNormal('a')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'reply', 'rel-reply', 'replySrc', 'bigFrame'),
+    ];
+    const colOf = { replySrc: 0, a: 0 };
+    const frameRects = {
+      bigFrame: { x: colX(1), y: 0, width: CARD_W * 2 + COL_GAP, height: 300 },
+      // right edge = 418 + 720 = 1138
+      // minCol = ceil((1138 - 18) / 400) = ceil(1120/400) = 3
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 2, frameRects,
+    });
+    expect(result.col['replySrc']).toBeGreaterThanOrEqual(3);
+  });
+
+  it('propagates cascading constraints after frame correction', () => {
+    // mock-101 → r10 (frame), mock-102 → mock-101 (annotation to text)
+    // r10 right=774 → mock-101 col ≥ 2
+    // mock-101 col=2 → mock-102 col ≥ 3
+    const normals = [makeNormal('mock-101'), makeNormal('mock-102'), makeNormal('m5')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 'mock-101', 'r10'),
+      makeEdge('e2', 'annotation', 'rel-2', 'mock-102', 'mock-101'),
+    ];
+    const colOf = { 'mock-101': 1, 'mock-102': 2, m5: 0 };
+    const frameRects = {
+      r10: { x: 18, y: 0, width: 756, height: 200 },
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 2, frameRects,
+    });
+    expect(result.col['mock-101']).toBeGreaterThanOrEqual(2);
+    expect(result.col['mock-102']).toBeGreaterThanOrEqual(result.col['mock-101'] + 1);
+  });
+
+  it('does not affect non-annotation/reference/reply edges', () => {
+    const normals = [makeNormal('src'), makeNormal('tgt')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'agree', 'rel-agree', 'src', 'frame1'),
+    ];
+    const colOf = { src: 0, tgt: 0 };
+    const frameRects = {
+      frame1: { x: colX(0), y: 0, width: 2000, height: 100 },
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 0, frameRects,
+    });
+    // AGREE should NOT be affected by frame-aware correction
+    expect(result.col['src']).toBe(0);
+  });
+
+  it('does not move sources that are already far enough right', () => {
+    const normals = [makeNormal('src'), makeNormal('a')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 'src', 'smallFrame'),
+    ];
+    const colOf = { src: 5, a: 0 };
+    const frameRects = {
+      smallFrame: { x: colX(0), y: 0, width: CARD_W, height: 100 }, // right = 338
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 5, frameRects,
+    });
+    // minCol = ceil((338 - 18) / 400) = ceil(320/400) = 1
+    // src is already at col 5, should stay there
+    expect(result.col['src']).toBe(5);
+  });
+
+  it('handles multiple sources targeting different frames', () => {
+    const normals = [
+      makeNormal('anno1'), makeNormal('anno2'),
+      makeNormal('a'), makeNormal('b'),
+    ];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 'anno1', 'frameA'),
+      makeEdge('e2', 'reference', 'rel-2', 'anno2', 'frameB'),
+    ];
+    const colOf = { anno1: 0, anno2: 0, a: 0, b: 0 };
+    const frameRects = {
+      frameA: { x: colX(0), y: 0, width: CARD_W, height: 100 },        // right=338 → minCol=ceil(320/400)=1
+      frameB: { x: colX(0), y: 0, width: CARD_W * 2 + COL_GAP, height: 100 }, // right=738 → minCol=ceil(720/400)=2
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 0, frameRects,
+    });
+    expect(result.col['anno1']).toBeGreaterThanOrEqual(1);
+    // frameB right=738, minCol=ceil((738-18)/400)=ceil(720/400)=2
+    expect(result.col['anno2']).toBeGreaterThanOrEqual(2);
+  });
+
+  it('returns same result when no edges target frames', () => {
+    const normals = [makeNormal('a'), makeNormal('b')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 'b', 'a'),
+    ];
+    const colOf = { a: 0, b: 1 };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 1, frameRects: {},
+    });
+    expect(result.col).toEqual({ a: 0, b: 1 });
+  });
+});
+
+// ============================================================
+// Stage 2½: compactAnnoRefClusters
+// ============================================================
+
+describe('compactAnnoRefClusters', () => {
+  it('returns unchanged layout when no annotation/reference edges', () => {
+    const normals = [makeNormal('a'), makeNormal('b')];
+    const layout = { a: { x: colX(0), y: 48, width: CARD_W, height: 86 }, b: { x: colX(1), y: 48, width: CARD_W, height: 86 } };
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf: { a: 0, b: 1 }, edges: [], allFrameRects: {}, canvasHeight: 200,
+    });
+    expect(result.layout).toEqual(layout);
+  });
+
+  it('shifts annotation source toward its text-message target', () => {
+    // src annotates tgt. tgt at y=362, src initially at y=48 (far above).
+    // src should be shifted down to targetY=362 (col 2 is empty there).
+    const normals = [makeNormal('src'), makeNormal('tgt')];
+    const colOf = { src: 2, tgt: 0 };
+    const layout = {
+      src: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      tgt: { x: colX(0), y: 362, width: CARD_W, height: 100 },
+    };
+    const edges: DemoEdge[] = [makeEdge('e1', 'annotation', 'rel-1', 'src', 'tgt')];
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
+    });
+    // src should be at y=362 (aligned with target)
+    expect(result.layout['src'].y).toBe(362);
+  });
+
+  it('stacks multiple sources toward target (middle card aligned)', () => {
+    // Three sources targeting tgt at y=362.
+    // n=3, middleIdx=1 (s2). heightAbove = 86+32 = 118. idealTop = 362-118 = 244.
+    const normals = [makeNormal('s1', 'a', '2024-01-01'), makeNormal('s2', 'b', '2024-01-02'), makeNormal('s3', 'c', '2024-01-03'), makeNormal('tgt')];
+    const colOf = { s1: 2, s2: 2, s3: 2, tgt: 0 };
+    const layout = {
+      s1: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      s2: { x: colX(2), y: 166, width: CARD_W, height: 86 },
+      s3: { x: colX(2), y: 284, width: CARD_W, height: 86 },
+      tgt: { x: colX(0), y: 362, width: CARD_W, height: 100 },
+    };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 's1', 'tgt'),
+      makeEdge('e2', 'annotation', 'rel-2', 's2', 'tgt'),
+      makeEdge('e3', 'reference', 'rel-3', 's3', 'tgt'),
+    ];
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
+    });
+    // Middle card (s2) top should be at targetY=362
+    expect(result.layout['s2'].y).toBe(362);
+    // s1 above s2: 362 - 86 - 32 = 244
+    expect(result.layout['s1'].y).toBe(244);
+    // s3 below s2: 362 + 86 + 32 = 480
+    expect(result.layout['s3'].y).toBe(480);
+    // target unchanged
+    expect(result.layout['tgt'].y).toBe(362);
+  });
+
+  it('respects upper bound from unrelated card above the cluster', () => {
+    // Unrelated card X at y=48 (bottom=134).
+    // n=2, middleIdx=1 (s2). heightAbove = 86+32 = 118. idealTop = 362-118 = 244.
+    // X bottom=134, upperBound = 134+32 = 166. 244 > 166, so top = 244.
+    const normals = [makeNormal('X'), makeNormal('s1', 'a', '2024-01-01'), makeNormal('s2', 'b', '2024-01-02'), makeNormal('tgt')];
+    const colOf = { X: 2, s1: 2, s2: 2, tgt: 0 };
+    const layout = {
+      X: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      s1: { x: colX(2), y: 166, width: CARD_W, height: 86 },
+      s2: { x: colX(2), y: 284, width: CARD_W, height: 86 },
+      tgt: { x: colX(0), y: 362, width: CARD_W, height: 100 },
+    };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 's1', 'tgt'),
+      makeEdge('e2', 'annotation', 'rel-2', 's2', 'tgt'),
+    ];
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
+    });
+    // s1 at 244, s2 at 362 (top aligned with target)
+    expect(result.layout['s1'].y).toBe(244);
+    expect(result.layout['s2'].y).toBe(362);
+  });
+
+  it('moves cluster toward target even when above it', () => {
+    // Cluster at y=280, target at y=362. n=2, middleIdx=1.
+    // heightAbove = 86+32 = 118. idealTop = 362-118 = 244.
+    // newTop = max(48, 244) = 244. s1 at 244, s2 at 362.
+    const normals = [makeNormal('s1'), makeNormal('s2'), makeNormal('tgt')];
+    const colOf = { s1: 2, s2: 2, tgt: 0 };
+    const layout = {
+      s1: { x: colX(2), y: 280, width: CARD_W, height: 86 },
+      s2: { x: colX(2), y: 398, width: CARD_W, height: 86 },
+      tgt: { x: colX(0), y: 362, width: CARD_W, height: 100 },
+    };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 's1', 'tgt'),
+      makeEdge('e2', 'reference', 'rel-2', 's2', 'tgt'),
+    ];
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
+    });
+    // Cluster should move to ideal position: s1 at 244, s2 at 362
+    expect(result.layout['s1'].y).toBe(244);
+    expect(result.layout['s2'].y).toBe(362);
+  });
+
+  it('shifts source toward frame target', () => {
+    // src annotates a frame at y=362
+    const normals = [makeNormal('src'), makeNormal('a'), makeNormal('b')];
+    const colOf = { src: 2, a: 0, b: 1 };
+    const layout = {
+      src: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      a: { x: colX(0), y: 410, width: CARD_W, height: 100 },
+      b: { x: colX(1), y: 410, width: CARD_W, height: 100 },
+    };
+    const edges: DemoEdge[] = [makeEdge('e1', 'annotation', 'rel-1', 'src', 'frame1')];
+    const frameRects = { frame1: { x: colX(0), y: 362, width: CARD_W * 2 + COL_GAP, height: 200 } };
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: frameRects, canvasHeight: 600,
+    });
+    // src should be at y=362 (aligned with frame top)
+    expect(result.layout['src'].y).toBe(362);
+  });
+
+  it('does not move non-annotation/reference edges', () => {
+    // Reply sources should NOT be compacted (only anno/ref)
+    const normals = [makeNormal('src'), makeNormal('tgt')];
+    const colOf = { src: 2, tgt: 0 };
+    const layout = {
+      src: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      tgt: { x: colX(0), y: 362, width: CARD_W, height: 100 },
+    };
+    const edges: DemoEdge[] = [makeEdge('e1', 'reply', 'rel-1', 'src', 'tgt')];
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
+    });
+    // Reply should NOT be compacted
+    expect(result.layout['src'].y).toBe(48);
+  });
+
+  it('handles interleaved clusters in different columns independently', () => {
+    // targetA at col 0 y=300, sources in col 2
+    // targetB at col 1 y=500, sources in col 2
+    const normals = [
+      makeNormal('a1', 'x', '2024-01-01'), makeNormal('a2', 'x', '2024-01-02'),
+      makeNormal('b1', 'x', '2024-01-03'), makeNormal('b2', 'x', '2024-01-04'),
+      makeNormal('tA'), makeNormal('tB'),
+    ];
+    const colOf = { a1: 2, a2: 2, b1: 2, b2: 2, tA: 0, tB: 1 };
+    const layout = {
+      a1: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      a2: { x: colX(2), y: 166, width: CARD_W, height: 86 },
+      b1: { x: colX(2), y: 284, width: CARD_W, height: 86 },
+      b2: { x: colX(2), y: 402, width: CARD_W, height: 86 },
+      tA: { x: colX(0), y: 300, width: CARD_W, height: 100 },
+      tB: { x: colX(1), y: 500, width: CARD_W, height: 100 },
+    };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'rel-1', 'a1', 'tA'),
+      makeEdge('e2', 'annotation', 'rel-2', 'a2', 'tA'),
+      makeEdge('e3', 'reference', 'rel-3', 'b1', 'tB'),
+      makeEdge('e4', 'reference', 'rel-4', 'b2', 'tB'),
+    ];
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 700,
+    });
+    // Cluster A (a1, a2) → targetA at y=300
+    // n=2, middleIdx=1, heightAbove=86+32=118, idealTop=300-118=182
+    // upperBound=48, newTop=182
+    expect(result.layout['a1'].y).toBe(182);
+    expect(result.layout['a2'].y).toBe(300);
+    // Cluster B (b1, b2) → targetB at y=500. a2 bottom=300+86=386.
+    // upperBound = 386+32 = 418
+    // n=2, middleIdx=1, heightAbove=118, idealTop=500-118=382
+    // 382 < 418, so top = 418
+    expect(result.layout['b1'].y).toBe(418);
+    expect(result.layout['b2'].y).toBe(536);
+  });
+
+  it('uses frame top edge when target card is inside a frame (m7 → m5 bug)', () => {
+    // m7 REFERENCES m5. m5 is inside frame r10 at y=410, but the frame's
+    // top edge is at y=362. m7 should align with the frame (362), not m5 (410).
+    const normals = [
+      makeNormal('m7'), makeNormal('m5'), makeNormal('m6'),
+    ];
+    const colOf = { m7: 1, m5: 0, m6: 1 };
+    const layout = {
+      m7: { x: colX(1), y: 638, width: CARD_W, height: 90 },
+      m5: { x: colX(0) + FRAME_PAD, y: 410, width: CARD_W, height: 148 },
+      m6: { x: colX(1), y: 410, width: CARD_W, height: 109 },
+    };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'reference', 'r11', 'm7', 'm5'),
+    ];
+    const frameRects = {
+      r10: { x: colX(0), y: 362, width: CARD_W * 2 + COL_GAP + FRAME_PAD * 2, height: 224 },
+    };
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: frameRects, canvasHeight: 800,
+    });
+    // m7 should be pushed below r10 (frame avoidance):
+    // r10 bottom=586, +ROW_GAP=618. m7 at y=618.
+    expect(result.layout['m7'].y).toBe(618);
+    // m5 and m6 should NOT be moved (they're inside the frame, not sources)
+    expect(result.layout['m5'].y).toBe(410);
+    expect(result.layout['m6'].y).toBe(410);
+  });
+
+  it('does not move anno/ref sources that are inside a frame', () => {
+    // m1 is inside merge frame mock-101. m1 ANNOTATION → m2.
+    // Compact should NOT move m1 — its position is managed by the merge layout.
+    const normals = [makeNormal('m1'), makeNormal('m2')];
+    const colOf = { m1: 0, m2: 0 };
+    const layout = {
+      m1: { x: colX(0) + FRAME_PAD, y: 100, width: CARD_W, height: 86 },
+      m2: { x: colX(0) + FRAME_PAD, y: 300, width: CARD_W, height: 86 },
+    };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'annotation', 'r6', 'm1', 'm2'),
+    ];
+    const frameRects = {
+      'mock-101': { x: colX(0), y: 48, width: CARD_W + FRAME_PAD * 2, height: 400 },
+    };
+    const result = compactAnnoRefClusters({
+      layout, normals, colOf, edges, allFrameRects: frameRects, canvasHeight: 500,
+    });
+    // m1 should NOT be moved — it's inside mock-101 frame
+    expect(result.layout['m1'].y).toBe(100);
+    expect(result.layout['m2'].y).toBe(300);
   });
 });

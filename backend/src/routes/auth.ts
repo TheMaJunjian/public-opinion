@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { appendAuditLog } from '../lib/audit';
 
 const router = Router();
 
@@ -31,6 +32,13 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
       select: { id: true, username: true, createdAt: true },
     });
     res.status(201).json({ message: '注册成功', user });
+    appendAuditLog({
+      actorId: user.id,
+      action: 'USER_REGISTERED',
+      entityType: 'User',
+      entityId: user.id,
+      data: { username: user.username },
+    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }

@@ -314,25 +314,6 @@ paths:
         '404':
           description: 话题不存在
 
-    delete:
-      tags: [话题]
-      summary: 删除话题
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: topicId
-          required: true
-          schema:
-            type: string
-      responses:
-        '204':
-          description: 删除成功
-        '403':
-          description: 无权限
-        '404':
-          description: 话题不存在
-
   /topics/{topicId}/messages:
     get:
       tags: [消息]

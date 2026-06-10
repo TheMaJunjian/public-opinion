@@ -16,7 +16,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(err.message || res.statusText);
+    throw new Error(err.error || err.message || res.statusText);
   }
   return res.json();
 }
@@ -60,10 +60,6 @@ export function updateTopic(id: string, data: { status: 'OPEN' | 'ARCHIVED' }) {
   return request<import('../types').Topic>(`/topics/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
-export function deleteTopic(id: string) {
-  return request<{ message: string }>(`/topics/${id}`, { method: 'DELETE' });
-}
-
 export function getMessages(topicId: string, params?: { page?: number; limit?: number }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
@@ -93,6 +89,7 @@ export function createRelation(topicId: string, data: {
   sourceMessageId?: string | null;
   targetRefs: import('../types').TargetRef[];
   payload?: import('../types').RelationPayload;
+  supersedesRelationId?: string;
 }) {
   return request<import('../types').Relation>(`/topics/${topicId}/relations`, {
     method: 'POST',
@@ -100,11 +97,20 @@ export function createRelation(topicId: string, data: {
   });
 }
 
+// Update a relation by creating a new version that supersedes the old one.
+// The old relation is preserved in the database but marked as superseded.
 export function updateRelation(topicId: string, relationId: string, data: {
+  relationType: string;
   targetRefs: import('../types').TargetRef[];
+  payload?: import('../types').RelationPayload;
 }) {
-  return request<import('../types').Relation>(`/topics/${topicId}/relations/${relationId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
+  return request<import('../types').Relation>(`/topics/${topicId}/relations`, {
+    method: 'POST',
+    body: JSON.stringify({
+      relationType: data.relationType,
+      targetRefs: data.targetRefs,
+      payload: data.payload,
+      supersedesRelationId: relationId,
+    }),
   });
 }

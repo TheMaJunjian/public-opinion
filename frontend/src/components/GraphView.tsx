@@ -1274,15 +1274,21 @@ function computeNoOverlapLayout(params: {
   interface FrameLayoutResult { rect: Rect; }
 
   /** Merge: normalize global colOf (translate from original canvas).
-   *  Arrange: no pipeline needed — items are placed as opaque rectangles. */
-  function computeMergeLocalColumns(frameCards: DemoMessage[]): Record<string, number> {
+   *  Arrange: no pipeline needed — items are placed as opaque rectangles.
+   *  extraCols: columns occupied by child frame cards, used to compute the
+   *  true leftmost column across ALL merge content (preserves relative positions). */
+  function computeMergeLocalColumns(frameCards: DemoMessage[], extraCols?: number[]): Record<string, number> {
     const localCol: Record<string, number> = {};
-    if (frameCards.length === 0) return localCol;
     let minCol = Infinity;
     for (const m of frameCards) {
       const c = colOf[m.id] ?? 0;
       localCol[m.id] = c;
       if (c < minCol) minCol = c;
+    }
+    if (extraCols) {
+      for (const c of extraCols) {
+        if (c < minCol) minCol = c;
+      }
     }
     if (isFinite(minCol) && minCol !== 0)
       for (const m of frameCards) localCol[m.id] -= minCol;
@@ -1298,8 +1304,19 @@ function computeNoOverlapLayout(params: {
       if (m) { frameCards.push(m); items.push({ kind: 'card', msg: m }); }
     }
     const isMerge = fb.isMerge;
-    // Merge: normalize global columns. Arrange: all cards at col 0 (items placed as rectangles).
-    const localColOf = isMerge ? computeMergeLocalColumns(frameCards) : {};
+    // Merge: normalize global columns. Collect columns from child frame cards
+    // so the normalization accounts for the full column span of the merge content.
+    const childFrameCols: number[] = [];
+    for (const childId of fb.childRelMsgIds) {
+      const child = frameById.get(childId);
+      if (child) {
+        for (const cid of child.cardIds) {
+          const c = colOf[cid];
+          if (c !== undefined) childFrameCols.push(c);
+        }
+      }
+    }
+    const localColOf = isMerge ? computeMergeLocalColumns(frameCards, childFrameCols) : {};
     for (const childId of fb.childRelMsgIds) {
       const child = frameById.get(childId);
       if (child) items.push({ kind: 'childFrame', child });
@@ -1361,7 +1378,11 @@ function computeNoOverlapLayout(params: {
           contentBottom = Math.max(contentBottom, r.y + r.height);
         }
         if (isMerge) {
-          const childStartY = colYCursor.get(0) ?? contentY;
+          // Start child frame below the bottom of all previously placed content
+          let childStartY = contentY;
+          for (const [, cy] of colYCursor) {
+            childStartY = Math.max(childStartY, cy);
+          }
           const result = layoutFrameBlock(child, contentX, childStartY);
           const childBottom = result.rect.y + result.rect.height + ROW_GAP;
           // Sync all column cursors below the child frame so items in other
@@ -1369,6 +1390,21 @@ function computeNoOverlapLayout(params: {
           for (const [col] of colYCursor) {
             colYCursor.set(col, Math.max(colYCursor.get(col) ?? contentY, childBottom));
           }
+          // Sync column cursors ONLY for columns that the child frame
+          // horizontally overlaps. Cards in non-overlapping columns
+          // (to the right of the frame) stay at their original Y level.
+          const maxLocalCol = Math.max(0, ...Object.values(localColOf));
+          const childLeft = result.rect.x;
+          const childRight = result.rect.x + result.rect.width;
+          for (let col = 0; col <= maxLocalCol; col++) {
+            const cardLeft = contentX + colX(col) - colX(0);
+            const cardRight = cardLeft + CARD_W;
+            if (cardLeft < childRight && childLeft < cardRight) {
+              colYCursor.set(col, Math.max(colYCursor.get(col) ?? contentY, childBottom));
+            }
+          }
+          // Ensure col 0 is always synced (child frame always starts at contentX)
+          colYCursor.set(0, Math.max(colYCursor.get(0) ?? contentY, childBottom));
           trackChildRect(result.rect);
         } else if (isHorizontal) {
           const result = layoutFrameBlock(child, xCursor, yCursor);
@@ -2754,8 +2790,19 @@ export default function GraphView(props: GraphViewProps) {
 
           // CLASSIFY / SUMMARY relation messages are shown as relation cards on the main canvas.
           if (msg.kind === "relation" && topicRelMsgIds.has(msg.id)) {
-            const relEdgesForMsg = edges.filter(e => e.relationMessageId === msg.id);
-            const targetCount = relEdgesForMsg.filter(e => !e.to.messageId.startsWith('anon:')).length;
+            // Count unique text-message targets from ALL edges (not just visible ones).
+            // The graphEdges filter may exclude edges whose targets are hidden (classified),
+            // so we count from the raw edges prop directly. Deduplicate by to.messageId
+            // because secondary relation types create duplicate edges.
+            const targetCount = (() => {
+              const seen = new Set<string>();
+              for (const e of edges) {
+                if (e.relationMessageId !== msg.id) continue;
+                if (e.to.messageId.startsWith('anon:')) continue;
+                seen.add(e.to.messageId);
+              }
+              return seen.size;
+            })();
             const isSummaryTopic = msg.relationType === "summary";
             const topicTitle = getRelationTitle(msg.relationPayload) || (isSummaryTopic ? `总结（${targetCount}）` : `分类（${targetCount}）`);
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");

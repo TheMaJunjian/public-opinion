@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createHash } from 'crypto';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { appendAuditLog } from '../lib/audit';
 
 const messagesRouter = Router({ mergeParams: true });
 
@@ -17,7 +18,7 @@ const createMessageSchema = z.object({
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  limit: z.coerce.number().int().min(1).max(200).optional().default(20),
 });
 
 // GET /api/topics/:topicId/messages
@@ -91,6 +92,14 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
     });
 
     res.status(201).json(message);
+    appendAuditLog({
+      actorId: req.user!.id,
+      action: 'MESSAGE_CREATED',
+      entityType: 'Message',
+      entityId: message.id,
+      topicId,
+      data: { kind: 'TEXT', contentLength: data.content.length },
+    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }

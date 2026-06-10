@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { RELATION_TYPES } from '../lib/relationTypes';
+import { appendAuditLog } from '../lib/audit';
 
 const relationsRouter = Router({ mergeParams: true });
 
@@ -50,10 +51,11 @@ const createRelationSchema = z.object({
   // sourceMessageId is required for most relation types, but optional for
   // relation types that support source-less semantics (AGREE, DISAGREE, ARRANGE,
   // CORRECT, REPLY, TAG, CLASSIFY, MERGE).
-  sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').optional(),
+  sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').nullable().optional(),
   // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
   // for relation types not listed in TARGET_OPTIONAL_RELATION_TYPES (currently only CLASSIFY).
-  targetRefs: z.array(targetRefSchema).max(20),
+  targetRefs: z.array(targetRefSchema).max(200),
+  supersedesRelationId: z.string().nullable().optional(),
   payload: z.object({
     label: z.string().trim().min(1).max(200).optional(),
     title: z.string().trim().min(1).max(200).optional(),
@@ -149,7 +151,7 @@ function collectSelectedGroupTargetTextIds(params: {
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  limit: z.coerce.number().int().min(1).max(200).optional().default(20),
 });
 
 // ============================================================
@@ -171,9 +173,9 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
 
     // Relation messages are stored in the unified Message table with kind=RELATION.
     const [total, messages] = await Promise.all([
-      prisma.message.count({ where: { topicId, kind: 'RELATION' } }),
+      prisma.message.count({ where: { topicId, kind: 'RELATION', supersededBy: null } }),
       prisma.message.findMany({
-        where: { topicId, kind: 'RELATION' },
+        where: { topicId, kind: 'RELATION', supersededBy: null },
         orderBy: { createdAt: 'asc' },
         skip,
         take: limit,
@@ -481,6 +483,30 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       include: { createdBy: { select: { id: true, username: true } } },
     });
 
+    // If this relation supersedes an older one, mark the old as superseded.
+    // Only CLASSIFY and SUMMARY support superseding via this mechanism.
+    if (data.supersedesRelationId) {
+      const oldRel = await prisma.message.findFirst({
+        where: { id: data.supersedesRelationId, topicId, kind: 'RELATION' },
+      });
+      if (!oldRel) {
+        res.status(404).json({ error: '被取代的关系消息不存在或不属于该话题' });
+        return;
+      }
+      if (oldRel.relationType !== data.relationType) {
+        res.status(400).json({ error: '被取代的关系类型必须与新关系一致' });
+        return;
+      }
+      if (oldRel.supersededBy) {
+        res.status(400).json({ error: '该关系已被取代，不可重复取代' });
+        return;
+      }
+      await prisma.message.update({
+        where: { id: data.supersedesRelationId },
+        data: { supersededBy: message.id },
+      });
+    }
+
     // Return in the Relation API shape expected by the frontend.
     res.status(201).json({
       id: message.id,
@@ -492,94 +518,18 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       createdAt: message.createdAt,
       createdBy: message.createdBy,
     });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// PATCH /api/topics/:topicId/relations/:relationId
-// Update a relation's targetRefs (e.g. add a new message to a classify topic).
-const patchRelationSchema = z.object({
-  targetRefs: z.array(targetRefSchema).max(20),
-});
-
-relationsRouter.patch('/:relationId', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const topicId = req.params.topicId as string;
-    const relationId = req.params.relationId as string;
-    const data = patchRelationSchema.parse(req.body);
-
-    const topic = await prisma.topic.findUnique({ where: { id: topicId } });
-    if (!topic) {
-      res.status(404).json({ error: '话题不存在' });
-      return;
-    }
-    if (topic.status === 'ARCHIVED') {
-      res.status(403).json({ error: '该话题已归档，不允许修改关系' });
-      return;
-    }
-
-    const existing = await prisma.message.findFirst({
-      where: { id: relationId, topicId, kind: 'RELATION' },
-    });
-    if (!existing) {
-      res.status(404).json({ error: '关系消息不存在或不属于该话题' });
-      return;
-    }
-
-    // Only CLASSIFY and SUMMARY relations support updating targets
-    if (existing.relationType !== 'CLASSIFY' && existing.relationType !== 'SUMMARY') {
-      res.status(400).json({ error: '仅分类和总结关系支持更新目标' });
-      return;
-    }
-
-    // Validate new targets exist in this topic
-    const targetMessageIds = data.targetRefs
-      .filter(r => r.kind === 'message' || r.kind === 'text-fragment')
-      .map(r => (r as { kind: 'message' | 'text-fragment'; messageId: string }).messageId);
-    const targetRelationIds = data.targetRefs
-      .filter(r => r.kind === 'relation')
-      .map(r => (r as { kind: 'relation'; relationId: string }).relationId);
-
-    if (targetMessageIds.length > 0) {
-      const uniqueMessageIds = [...new Set(targetMessageIds)];
-      const foundMessages = await prisma.message.findMany({
-        where: { id: { in: uniqueMessageIds }, topicId, kind: 'TEXT' },
-        select: { id: true },
-      });
-      if (foundMessages.length !== uniqueMessageIds.length) {
-        res.status(404).json({ error: '部分目标消息不存在或不属于该话题' });
-        return;
-      }
-    }
-    if (targetRelationIds.length > 0) {
-      const uniqueRelationIds = [...new Set(targetRelationIds)];
-      const foundRelations = await prisma.message.findMany({
-        where: { id: { in: uniqueRelationIds }, topicId, kind: 'RELATION' },
-        select: { id: true },
-      });
-      if (foundRelations.length !== uniqueRelationIds.length) {
-        res.status(404).json({ error: '部分目标关系消息不存在或不属于该话题' });
-        return;
-      }
-    }
-
-    const updated = await prisma.message.update({
-      where: { id: relationId },
-      data: { targetRefs: data.targetRefs },
-      include: { createdBy: { select: { id: true, username: true } } },
-    });
-
-    res.json({
-      id: updated.id,
-      topicId: updated.topicId,
-      relationType: updated.relationType!,
-      sourceMessageId: updated.relSourceId ?? null,
-      targetRefs: updated.targetRefs,
-      payload: updated.relationPayload ?? undefined,
-      createdAt: updated.createdAt,
-      createdBy: updated.createdBy,
-    });
+    appendAuditLog({
+      actorId: req.user!.id,
+      action: data.supersedesRelationId ? 'RELATION_SUPERSEDED' : 'RELATION_CREATED',
+      entityType: 'Relation',
+      entityId: message.id,
+      topicId,
+      data: {
+        relationType: message.relationType!,
+        supersedes: data.supersedesRelationId ?? null,
+        targetCount: (data.targetRefs ?? []).length,
+      },
+    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }

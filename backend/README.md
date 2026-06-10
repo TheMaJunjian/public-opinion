@@ -92,7 +92,6 @@ npm run dev
 | POST | `/api/topics` | 是 | 创建话题 |
 | GET | `/api/topics/:topicId` | 否 | 获取单个话题 |
 | PATCH | `/api/topics/:topicId` | 是（仅作者）| 更新话题状态/内容 |
-| DELETE | `/api/topics/:topicId` | 是（仅作者）| 删除话题（连带消息和关系） |
 
 ### 消息 `/api/topics/:topicId/messages`
 | 方法 | 路径 | 需认证 | 说明 |

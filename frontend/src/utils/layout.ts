@@ -820,6 +820,16 @@ export function compactAnnoRefClusters(params: {
   }
 
   // ── Compact each cluster ──
+  // Track cards that still need to be moved by upcoming clusters.
+  // Once a cluster is processed, its cards are at final positions and
+  // should block subsequent clusters (avoids overlapping compaction).
+  const pendingClusterCardIds = new Set<string>();
+  for (const [, colMap] of columnClusters) {
+    for (const [, cluster] of colMap) {
+      for (const id of cluster) pendingClusterCardIds.add(id);
+    }
+  }
+
   for (const [col, colMap] of columnClusters) {
     // Build ordered list of ALL card IDs in this column (sorted by current y)
     const columnCardIds = normalIds
@@ -875,13 +885,18 @@ export function compactAnnoRefClusters(params: {
       }
       const idealTop = targetY - heightAbove;
 
-      // Upper bound: can't go above the bottom of any non-cluster card
-      // that currently sits above the cluster's ideal position.
+      // Upper bound: ensure the cluster does not overlap with any
+      // card in the same column that is at its final position.
+      // Cards pending in other clusters are skipped — they will move.
       let upperBound = GRID_TOP;
+      const clusterTotalHeight = cardHeights.reduce((s, h, i) => s + h + (i > 0 ? ROW_GAP : 0), 0);
       for (const cid of columnCardIds) {
         if (clusterIds.includes(cid)) continue;
+        if (pendingClusterCardIds.has(cid)) continue; // will be moved by its own cluster later
         const box = nextLayout[cid];
-        if (box && box.y < idealTop) {
+        if (!box) continue;
+        // If cluster at idealTop would vertically overlap this card, push below it
+        if (idealTop < box.y + box.height && idealTop + clusterTotalHeight > box.y) {
           upperBound = Math.max(upperBound, box.y + box.height + ROW_GAP);
         }
       }
@@ -911,6 +926,10 @@ export function compactAnnoRefClusters(params: {
         nextLayout[id] = { ...box, y: cursor };
         cursor += box.height + ROW_GAP;
       }
+
+      // Cards in this cluster are now at final positions — remove from pending
+      // so they act as obstacles for subsequent clusters.
+      for (const id of clusterIds) pendingClusterCardIds.delete(id);
 
       // Re-sort column card IDs after shift
       columnCardIds.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));

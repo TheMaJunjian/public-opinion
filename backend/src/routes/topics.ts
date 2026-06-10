@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { appendAuditLog } from '../lib/audit';
 
 const router = Router();
 
@@ -18,7 +19,7 @@ const listTopicsSchema = z.object({
   query: z.string().optional(),
   sort: z.enum(['createdAt', 'updatedAt']).optional().default('createdAt'),
   page: z.coerce.number().int().min(1).optional().default(1),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  limit: z.coerce.number().int().min(1).max(200).optional().default(20),
 });
 
 // GET /api/topics
@@ -68,6 +69,14 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response, next: Next
       include: { createdBy: { select: { id: true, username: true } } },
     });
     res.status(201).json(topic);
+    appendAuditLog({
+      actorId: req.user!.id,
+      action: 'TOPIC_CREATED',
+      entityType: 'Topic',
+      entityId: topic.id,
+      topicId: topic.id,
+      data: { title: topic.title },
+    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }
@@ -120,33 +129,13 @@ router.patch('/:topicId', requireAuth, async (req: AuthRequest, res: Response, n
     });
 
     res.json(topic);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// DELETE /api/topics/:topicId
-router.delete('/:topicId', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const topicId = req.params.topicId as string;
-    const existing = await prisma.topic.findUnique({ where: { id: topicId } });
-
-    if (!existing) {
-      res.status(404).json({ error: '话题不存在' });
-      return;
-    }
-
-    if (existing.createdById !== req.user!.id) {
-      res.status(403).json({ error: '无权限删除此话题' });
-      return;
-    }
-
-    await prisma.$transaction([
-      prisma.message.deleteMany({ where: { topicId } }),
-      prisma.topic.delete({ where: { id: topicId } }),
-    ]);
-
-    res.status(204).send();
+    appendAuditLog({
+      actorId: req.user!.id,
+      action: status === 'ARCHIVED' ? 'TOPIC_ARCHIVED' : 'TOPIC_REOPENED',
+      entityType: 'Topic',
+      entityId: topic.id,
+      topicId: topic.id,
+    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }

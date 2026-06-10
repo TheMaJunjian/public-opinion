@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats } from '../utils/modelBridge';
@@ -529,7 +529,6 @@ type FocusEntry = {
 
 export default function TopicDetailPage() {
   const { topicId } = useParams<{ topicId: string }>();
-  const navigate = useNavigate();
   const { user } = useAuth();
 
   const [topic, setTopic] = useState<Topic | null>(null);
@@ -918,6 +917,9 @@ export default function TopicDetailPage() {
     const snapshot = captureSnapshot();
     const entry: FocusEntry = { ids: messageIds, snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
     setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
+    // Bump exit key to force GraphView clean remount when entering focus,
+    // avoiding React 18 concurrent reconciliation removeChild errors.
+    setFocusExitKey(k => k + 1);
   }
 
   function exitFocus() {
@@ -989,31 +991,74 @@ export default function TopicDetailPage() {
             const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
             const newTargetRef: TargetRef = { kind: 'message', messageId: msg.id };
             const updatedRefs = [...existingRefs, newTargetRef];
-            api.updateRelation(topicId!, topicFocusRelMsgId, { targetRefs: updatedRefs })
+            api.updateRelation(topicId!, topicFocusRelMsgId, {
+              relationType: topicRelation.relationType,
+              targetRefs: updatedRefs,
+              payload: topicRelation.payload,
+            })
               .then(updatedRel => {
-                setRelations(prev => prev.map(r => r.id === updatedRel.id ? updatedRel : r));
+                // Replace the old (now superseded) relation with the new one
+                // so topicTextIds in the useMemo picks up the added message.
+                const newRelId = updatedRel.id;
+                setRelations(prev => {
+                  const filtered = prev.filter(r => r.id !== topicFocusRelMsgId);
+                  return [...filtered, updatedRel];
+                });
+                // Replace the old relation's DemoMessage card with the new one
+                // so the UI card ID matches the active relation in relationById.
+                // Fixes: (1) old classify card appearing as an extra card after
+                // sending a message in topic-focus mode,
+                // (2) re-entering the topic after exit producing an empty view
+                // because the old relMsgId was no longer in relationById.
+                setMessages(prev => {
+                  const filtered = prev.filter(m => m.id !== topicFocusRelMsgId);
+                  return [...filtered, buildRelationDemoMessage(updatedRel)];
+                });
+                // Update focus entry to point to the new relation ID so
+                // subsequent messages append to the latest targetRefs.
+                setFocusEntries(prev => {
+                  if (prev.length === 0) return prev;
+                  const last = prev[prev.length - 1];
+                  if (last.mode !== "topic" || last.topicRelMsgId !== topicFocusRelMsgId) return prev;
+                  return [...prev.slice(0, -1), { ...last, topicRelMsgId: newRelId }];
+                });
+                // Remap existing edges that reference the old relation to the new
+                // relation ID, then add a classify edge for the new message.
+                setEdges(prev => {
+                  let next = prev.map(e => {
+                    if (e.relationMessageId !== topicFocusRelMsgId) return e;
+                    return {
+                      ...e,
+                      relationMessageId: newRelId,
+                      from: e.from.messageId === `anon:${topicFocusRelMsgId}`
+                        ? { ...e.from, messageId: `anon:${newRelId}` }
+                        : e.from,
+                    };
+                  });
+                  const alreadyLinked = next.some(e =>
+                    (e.relationType === "classify" || e.relationType === "summary") &&
+                    e.relationMessageId === newRelId &&
+                    e.to.messageId === msg.id &&
+                    e.to.selection.kind === "whole"
+                  );
+                  if (!alreadyLinked) {
+                    const relType = (topicFocusRelType === "summary" ? "summary" : "classify") as RelationType;
+                    next = [...next, {
+                      id: nextId("edge"),
+                      relationMessageId: newRelId,
+                      relationType: relType,
+                      from: { messageId: `anon:${newRelId}`, selection: { kind: "whole" } },
+                      to: { messageId: msg.id, selection: { kind: "whole" } },
+                      relationLabel: relationTypeName(relType),
+                    }];
+                  }
+                  return next;
+                });
               })
               .catch(e => console.warn('更新分类目标失败:', e));
           }
-          // Also update local edges state so the UI reflects the change immediately.
-          setEdges(prev => {
-            const alreadyLinked = prev.some(e =>
-              (e.relationType === "classify" || e.relationType === "summary") &&
-              e.relationMessageId === topicFocusRelMsgId &&
-              e.to.messageId === msg.id &&
-              e.to.selection.kind === "whole"
-            );
-            if (alreadyLinked) return prev;
-            const relType = (topicFocusRelType === "summary" ? "summary" : "classify") as RelationType;
-            return [...prev, {
-              id: nextId("edge"),
-              relationMessageId: topicFocusRelMsgId,
-              relationType: relType,
-              from: { messageId: `anon:${topicFocusRelMsgId}`, selection: { kind: "whole" } },
-              to: { messageId: msg.id, selection: { kind: "whole" } },
-              relationLabel: relationTypeName(relType),
-            }];
-          });
+          // Edge is now added inside the .then callback above with the
+          // correct (new) relationMessageId matching the updated focus entry.
         }
       }
       if (!overrideContent) setNewMessageContent("");
@@ -1088,7 +1133,9 @@ export default function TopicDetailPage() {
     setLastClickedMessageId(messageId);
     const currentlyActive = activeTextSelectId === messageId;
     if (m?.kind === "relation") {
-      const relType = relationTypeByRelMsgId.get(messageId);
+      // Use msg.relationType directly — more reliable than relationTypeByRelMsgId
+      // which depends on edges and can be stale after ErrorBoundary recovery.
+      const relType = m.relationType;
       if (relType === "classify" || relType === "summary") {
         // Always clear any text selection before entering classification to prevent
         // the browser's native double-click text selection from persisting into the new view.
@@ -1184,10 +1231,23 @@ export default function TopicDetailPage() {
       }
       const relType = relationTypeByRelMsgId.get(mid);
       if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") continue;
-      const key = `relation:${mid}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      res.push({ kind: "relation", relationId: mid });
+      // ARRANGE / MERGE: expand to their contained text messages (layout containers).
+      // CLASSIFY / SUMMARY: keep as relation-kind targets — they appear as topic
+      // cards inside the new classification, not as expanded text messages.
+      if (relType === "arrange" || relType === "merge") {
+        const owned = collectOwnedByRelation(mid, relationById);
+        for (const textId of owned.textIds) {
+          const key = `message:${textId}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          res.push({ kind: "message", messageId: textId });
+        }
+      } else {
+        const key = `relation:${mid}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        res.push({ kind: "relation", relationId: mid });
+      }
     }
     return res;
   }
@@ -1819,6 +1879,9 @@ export default function TopicDetailPage() {
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
       setRelationType(null); setSecondaryRelationType("none");
+      // Bump key to force GraphView clean remount after adding classify edges,
+      // avoiding React 18 concurrent reconciliation removeChild errors.
+      setFocusExitKey(k => k + 1);
       return;
     }
 
@@ -2653,10 +2716,14 @@ export default function TopicDetailPage() {
     // the edge does not connect to a classified (hidden) text endpoint.
     // Edges of directly-focused relation messages are always included
     // so the relation structure is fully visible (fix: REFERENCE edge focus).
+    // CLASSIFY / SUMMARY edges are always included so their topic cards can
+    // display the correct target count, even when targets are hidden.
     const graphEdges = baseEdges.filter(e => {
       if (!graphVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
       // Edges of focused relations: always visible
       if (focusRelationMsgIds.has(e.relationMessageId)) return true;
+      // CLASSIFY / SUMMARY: keep edges so topic card target count is correct
+      if (e.relationType === 'classify' || e.relationType === 'summary') return true;
       const fromOk = e.from.messageId.startsWith('anon:') || graphVisibleIds.has(e.from.messageId);
       const toOk = graphVisibleIds.has(e.to.messageId);
       return fromOk && toOk;
@@ -2818,14 +2885,6 @@ export default function TopicDetailPage() {
     document.addEventListener('mouseup', onMouseUp);
   }
 
-  async function handleDeleteTopic() {
-    if (!topicId || !confirm('确定要删除这个话题吗？')) return;
-    try {
-      await api.deleteTopic(topicId);
-      navigate('/');
-    } catch (e: any) { alert(`删除失败: ${e?.message ?? e}`); }
-  }
-
   if (loading) {
     return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
   }
@@ -2871,7 +2930,6 @@ export default function TopicDetailPage() {
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
               {topic?.status === 'ARCHIVED' ? '重新开放' : '归档'}
             </button>
-            <button onClick={handleDeleteTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #a00", background: "#300", color: "#faa", fontSize: 11, cursor: "pointer" }}>删除</button>
           </>}
         </div>
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
@@ -3245,7 +3303,7 @@ export default function TopicDetailPage() {
             <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
           </div>
 
-          <StructureView focusIds={currentFocusIds ?? []} messages={messages} edges={edges} />
+          <StructureView key={`sv-${focusExitKey}`} focusIds={currentFocusIds ?? []} messages={messages} edges={edges} />
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>

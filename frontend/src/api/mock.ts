@@ -11,7 +11,7 @@
  * and focus-mode-relevant hop structures.
  */
 
-import type { User, Topic, Message, Relation, PaginatedResponse, TargetRef } from '../types';
+import type { User, Topic, Message, Relation, PaginatedResponse, TargetRef, RelationPayload } from '../types';
 
 const delay = (ms = 150) => new Promise(res => setTimeout(res, ms));
 
@@ -353,14 +353,6 @@ export async function updateTopic(id: string, data: { status: 'OPEN' | 'ARCHIVED
   return topic;
 }
 
-export async function deleteTopic(id: string) {
-  await delay();
-  const idx = topics.findIndex(t => t.id === id);
-  if (idx === -1) throw new Error('话题不存在');
-  topics.splice(idx, 1);
-  return { message: '已删除' };
-}
-
 export async function getMessages(topicId: string, params?: { page?: number; limit?: number }) {
   await delay();
   const filtered = messages.filter(m => m.topicId === topicId);
@@ -408,12 +400,25 @@ export async function createRelation(topicId: string, data: {
 }
 
 export async function updateRelation(topicId: string, relationId: string, data: {
+  relationType: string;
   targetRefs: TargetRef[];
+  payload?: RelationPayload;
 }) {
   await delay();
   if (!mockUser) throw new Error('请先登录');
-  const idx = relations.findIndex(r => r.id === relationId && r.topicId === topicId);
-  if (idx === -1) throw new Error('关系消息不存在');
-  relations[idx] = { ...relations[idx], targetRefs: data.targetRefs };
-  return relations[idx];
+  const oldIdx = relations.findIndex(r => r.id === relationId && r.topicId === topicId);
+  if (oldIdx === -1) throw new Error('关系消息不存在');
+  const oldRel = relations[oldIdx];
+  const newRel: Relation = {
+    id: `rel-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    topicId,
+    relationType: data.relationType,
+    sourceMessageId: oldRel.sourceMessageId,
+    targetRefs: data.targetRefs,
+    payload: data.payload ?? oldRel.payload,
+    createdAt: new Date().toISOString(),
+    createdBy: { id: mockUser.id, username: mockUser.username, createdAt: mockUser.createdAt },
+  };
+  relations.push(newRel);
+  return newRel;
 }

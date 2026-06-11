@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { RELATION_TYPES } from '../lib/relationTypes';
-import { appendAuditLog } from '../lib/audit';
+import { applyEvent } from '../lib/events';
 
 const relationsRouter = Router({ mergeParams: true });
 
@@ -85,7 +85,7 @@ const createRelationSchema = z.object({
   }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
 const CLASSIFY_CROSS_LINK_ERROR = '分类目标与已分类消息存在非引用关联，无法建立分类关系';
 const MERGE_CROSS_LINK_ERROR = '归并目标与已分类消息存在非引用关联，无法建立归并关系';
@@ -242,6 +242,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     // For ARRANGE: the arranged text messages are stored as targets, not sources.
     const noSourceRelTypeNames: Record<string, string> = {
       CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', ARRANGE: '排列',
+      RECOMMEND: '推荐', ARCHIVE: '冷藏',
     };
     if (data.relationType in noSourceRelTypeNames && data.sourceMessageId) {
       res.status(400).json({ error: `${noSourceRelTypeNames[data.relationType]}关系不应提供来源消息 ID` });
@@ -468,23 +469,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         ? { ...data.payload, targetLayout: 'multi-column' as const }
         : data.payload;
 
-    // Create the relation as a RELATION-kind message in the unified Message table.
-    const message = await prisma.message.create({
-      data: {
-        topicId,
-        createdById: req.user!.id,
-        kind: 'RELATION',
-        relationType: data.relationType,
-        relSourceId: data.sourceMessageId ?? null,
-        targetRefs: data.targetRefs,
-        relationPayload: relationPayload ?? undefined,
-        content: null,
-      },
-      include: { createdBy: { select: { id: true, username: true } } },
-    });
-
-    // If this relation supersedes an older one, mark the old as superseded.
-    // Only CLASSIFY and SUMMARY support superseding via this mechanism.
+    // Validate supersedesRelationId BEFORE any write, so we don't leave orphans.
     if (data.supersedesRelationId) {
       const oldRel = await prisma.message.findFirst({
         where: { id: data.supersedesRelationId, topicId, kind: 'RELATION' },
@@ -501,11 +486,22 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         res.status(400).json({ error: '该关系已被取代，不可重复取代' });
         return;
       }
-      await prisma.message.update({
-        where: { id: data.supersedesRelationId },
-        data: { supersededBy: message.id },
-      });
     }
+
+    // Apply the event — state write + audit log on critical path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const message: any = await applyEvent({
+      type: 'RELATION_CREATED',
+      actorId: req.user!.id,
+      topicId,
+      payload: {
+        relationType: data.relationType,
+        sourceMessageId: data.sourceMessageId ?? null,
+        targetRefs: data.targetRefs,
+        relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
+        supersedesRelationId: data.supersedesRelationId ?? null,
+      },
+    });
 
     // Return in the Relation API shape expected by the frontend.
     res.status(201).json({
@@ -518,18 +514,6 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       createdAt: message.createdAt,
       createdBy: message.createdBy,
     });
-    appendAuditLog({
-      actorId: req.user!.id,
-      action: data.supersedesRelationId ? 'RELATION_SUPERSEDED' : 'RELATION_CREATED',
-      entityType: 'Relation',
-      entityId: message.id,
-      topicId,
-      data: {
-        relationType: message.relationType!,
-        supersedes: data.supersedesRelationId ?? null,
-        targetCount: (data.targetRefs ?? []).length,
-      },
-    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }

@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
-import { appendAuditLog } from '../lib/audit';
+import { applyEvent } from '../lib/events';
 
 const router = Router();
 
@@ -64,19 +64,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 router.post('/', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { title, body } = createTopicSchema.parse(req.body);
-    const topic = await prisma.topic.create({
-      data: { title, body, createdById: req.user!.id },
-      include: { createdBy: { select: { id: true, username: true } } },
+    const topic = await applyEvent({
+      type: 'TOPIC_CREATED',
+      actorId: req.user!.id,
+      payload: { title, body },
     });
     res.status(201).json(topic);
-    appendAuditLog({
-      actorId: req.user!.id,
-      action: 'TOPIC_CREATED',
-      entityType: 'Topic',
-      entityId: topic.id,
-      topicId: topic.id,
-      data: { title: topic.title },
-    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }
@@ -122,20 +115,14 @@ router.patch('/:topicId', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    const topic = await prisma.topic.update({
-      where: { id: topicId },
-      data: { status },
-      include: { createdBy: { select: { id: true, username: true } } },
+    const topic = await applyEvent({
+      type: 'TOPIC_STATUS_CHANGED',
+      actorId: req.user!.id,
+      topicId,
+      payload: { status },
     });
 
     res.json(topic);
-    appendAuditLog({
-      actorId: req.user!.id,
-      action: status === 'ARCHIVED' ? 'TOPIC_ARCHIVED' : 'TOPIC_REOPENED',
-      entityType: 'Topic',
-      entityId: topic.id,
-      topicId: topic.id,
-    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }

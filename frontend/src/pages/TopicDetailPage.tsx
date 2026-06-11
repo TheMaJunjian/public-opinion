@@ -776,8 +776,18 @@ export default function TopicDetailPage() {
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])
         .filter(mid => msgMap.get(mid)?.kind === 'normal');
-      if (textEndpoints.length === 0) continue;
-      if (textEndpoints.every(mid => hiddenTextIds.has(mid))) {
+      if (textEndpoints.length > 0) {
+        if (textEndpoints.some(mid => hiddenTextIds.has(mid))) {
+          ids.add(relMsgId);
+        }
+        continue;
+      }
+      // No text endpoints — all targets are relation messages.
+      // Hide if any target relation is owned by a CLASSIFY/SUMMARY.
+      const relEndpoints = relEdges
+        .flatMap(e => [e.from.messageId, e.to.messageId])
+        .filter(mid => msgMap.get(mid)?.kind === 'relation');
+      if (relEndpoints.some(mid => ownedRelationIds.has(mid))) {
         ids.add(relMsgId);
       }
     }
@@ -1231,10 +1241,15 @@ export default function TopicDetailPage() {
       }
       const relType = relationTypeByRelMsgId.get(mid);
       if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") continue;
-      // ARRANGE / MERGE: expand to their contained text messages (layout containers).
-      // CLASSIFY / SUMMARY: keep as relation-kind targets — they appear as topic
-      // cards inside the new classification, not as expanded text messages.
+      // ARRANGE / MERGE: expand to their contained text messages (layout containers),
+      // AND also keep the container itself as a relation-kind target so it gets
+      // hidden from the parent view (list + graph) when classified.
       if (relType === "arrange" || relType === "merge") {
+        const relKey = `relation:${mid}`;
+        if (!seen.has(relKey)) {
+          seen.add(relKey);
+          res.push({ kind: "relation", relationId: mid });
+        }
         const owned = collectOwnedByRelation(mid, relationById);
         for (const textId of owned.textIds) {
           const key = `message:${textId}`;
@@ -2637,7 +2652,17 @@ export default function TopicDetailPage() {
         const textEndpoints = relEdges
           .flatMap(e => [e.from.messageId, e.to.messageId])
           .filter(mid => msgMap.get(mid)?.kind === 'normal');
-        if (textEndpoints.length > 0 && textEndpoints.every(mid => topicTextIds.has(mid))) {
+        if (textEndpoints.length > 0) {
+          if (textEndpoints.every(mid => topicTextIds.has(mid))) {
+            topicRelationIds.add(relMsgId);
+          }
+          continue;
+        }
+        // All endpoints are relation messages — include if any target is in the topic
+        const relEndpoints = relEdges
+          .flatMap(e => [e.from.messageId, e.to.messageId])
+          .filter(mid => msgMap.get(mid)?.kind === 'relation');
+        if (relEndpoints.some(mid => topicRelationIds.has(mid))) {
           topicRelationIds.add(relMsgId);
         }
       }

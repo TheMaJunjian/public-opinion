@@ -2249,29 +2249,6 @@ export default function GraphView(props: GraphViewProps) {
       }
     }
 
-    // Compute INLINE BADGES — RECOMMEND / ARCHIVE: small badge anchored to target message card
-    // Position: top-right corner of the target card, stacked upward for multiple badges.
-    const BADGE_W = 46, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
-    const newInlineBadgesByMsg = new Map<string, Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>();
-    for (const e of edges) {
-      if (getRelKind(e.relationType) !== 'inline-badge') continue;
-      if (e.to.selection.kind !== 'whole') continue;
-      const mid = e.to.messageId;
-      const targetMsg = msgMap.get(mid);
-      const isInlineBadgeTargetCard = !!targetMsg && (
-        targetMsg.kind === 'normal' ||
-        (targetMsg.kind === 'relation' && relationCardMsgIds.has(mid))
-      );
-      if (!isInlineBadgeTargetCard) continue;
-      const ep = endpointBoxForNormal(mid), box = ep?.box ?? layout[mid]; if (!box) continue;
-      const spec = getPresentationSpec(e.relationType);
-      const arr = newInlineBadgesByMsg.get(mid) ?? [];
-      const badgeX = box.x + box.width - BADGE_W + BADGE_RIGHT_GAP;
-      const badgeY = box.y + BADGE_TOP_OFFSET - arr.length * (BADGE_H + 2);
-      arr.push({ relMsgId: e.relationMessageId, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H } });
-      newInlineBadgesByMsg.set(mid, arr);
-    }
-
     // Compute AGREE/DISAGREE decorations targeting relation messages (relDecByRelMsgId)
     // These are displayed next to the relation's visual element (tag badge, arrange frame, edge label).
     // Uses transitive resolution: disagree-on-disagree projects as agree on the original target.
@@ -2299,7 +2276,6 @@ export default function GraphView(props: GraphViewProps) {
     setTagDecorationsByMsg(newTagDecorationsByMsg);
     setArrangeFrames(newArrangeFrames);
     setGroupFrames(newGroupFrames);
-    setInlineBadgesByMsg(newInlineBadgesByMsg);
 
     // DEBUG: send rects + cardIds to parent
     if (onDebugRects) {
@@ -2371,6 +2347,36 @@ export default function GraphView(props: GraphViewProps) {
     const groupFrameByRelMsgId = new Map<string,Rect>();
     for (const gf of newGroupFrames) groupFrameByRelMsgId.set(gf.relMsgId, gf.rect);
 
+    // Compute INLINE BADGES — RECOMMEND / ARCHIVE: small badge anchored to target message card.
+    // Positioned after frameByRelMsgId / groupFrameByRelMsgId so frame targets resolve correctly.
+    const BADGE_W = 46, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
+    const newInlineBadgesByMsg = new Map<string, Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>();
+    for (const e of edges) {
+      if (getRelKind(e.relationType) !== 'inline-badge') continue;
+      if (e.to.selection.kind !== 'whole') continue;
+      const mid = e.to.messageId;
+      const targetMsg = msgMap.get(mid);
+      const isInlineBadgeTargetCard = !!targetMsg && (
+        targetMsg.kind === 'normal' ||
+        (targetMsg.kind === 'relation' && (
+          relationCardMsgIds.has(mid) ||
+          frameByRelMsgId.has(mid) ||
+          groupFrameByRelMsgId.has(mid)
+        ))
+      );
+      if (!isInlineBadgeTargetCard) continue;
+      const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
+      const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
+      if (!box) continue;
+      const spec = getPresentationSpec(e.relationType);
+      const arr = newInlineBadgesByMsg.get(mid) ?? [];
+      const badgeX = box.x + box.width - BADGE_W + BADGE_RIGHT_GAP;
+      const badgeY = box.y + BADGE_TOP_OFFSET - arr.length * (BADGE_H + 2);
+      arr.push({ relMsgId: e.relationMessageId, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H } });
+      newInlineBadgesByMsg.set(mid, arr);
+    }
+    setInlineBadgesByMsg(newInlineBadgesByMsg);
+
     const tagBadgeByRelMsgId = new Map<string,{mid:string;rect:Rect}>();
     for (const [mid,groups] of Object.entries(newTagDecorationsByMsg)) {
       for (const group of groups) {
@@ -2405,6 +2411,12 @@ export default function GraphView(props: GraphViewProps) {
           if (relCard) return relCard;
         }
         return fr ? { x: fr.x, y: fr.y, width: fr.width, height: fr.height } : null;
+      }
+      // CLASSIFY / SUMMARY are edge-label kind but rendered as topic cards in normals.
+      // When another relation (e.g. REFERENCE) targets them, use their card position.
+      if (relType === 'classify' || relType === 'summary') {
+        const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
+        if (relCard) return relCard;
       }
       if (relType === "tag") {
         const tagInfo = tagBadgeByRelMsgId.get(relId);

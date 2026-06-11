@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createHash } from 'crypto';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
-import { appendAuditLog } from '../lib/audit';
+import { applyEvent } from '../lib/events';
 
 const messagesRouter = Router({ mergeParams: true });
 
@@ -75,31 +75,22 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
       quotedTextHash = createHash('sha256').update(data.quotedText).digest('hex');
     }
 
-    const message = await prisma.message.create({
-      data: {
-        topicId,
-        createdById: req.user!.id,
-        kind: 'TEXT',
+    const message = await applyEvent({
+      type: 'MESSAGE_CREATED',
+      actorId: req.user!.id,
+      topicId,
+      payload: {
         contentType: data.contentType,
         content: data.content,
-        quoteSourceId: data.quoteSourceId,
-        quotedText: data.quotedText,
-        quotedTextHash,
-        quoteContextBefore: data.quoteContextBefore,
-        quoteContextAfter: data.quoteContextAfter,
+        quoteSourceId: data.quoteSourceId ?? null,
+        quotedText: data.quotedText ?? null,
+        quotedTextHash: quotedTextHash ?? null,
+        quoteContextBefore: data.quoteContextBefore ?? null,
+        quoteContextAfter: data.quoteContextAfter ?? null,
       },
-      include: { createdBy: { select: { id: true, username: true } } },
     });
 
     res.status(201).json(message);
-    appendAuditLog({
-      actorId: req.user!.id,
-      action: 'MESSAGE_CREATED',
-      entityType: 'Message',
-      entityId: message.id,
-      topicId,
-      data: { kind: 'TEXT', contentLength: data.content.length },
-    }).catch(err => console.error('audit log error:', err));
   } catch (err) {
     next(err);
   }

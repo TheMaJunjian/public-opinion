@@ -34,6 +34,10 @@ jest.mock('../lib/prisma', () => ({
       findMany: jest.fn(),
       count: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
+    },
+    auditLog: {
+      create: jest.fn(),
     },
   },
 }));
@@ -124,6 +128,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       ...mockRelationMsg,
       id: 'rel-new',
     });
+    // Event sourcing: audit log write
+    (prisma.auditLog.create as jest.Mock).mockResolvedValue({});
   });
 
   it('returns 400 for an invalid relationType', async () => {

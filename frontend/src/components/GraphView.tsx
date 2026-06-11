@@ -1715,19 +1715,33 @@ export default function GraphView(props: GraphViewProps) {
     for (const id of shouldKeepVisible) isTagSource.delete(id);
     return isTagSource;
   }, [edges, msgMap]);
-  // CLASSIFY / SUMMARY relation messages are displayed as topic cards on the main canvas
-  // (not as SVG frames), so they participate in the normals layout like regular text messages.
-  const topicRelMsgIds = useMemo(() => {
+  // CLASSIFY relation messages are displayed as topic cards on the main canvas.
+  // SUMMARY relation messages are displayed as normal cards (replace-overlay semantics).
+  const classifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const m of messages) {
-      if (m.kind === "relation" && (m.relationType === "classify" || m.relationType === "summary")) ids.add(m.id);
+      if (m.kind === "relation" && m.relationType === "classify") ids.add(m.id);
     }
     for (const e of edges) {
-      if (e.relationType === 'classify' || e.relationType === 'summary') ids.add(e.relationMessageId);
+      if (e.relationType === 'classify') ids.add(e.relationMessageId);
     }
     return ids;
   }, [edges, messages]);
-  const relationCardMsgIds = useMemo(() => new Set<string>(topicRelMsgIds), [topicRelMsgIds]);
+  const summaryRelMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of messages) {
+      if (m.kind === "relation" && m.relationType === "summary") ids.add(m.id);
+    }
+    for (const e of edges) {
+      if (e.relationType === 'summary') ids.add(e.relationMessageId);
+    }
+    return ids;
+  }, [edges, messages]);
+  const relationCardMsgIds = useMemo(() => {
+    const ids = new Set(classifyRelMsgIds);
+    for (const id of summaryRelMsgIds) ids.add(id);
+    return ids;
+  }, [classifyRelMsgIds, summaryRelMsgIds]);
   const normals = useMemo(() => messages.filter(m =>
     (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
     (m.kind === "relation" && relationCardMsgIds.has(m.id))
@@ -1735,6 +1749,7 @@ export default function GraphView(props: GraphViewProps) {
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
   // Exclude CLASSIFY/SUMMARY/ARRANGE messages from relIds — they are now in normals and should not be
   // treated as relation-message endpoints for edge-routing constraint algorithms.
+  // (SUMMARY is in normals via summaryRelMsgIds ⊆ relationCardMsgIds)
   const relIds = useMemo(() => new Set(messages.filter(m => m.kind === "relation" && !relationCardMsgIds.has(m.id)).map(m => m.id)), [messages, relationCardMsgIds]);
 
   const { col: baseCol, maxCol: baseMaxCol } = useMemo(() => computeMinColumnsForAnnoRefRule1(normalIds, edges, relIds), [normalIds, edges, relIds]);
@@ -1819,6 +1834,35 @@ export default function GraphView(props: GraphViewProps) {
     return ids;
   }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
 
+  // Summary-target IDs: all text-message targets of SUMMARY relations.
+  // These are hidden in the non-linear view — the summary card replaces them.
+  const summaryTargetMsgIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType !== 'summary') continue;
+      if (e.to.selection.kind !== 'whole' && e.to.selection.kind !== 'text') continue;
+      ids.add(e.to.messageId);
+    }
+    return ids;
+  }, [edges]);
+
+  // Summary-target IDs that are NOT themselves summary source messages.
+  // A summary that is also summarized by another (chained) remains visible.
+  const hiddenSummaryTargetIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of summaryTargetMsgIds) {
+      if (!summaryRelMsgIds.has(id)) ids.add(id);
+    }
+    return ids;
+  }, [summaryTargetMsgIds, summaryRelMsgIds]);
+
+  // Combined set of all hidden target message IDs (CORRECT + SUMMARY).
+  const hiddenTargetIds = useMemo(() => {
+    const ids = new Set(hiddenCorrectedTargetIds);
+    for (const id of hiddenSummaryTargetIds) ids.add(id);
+    return ids;
+  }, [hiddenCorrectedTargetIds, hiddenSummaryTargetIds]);
+
   // Build frame blocks: identify which cards belong to which frames (arrange/merge/classify/summary).
   // This is computed before the layout so frames are placed as atomic units.
   // visibleCardIds includes all cards that endpointBoxForNormal can find (normals + tag sources).
@@ -1853,8 +1897,8 @@ export default function GraphView(props: GraphViewProps) {
   // ── Two-pass layout: pass 1 gets frame rects, correct columns, pass 2 is final ──
   // Pass 1: compute initial layout solely to obtain actual frame rects
   const { frameRects: pass1FrameRects } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf: pipelineCol, measuredHeights, measuredWidths, maxCol: pipelineMaxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
-    [normals, pipelineCol, measuredHeights, measuredWidths, pipelineMaxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
+    () => computeNoOverlapLayout({ normals, colOf: pipelineCol, measuredHeights, measuredWidths, maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages }),
+    [normals, pipelineCol, measuredHeights, measuredWidths, pipelineMaxCol, hiddenTargetIds, frameBlocks, messages]
   );
 
   // Column correction: push anno/ref/reply sources targeting frames to the right of the frame's actual visual boundary
@@ -1867,8 +1911,8 @@ export default function GraphView(props: GraphViewProps) {
 
   // Pass 2: final layout with corrected columns
   const { layout: pass2Layout, canvasHeight: pass2CanvasHeight, frameRects: baseFrameRects } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, measuredWidths, maxCol, correctedTargetIds: hiddenCorrectedTargetIds, frameBlocks, allMessages: messages }),
-    [normals, colOf, measuredHeights, measuredWidths, maxCol, hiddenCorrectedTargetIds, frameBlocks, messages]
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, measuredWidths, maxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages }),
+    [normals, colOf, measuredHeights, measuredWidths, maxCol, hiddenTargetIds, frameBlocks, messages]
   );
 
   // Compact: shift anno/ref source clusters toward their targets
@@ -2796,12 +2840,13 @@ export default function GraphView(props: GraphViewProps) {
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
           if (hideMessageIds?.has(msg.id)) return null;
-          // Corrected targets that are not themselves a correction source are invisible (replaced by the correction source card).
-          // Chained correction sources remain visible so their own correction badge is preserved.
-          if (hiddenCorrectedTargetIds.has(msg.id)) return null;
+          // Hidden targets: corrected targets (replaced by correction source) and
+          // summarized targets (covered by summary card). Chained sources remain visible.
+          if (hiddenTargetIds.has(msg.id)) return null;
 
-          // CLASSIFY / SUMMARY relation messages are shown as relation cards on the main canvas.
-          if (msg.kind === "relation" && topicRelMsgIds.has(msg.id)) {
+          // CLASSIFY relation messages are shown as topic cards on the main canvas.
+          // SUMMARY messages fall through to normal card rendering below.
+          if (msg.kind === "relation" && classifyRelMsgIds.has(msg.id)) {
             // Count unique text-message targets from ALL edges (not just visible ones).
             // The graphEdges filter may exclude edges whose targets are hidden (classified),
             // so we count from the raw edges prop directly. Deduplicate by to.messageId
@@ -2815,8 +2860,7 @@ export default function GraphView(props: GraphViewProps) {
               }
               return seen.size;
             })();
-            const isSummaryTopic = msg.relationType === "summary";
-            const topicTitle = getRelationTitle(msg.relationPayload) || (isSummaryTopic ? `总结（${targetCount}）` : `分类（${targetCount}）`);
+            const topicTitle = getRelationTitle(msg.relationPayload) || `分类（${targetCount}）`;
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             const isActive = lastClickedMessageId === msg.id;
             return (
@@ -2828,8 +2872,8 @@ export default function GraphView(props: GraphViewProps) {
                   padding:"12px 16px",boxShadow:isWhole?"0 8px 20px rgba(11,132,255,0.22)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
                   gap:8,cursor:"pointer",outline:isActive?"1px dashed #0b84ff":"none",userSelect:"none",color:"#f5f5f5"}}>
                 <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
-                  <span>{`${isSummaryTopic ? "总结" : "分类"} ${msg.id}`}</span>
-                  <span>{isSummaryTopic ? "双击进入总结" : "双击进入分类"}</span>
+                  <span>{`分类 ${msg.id}`}</span>
+                  <span>双击进入分类</span>
                 </div>
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>

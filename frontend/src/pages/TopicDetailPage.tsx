@@ -2596,9 +2596,9 @@ export default function TopicDetailPage() {
           }
           if (relType === 'ARRANGE' || relType === 'MERGE') {
             // ARRANGE and MERGE are framing relations: all content (text targets and
-            // nested framing relations) is expanded inline. CLASSIFY and SUMMARY targets
-            // are shown as topic cards but not recursively expanded (user must double-click
-            // to enter them).
+            // nested framing relations) is expanded inline.
+            // CLASSIFY and SUMMARY targets are shown as topic cards but not expanded
+            // (user must double-click to enter them).
             getTextTargetIds(rel.targetRefs).forEach(id => topicTextIds.add(id));
             getRelationTargetIds(rel.targetRefs).forEach(id => {
               topicRelationIds.add(id);
@@ -2606,13 +2606,15 @@ export default function TopicDetailPage() {
               if ((childRelType === 'ARRANGE' || childRelType === 'MERGE') && !visited.has(id)) {
                 queue.push(id);
               }
-              // CLASSIFY and SUMMARY targets are shown as topic cards but not recursively expanded.
+              // CLASSIFY and SUMMARY remain as opaque topic cards.
             });
           } else {
             // CLASSIFY and SUMMARY: these are opaque topic cards — they are already in
             // topicRelationIds (added when first encountered as targets), and GraphView
-            // will render them as cards. Do NOT recursively expand their internal content
-            // into the current view; the user must double-click to enter them.
+            // will render them as cards.  Their internal targets are NOT expanded into
+            // the current view; the user must double-click to enter them.
+            // (SUMMARY targets are hidden by GraphView's hiddenTargetIds in non-linear
+            // view; in linear view, double-click the summary card to see its targets.)
           }
         }
       }
@@ -2668,11 +2670,16 @@ export default function TopicDetailPage() {
       }
       const visibleIds = new Set<string>([...topicTextIds, ...topicRelationIds]);
       const topicMessages = baseMessages.filter(m => visibleIds.has(m.id));
-      const topicEdges = baseEdges.filter(e =>
-        visibleIds.has(e.relationMessageId) &&
-        (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
-        visibleIds.has(e.to.messageId)
-      );
+      // Include edges whose relation message is visible.  For CLASSIFY and SUMMARY
+      // edges, keep them even when the target text messages are not in visibleIds —
+      // this lets topic cards display correct target counts and lets SUMMARY compute
+      // its hiddenTargetIds for covered messages.
+      const topicEdges = baseEdges.filter(e => {
+        if (!visibleIds.has(e.relationMessageId)) return false;
+        if (e.relationType === 'classify' || e.relationType === 'summary') return true;
+        return (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
+               visibleIds.has(e.to.messageId);
+      });
       return {
         graphMessagesToRender: topicMessages,
         graphEdgesToRender: topicEdges,

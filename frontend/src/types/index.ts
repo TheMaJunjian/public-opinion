@@ -45,8 +45,8 @@ export interface Message {
  *   Decoration (badge on target):    AGREE, DISAGREE
  *   Decoration-label (text tag):     TAG
  *   Arrange-frame (border wrap):      ARRANGE
- *   Replace/Overlay:                 CORRECT
- *   Frame/Group:                     CLASSIFY, MERGE, SUMMARY
+ *   Replace/Overlay:                 CORRECT, SUMMARY
+ *   Frame/Group:                     CLASSIFY, MERGE
  *   Inline badge:                    RECOMMEND, ARCHIVE
  *
  * Notes:
@@ -193,7 +193,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true   },
   CLASSIFY:    { kind: 'edge-label',        label: '分类', color: 'gray',   formsTrees: false },
   MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },
-  SUMMARY:     { kind: 'edge-label',        label: '总结', color: 'amber',  formsTrees: false },
+  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
 };

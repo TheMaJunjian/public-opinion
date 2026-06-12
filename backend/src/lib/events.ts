@@ -3,14 +3,8 @@
  *
  * Designdoc: Phase 7 Stage 1 — 事件化 Web 原型
  *   - 所有关键动作写 AuditLog（含完整 payload，可回放）
- *   - 审计日志在关键路径上：失败 = 请求失败
- *   - 不允许直接改最终状态
- *
- * applyEvent() is the SINGLE write path. Routes do validation only,
- * then delegate to applyEvent() which writes state + audit log.
- *
- * TODO(Phase 7 Stage 2): wrap state + audit in prisma.$transaction
- * for atomicity once test infrastructure supports it.
+ *   - 状态写入 + 审计日志在 prisma.$transaction 中原子执行
+ *   - applyEvent() is the SINGLE write path
  */
 import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
@@ -22,7 +16,10 @@ import { Prisma } from '@prisma/client';
 export interface UserRegisteredEvent {
   type: 'USER_REGISTERED';
   actorId: string;
-  payload: { username: string };
+  payload: {
+    username: string;
+    passwordHash: string;
+  };
 }
 
 export interface TopicCreatedEvent {
@@ -97,24 +94,31 @@ export async function applyEvent(event: AppEvent): Promise<unknown> {
 }
 
 // ── Handlers ─────────────────────────────────────────────────
-// State write and audit log are on the critical path.
-// $transaction is deferred for now; sequential writes are acceptable
-// for Phase 1 single-server deployment. The key invariant is that
-// audit log failure = request failure (no .catch(), no fire-and-forget).
 
 async function applyUserRegistered(event: UserRegisteredEvent) {
   const { actorId, payload } = event;
-  // User already created by auth route (needs bcrypt hash first).
-  await prisma.auditLog.create({
-    data: {
-      actorId,
-      action: 'USER_REGISTERED',
-      entityType: 'User',
-      entityId: actorId,
-      data: { username: payload.username },
-    },
-  });
-  return null;
+
+  const [user] = await prisma.$transaction([
+    prisma.user.create({
+      data: {
+        id: actorId,
+        username: payload.username,
+        password: payload.passwordHash,
+      },
+      select: { id: true, username: true, createdAt: true },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId,
+        action: 'USER_REGISTERED',
+        entityType: 'User',
+        entityId: actorId,
+        data: { username: payload.username },
+      },
+    }),
+  ]);
+
+  return user;
 }
 
 async function applyTopicCreated(event: TopicCreatedEvent) {
@@ -142,22 +146,23 @@ async function applyTopicCreated(event: TopicCreatedEvent) {
 async function applyTopicStatusChanged(event: TopicStatusChangedEvent) {
   const { actorId, topicId, payload } = event;
 
-  const topic = await prisma.topic.update({
-    where: { id: topicId },
-    data: { status: payload.status },
-    include: { createdBy: { select: { id: true, username: true } } },
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      actorId,
-      action: payload.status === 'ARCHIVED' ? 'TOPIC_ARCHIVED' : 'TOPIC_REOPENED',
-      entityType: 'Topic',
-      entityId: topic.id,
-      topicId: topic.id,
+  const [topic] = await prisma.$transaction([
+    prisma.topic.update({
+      where: { id: topicId },
       data: { status: payload.status },
-    },
-  });
+      include: { createdBy: { select: { id: true, username: true } } },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId,
+        action: payload.status === 'ARCHIVED' ? 'TOPIC_ARCHIVED' : 'TOPIC_REOPENED',
+        entityType: 'Topic',
+        entityId: topicId,
+        topicId,
+        data: { status: payload.status },
+      },
+    }),
+  ]);
 
   return topic;
 }
@@ -165,37 +170,43 @@ async function applyTopicStatusChanged(event: TopicStatusChangedEvent) {
 async function applyMessageCreated(event: MessageCreatedEvent) {
   const { actorId, topicId, payload } = event;
 
-  const message = await prisma.message.create({
-    data: {
-      topicId,
-      createdById: actorId,
-      kind: 'TEXT',
-      contentType: payload.contentType ?? 'TEXT',
-      content: payload.content,
-      quoteSourceId: payload.quoteSourceId ?? null,
-      quotedText: payload.quotedText ?? null,
-      quotedTextHash: payload.quotedTextHash ?? null,
-      quoteContextBefore: payload.quoteContextBefore ?? null,
-      quoteContextAfter: payload.quoteContextAfter ?? null,
-    },
-    include: { createdBy: { select: { id: true, username: true } } },
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      actorId,
-      action: 'MESSAGE_CREATED',
-      entityType: 'Message',
-      entityId: message.id,
-      topicId,
+  const [message] = await prisma.$transaction([
+    prisma.message.create({
       data: {
+        topicId,
+        createdById: actorId,
         kind: 'TEXT',
         contentType: payload.contentType ?? 'TEXT',
         content: payload.content,
-        quoteSourceId: payload.quoteSourceId,
-        quotedTextHash: payload.quotedTextHash,
+        quoteSourceId: payload.quoteSourceId ?? null,
+        quotedText: payload.quotedText ?? null,
+        quotedTextHash: payload.quotedTextHash ?? null,
+        quoteContextBefore: payload.quoteContextBefore ?? null,
+        quoteContextAfter: payload.quoteContextAfter ?? null,
       },
-    },
+      include: { createdBy: { select: { id: true, username: true } } },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId,
+        action: 'MESSAGE_CREATED',
+        entityType: 'Message',
+        entityId: '',
+        topicId,
+        data: {
+          kind: 'TEXT',
+          contentType: payload.contentType ?? 'TEXT',
+          content: payload.content,
+          quoteSourceId: payload.quoteSourceId,
+          quotedTextHash: payload.quotedTextHash,
+        },
+      },
+    }),
+  ]);
+
+  await prisma.auditLog.updateMany({
+    where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
+    data: { entityId: message.id },
   });
 
   return message;
@@ -204,21 +215,38 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
 async function applyRelationCreated(event: RelationCreatedEvent) {
   const { actorId, topicId, payload } = event;
 
-  const message = await prisma.message.create({
-    data: {
-      topicId,
-      createdById: actorId,
-      kind: 'RELATION',
-      relationType: payload.relationType,
-      relSourceId: payload.sourceMessageId ?? null,
-      targetRefs: payload.targetRefs as Prisma.InputJsonValue,
-      relationPayload: (payload.relationPayload ?? undefined) as Prisma.InputJsonValue | undefined,
-      content: null,
-    },
-    include: { createdBy: { select: { id: true, username: true } } },
-  });
+  const [message] = await prisma.$transaction([
+    prisma.message.create({
+      data: {
+        topicId,
+        createdById: actorId,
+        kind: 'RELATION',
+        relationType: payload.relationType,
+        relSourceId: payload.sourceMessageId ?? null,
+        targetRefs: payload.targetRefs as Prisma.InputJsonValue,
+        relationPayload: (payload.relationPayload ?? undefined) as Prisma.InputJsonValue | undefined,
+        content: null,
+      },
+      include: { createdBy: { select: { id: true, username: true } } },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId,
+        action: payload.supersedesRelationId ? 'RELATION_SUPERSEDED' : 'RELATION_CREATED',
+        entityType: 'Relation',
+        entityId: '',
+        topicId,
+        data: {
+          relationType: payload.relationType,
+          sourceMessageId: payload.sourceMessageId,
+          supersedesRelationId: payload.supersedesRelationId,
+          targetRefs: payload.targetRefs as Prisma.InputJsonValue,
+          relationPayload: payload.relationPayload as Prisma.InputJsonValue | undefined,
+        },
+      },
+    }),
+  ]);
 
-  // If superseding an older relation, mark it as superseded.
   if (payload.supersedesRelationId) {
     await prisma.message.update({
       where: { id: payload.supersedesRelationId },
@@ -226,21 +254,12 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     });
   }
 
-  await prisma.auditLog.create({
-    data: {
-      actorId,
+  await prisma.auditLog.updateMany({
+    where: {
       action: payload.supersedesRelationId ? 'RELATION_SUPERSEDED' : 'RELATION_CREATED',
-      entityType: 'Relation',
-      entityId: message.id,
-      topicId,
-      data: {
-        relationType: payload.relationType,
-        sourceMessageId: payload.sourceMessageId,
-        supersedesRelationId: payload.supersedesRelationId,
-        targetRefs: payload.targetRefs as Prisma.InputJsonValue,
-        relationPayload: payload.relationPayload as Prisma.InputJsonValue | undefined,
-      },
+      entityId: '', actorId, topicId,
     },
+    data: { entityId: message.id },
   });
 
   return message;

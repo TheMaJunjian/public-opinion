@@ -2,8 +2,10 @@ import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { createId } from '@paralleldrive/cuid2';
 import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { applyEvent } from '../lib/events';
 
 const router = Router();
 
@@ -25,19 +27,13 @@ const loginSchema = z.object({
 router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { username, password } = registerSchema.parse(req.body);
+    const userId = createId();
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { username, password: hashedPassword },
-      select: { id: true, username: true, createdAt: true },
-    });
-    await prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        action: 'USER_REGISTERED',
-        entityType: 'User',
-        entityId: user.id,
-        data: { username: user.username },
-      },
+
+    const user = await applyEvent({
+      type: 'USER_REGISTERED',
+      actorId: userId,
+      payload: { username, passwordHash: hashedPassword },
     });
 
     res.status(201).json({ message: '注册成功', user });

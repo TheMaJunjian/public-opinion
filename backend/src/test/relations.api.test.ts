@@ -38,7 +38,9 @@ jest.mock('../lib/prisma', () => ({
     },
     auditLog: {
       create: jest.fn(),
+      updateMany: jest.fn(),
     },
+    $transaction: jest.fn().mockResolvedValue([{}, {}]),
   },
 }));
 
@@ -130,6 +132,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     });
     // Event sourcing: audit log write
     (prisma.auditLog.create as jest.Mock).mockResolvedValue({});
+    (prisma.$transaction as jest.Mock).mockResolvedValue([{}, {}]);
   });
 
   it('returns 400 for an invalid relationType', async () => {
@@ -571,6 +574,19 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
       id: 'rel-new',
       createdBy: mockUser,
     });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([
+      {
+        id: 'rel-new',
+        topicId: 'topic-1',
+        relationType: 'REPLY',
+        relSourceId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        relationPayload: undefined,
+        createdAt: new Date().toISOString(),
+        createdBy: mockUser,
+      },
+      {},
+    ]);
   });
 
   it('creates a relation with a message target and returns 201', async () => {
@@ -657,6 +673,7 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
       relationType: 'SUMMARY',
       createdBy: mockUser,
     });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([{}, {}]);
   });
 
   it('rejects SUMMARY with sourceMessageId', async () => {

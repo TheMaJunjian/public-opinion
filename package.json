@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@paralleldrive/cuid2": "^3.3.0"
+  }
+}

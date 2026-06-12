@@ -3,6 +3,10 @@ import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } fr
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
+import {
+  CARD_W, MIN_CARD_H, GRID_LEFT, GRID_TOP, COL_GAP, ROW_GAP,
+  CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H,
+} from '../utils/layout';
 import type { PresentationKind, RelationTargetLayout } from '../types';
 
 // ========================= Layout types =========================
@@ -29,15 +33,6 @@ type PositionedEdge = {
   ctrl: Point;
   end: Point;
 };
-
-const CARD_W = 320;
-const MIN_CARD_H = 86;
-const GRID_LEFT = 18;
-const GRID_TOP = 48;
-const COL_GAP = 80;      // right-side decorations need ~58px (DEC_RIGHT_GAP=6 + DEC_W=56 + buffer)
-const ROW_GAP = 32;
-const CANVAS_BOTTOM_PAD = 120;
-const CANVAS_RIGHT_PAD = 120; // extra right padding so decoration badges/frames never overflow the canvas
 // Decoration constants — decorations are now on the RIGHT side of each card, stacked vertically
 const DEC_W = 56;        // width of each decoration badge
 const DEC_H = 22;        // height of each decoration badge
@@ -53,7 +48,7 @@ const TAG_RIGHT_GAP = 6;     // horizontal gap from card right edge
 const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
 // Frame constants (shared by arrange, classify, merge, summary frames)
-const FRAME_PAD = 16; // padding around the frame that wraps grouped messages
+// FRAME_PAD is imported from ../utils/layout
 const FRAME_PAD_X = GRID_LEFT;  // 18 — horizontal padding inside frame
 const FRAME_PAD_Y = GRID_TOP;   // 48 — vertical padding inside frame
 const FRAME_RADIUS = 8; // border-radius of group frames
@@ -72,8 +67,7 @@ const GROUP_HEADER_MIN_W = 180;
 const GROUP_HEADER_MAX_W = 320;
 const GROUP_HEADER_X_OFFSET = 6;
 const GROUP_HEADER_HEIGHT = 56;
-// MERGE cards get a more compact header (half the height of classify/summary group headers)
-const MERGE_CARD_H = 36;
+// MERGE_CARD_H is imported from ../utils/layout
 
 // Shared empty set for fallback
 

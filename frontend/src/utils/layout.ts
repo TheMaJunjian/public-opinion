@@ -19,7 +19,7 @@ import type { PresentationKind, RelationTargetLayout } from '../types';
 import { getPresentationSpec, PRESENTATION_SPECS } from '../types';
 
 // ============================================================
-// Layout Constants (mirrored from GraphView.tsx)
+// Layout Constants (canonical source — imported by GraphView.tsx)
 // ============================================================
 
 export const CARD_W = 320;

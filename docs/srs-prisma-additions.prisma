@@ -1,0 +1,211 @@
+// ============================================================
+// SRS 经济系统模型 — 追加到 schema.prisma 末尾
+// (Phase 1-4: 贡献点 + 押注 + 结算 + 推翻)
+// ============================================================
+
+// ── User 扩展字段 ──────────────────────────────────────────
+// 在现有 User 模型中追加以下字段:
+//   publicKey       String?        // 去中心化预留
+//   balance         Balance?       // 1:1 余额
+//   pointTransactions PointTransaction[]
+//   stakes          Stake[]
+//   voteStakes      VoteStake[]
+//   ledgerEntries   LedgerEntry[]
+//   settlementRounds SettlementRound[]  @relation("RoundCreator")
+
+// ── 余额与负债 ──────────────────────────────────────────────
+
+model Balance {
+  userId      String   @id
+  balance     BigInt   @default(0)   // 可为负
+  debtFrozen  Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+// ── 贡献点流水 ──────────────────────────────────────────────
+
+model PointTransaction {
+  id        String   @id @default(cuid())
+  userId    String
+  createdAt DateTime @default(now())
+  amount    BigInt                 // 变动金额（可正可负）
+  type      PointTxType
+  refType   String?                // STAKE | VOTE | SETTLEMENT | SYSTEM
+  refId     String?
+  memo      String?
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+enum PointTxType {
+  MINT_INITIAL
+  MINT_DAILY
+  STAKE_LOCK
+  STAKE_UNLOCK
+  VOTE_LOCK
+  VOTE_UNLOCK
+  SETTLEMENT_PAYOUT
+  SETTLEMENT_CLAWBACK
+}
+
+// ── 押注与资金池 ────────────────────────────────────────────
+
+model Stake {
+  id        String   @id @default(cuid())
+  userId    String
+  topicId   String
+  messageId String
+  side      StakeSide           // PRO | CON
+  amount    BigInt
+  roundId   String?             // 若在某轮投票期下注可归属
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+  message   Message  @relation(fields: [messageId], references: [id])
+  round     SettlementRound? @relation(fields: [roundId], references: [id])
+
+  @@index([messageId])
+  @@index([userId])
+  @@index([roundId])
+}
+
+enum StakeSide {
+  PRO
+  CON
+}
+
+model BetPool {
+  messageId String   @id
+  lockedPro BigInt   @default(0)
+  lockedCon BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+
+  message   Message  @relation(fields: [messageId], references: [id])
+}
+
+// ── 结算轮次 ────────────────────────────────────────────────
+
+model SettlementRound {
+  id               String    @id @default(cuid())
+  messageId        String
+  createdByUserId  String
+  status           RoundStatus @default(OPEN)
+  result           RoundResult?
+  previousRoundId  String?
+  openedAt         DateTime  @default(now())
+  closedAt         DateTime?
+  note             String?
+
+  createdBy        User      @relation("RoundCreator", fields: [createdByUserId], references: [id])
+  message          Message   @relation(fields: [messageId], references: [id])
+  previousRound    SettlementRound? @relation("RoundChain", fields: [previousRoundId], references: [id])
+  nextRounds       SettlementRound[] @relation("RoundChain")
+  votes            VoteStake[]
+  stakes           Stake[]
+
+  @@index([messageId])
+  @@index([status])
+  @@index([previousRoundId])
+}
+
+enum RoundStatus {
+  OPEN
+  VOTING
+  SETTLED
+  CANCELLED
+}
+
+enum RoundResult {
+  TRUE
+  FALSE
+  UNKNOWN
+}
+
+// ── 投票押注 ────────────────────────────────────────────────
+
+model VoteStake {
+  id        String   @id @default(cuid())
+  roundId   String
+  userId    String
+  vote      RoundResult           // TRUE | FALSE | UNKNOWN
+  amount    BigInt                // 投票金额 = 权重
+  createdAt DateTime @default(now())
+
+  round     SettlementRound @relation(fields: [roundId], references: [id])
+  user      User            @relation(fields: [userId], references: [id])
+
+  @@index([roundId])
+  @@index([userId])
+}
+
+// ── 账本分录（可冲销）────────────────────────────────────────
+
+model LedgerEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  createdAt DateTime @default(now())
+  entryType LedgerEntryType
+  amount    BigInt                // 可正可负
+  refType   String                // MESSAGE | ROUND | STAKE | VOTE | SYSTEM
+  refId     String?
+  memo      String?
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([refType, refId])
+}
+
+enum LedgerEntryType {
+  MINT_INITIAL
+  MINT_DAILY
+  STAKE_LOCK
+  STAKE_UNLOCK
+  VOTE_LOCK
+  VOTE_UNLOCK
+  SETTLEMENT_PAYOUT
+  SETTLEMENT_CLAWBACK
+}
+
+// ── 证据引用（Phase 5）──────────────────────────────────────
+
+model EvidenceRef {
+  id          String   @id @default(cuid())
+  createdByUserId String
+  createdAt   DateTime @default(now())
+  refType     String                // MESSAGE | RELATION | ROUND | URL
+  refId       String?
+  url         String?
+  description String?
+
+  createdBy   User     @relation(fields: [createdByUserId], references: [id])
+}
+
+// ── 标签/分类（远期：清爽视图）─────────────────────────────────
+
+model TagAssignment {
+  id              String   @id @default(cuid())
+  objectType      String             // MESSAGE | RELATION | ROUND
+  objectId        String
+  taggedByUserId  String
+  tag             TagType
+  createdAt       DateTime @default(now())
+
+  taggedBy        User     @relation(fields: [taggedByUserId], references: [id])
+
+  @@unique([objectType, objectId, taggedByUserId, tag])
+  @@index([objectType, objectId])
+}
+
+enum TagType {
+  SPAM
+  OFFTOPIC
+  LOWVALUE
+  IMPORTANT
+}

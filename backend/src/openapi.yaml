@@ -214,8 +214,8 @@ paths:
 
   /topics:
     get:
-      tags: [话题]
-      summary: 获取话题列表
+      tags: [分类]
+      summary: 获取分类列表
       parameters:
         - in: query
           name: query
@@ -241,11 +241,11 @@ paths:
             default: 20
       responses:
         '200':
-          description: 话题列表
+          description: 分类列表
 
     post:
-      tags: [话题]
-      summary: 创建话题
+      tags: [分类]
+      summary: 创建分类
       security:
         - bearerAuth: []
       requestBody:
@@ -264,14 +264,14 @@ paths:
                   maxLength: 5000
       responses:
         '201':
-          description: 话题创建成功
+          description: 分类创建成功
         '401':
           description: 未认证
 
   /topics/{topicId}:
     get:
-      tags: [话题]
-      summary: 获取单个话题
+      tags: [分类]
+      summary: 获取单个分类
       parameters:
         - in: path
           name: topicId
@@ -280,13 +280,13 @@ paths:
             type: string
       responses:
         '200':
-          description: 话题详情
+          description: 分类详情
         '404':
-          description: 话题不存在
+          description: 分类不存在
 
     patch:
-      tags: [话题]
-      summary: 更新话题状态
+      tags: [分类]
+      summary: 更新分类状态
       security:
         - bearerAuth: []
       parameters:
@@ -312,12 +312,12 @@ paths:
         '403':
           description: 无权限
         '404':
-          description: 话题不存在
+          description: 分类不存在
 
   /topics/{topicId}/messages:
     get:
       tags: [消息]
-      summary: 获取话题消息列表
+      summary: 获取分类消息列表
       parameters:
         - in: path
           name: topicId
@@ -378,12 +378,12 @@ paths:
         '201':
           description: 消息创建成功
         '403':
-          description: 话题已归档
+          description: 分类已归档
 
   /topics/{topicId}/relations:
     get:
       tags: [关系]
-      summary: 获取话题关系列表
+      summary: 获取分类关系列表
       parameters:
         - in: path
           name: topicId
@@ -445,6 +445,6 @@ paths:
         '201':
           description: 关系创建成功
         '403':
-          description: 话题已归档
+          description: 分类已归档
         '404':
           description: 消息不存在

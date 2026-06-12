@@ -44,7 +44,7 @@ export default function TopicListPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!newTitle.trim()) { setCreateError('请输入话题标题'); return; }
+    if (!newTitle.trim()) { setCreateError('请输入分类标题'); return; }
     setCreateError('');
     setCreating(true);
     try {
@@ -64,7 +64,7 @@ export default function TopicListPage() {
     <div className="max-w-3xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">话题广场</h1>
+          <h1 className="text-2xl font-bold text-gray-900">分类广场</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             非线性表显示和交互系统 · 消息是节点，关系也是消息
           </p>
@@ -74,25 +74,25 @@ export default function TopicListPage() {
             onClick={() => setShowCreateForm(!showCreateForm)}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
           >
-            + 发起话题
+            + 发起分类
           </button>
         )}
       </div>
 
       {showCreateForm && (
         <form onSubmit={handleCreate} className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6">
-          <h3 className="text-base font-semibold text-gray-800 mb-3">发起新话题</h3>
+          <h3 className="text-base font-semibold text-gray-800 mb-3">发起新分类</h3>
           {createError && <p className="text-red-500 text-sm mb-2">{createError}</p>}
           <input
             value={newTitle}
             onChange={e => setNewTitle(e.target.value)}
-            placeholder="话题标题（必填）"
+            placeholder="分类标题（必填）"
             className="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-indigo-400"
           />
           <textarea
             value={newBody}
             onChange={e => setNewBody(e.target.value)}
-            placeholder="话题描述（可选）"
+            placeholder="分类描述（可选）"
             rows={3}
             className="w-full border border-gray-300 rounded px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
           />
@@ -109,7 +109,7 @@ export default function TopicListPage() {
               disabled={creating}
               className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-5 py-1.5 rounded text-sm font-medium"
             >
-              {creating ? '创建中…' : '创建话题'}
+              {creating ? '创建中…' : '创建分类'}
             </button>
           </div>
         </form>
@@ -119,7 +119,7 @@ export default function TopicListPage() {
         <input
           value={query}
           onChange={e => { setQuery(e.target.value); setPage(1); }}
-          placeholder="搜索话题…"
+          placeholder="搜索分类…"
           className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
         <button
@@ -135,7 +135,7 @@ export default function TopicListPage() {
       {loading ? (
         <div className="text-center py-12 text-gray-400">加载中…</div>
       ) : topics.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">暂无话题</div>
+        <div className="text-center py-12 text-gray-400">暂无分类</div>
       ) : (
         <div className="space-y-3">
           {topics.map(topic => <TopicCard key={topic.id} topic={topic} />)}

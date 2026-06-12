@@ -30,7 +30,7 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
 
     const topic = await prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) {
-      res.status(404).json({ error: '话题不存在' });
+      res.status(404).json({ error: '分类不存在' });
       return;
     }
 
@@ -62,11 +62,11 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
 
     const topic = await prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) {
-      res.status(404).json({ error: '话题不存在' });
+      res.status(404).json({ error: '分类不存在' });
       return;
     }
     if (topic.status === 'ARCHIVED') {
-      res.status(403).json({ error: '该话题已归档，不允许发布新消息' });
+      res.status(403).json({ error: '该分类已归档，不允许发布新消息' });
       return;
     }
 

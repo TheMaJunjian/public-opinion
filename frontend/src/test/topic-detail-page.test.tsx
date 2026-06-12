@@ -70,7 +70,7 @@ describe('TopicDetailPage composer refresh', () => {
     vi.clearAllMocks();
     const topic: Topic = {
       id: 'topic-1',
-      title: '测试话题',
+      title: '测试分类',
       status: 'OPEN',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
@@ -111,7 +111,7 @@ describe('TopicDetailPage composer refresh', () => {
 describe('TopicDetailPage nested-classify merge expansion', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -143,14 +143,14 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
         {
           id: 'rel-inner', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
           targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }],
-          payload: { title: '内层话题' },
+          payload: { title: '内层分类' },
           createdAt: '2024-01-01T00:03:00.000Z',
           createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
         },
         {
           id: 'rel-outer', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
           targetRefs: [{ kind: 'relation', relationId: 'rel-inner' }],
-          payload: { title: '外层话题' },
+          payload: { title: '外层分类' },
           createdAt: '2024-01-01T00:04:00.000Z',
           createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
         },
@@ -168,21 +168,21 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     // On the main canvas only the outer classify topic card should be visible;
     // msg-a, msg-b, rel-merge, and rel-inner are hidden (classified away).
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
     });
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
-    expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
 
     // Enter the outer topic by double-clicking its card
-    fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
 
     // After entering outer-topic focus, only the direct CLASSIFY target (rel-inner)
     // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
     // internal content (rel-merge, msg-a, msg-b) should NOT be expanded into this view.
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-inner')).toBeInTheDocument();
     });
     expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
@@ -194,7 +194,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
 describe('TopicDetailPage deeply nested classify → classify → merge', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -227,21 +227,21 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
         {
           id: 'rel-inner', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
           targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }],
-          payload: { title: '内层话题' },
+          payload: { title: '内层分类' },
           createdAt: '2024-01-01T00:03:00.000Z',
           createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
         },
         {
           id: 'rel-middle', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
           targetRefs: [{ kind: 'relation', relationId: 'rel-inner' }],
-          payload: { title: '中层话题' },
+          payload: { title: '中层分类' },
           createdAt: '2024-01-01T00:04:00.000Z',
           createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
         },
         {
           id: 'rel-outer', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
           targetRefs: [{ kind: 'relation', relationId: 'rel-middle' }],
-          payload: { title: '外层话题' },
+          payload: { title: '外层分类' },
           createdAt: '2024-01-01T00:05:00.000Z',
           createdBy: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
         },
@@ -258,27 +258,27 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
 
     // On the main canvas only the outer classify topic card should be visible.
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
     });
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
-    expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
-    expect(screen.queryByText('分类话题 rel-middle')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类 rel-middle')).not.toBeInTheDocument();
 
     // Enter the outer topic by double-clicking its card.
-    fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
 
     // After entering outer-topic focus, only the direct CLASSIFY target (rel-middle)
     // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
     // internal content (rel-inner, rel-merge, msg-a, msg-b) should NOT be expanded.
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-middle')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-middle')).toBeInTheDocument();
     });
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
-    expect(screen.queryByText('分类话题 rel-inner')).not.toBeInTheDocument();
+    expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
   });
 });
 
@@ -287,7 +287,7 @@ describe('TopicDetailPage summary relation visibility', () => {
     vi.clearAllMocks();
     const topic: Topic = {
       id: 'topic-1',
-      title: '测试话题',
+      title: '测试分类',
       status: 'OPEN',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
@@ -349,7 +349,7 @@ describe('TopicDetailPage merge frame double-click popup', () => {
     vi.clearAllMocks();
     const topic: Topic = {
       id: 'topic-1',
-      title: '测试话题',
+      title: '测试分类',
       status: 'OPEN',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-01T00:00:00.000Z',
@@ -399,7 +399,7 @@ describe('TopicDetailPage merge frame double-click popup', () => {
 describe('TopicDetailPage classify containing merge with nested classify target', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -424,7 +424,7 @@ describe('TopicDetailPage classify containing merge with nested classify target'
           relationType: 'CLASSIFY',
           sourceMessageId: null,
           targetRefs: [{ kind: 'message', messageId: 'msg-c' }],
-          payload: { title: '内层话题' },
+          payload: { title: '内层分类' },
           createdAt: '2024-01-01T00:02:00.000Z',
           createdBy: makeUser(),
         },
@@ -443,7 +443,7 @@ describe('TopicDetailPage classify containing merge with nested classify target'
           relationType: 'CLASSIFY',
           sourceMessageId: null,
           targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }, { kind: 'message', messageId: 'msg-b' }],
-          payload: { title: '外层话题' },
+          payload: { title: '外层分类' },
           createdAt: '2024-01-01T00:04:00.000Z',
           createdBy: makeUser(),
         },
@@ -457,9 +457,9 @@ describe('TopicDetailPage classify containing merge with nested classify target'
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
     });
-    fireEvent.doubleClick(screen.getByText('分类话题 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
 
     // After entering outer-topic focus:
     // - msg-b is a direct text target, should be visible
@@ -468,7 +468,7 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     // - rel-inner (CLASSIFY) is inside rel-merge, shown as topic card only
     // - msg-c is inside rel-inner, should NOT be visible (CLASSIFY is opaque)
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-inner')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-inner')).toBeInTheDocument();
     });
     expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
     expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
@@ -479,7 +479,7 @@ describe('TopicDetailPage classify containing merge with nested classify target'
 describe('TopicDetailPage MERGE graph frame visibility', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -525,7 +525,7 @@ describe('TopicDetailPage MERGE graph frame visibility', () => {
 describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -561,7 +561,7 @@ describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => 
           relationType: 'CLASSIFY',
           sourceMessageId: null,
           targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }],
-          payload: { title: '分类话题' },
+          payload: { title: '分类' },
           createdAt: '2024-01-01T00:02:00.000Z',
           createdBy: makeUser(),
         },
@@ -575,11 +575,11 @@ describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => 
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
 
     // Enter the classify topic
-    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
 
     await waitFor(() => {
       // The arrange relation message must be visible in the topic view
@@ -595,7 +595,7 @@ describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => 
 describe('TopicDetailPage SUMMARY topic with arrange source visibility', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -659,7 +659,7 @@ describe('TopicDetailPage SUMMARY topic with arrange source visibility', () => {
 describe('TopicDetailPage MERGE with nested relation target graph visibility', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -717,7 +717,7 @@ describe('TopicDetailPage MERGE with nested relation target graph visibility', (
 describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -756,7 +756,7 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
           relationType: 'CLASSIFY',
           sourceMessageId: null,
           targetRefs: [{ kind: 'message', messageId: 'msg-orig' }],
-          payload: { title: '分类话题' },
+          payload: { title: '分类' },
           createdAt: '2024-01-01T00:02:00.000Z',
           createdBy: makeUser(),
         },
@@ -770,7 +770,7 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
 
     // msg-orig is classified, so it should be hidden
@@ -787,10 +787,10 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
@@ -809,7 +809,7 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
 describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -894,7 +894,7 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
 describe('TopicDetailPage exit classify topic restores base view', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -938,14 +938,14 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
 
     // Base view: topic card visible, classified messages hidden, unclassified visible
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
     expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
 
     // Enter the classify topic
-    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
 
     // Topic view: classified messages visible, topic card hidden, unclassified hidden
     await waitFor(() => {
@@ -960,7 +960,7 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
 
     // After exit: base view should be restored exactly as before
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
     expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
     expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
@@ -971,7 +971,7 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
 describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () => {
   const topic: Topic = {
     id: 'topic-1',
-    title: '测试话题',
+    title: '测试分类',
     status: 'OPEN',
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -1039,7 +1039,7 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
             { kind: 'relation', relationId: 'r10' },
             { kind: 'message', messageId: 'm7' },
           ],
-          payload: { title: '分类话题' },
+          payload: { title: '分类' },
           createdAt: '2024-01-01T00:06:00.000Z', createdBy: makeUser(),
         },
       ] as Relation[],
@@ -1088,7 +1088,7 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
 
     // Directly classified → hidden
@@ -1109,7 +1109,7 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
     expect(screen.queryByText('关系消息 r3')).not.toBeInTheDocument();
     expect(screen.queryByText('关系消息 r8')).not.toBeInTheDocument();
     // Topic card → visible
-    expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+    expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     // Unrelated → visible
     expect(screen.getByText('消息 m8')).toBeInTheDocument();
   });
@@ -1120,10 +1120,10 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类话题 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('分类话题 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);

@@ -77,7 +77,7 @@ const createRelationSchema = z.object({
   if (data.relationType === 'CLASSIFY' && !data.payload?.title) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: '分类关系需要提供话题名称',
+      message: '分类关系需要提供分类名称',
       path: ['payload', 'title'],
     });
   }
@@ -111,7 +111,7 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
 
     const topic = await prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) {
-      res.status(404).json({ error: '话题不存在' });
+      res.status(404).json({ error: '分类不存在' });
       return;
     }
 
@@ -156,11 +156,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
 
     const topic = await prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) {
-      res.status(404).json({ error: '话题不存在' });
+      res.status(404).json({ error: '分类不存在' });
       return;
     }
     if (topic.status === 'ARCHIVED') {
-      res.status(403).json({ error: '该话题已归档，不允许建立新关系' });
+      res.status(403).json({ error: '该分类已归档，不允许建立新关系' });
       return;
     }
 
@@ -199,7 +199,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         where: { id: data.sourceMessageId, topicId },
       });
       if (!sourceMessage) {
-        res.status(404).json({ error: '来源消息不存在或不属于该话题' });
+        res.status(404).json({ error: '来源消息不存在或不属于该分类' });
         return;
       }
     }
@@ -230,7 +230,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         select: { id: true },
       });
       if (foundMessages.length !== uniqueMessageIds.length) {
-        res.status(404).json({ error: '部分目标消息不存在或不属于该话题' });
+        res.status(404).json({ error: '部分目标消息不存在或不属于该分类' });
         return;
       }
     }
@@ -244,7 +244,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         select: { id: true, relationType: true, targetRefs: true },
       });
       if (directTargetRelations.length !== uniqueRelationIds.length) {
-        res.status(404).json({ error: '部分目标关系消息不存在或不属于该话题' });
+        res.status(404).json({ error: '部分目标关系消息不存在或不属于该分类' });
         return;
       }
 
@@ -311,7 +311,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         where: { id: data.supersedesRelationId, topicId, kind: 'RELATION' },
       });
       if (!oldRel) {
-        res.status(404).json({ error: '被取代的关系消息不存在或不属于该话题' });
+        res.status(404).json({ error: '被取代的关系消息不存在或不属于该分类' });
         return;
       }
       if (oldRel.relationType !== data.relationType) {

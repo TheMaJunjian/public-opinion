@@ -28,7 +28,7 @@
 
 | 状态变量 | 类型 | 初始值 | 语义 |
 |---------|------|--------|------|
-| `topic` | `Topic \| null` | `null` | 当前话题元数据 |
+| `topic` | `Topic \| null` | `null` | 当前分类元数据 |
 | `messages` | `Message[]` | `[]` | 当前页所有文本消息 |
 | `relations` | `Relation[]` | `[]` | 所有关系（不分页，limit=200） |
 | `viewMode` | `'graph' \| 'tree' \| 'linear'` | `'graph'` | 左侧视图模式 |
@@ -592,7 +592,7 @@ export const RELATION_TYPES = [
 
 | 功能 | 描述 | 实现文件 |
 |------|------|----------|
-| 话题标题与状态 | 显示话题名、状态、发起人、时间 | `TopicDetailPage` |
+| 分类标题与状态 | 显示分类名、状态、发起人、时间 | `TopicDetailPage` |
 | 视图切换 | 图/树/列表三按钮 | `TopicDetailPage` |
 | 关系类型选择条 | 横向按钮，当前选中 indigo 高亮 | `TopicDetailPage` |
 | 焦点模式指示 | 开启时显示 "◎ 焦点模式：X/Y 条" | `TopicDetailPage` |

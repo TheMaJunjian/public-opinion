@@ -114,7 +114,7 @@ export function convertMessagesToDemoModel(
       ? getRelationLabel(rel.payload)
       : undefined;
     const classifyTitle = relType === 'classify'
-      ? (getRelationTitle(rel.payload) || `分类话题（${rel.targetRefs.length}）`)
+      ? (getRelationTitle(rel.payload) || `分类（${rel.targetRefs.length}）`)
       : undefined;
 
     if (!seenRelMsgIds.has(relMsgId)) {
@@ -122,7 +122,7 @@ export function convertMessagesToDemoModel(
       const typeName = relationTypeName(rel.relationType);
       let content: string;
       if (relType === 'classify') {
-        content = `话题：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
+        content = `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'tag' && tagLabel) {
         content = `建立${typeName}关系「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (rel.sourceMessageId) {

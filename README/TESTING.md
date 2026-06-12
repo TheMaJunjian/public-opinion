@@ -279,7 +279,7 @@ describe('GET /api/myRoute', () => {
 | 测试文件 | 测试数量 | 覆盖内容 |
 |---------|---------|---------|
 | `validation.test.ts` | 21 | `TargetRef` discriminated union 所有 3 种 kind、`createRelationSchema` 全部验证规则 |
-| `relations.api.test.ts` | 14 | GET/POST 接口、鉴权、话题不存在/归档、来源消息校验、关系目标递归、404 响应 |
+| `relations.api.test.ts` | 14 | GET/POST 接口、鉴权、分类不存在/归档、来源消息校验、关系目标递归、404 响应 |
 
 ---
 

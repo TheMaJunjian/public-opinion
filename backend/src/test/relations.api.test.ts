@@ -95,7 +95,7 @@ describe('GET /api/topics/:topicId/relations', () => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(null);
     const res = await request(app).get('/api/topics/nonexistent/relations');
     expect(res.status).toBe(404);
-    expect(res.body.error).toBe('话题不存在');
+    expect(res.body.error).toBe('分类不存在');
   });
 
   it('returns empty data array when no relations exist', async () => {
@@ -192,7 +192,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(201);
   });
 
@@ -200,7 +200,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '空话题' }, targetRefs: [] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '空分类' }, targetRefs: [] });
     expect(res.status).toBe(201);
   });
 
@@ -208,7 +208,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('分类关系');
   });
@@ -218,7 +218,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'relation', relationId: 'rel-1' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'relation', relationId: 'rel-1' }] });
     expect(res.status).toBe(201);
   });
 
@@ -370,7 +370,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('非引用关联');
   });
@@ -387,7 +387,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(201);
   });
 
@@ -405,7 +405,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({
         relationType: 'CLASSIFY',
-        payload: { title: '测试话题' },
+        payload: { title: '测试分类' },
         targetRefs: [{ kind: 'message', messageId: 'msg-1' }, { kind: 'message', messageId: 'msg-2' }],
       });
     expect(res.status).toBe(201);
@@ -427,7 +427,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
     expect(res.status).toBe(201);
   });
 
@@ -447,7 +447,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }] });
     expect(res.status).toBe(201);
   });
 
@@ -477,7 +477,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('非引用关联');
   });
@@ -503,7 +503,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'CLASSIFY', payload: { title: '测试话题' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
+      .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
     expect(res.status).toBe(201);
   });
 

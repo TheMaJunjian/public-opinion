@@ -24,7 +24,7 @@ describe('merge canvas helpers', () => {
       makeNormal('msg-3'),
       { id: 'rel-1', author: 'tester', createdAt: '2024-01-01T00:01:00.000Z', content: 'reply', kind: 'relation', relationType: 'reply' },
       // Long Chinese title to verify merge header width expands adaptively.
-      { id: 'merge-1', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'merge', kind: 'relation', relationType: 'merge', relationPayload: { title: '归并话题标签很长用于测试宽度自适应' } },
+      { id: 'merge-1', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'merge', kind: 'relation', relationType: 'merge', relationPayload: { title: '归并分类标签很长用于测试宽度自适应' } },
     ];
     const edges: DemoEdge[] = [
       { id: 'rel-1::0', relationMessageId: 'rel-1', relationType: 'reply', from: { messageId: 'msg-2', selection: { kind: 'whole' } }, to: { messageId: 'msg-1', selection: { kind: 'whole' } }, relationLabel: 'reply' },

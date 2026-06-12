@@ -22,7 +22,7 @@ const ALL_RELATION_TYPES: RelationType[] = [
 
 /** Max characters to display for an existing tag label in the secondary relation selector. */
 const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
-const CLASSIFY_TARGET_HINT = "文本消息、排列关系消息、分类话题消息或归并关系消息";
+const CLASSIFY_TARGET_HINT = "文本消息、排列关系消息、分类消息或归并关系消息";
 
 /** Return the display label for a secondary relation option button. */
 function secondaryRelationLabel(t: string): string {
@@ -129,7 +129,7 @@ function buildRelationDemoMessage(relation: Relation): DemoMessage {
   const targetSummary = relationTargetRefsSummary(relation.targetRefs);
   let content: string;
   if (relType === 'classify') {
-    content = `话题：${title ?? `分类话题（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
+    content = `分类：${title ?? `分类（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'summary') {
     content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'tag' && label) {
@@ -1917,7 +1917,7 @@ export default function TopicDetailPage() {
       }
       const classifyTitle = newMessageContent.trim();
       if (!classifyTitle) {
-        alert("话题名称不能为空");
+        alert("分类名称不能为空");
         return;
       }
       const targetRefs = getClassifyTargetRefs(effectiveTargets);
@@ -2281,8 +2281,8 @@ export default function TopicDetailPage() {
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
-      if (targetCount === 0) return "建立分类话题（无目标）";
-      return `建立分类话题（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
+      if (targetCount === 0) return "建立分类（无目标）";
+      return `建立分类（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
     }
     if (isSummaryType) {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
@@ -2612,8 +2612,8 @@ export default function TopicDetailPage() {
     },
     [topicFocusRelMsg]
   );
-  const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : topicFocusRelType === "classify" ? "分类" : "话题";
-  const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : topicFocusRelType === "classify" ? "退出分类" : "退出话题";
+  const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : topicFocusRelType === "classify" ? "分类" : "分类";
+  const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : topicFocusRelType === "classify" ? "退出分类" : "退出分类";
   const topicFocusTitle = topicFocusRelMsg
     ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`)
     : "";
@@ -3125,7 +3125,7 @@ export default function TopicDetailPage() {
                   const topicMsgTargetCount = isTopicMsg
                     ? collectOwnedByRelation(msg.id, relationById).textIds.size
                     : 0;
-                  const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类话题（${topicMsgTargetCount}）` : isMergeTopicMsg ? `归并（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
+                  const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类（${topicMsgTargetCount}）` : isMergeTopicMsg ? `归并（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{
@@ -3152,8 +3152,8 @@ export default function TopicDetailPage() {
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
                       <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
-                        <span>{isClassifyTopicMsg ? `分类话题 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
-                        <span>{isTopicMsg ? "双击进入话题" : `作者：${msg.author}`}</span>
+                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
+                        <span>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</span>
                       </div>
                       {isTopicMsg && (
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
@@ -3381,7 +3381,7 @@ export default function TopicDetailPage() {
                 return (
                   <textarea
                     style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容") : isClassifyType ? "输入分类话题名称（不能为空）" : isSummaryType ? "输入总结内容（不能为空）" : "输入一条新普通消息（支持自由换行）"}
+                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容") : isClassifyType ? "输入分类名称（不能为空）" : isSummaryType ? "输入总结内容（不能为空）" : "输入一条新普通消息（支持自由换行）"}
                     value={newMessageContent}
                     readOnly={textAreaDisabled}
                     onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}
@@ -3406,7 +3406,7 @@ export default function TopicDetailPage() {
 
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ fontWeight: 600 }}>焦点</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>{isTopicFocus ? "当前模式：话题" : "当前模式：焦点"}</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>{isTopicFocus ? "当前模式：分类" : "当前模式：焦点"}</div>
             <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
           </div>
 

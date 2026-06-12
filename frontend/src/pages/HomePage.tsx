@@ -4,8 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 
 /**
- * 首页：登录后自动跳转到第一个话题的详情页。
- * 若当前无话题，则自动创建一个默认话题后跳转。
+ * 首页：登录后自动跳转到第一个分类的详情页。
+ * 若当前无分类，则自动创建一个默认分类后跳转。
  * 未登录时跳转到登录页。
  */
 export default function HomePage() {
@@ -42,7 +42,7 @@ export default function HomePage() {
         }
       } catch (e: unknown) {
         if (cancelled) return;
-        setError(`加载话题失败：${e instanceof Error ? e.message : e}`);
+        setError(`加载分类失败：${e instanceof Error ? e.message : e}`);
       }
     }
 

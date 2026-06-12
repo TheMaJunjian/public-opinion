@@ -1,6 +1,6 @@
 # 公论 (GongLun) 后端 API
 
-公论是一个结构化讨论系统，支持用户在话题下发布消息并通过显式关系（支持、反对、引用等）建立观点网络。本文档为 MVP 后端部署与测试指南。
+公论是一个结构化讨论系统，支持用户在分类下发布消息并通过显式关系（支持、反对、引用等）建立观点网络。本文档为 MVP 后端部署与测试指南。
 
 ---
 
@@ -85,13 +85,13 @@ npm run dev
 | POST | `/api/auth/login` | 否 | 登录，返回 JWT |
 | POST | `/api/auth/logout` | 是 | 登出（客户端删除令牌） |
 
-### 话题 `/api/topics`
+### 分类 `/api/topics`
 | 方法 | 路径 | 需认证 | 说明 |
 |------|------|--------|------|
 | GET | `/api/topics` | 否 | 列表（支持搜索、排序、分页） |
-| POST | `/api/topics` | 是 | 创建话题 |
-| GET | `/api/topics/:topicId` | 否 | 获取单个话题 |
-| PATCH | `/api/topics/:topicId` | 是（仅作者）| 更新话题状态/内容 |
+| POST | `/api/topics` | 是 | 创建分类 |
+| GET | `/api/topics/:topicId` | 否 | 获取单个分类 |
+| PATCH | `/api/topics/:topicId` | 是（仅作者）| 更新分类状态/内容 |
 
 ### 消息 `/api/topics/:topicId/messages`
 | 方法 | 路径 | 需认证 | 说明 |
@@ -128,13 +128,13 @@ http POST localhost:3000/api/auth/login \
 # 响应中取 token 字段，下面用 $TOKEN 代替
 ```
 
-### 步骤 3：创建话题
+### 步骤 3：创建分类
 
 ```bash
 http POST localhost:3000/api/topics \
   "Authorization:Bearer $TOKEN" \
   title="关于气候变化的全球讨论" \
-  body="这个话题邀请所有人就气候变化提出观点和证据。"
+  body="这个分类邀请所有人就气候变化提出观点和证据。"
 # 记录返回的 id，下面用 $TOPIC_ID 代替
 ```
 
@@ -186,7 +186,7 @@ http POST localhost:3000/api/topics/$TOPIC_ID/relations \
   targetRefs:='[{"targetMessageId": "$MSG1_ID", "targetSelectedText": "核心解决方案"}]'
 ```
 
-### 步骤 8：查询话题下所有关系
+### 步骤 8：查询分类下所有关系
 
 ```bash
 http GET localhost:3000/api/topics/$TOPIC_ID/relations
@@ -227,7 +227,7 @@ backend/
 │   │   └── errorHandler.ts   # 全局错误处理
 │   └── routes/
 │       ├── auth.ts           # 注册/登录/登出
-│       ├── topics.ts         # 话题 CRUD
+│       ├── topics.ts         # 分类 CRUD
 │       ├── messages.ts       # 消息（只写+只读）
 │       └── relations.ts      # 关系建立与查询
 ├── prisma/

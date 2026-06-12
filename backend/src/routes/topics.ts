@@ -88,7 +88,7 @@ router.get('/:topicId', async (req: Request, res: Response, next: NextFunction) 
     });
 
     if (!topic) {
-      res.status(404).json({ error: '话题不存在' });
+      res.status(404).json({ error: '分类不存在' });
       return;
     }
 
@@ -106,12 +106,12 @@ router.patch('/:topicId', requireAuth, async (req: AuthRequest, res: Response, n
     const existing = await prisma.topic.findUnique({ where: { id: topicId } });
 
     if (!existing) {
-      res.status(404).json({ error: '话题不存在' });
+      res.status(404).json({ error: '分类不存在' });
       return;
     }
 
     if (existing.createdById !== req.user!.id) {
-      res.status(403).json({ error: '无权限修改此话题' });
+      res.status(403).json({ error: '无权限修改此分类' });
       return;
     }
 

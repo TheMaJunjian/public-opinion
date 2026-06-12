@@ -340,14 +340,14 @@ export async function createTopic(data: { title: string; body?: string }) {
 export async function getTopic(id: string) {
   await delay();
   const topic = topics.find(t => t.id === id);
-  if (!topic) throw new Error('话题不存在');
+  if (!topic) throw new Error('分类不存在');
   return topic;
 }
 
 export async function updateTopic(id: string, data: { status: 'OPEN' | 'ARCHIVED' }) {
   await delay();
   const topic = topics.find(t => t.id === id);
-  if (!topic) throw new Error('话题不存在');
+  if (!topic) throw new Error('分类不存在');
   topic.status = data.status;
   topic.updatedAt = new Date().toISOString();
   return topic;

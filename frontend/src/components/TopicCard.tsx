@@ -5,7 +5,7 @@ interface Props {
   topic: Topic;
 }
 
-/** 话题卡片：显示话题概要，非线性结构的条目入口 */
+/** 分类卡片：显示分类概要，非线性结构的条目入口 */
 export default function TopicCard({ topic }: Props) {
   const isOpen = topic.status === 'OPEN';
   return (

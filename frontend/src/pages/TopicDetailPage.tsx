@@ -983,6 +983,65 @@ export default function TopicDetailPage() {
     });
   }
 
+  /**
+   * When inside a CLASSIFY / SUMMARY topic focus, register a newly created
+   * message or relation as a target of the parent CLASSIFY/SUMMARY so it
+   * stays scoped inside the topic after exit.
+   *
+   * @param newTargetRef  The new target to append (message or relation).
+   * @param onUpdated     Optional callback invoked after the superseding
+   *                      relation replaces the old one in state. Receives
+   *                      the new relation ID.
+   */
+  function addTargetToClassifyTopic(
+    newTargetRef: TargetRef,
+    onUpdated?: (newRelId: string) => void,
+  ) {
+    if (!isTopicFocus || !topicFocusRelMsgId || !topicId) return;
+    const topicRelation = relationById.get(topicFocusRelMsgId);
+    if (!topicRelation) return;
+    const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
+    const updatedRefs = [...existingRefs, newTargetRef];
+    api.updateRelation(topicId, topicFocusRelMsgId, {
+      relationType: topicRelation.relationType,
+      targetRefs: updatedRefs,
+      payload: topicRelation.payload,
+    })
+      .then(updatedRel => {
+        const newRelId = updatedRel.id;
+        // Replace old relation with superseding new one
+        setRelations(prev => {
+          const filtered = prev.filter(r => r.id !== topicFocusRelMsgId);
+          return [...filtered, updatedRel];
+        });
+        setMessages(prev => {
+          const filtered = prev.filter(m => m.id !== topicFocusRelMsgId);
+          return [...filtered, buildRelationDemoMessage(updatedRel)];
+        });
+        setFocusEntries(prev => {
+          if (prev.length === 0) return prev;
+          const last = prev[prev.length - 1];
+          if (last.mode !== "topic" || last.topicRelMsgId !== topicFocusRelMsgId) return prev;
+          return [...prev.slice(0, -1), { ...last, topicRelMsgId: newRelId }];
+        });
+        setEdges(prev => {
+          let next = prev.map(e => {
+            if (e.relationMessageId !== topicFocusRelMsgId) return e;
+            return {
+              ...e,
+              relationMessageId: newRelId,
+              from: e.from.messageId === `anon:${topicFocusRelMsgId}`
+                ? { ...e.from, messageId: `anon:${newRelId}` }
+                : e.from,
+            };
+          });
+          onUpdated?.(newRelId);
+          return next;
+        });
+      })
+      .catch(e => console.warn('更新分类目标失败:', e));
+  }
+
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
@@ -1005,81 +1064,27 @@ export default function TopicDetailPage() {
           return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
         });
         if (topicFocusRelMsgId) {
-          // Persist the new message as a target of the classify topic in the backend,
-          // so the message remains inside the topic after page reload.
-          const topicRelation = relationById.get(topicFocusRelMsgId);
-          if (topicRelation) {
-            const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
-            const newTargetRef: TargetRef = { kind: 'message', messageId: msg.id };
-            const updatedRefs = [...existingRefs, newTargetRef];
-            api.updateRelation(topicId!, topicFocusRelMsgId, {
-              relationType: topicRelation.relationType,
-              targetRefs: updatedRefs,
-              payload: topicRelation.payload,
-            })
-              .then(updatedRel => {
-                // Replace the old (now superseded) relation with the new one
-                // so topicTextIds in the useMemo picks up the added message.
-                const newRelId = updatedRel.id;
-                setRelations(prev => {
-                  const filtered = prev.filter(r => r.id !== topicFocusRelMsgId);
-                  return [...filtered, updatedRel];
-                });
-                // Replace the old relation's DemoMessage card with the new one
-                // so the UI card ID matches the active relation in relationById.
-                // Fixes: (1) old classify card appearing as an extra card after
-                // sending a message in topic-focus mode,
-                // (2) re-entering the topic after exit producing an empty view
-                // because the old relMsgId was no longer in relationById.
-                setMessages(prev => {
-                  const filtered = prev.filter(m => m.id !== topicFocusRelMsgId);
-                  return [...filtered, buildRelationDemoMessage(updatedRel)];
-                });
-                // Update focus entry to point to the new relation ID so
-                // subsequent messages append to the latest targetRefs.
-                setFocusEntries(prev => {
-                  if (prev.length === 0) return prev;
-                  const last = prev[prev.length - 1];
-                  if (last.mode !== "topic" || last.topicRelMsgId !== topicFocusRelMsgId) return prev;
-                  return [...prev.slice(0, -1), { ...last, topicRelMsgId: newRelId }];
-                });
-                // Remap existing edges that reference the old relation to the new
-                // relation ID, then add a classify edge for the new message.
-                setEdges(prev => {
-                  let next = prev.map(e => {
-                    if (e.relationMessageId !== topicFocusRelMsgId) return e;
-                    return {
-                      ...e,
-                      relationMessageId: newRelId,
-                      from: e.from.messageId === `anon:${topicFocusRelMsgId}`
-                        ? { ...e.from, messageId: `anon:${newRelId}` }
-                        : e.from,
-                    };
-                  });
-                  const alreadyLinked = next.some(e =>
-                    (e.relationType === "classify" || e.relationType === "summary") &&
-                    e.relationMessageId === newRelId &&
-                    e.to.messageId === msg.id &&
-                    e.to.selection.kind === "whole"
-                  );
-                  if (!alreadyLinked) {
-                    const relType = (topicFocusRelType === "summary" ? "summary" : "classify") as RelationType;
-                    next = [...next, {
-                      id: nextId("edge"),
-                      relationMessageId: newRelId,
-                      relationType: relType,
-                      from: { messageId: `anon:${newRelId}`, selection: { kind: "whole" } },
-                      to: { messageId: msg.id, selection: { kind: "whole" } },
-                      relationLabel: relationTypeName(relType),
-                    }];
-                  }
-                  return next;
-                });
-              })
-              .catch(e => console.warn('更新分类目标失败:', e));
-          }
-          // Edge is now added inside the .then callback above with the
-          // correct (new) relationMessageId matching the updated focus entry.
+          // Persist the new message as a target of the classify/summary topic
+          // so the message remains scoped inside the topic after exit / reload.
+          addTargetToClassifyTopic(
+            { kind: 'message', messageId: msg.id },
+            (newRelId) => {
+              // Add a classify/summary edge for the new message so the topic
+              // card reflects the updated target count in GraphView.
+              const relType = (topicFocusRelType === "summary" ? "summary" : "classify") as RelationType;
+              const alreadyLinked = false; // fresh target, no existing edge
+              if (!alreadyLinked) {
+                setEdges(prev => [...prev, {
+                  id: nextId("edge"),
+                  relationMessageId: newRelId,
+                  relationType: relType,
+                  from: { messageId: `anon:${newRelId}`, selection: { kind: "whole" } },
+                  to: { messageId: msg.id, selection: { kind: "whole" } },
+                  relationLabel: relationTypeName(relType),
+                }]);
+              }
+            },
+          );
         }
       }
       if (!overrideContent) setNewMessageContent("");
@@ -1443,6 +1448,7 @@ export default function TopicDetailPage() {
       });
       const relId = backendRel.id;
       appendCreatedRelation(backendRel);
+      addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
       const anonSrcId = `anon:${relId}`;
       return { id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge;
     } catch (e: any) {
@@ -1504,6 +1510,7 @@ export default function TopicDetailPage() {
           });
           const relId = backendRel.id;
           appendCreatedRelation(backendRel);
+          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
           for (const s of fromReply) {
             for (const t of toReply) {
               newEdgesList.push(buildEdges({ ...s }, { ...t }, "reply", replyEdgeLabel, relId));
@@ -1523,6 +1530,7 @@ export default function TopicDetailPage() {
             const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
+            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
             for (const targetMid of uniqueTargetMids) {
               newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
             }
@@ -1535,6 +1543,7 @@ export default function TopicDetailPage() {
             const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
+            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
             const anonSrcId = `anon:${backendRel.id}`;
             newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -1549,6 +1558,7 @@ export default function TopicDetailPage() {
           const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
           const relId = backendRel.id;
           appendCreatedRelation(backendRel);
+          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
           const anonSrcId = `anon:${backendRel.id}`;
           newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -1573,6 +1583,7 @@ export default function TopicDetailPage() {
             const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
+            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
             for (const t of targets) {
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, relationType, label, relId));
             }
@@ -1636,6 +1647,7 @@ export default function TopicDetailPage() {
             const backendRel = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
+            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
             const anonSrcId = `anon:${backendRel.id}`;
             newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -1710,6 +1722,7 @@ export default function TopicDetailPage() {
             const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
             const newRelId = newRelBackend.id;
             appendCreatedRelation(newRelBackend);
+            addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
             const newFromId = newSourceId ?? `anon:${newRelId}`;
             for (const e of edgesToCorrect) {
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
@@ -1718,6 +1731,7 @@ export default function TopicDetailPage() {
             const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
             const corrRelId = corrBackendRel.id;
             appendCreatedRelation(corrBackendRel);
+            addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
             newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
           } else {
             // Specific fragments selected: one separate correction per selected edge fragment
@@ -1727,12 +1741,14 @@ export default function TopicDetailPage() {
               const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
               const newRelId = newRelBackend.id;
               appendCreatedRelation(newRelBackend);
+              addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
               const newFromId = newSourceId ?? `anon:${newRelId}`;
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...edge.to }, relationLabel: secTypeName } as DemoEdge);
               // Step 2: Create the CORRECT relation for this fragment
               const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
               const corrRelId = corrBackendRel.id;
               appendCreatedRelation(corrBackendRel);
+              addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
               newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
             }
           }
@@ -1751,6 +1767,7 @@ export default function TopicDetailPage() {
         const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
+        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const anonSrcId = `anon:${backendRel.id}`;
         for (const t of draftUnits) {
           newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: typeName } as DemoEdge);
@@ -1781,6 +1798,7 @@ export default function TopicDetailPage() {
             const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
+            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
             const anonSrcId = `anon:${backendRel.id}`;
             newEdgesList.push({
               id: nextId("edge"), relationMessageId: relId, relationType,
@@ -1827,6 +1845,7 @@ export default function TopicDetailPage() {
         // Encode layout direction in relationLabel so layout engine can read it directly
         const edgeLabel = secondaryRelationType === 'horizontal' ? 'arrange-h' : 'arrange-v';
         appendCreatedRelation(backendRel);
+        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const anonSrcId = `anon:${backendRel.id}`;
         for (const tgtMid of allTargetMids) {
           newEdgesList.push({
@@ -1885,6 +1904,7 @@ export default function TopicDetailPage() {
         });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
+        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
           targetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
@@ -1938,6 +1958,7 @@ export default function TopicDetailPage() {
         });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
+        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
           summaryTargetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
@@ -1996,6 +2017,7 @@ export default function TopicDetailPage() {
         });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
+        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const virtualFrameNodeId = `anon:${backendRel.id}`;
         const newEdges = mergeTargetRefs.map(targetRef => ({
           id: nextId("edge"),
@@ -2715,6 +2737,8 @@ export default function TopicDetailPage() {
     }
 
     // listHiddenRelationIds: relation messages to hide in the linear list view.
+    // All CLASSIFY-owned relations are hidden — they belong to the CLASSIFY scope
+    // and should not appear in the parent topic's flat list.
     // CLASSIFY and SUMMARY relation messages that are owned by CLASSIFY are hidden (they are
     // the classification containers and are shown in the graph view as topic cards).
     // MERGE owned by CLASSIFY is also hidden (intermediate grouping structure).
@@ -2723,10 +2747,8 @@ export default function TopicDetailPage() {
     // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are classified (via listExclusiveRelMsgIds).
     const listHiddenRelationIds = new Set<string>([
-      ...classifiedTargetClassifyRelMsgIds,
-      ...classifiedTargetMergeRelMsgIds,
+      ...classifyOwnership.relationIds,
       ...classifiedTargetSummaryRelMsgIds,
-      ...classifiedTargetARRANGERelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
@@ -2792,7 +2814,7 @@ export default function TopicDetailPage() {
       listMessagesToRender: listMessages,
       listEdgesToRender: listEdges,
     };
-  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
+  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -2812,6 +2834,7 @@ export default function TopicDetailPage() {
       const anonSrcId = `anon:${backendRel.id}`;
       const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relId, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };
       appendCreatedRelation(backendRel);
+      addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
       setEdges(prev => [...prev, edge]);
     } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
   }

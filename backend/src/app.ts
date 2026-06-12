@@ -9,6 +9,8 @@ import authRouter from './routes/auth';
 import topicsRouter from './routes/topics';
 import messagesRouter from './routes/messages';
 import relationsRouter from './routes/relations';
+import pointsRouter from './routes/points';
+import rulesRouter from './routes/rules';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -49,6 +51,8 @@ app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/topics', writeLimiter, topicsRouter);
 app.use('/api/topics/:topicId/messages', writeLimiter, messagesRouter);
 app.use('/api/topics/:topicId/relations', writeLimiter, relationsRouter);
+app.use('/api/points', pointsRouter);
+app.use('/api/rules', rulesRouter);
 
 // Health check
 app.get('/health', (_req, res) => {

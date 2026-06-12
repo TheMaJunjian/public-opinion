@@ -422,3 +422,51 @@ export async function updateRelation(topicId: string, relationId: string, data: 
   relations.push(newRel);
   return newRel;
 }
+
+// ============================================================
+// Points & Rules Mock API (Phase 1)
+// ============================================================
+
+export async function getPointsBalance() {
+  await delay(50);
+  if (!mockUser) throw new Error('请先登录');
+  return {
+    points: { available: 100, locked: 0 },
+    balance: { amount: 100, debtFrozen: false },
+  };
+}
+
+export async function getPointsTransactions(params?: { page?: number; limit?: number }) {
+  await delay(50);
+  if (!mockUser) throw new Error('请先登录');
+  return {
+    data: [
+      {
+        id: 'pt-1',
+        type: 'MINT',
+        amount: 100,
+        balanceAfter: 100,
+        createdAt: new Date().toISOString(),
+        data: { reason: 'REGISTRATION_BONUS' },
+      },
+    ],
+    pagination: { page: params?.page ?? 1, limit: params?.limit ?? 20, total: 1, totalPages: 1 },
+  };
+}
+
+export async function getCurrentRules() {
+  await delay(50);
+  return {
+    id: 'rule-v1',
+    version: 1,
+    status: 'ACTIVE',
+    description: '初始默认规则 — 线性权重、最小押注 1、无单注上限',
+    parameters: {
+      minStake: 1,
+      maxSingleStake: null,
+      weightFunction: 'linear',
+      concurrentRoundLimit: 1,
+    },
+    createdAt: '2024-01-01T00:00:00Z',
+  };
+}

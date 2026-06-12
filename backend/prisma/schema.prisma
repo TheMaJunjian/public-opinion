@@ -15,9 +15,13 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  topics    Topic[]
-  messages  Message[]
-  auditLogs AuditLog[]
+  topics            Topic[]
+  messages          Message[]
+  auditLogs         AuditLog[]
+  pointAccount      PointAccount?
+  pointTransactions PointTransaction[]
+  balance           Balance?
+  ledgerEntries     LedgerEntry[]
 }
 
 model Topic {
@@ -100,4 +104,46 @@ model RuleVersion {
   status      String   @default("ACTIVE") // ACTIVE | SUPERSEDED
   description String?
   parameters  Json
+}
+
+// ============================================================
+// Points & Ledger Models (Phase 1 — 贡献点与账本)
+// ============================================================
+
+model PointAccount {
+  userId    String @id
+  user      User   @relation(fields: [userId], references: [id])
+  available Int    @default(0)
+  locked    Int    @default(0)
+}
+
+model PointTransaction {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  type         String   // MINT | UNLOCK | LOCK | SPEND | TRANSFER
+  amount       Int
+  balanceAfter Int
+  createdAt    DateTime @default(now())
+  data         Json?
+}
+
+model Balance {
+  userId      String  @id
+  user        User    @relation(fields: [userId], references: [id])
+  balance     Int     @default(0)
+  debtFrozen  Boolean @default(false)
+}
+
+model LedgerEntry {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  entryType    String   // MINT_INITIAL | MINT_DAILY | STAKE_LOCK | STAKE_UNLOCK | VOTE_LOCK | VOTE_UNLOCK | SETTLEMENT_PAYOUT | SETTLEMENT_CLAWBACK
+  amount       Int
+  balanceAfter Int
+  roundId      String?
+  messageId    String?
+  createdAt    DateTime @default(now())
+  data         Json?
 }

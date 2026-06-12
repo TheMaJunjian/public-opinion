@@ -318,3 +318,36 @@ export function getConnectorColorClass(relationType: string): string {
   };
   return COLOR_BORDER[spec.color] ?? 'border-gray-300';
 }
+
+// ============================================================
+// Points & Ledger Types (Phase 1)
+// ============================================================
+
+export interface PointsBalance {
+  points: {
+    available: number;
+    locked: number;
+  };
+  balance: {
+    amount: number;
+    debtFrozen: boolean;
+  };
+}
+
+export interface PointTransaction {
+  id: string;
+  type: string; // MINT | UNLOCK | LOCK | SPEND | TRANSFER
+  amount: number;
+  balanceAfter: number;
+  createdAt: string;
+  data?: Record<string, unknown> | null;
+}
+
+export interface CurrentRule {
+  id: string;
+  version: number;
+  status: string;
+  description: string | null;
+  parameters: Record<string, unknown>;
+  createdAt: string;
+}

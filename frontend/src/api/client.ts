@@ -114,3 +114,22 @@ export function updateRelation(topicId: string, relationId: string, data: {
     }),
   });
 }
+
+// ============================================================
+// Points & Rules API (Phase 1)
+// ============================================================
+
+export function getPointsBalance() {
+  return request<import('../types').PointsBalance>('/points/balance');
+}
+
+export function getPointsTransactions(params?: { page?: number; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.limit) qs.set('limit', String(params.limit));
+  return request<import('../types').PaginatedResponse<import('../types').PointTransaction>>(`/points/transactions?${qs}`);
+}
+
+export function getCurrentRules() {
+  return request<import('../types').CurrentRule>('/rules/current');
+}

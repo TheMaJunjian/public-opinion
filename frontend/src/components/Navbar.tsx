@@ -1,5 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import PointsBadge from './PointsBadge';
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
 export default function Navbar() {
@@ -20,6 +21,7 @@ export default function Navbar() {
       <div className="flex items-center gap-4">
         {user ? (
           <>
+            <PointsBadge />
             <span className="text-indigo-200 text-sm">
               {user.username}
             </span>

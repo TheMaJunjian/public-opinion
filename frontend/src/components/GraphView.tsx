@@ -1756,8 +1756,7 @@ export default function GraphView(props: GraphViewProps) {
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   // Reserved: populate via ResizeObserver when cards need variable widths (e.g. MERGE headers).
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [measuredWidths, setMeasuredWidths] = useState<Record<string,number>>({});
+  const [measuredWidths] = useState<Record<string,number>>({});
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
   const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
   const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}>|null>(null);

@@ -318,12 +318,12 @@ describe('merge canvas pipeline integration', () => {
       makeNormal('m2'),
       makeNormal('m5'),
       makeNormal('m6'),
-      { id: 'r10', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'arrange', kind: 'relation', relationType: 'supp' },
+      { id: 'r10', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'arrange', kind: 'relation', relationType: 'tag' },
       { id: 'merge-1', author: 'tester', createdAt: '2024-01-01T00:03:00.000Z', content: 'merge', kind: 'relation', relationType: 'merge', relationPayload: { title: '归并' } },
     ];
     const edges: DemoEdge[] = [
-      { id: 'r10::0', relationMessageId: 'r10', relationType: 'supp', from: { messageId: 'anon:r10', selection: { kind: 'whole' } }, to: { messageId: 'm5', selection: { kind: 'whole' } }, relationLabel: 'supp' },
-      { id: 'r10::1', relationMessageId: 'r10', relationType: 'supp', from: { messageId: 'anon:r10', selection: { kind: 'whole' } }, to: { messageId: 'm6', selection: { kind: 'whole' } }, relationLabel: 'supp' },
+      { id: 'r10::0', relationMessageId: 'r10', relationType: 'tag', from: { messageId: 'anon:r10', selection: { kind: 'whole' } }, to: { messageId: 'm5', selection: { kind: 'whole' } }, relationLabel: 'tag' },
+      { id: 'r10::1', relationMessageId: 'r10', relationType: 'tag', from: { messageId: 'anon:r10', selection: { kind: 'whole' } }, to: { messageId: 'm6', selection: { kind: 'whole' } }, relationLabel: 'tag' },
       { id: 'merge-1::0', relationMessageId: 'merge-1', relationType: 'merge', from: { messageId: 'anon:merge-1', selection: { kind: 'whole' } }, to: { messageId: 'm1', selection: { kind: 'whole' } }, relationLabel: 'merge' },
       { id: 'merge-1::1', relationMessageId: 'merge-1', relationType: 'merge', from: { messageId: 'anon:merge-1', selection: { kind: 'whole' } }, to: { messageId: 'm2', selection: { kind: 'whole' } }, relationLabel: 'merge' },
       { id: 'merge-1::2', relationMessageId: 'merge-1', relationType: 'merge', from: { messageId: 'anon:merge-1', selection: { kind: 'whole' } }, to: { messageId: 'r10', selection: { kind: 'whole' } }, relationLabel: 'merge' },

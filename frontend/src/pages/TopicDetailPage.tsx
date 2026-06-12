@@ -1867,7 +1867,6 @@ export default function TopicDetailPage() {
           payload: buildRelationPayload({ relationType: 'ARRANGE', targetLayout }),
         });
         const relId = backendRel.id;
-        const typeName = relationTypeName("arrange");
         // Encode layout direction in relationLabel so layout engine can read it directly
         const edgeLabel = secondaryRelationType === 'horizontal' ? 'arrange-h' : 'arrange-v';
         appendCreatedRelation(backendRel);

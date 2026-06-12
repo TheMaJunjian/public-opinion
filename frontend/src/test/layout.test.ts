@@ -31,7 +31,8 @@ import {
   findOverlaps,
   verifyColumnOrder,
 } from '../utils/layout';
-import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
+import type { DemoMessage, DemoEdge, RelationType } from '../utils/modelBridge';
+import { LayoutBox, Rect } from '../utils/layout';
 
 // ============================================================
 // Fixtures
@@ -43,7 +44,7 @@ function makeNormal(id: string, author = 'userA', createdAt = '2024-01-01T00:00:
 
 function makeEdge(
   id: string,
-  relationType: string,
+  relationType: RelationType,
   relationMessageId: string,
   fromMessageId: string,
   toMessageId: string,
@@ -1225,10 +1226,6 @@ describe('Frame-as-card placement invariants', () => {
 
   it('a frame should start at GRID_TOP when canvas is empty', () => {
     // Same as a card: empty canvas → start at (GRID_LEFT, GRID_TOP)
-    const normals: DemoMessage[] = [];
-    const layout = computeSimpleNoOverlapLayout({
-      normals, colOf: {}, maxCol: 0,
-    });
     // Empty layout, next item at col 0 would start at GRID_TOP
     const nextY = GRID_TOP;
     expect(nextY).toBe(48);
@@ -1368,7 +1365,6 @@ describe('Frame-as-card placement invariants', () => {
     const minX = Math.min(card1.x, card2.x);
     const minY = Math.min(card1.y, card2.y);
     const maxR = Math.max(card1.x + card1.width, card2.x + card2.width);
-    const maxB = Math.max(card1.y + card1.height, card2.y + card2.height);
 
     expect(minX - FRAME_PAD).toBe(fx); // 34-16=18
     expect(minY - FRAME_PAD).toBe(fy); // 64-16=48

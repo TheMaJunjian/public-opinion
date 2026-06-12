@@ -15,7 +15,7 @@
  */
 
 import type { DemoMessage, DemoEdge } from './modelBridge';
-import type { PresentationKind, RelationTargetLayout } from '../types';
+import type { PresentationKind } from '../types';
 import { getPresentationSpec, PRESENTATION_SPECS } from '../types';
 
 // ============================================================

@@ -40,7 +40,8 @@ const writeLimiter = rateLimit({
 });
 
 // Load OpenAPI spec and mount Swagger UI
-const swaggerDocument = YAML.load(path.join(__dirname, 'openapi.yaml')) as Record<string, unknown>;
+// __dirname is dist/ in production, src/ in dev; openapi.yaml lives in src/
+const swaggerDocument = YAML.load(path.join(__dirname, '..', 'src', 'openapi.yaml')) as Record<string, unknown>;
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // API routes

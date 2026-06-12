@@ -777,7 +777,18 @@ export default function TopicDetailPage() {
         .flatMap(e => [e.from.messageId, e.to.messageId])
         .filter(mid => msgMap.get(mid)?.kind === 'normal');
       if (textEndpoints.length > 0) {
-        if (textEndpoints.some(mid => hiddenTextIds.has(mid))) {
+        if (relType === 'reference') {
+          // Cross-topic REFERENCE: only hide the relation message when its source
+          // (from) message is classified/hidden.  If the source is visible but the
+          // target is in another classify topic, the reference should still appear
+          // alongside the source in the linear and graph views.
+          const sourceHidden = relEdges.some(e =>
+            msgMap.get(e.from.messageId)?.kind === 'normal' && hiddenTextIds.has(e.from.messageId)
+          );
+          if (sourceHidden) {
+            ids.add(relMsgId);
+          }
+        } else if (textEndpoints.some(mid => hiddenTextIds.has(mid))) {
           ids.add(relMsgId);
         }
         continue;
@@ -2657,6 +2668,16 @@ export default function TopicDetailPage() {
         if (textEndpoints.length > 0) {
           if (textEndpoints.every(mid => topicTextIds.has(mid))) {
             topicRelationIds.add(relMsgId);
+          } else if (relEdges[0]?.relationType === 'reference') {
+            // Cross-topic REFERENCE: include the relation message when its source
+            // message (from) is in the current topic, even if the target is in
+            // a different classify topic.
+            const sourceInTopic = relEdges.some(e =>
+              msgMap.get(e.from.messageId)?.kind === 'normal' && topicTextIds.has(e.from.messageId)
+            );
+            if (sourceInTopic) {
+              topicRelationIds.add(relMsgId);
+            }
           }
           continue;
         }
@@ -2677,6 +2698,11 @@ export default function TopicDetailPage() {
       const topicEdges = baseEdges.filter(e => {
         if (!visibleIds.has(e.relationMessageId)) return false;
         if (e.relationType === 'classify' || e.relationType === 'summary') return true;
+        // Cross-topic REFERENCE: include the edge when the source endpoint is
+        // visible, even if the target is in a different classify topic.
+        if (e.relationType === 'reference') {
+          return e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId);
+        }
         return (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
                visibleIds.has(e.to.messageId);
       });

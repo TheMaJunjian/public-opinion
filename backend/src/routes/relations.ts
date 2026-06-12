@@ -4,6 +4,11 @@ import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { RELATION_TYPES } from '../lib/relationTypes';
 import { applyEvent } from '../lib/events';
+import {
+  extractTextTargetIds,
+  extractNestedRelationIds,
+  validateGroupingTargets,
+} from '../lib/crossLinkValidator';
 
 const relationsRouter = Router({ mergeParams: true });
 
@@ -87,67 +92,6 @@ const createRelationSchema = z.object({
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
-const CLASSIFY_CROSS_LINK_ERROR = '分类目标与已分类消息存在非引用关联，无法建立分类关系';
-const MERGE_CROSS_LINK_ERROR = '归并目标与已分类消息存在非引用关联，无法建立归并关系';
-const SUMMARY_CROSS_LINK_ERROR = '总结目标与已分类消息存在非引用关联，无法建立总结关系';
-
-function extractTextTargetIds(targetRefs: unknown): string[] {
-  if (!Array.isArray(targetRefs)) return [];
-  return [...new Set(
-    targetRefs
-      .filter((ref): ref is { kind: 'message' | 'text-fragment'; messageId: string } =>
-        !!ref &&
-        typeof ref === 'object' &&
-        ((ref as { kind?: unknown }).kind === 'message' || (ref as { kind?: unknown }).kind === 'text-fragment') &&
-        typeof (ref as { messageId?: unknown }).messageId === 'string'
-      )
-      .map(ref => ref.messageId)
-  )];
-}
-
-function extractNestedRelationIds(targetRefs: unknown): string[] {
-  if (!Array.isArray(targetRefs)) return [];
-  return [...new Set(
-    targetRefs
-      .filter((ref): ref is { kind: 'relation'; relationId: string } =>
-        !!ref &&
-        typeof ref === 'object' &&
-        (ref as { kind?: unknown }).kind === 'relation' &&
-        typeof (ref as { relationId?: unknown }).relationId === 'string'
-      )
-      .map(ref => ref.relationId)
-  )];
-}
-
-function collectSelectedGroupTargetTextIds(params: {
-  targetTextIds: string[];
-  targetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }>;
-}): string[] {
-  const selectedTextIds = new Set(params.targetTextIds);
-  const relationById = new Map(
-    params.targetRelations.map(rel => [rel.id, rel] as const)
-  );
-  const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY']);
-  const queue = params.targetRelations
-    .filter(rel => expandableRelationTypes.has(rel.relationType ?? ''))
-    .map(rel => rel.id);
-  const visited = new Set<string>();
-
-  while (queue.length > 0) {
-    const relId = queue.shift()!;
-    if (visited.has(relId)) continue;
-    visited.add(relId);
-    const rel = relationById.get(relId);
-    if (!rel) continue;
-    if (!expandableRelationTypes.has(rel.relationType ?? '')) continue;
-    extractTextTargetIds(rel.targetRefs).forEach(id => selectedTextIds.add(id));
-    for (const nestedRelId of extractNestedRelationIds(rel.targetRefs)) {
-      if (!visited.has(nestedRelId) && relationById.has(nestedRelId)) queue.push(nestedRelId);
-    }
-  }
-
-  return [...selectedTextIds];
-}
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -339,128 +283,20 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       foundTargetRelations = [...relationById.values()];
     }
 
-    // SUMMARY targets must be text messages, ARRANGE, MERGE, or CLASSIFY relation messages.
-    if (data.relationType === 'SUMMARY' && foundTargetRelations.length > 0) {
-      const allowedSummaryTargetRelTypes = new Set(['ARRANGE', 'MERGE', 'CLASSIFY']);
-      for (const rel of foundTargetRelations.filter(r => targetRelationIds.includes(r.id))) {
-        if (!allowedSummaryTargetRelTypes.has(rel.relationType ?? '')) {
-          res.status(400).json({ error: '总结关系的目标关系消息只能是排列、归并或分类关系消息' });
-          return;
-        }
-      }
-    }
-
-    // CLASSIFY, MERGE, and SUMMARY targets cannot have non-reference cross-links with
-    // text messages that are already owned by an existing CLASSIFY or SUMMARY relation.
+    // CLASSIFY, MERGE, and SUMMARY: validate grouping targets.
+    // SUMMARY target-type check and cross-link BFS are delegated to the
+    // crossLinkValidator module to keep the route handler lean.
     if (data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'SUMMARY') {
-      const groupedTargetTextIds = collectSelectedGroupTargetTextIds({
-        targetTextIds: [...new Set(
-          data.targetRefs
-            .filter((r): r is Extract<typeof data.targetRefs[number], { kind: 'message' | 'text-fragment' }> =>
-              r.kind === 'message' || r.kind === 'text-fragment'
-            )
-            .map(r => r.messageId)
-        )],
-        targetRelations: foundTargetRelations,
+      const validationResult = await validateGroupingTargets({
+        topicId,
+        relationType: data.relationType,
+        targetRefs: data.targetRefs,
+        targetRelationIds,
+        foundTargetRelations,
       });
-      if (groupedTargetTextIds.length > 0) {
-        const selectedTargetTextIdSet = new Set(groupedTargetTextIds);
-        const relationMessages = await prisma.message.findMany({
-          where: { topicId, kind: 'RELATION' },
-          select: { id: true, relationType: true, relSourceId: true, targetRefs: true },
-        });
-
-        // Build the set of text message IDs already owned by existing CLASSIFY/SUMMARY relations.
-        // These are the "already classified" messages that make cross-links forbidden.
-        // A single BFS processes all CLASSIFY/SUMMARY relations together to avoid redundant traversals.
-        // Skip relations that are themselves targets of this merge/classify/summary — they are
-        // being absorbed by the new relation, so their text messages should not count as
-        // "already classified" for the cross-link check.
-        const allRelById = new Map(relationMessages.map(r => [r.id, r]));
-        const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY']);
-        const absorbedRelationIds = new Set(foundTargetRelations.map(r => r.id));
-        const alreadyClassifiedTextIds = new Set<string>();
-        const bfsQueue: string[] = [];
-        const bfsVisited = new Set<string>();
-        for (const rel of relationMessages) {
-          if ((rel.relationType === 'CLASSIFY' || rel.relationType === 'SUMMARY') && !bfsVisited.has(rel.id)) {
-            bfsQueue.push(rel.id);
-          }
-        }
-        while (bfsQueue.length > 0) {
-          const bfsId = bfsQueue.shift()!;
-          if (bfsVisited.has(bfsId)) continue;
-          bfsVisited.add(bfsId);
-          // Skip relations that are being absorbed by this operation
-          if (absorbedRelationIds.has(bfsId)) continue;
-          const bfsRel = allRelById.get(bfsId);
-          if (!bfsRel) continue;
-          extractTextTargetIds(bfsRel.targetRefs).forEach(id => alreadyClassifiedTextIds.add(id));
-          if (!expandableTypes.has(bfsRel.relationType ?? '')) continue;
-          for (const nestedId of extractNestedRelationIds(bfsRel.targetRefs)) {
-            if (!bfsVisited.has(nestedId)) bfsQueue.push(nestedId);
-          }
-        }
-
-        const sourceIds = [...new Set(
-          relationMessages
-            .map(m => m.relSourceId)
-            .filter((id): id is string => !!id)
-        )];
-        const sourceTextRows = sourceIds.length > 0
-          ? await prisma.message.findMany({
-              where: { topicId, kind: 'TEXT', id: { in: sourceIds } },
-              select: { id: true },
-            })
-          : [];
-        const sourceTextIdSet = new Set(sourceTextRows.map(row => row.id));
-
-        const crossLinkError =
-          data.relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR
-          : data.relationType === 'MERGE' ? MERGE_CROSS_LINK_ERROR
-          : SUMMARY_CROSS_LINK_ERROR;
-
-        for (const relMsg of relationMessages) {
-          // Skip REFERENCE (citation) and CORRECT (correction) relations:
-          // - REFERENCE does not imply semantic grouping
-          // - CORRECT edges are already handled by expandTextIdsWithCorrections
-          //   and should not trigger cross-link blocks
-          if (relMsg.relationType === 'REFERENCE' || relMsg.relationType === 'CORRECT') continue;
-          // Skip relations that are themselves direct targets of this classification
-          // (e.g., when classifying a ARRANGE or MERGE, its own edges should not
-          // trigger cross-link errors — Bug 3 fix).
-          if (targetRelationIds.includes(relMsg.id)) continue;
-          const sourceTextId =
-            relMsg.relSourceId && sourceTextIdSet.has(relMsg.relSourceId)
-              ? relMsg.relSourceId
-              : null;
-          const refs = Array.isArray(relMsg.targetRefs)
-            ? relMsg.targetRefs as Array<{ kind?: unknown; messageId?: unknown }>
-            : [];
-          const targetTextIds = [...new Set(
-            refs
-              .filter(ref =>
-                (ref.kind === 'message' || ref.kind === 'text-fragment') &&
-                typeof ref.messageId === 'string'
-              )
-              .map(ref => ref.messageId as string)
-          )];
-          const hasSelectedEndpoint =
-            (sourceTextId !== null && selectedTargetTextIdSet.has(sourceTextId)) ||
-            targetTextIds.some(id => selectedTargetTextIdSet.has(id));
-          if (!hasSelectedEndpoint) continue;
-          // Only block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY
-          // AND is NOT part of the same expanded selection (e.g., when a ARRANGE bridges
-          // between selected and already-classified messages, allow it — Bug 3 fix).
-          if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId) && alreadyClassifiedTextIds.has(sourceTextId)) {
-            res.status(400).json({ error: crossLinkError });
-            return;
-          }
-          if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id) && alreadyClassifiedTextIds.has(id))) {
-            res.status(400).json({ error: crossLinkError });
-            return;
-          }
-        }
+      if (!validationResult.ok) {
+        res.status(400).json({ error: validationResult.error });
+        return;
       }
     }
 

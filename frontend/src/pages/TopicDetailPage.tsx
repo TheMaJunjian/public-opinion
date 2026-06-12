@@ -1009,31 +1009,57 @@ export default function TopicDetailPage() {
     })
       .then(updatedRel => {
         const newRelId = updatedRel.id;
-        // Replace old relation with superseding new one
+        const oldRelId = topicFocusRelMsgId;
+        // Replace old relation with superseding new one.
+        // Also update any parent relation's targetRefs that reference the old ID,
+        // so the ownership chain (collectOwnedByRelation) stays intact.
         setRelations(prev => {
-          const filtered = prev.filter(r => r.id !== topicFocusRelMsgId);
-          return [...filtered, updatedRel];
+          const filtered = prev.filter(r => r.id !== oldRelId);
+          // Rewrite targetRefs in any relation that points to the superseded relation
+          return filtered.map(r => {
+            const refs = (r.targetRefs ?? []) as TargetRef[];
+            const hasOldRef = refs.some(ref => ref.kind === 'relation' && ref.relationId === oldRelId);
+            if (!hasOldRef) return r;
+            return {
+              ...r,
+              targetRefs: refs.map(ref =>
+                ref.kind === 'relation' && ref.relationId === oldRelId
+                  ? { ...ref, relationId: newRelId }
+                  : ref
+              ),
+            };
+          }).concat(updatedRel);
         });
         setMessages(prev => {
-          const filtered = prev.filter(m => m.id !== topicFocusRelMsgId);
+          const filtered = prev.filter(m => m.id !== oldRelId);
           return [...filtered, buildRelationDemoMessage(updatedRel)];
         });
         setFocusEntries(prev => {
           if (prev.length === 0) return prev;
           const last = prev[prev.length - 1];
-          if (last.mode !== "topic" || last.topicRelMsgId !== topicFocusRelMsgId) return prev;
+          if (last.mode !== "topic" || last.topicRelMsgId !== oldRelId) return prev;
           return [...prev.slice(0, -1), { ...last, topicRelMsgId: newRelId }];
         });
         setEdges(prev => {
           let next = prev.map(e => {
-            if (e.relationMessageId !== topicFocusRelMsgId) return e;
-            return {
-              ...e,
-              relationMessageId: newRelId,
-              from: e.from.messageId === `anon:${topicFocusRelMsgId}`
-                ? { ...e.from, messageId: `anon:${newRelId}` }
-                : e.from,
-            };
+            // Update edges emitted by the superseded relation message
+            if (e.relationMessageId === oldRelId) {
+              return {
+                ...e,
+                relationMessageId: newRelId,
+                from: e.from.messageId === `anon:${oldRelId}`
+                  ? { ...e.from, messageId: `anon:${newRelId}` }
+                  : e.from,
+              };
+            }
+            // Update edges that target the superseded relation message
+            if (e.to.messageId === oldRelId && e.to.selection.kind === 'whole') {
+              return {
+                ...e,
+                to: { ...e.to, messageId: newRelId },
+              };
+            }
+            return e;
           });
           onUpdated?.(newRelId);
           return next;

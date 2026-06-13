@@ -537,6 +537,7 @@ export default function TopicDetailPage() {
   const [relations, setRelations] = useState<Relation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [stakeCounts, setStakeCounts] = useState<Record<string, { pro: number; con: number }>>({});
 
   useEffect(() => {
     if (!topicId) return;
@@ -557,6 +558,23 @@ export default function TopicDetailPage() {
         setRelations(relationsData.data);
         setMessages(demoMsgs);
         setEdges(demoEdges);
+
+        // Phase 2: batch-load stake counts for all TEXT messages
+        const textMsgIds = messagesData.data.map((m: { id: string }) => m.id);
+        if (textMsgIds.length > 0) {
+          try {
+            const stakes = await Promise.all(
+              textMsgIds.map((id: string) =>
+                api.getMessageStakes(id).then(r => ({ id, pro: r.counts.pro, con: r.counts.con }))
+              )
+            );
+            const map: Record<string, { pro: number; con: number }> = {};
+            for (const s of stakes) map[s.id] = { pro: s.pro, con: s.con };
+            if (!cancelled) setStakeCounts(map);
+          } catch {
+            // stake fetch is best-effort; don't block the page
+          }
+        }
       } catch (e: any) {
         if (cancelled) return;
         setLoadError(String(e?.message ?? e));
@@ -613,6 +631,7 @@ export default function TopicDetailPage() {
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
     setRelations(prev => [...prev, backendRel]);
     setMessages(prev => [...prev, buildRelationDemoMessage(backendRel)]);
+    window.dispatchEvent(new Event('points-refresh'));
   }, []);
 
   // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
@@ -1083,6 +1102,8 @@ export default function TopicDetailPage() {
         kind: "normal",
       };
       setMessages(prev => [...prev, msg]);
+      // Optimistic stake count update for the new message (self-stake PRO)
+      setStakeCounts(prev => ({ ...prev, [msg.id]: { pro: stakeAmount, con: 0 } }));
       if (isTopicFocus) {
         setFocusEntries(prev => {
           if (prev.length === 0) return prev;
@@ -1116,6 +1137,7 @@ export default function TopicDetailPage() {
       }
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
+      window.dispatchEvent(new Event('points-refresh'));
       return msg;
     } catch (e: any) {
       alert(`发送消息失败: ${e?.message ?? e}`);
@@ -3155,6 +3177,16 @@ export default function TopicDetailPage() {
                         <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
                         <span>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</span>
                       </div>
+                      {stakeCounts[msg.id] && (stakeCounts[msg.id].pro > 0 || stakeCounts[msg.id].con > 0) && (
+                        <div style={{ display: "flex", gap: 10, marginBottom: 4, fontSize: 11 }}>
+                          {stakeCounts[msg.id].pro > 0 && (
+                            <span style={{ color: "#4ade80" }}>👍 PRO {stakeCounts[msg.id].pro}</span>
+                          )}
+                          {stakeCounts[msg.id].con > 0 && (
+                            <span style={{ color: "#f87171" }}>👎 CON {stakeCounts[msg.id].con}</span>
+                          )}
+                        </div>
+                      )}
                       {isTopicMsg && (
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                           <div style={{ fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -3233,6 +3265,7 @@ export default function TopicDetailPage() {
                   onGroupFrameDoubleClick={handleGroupFrameDoubleClick}
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
+                  stakeCounts={stakeCounts}
                   onDebugRects={setDebugRects}
                 />
             )}

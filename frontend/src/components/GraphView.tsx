@@ -1660,6 +1660,8 @@ export interface GraphViewProps {
   onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
   /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
   hideMessageIds?: Set<string>;
+  /** Phase 2: stake counts per message (pro/con) for display on cards */
+  stakeCounts?: Record<string, { pro: number; con: number }>;
   /** DEBUG: callback to report frame/card rectangles */
   onDebugRects?: (text: string) => void;
 }
@@ -1676,6 +1678,7 @@ export default function GraphView(props: GraphViewProps) {
     onGroupFrameClick, onGroupFrameDoubleClick,
     onInlineBadgeClick, onInlineBadgeDoubleClick,
     hideMessageIds,
+    stakeCounts,
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
@@ -2127,7 +2130,7 @@ export default function GraphView(props: GraphViewProps) {
 
     const decorationsByMsg = computeTransitiveVoteStats(edges, messages);
 
-    // Decorations are now placed to the RIGHT of the card, stacked vertically (agree on top, disagree below).
+    // Decorations are placed to the RIGHT of the card, stacked vertically (agree on top, disagree below).
     // Each badge is split into icon area (left DEC_ICON_W px) and body area (rest).
     const decorationRects: Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}> = {};
     for (const [mid,data] of Object.entries(decorationsByMsg)) {
@@ -2173,7 +2176,6 @@ export default function GraphView(props: GraphViewProps) {
         const hasAgree=!!decorationRects[`${mid}::agree`], hasDisagree=!!decorationRects[`${mid}::disagree`];
         const decBottomY = box.y+DEC_RIGHT_TOP + (hasAgree?DEC_H+DEC_GAP:0) + (hasDisagree?DEC_H+DEC_GAP:0);
         const tagY=decBottomY + newTagDecorationsByMsg[mid].length*(TAG_H+TAG_V_GAP);
-        // Reserve width for count suffix; we'll recalculate at render time
         const tagW=Math.max(TAG_MIN_W, label.length*8+8+28);
         const rect={x:tagX,y:tagY,width:tagW,height:TAG_H};
         newTagDecorationsByMsg[mid].push({label,relMsgIds:[e.relationMessageId],rect,relAgreeCount:0,relDisagreeCount:0,relAgreeMsgIds:[],relDisagreeMsgIds:[]});
@@ -2962,8 +2964,20 @@ export default function GraphView(props: GraphViewProps) {
                     })}
                   </div>
                 )}
-                <div style={{flex:1,display:"flex",justifyContent:"flex-end"}}>
+                <div style={{flex:1,display:"flex",justifyContent:"flex-end",flexDirection:"column",alignItems:"flex-end"}}>
                   <span style={{opacity:0.7}}>{msg.id}</span>
+                  {(() => {
+                    const sc = stakeCounts?.[msg.id];
+                    if (sc && (sc.pro > 0 || sc.con > 0)) {
+                      return (
+                        <div style={{ display: "flex", gap: 6, fontSize: 10, marginTop: 2 }}>
+                          {sc.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc.pro}</span>}
+                          {sc.con > 0 && <span style={{ color: "#f87171" }}>👎{sc.con}</span>}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               </div>
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
@@ -3028,6 +3042,7 @@ export default function GraphView(props: GraphViewProps) {
                 {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edge.relationType==="reply"?1.0:1.2} fill="none"/>}
                 {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
                 {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
+                {/* Text with stroke for readability against any background */}
                 <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:isWhole||isFrag?3:2} as any}>
                   {edgeLabelText}
                 </text>
@@ -3108,8 +3123,29 @@ export default function GraphView(props: GraphViewProps) {
           const tagItems=tagsByRelMsgState.get(relId)??[];
           if ((!dec||(dec.agreeCount===0&&dec.disagreeCount===0))&&tagItems.length===0) continue;
           rendered.add(relId);
-          const decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
+          // Default: right side of label, stacked vertically
+          let decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
           let decTop=bb.y+Math.floor((bb.height-DEC_H)/2);
+          let useBelow = false;
+          // Check if right-side decorations would overlap any card; if so, shift below the label
+          const hasAgree=dec&&dec.agreeCount>0, hasDisagree=dec&&dec.disagreeCount>0;
+          const decCount=(hasAgree?1:0)+(hasDisagree?1:0);
+          if (decCount>0) {
+            const rightDecRect = { x: decLeft, y: decTop, width: DEC_W, height: decCount * DEC_H + (decCount-1) * DEC_GAP };
+            useBelow = normals.some(m => {
+              const cardBox = layout[m.id];
+              if (!cardBox) return false;
+              return rightDecRect.x < cardBox.x + cardBox.width &&
+                     rightDecRect.x + rightDecRect.width > cardBox.x &&
+                     rightDecRect.y < cardBox.y + cardBox.height &&
+                     rightDecRect.y + rightDecRect.height > cardBox.y;
+            });
+            if (useBelow) {
+              const totalW = (hasAgree?DEC_W:0) + (hasDisagree?DEC_W:0) + (hasAgree&&hasDisagree?4:0);
+              decLeft = bb.x + Math.floor((bb.width - totalW) / 2);
+              decTop = bb.y + bb.height + 2;
+            }
+          }
           for (const kind of ["agree","disagree"] as const) {
             const count=kind==="agree"?dec?.agreeCount??0:dec?.disagreeCount??0;
             if (count<=0) continue;
@@ -3136,7 +3172,8 @@ export default function GraphView(props: GraphViewProps) {
                 </div>
               </div>
             );
-            decTop+=DEC_H+DEC_GAP;
+            if (useBelow) { decLeft += DEC_W + 4; }
+            else { decTop += DEC_H + DEC_GAP; }
           }
           // TAG badges on this relation message — aggregated by label text
           const tagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();

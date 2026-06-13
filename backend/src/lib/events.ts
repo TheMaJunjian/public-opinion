@@ -47,6 +47,7 @@ export interface MessageCreatedEvent {
     quotedTextHash?: string | null;
     quoteContextBefore?: string | null;
     quoteContextAfter?: string | null;
+    stakeAmount?: number; // Phase 2: override selfStakeOnCreate
   };
 }
 
@@ -84,6 +85,18 @@ export interface PointTransferredEvent {
   };
 }
 
+export interface StakePlacedEvent {
+  type: 'STAKE_PLACED';
+  actorId: string;
+  topicId: string;
+  payload: {
+    messageId: string;
+    side: 'PRO' | 'CON';
+    amount: number;
+    roundId?: string | null;
+  };
+}
+
 export type AppEvent =
   | UserRegisteredEvent
   | TopicCreatedEvent
@@ -91,7 +104,8 @@ export type AppEvent =
   | MessageCreatedEvent
   | RelationCreatedEvent
   | PointMintedEvent
-  | PointTransferredEvent;
+  | PointTransferredEvent
+  | StakePlacedEvent;
 
 // ============================================================
 // Apply Event — the single write path
@@ -117,6 +131,8 @@ export async function applyEvent(event: AppEvent): Promise<unknown> {
       return applyPointMinted(event);
     case 'POINT_TRANSFERRED':
       return applyPointTransferred(event);
+    case 'STAKE_PLACED':
+      return applyStakePlaced(event);
   }
 }
 
@@ -210,7 +226,7 @@ async function applyTopicCreated(event: TopicCreatedEvent) {
         action: 'TOPIC_CREATED',
         entityType: 'Topic',
         entityId: '',
-        topicId: '',
+        topicId: null,
         data: { title: payload.title, body: payload.body },
       },
     }),
@@ -290,6 +306,9 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     data: { entityId: message.id },
   });
 
+  // Auto-self-stake PRO (Phase 2.5)
+  await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount);
+
   return message;
 }
 
@@ -343,7 +362,39 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     data: { entityId: message.id },
   });
 
+  // Auto-self-stake PRO (Phase 2.6)
+  await autoSelfStake(actorId, topicId, message.id);
+
   return message;
+}
+
+// ── Auto Self-Stake Helper (Phase 2.5-2.6) ───────────────────
+
+async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number) {
+  try {
+    const rule = await prisma.ruleVersion.findFirst({
+      where: { status: 'ACTIVE' },
+      orderBy: { version: 'desc' },
+      select: { parameters: true },
+    });
+    const selfStakeAmount = overrideAmount
+      ?? (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number | undefined;
+    if (!selfStakeAmount || selfStakeAmount <= 0) return;
+
+    const userBalance = await prisma.balance.findUnique({ where: { userId } });
+    if (!userBalance || userBalance.debtFrozen || userBalance.balance < selfStakeAmount) return;
+
+    await executeStake({
+      userId,
+      topicId,
+      messageId,
+      side: 'PRO',
+      amount: selfStakeAmount,
+    });
+  } catch {
+    // Silently skip auto-stake if it fails (e.g., balance too low);
+    // the message was already created successfully.
+  }
 }
 
 // ── Points & Ledger Handlers ─────────────────────────────────
@@ -478,4 +529,129 @@ async function applyPointTransferred(event: PointTransferredEvent) {
   ]);
 
   return { fromAvailable: fromNewAvailable, toAvailable: toNewAvailable };
+}
+
+// ── Stake Handlers (Phase 2) ─────────────────────────────────
+
+/**
+ * Shared internal stake execution — reusable by both the STAKE_PLACED event handler
+ * and the message-creation auto-self-stake flow.
+ */
+export async function executeStake(params: {
+  userId: string;
+  topicId: string;
+  messageId: string;
+  side: 'PRO' | 'CON';
+  amount: number;
+  roundId?: string | null;
+}) {
+  const { userId, topicId, messageId, side, amount, roundId } = params;
+
+  // Validate user state
+  const [userBalance, pointAccount] = await Promise.all([
+    prisma.balance.findUnique({ where: { userId } }),
+    prisma.pointAccount.findUnique({ where: { userId } }),
+  ]);
+
+  if (!userBalance || !pointAccount) {
+    throw new Error('Account not found');
+  }
+  if (userBalance.debtFrozen) {
+    throw new Error('Account is frozen due to negative balance');
+  }
+  if (pointAccount.available < amount) {
+    throw new Error('Insufficient available points');
+  }
+
+  const newAvailable = pointAccount.available - amount;
+  const newLocked = pointAccount.locked + amount;
+  const newBalance = userBalance.balance - amount;
+
+  // Atomic write: account + stake + betPool + ledger + auditLog
+  const [stake] = await prisma.$transaction([
+    prisma.stake.create({
+      data: { userId, topicId, messageId, side, amount, roundId: roundId ?? null },
+    }),
+    prisma.pointAccount.update({
+      where: { userId },
+      data: { available: newAvailable, locked: newLocked },
+    }),
+    prisma.balance.update({
+      where: { userId },
+      data: {
+        balance: newBalance,
+        debtFrozen: newBalance < 0,
+      },
+    }),
+    prisma.pointTransaction.create({
+      data: {
+        userId,
+        type: 'LOCK',
+        amount: -amount,
+        balanceAfter: newAvailable,
+        data: { side, messageId, topicId },
+      },
+    }),
+    // Upsert BetPool
+    prisma.betPool.upsert({
+      where: { messageId },
+      create: {
+        messageId,
+        lockedPro: side === 'PRO' ? amount : 0,
+        lockedCon: side === 'CON' ? amount : 0,
+      },
+      update: {
+        lockedPro: side === 'PRO' ? { increment: amount } : undefined,
+        lockedCon: side === 'CON' ? { increment: amount } : undefined,
+      },
+    }),
+    prisma.ledgerEntry.create({
+      data: {
+        userId,
+        entryType: 'STAKE_LOCK',
+        amount: -amount,
+        balanceAfter: newBalance,
+        messageId,
+        roundId: roundId ?? null,
+        data: { side },
+      },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId: userId,
+        action: 'STAKE_PLACED',
+        entityType: 'Stake',
+        entityId: '',
+        topicId,
+        data: { messageId, side, amount, roundId },
+      },
+    }),
+  ]);
+
+  // Patch audit log entityId
+  await prisma.auditLog.updateMany({
+    where: { action: 'STAKE_PLACED', entityId: '', actorId: userId, topicId },
+    data: { entityId: stake.id },
+  });
+
+  return {
+    stakeId: stake.id,
+    side,
+    amount,
+    newAvailable,
+    newLocked,
+    newBalance,
+  };
+}
+
+async function applyStakePlaced(event: StakePlacedEvent) {
+  const { actorId, topicId, payload } = event;
+  return executeStake({
+    userId: actorId,
+    topicId,
+    messageId: payload.messageId,
+    side: payload.side,
+    amount: payload.amount,
+    roundId: payload.roundId ?? null,
+  });
 }

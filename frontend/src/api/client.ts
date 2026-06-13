@@ -70,6 +70,7 @@ export function getMessages(topicId: string, params?: { page?: number; limit?: n
 export function createMessage(topicId: string, data: {
   contentType?: 'TEXT' | 'MARKDOWN';
   content: string;
+  stakeAmount?: number;
 }) {
   return request<import('../types').Message>(`/topics/${topicId}/messages`, {
     method: 'POST',
@@ -132,4 +133,19 @@ export function getPointsTransactions(params?: { page?: number; limit?: number }
 
 export function getCurrentRules() {
   return request<import('../types').CurrentRule>('/rules/current');
+}
+
+// ============================================================
+// Stake API (Phase 2)
+// ============================================================
+
+export function placeStake(messageId: string, data: { side: 'PRO' | 'CON'; amount: number }) {
+  return request<import('../types').StakeResult>(`/messages/${messageId}/stakes`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function getMessageStakes(messageId: string) {
+  return request<import('../types').MessageStakes>(`/messages/${messageId}/stakes`);
 }

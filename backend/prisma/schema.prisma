@@ -22,6 +22,7 @@ model User {
   pointTransactions PointTransaction[]
   balance           Balance?
   ledgerEntries     LedgerEntry[]
+  stakes            Stake[]
 }
 
 model Topic {
@@ -73,6 +74,9 @@ model Message {
 
   topic     Topic    @relation(fields: [topicId], references: [id])
   createdBy User     @relation(fields: [createdById], references: [id])
+
+  stakes   Stake[]
+  betPool  BetPool?
 }
 
 enum ContentType {
@@ -146,4 +150,28 @@ model LedgerEntry {
   messageId    String?
   createdAt    DateTime @default(now())
   data         Json?
+}
+
+// ============================================================
+// Stake & BetPool Models (Phase 2 — 押注与资金池)
+// ============================================================
+
+model Stake {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  topicId   String
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id])
+  side      String   // PRO | CON
+  amount    Int
+  roundId   String?
+  createdAt DateTime @default(now())
+}
+
+model BetPool {
+  messageId String @id
+  message   Message @relation(fields: [messageId], references: [id])
+  lockedPro Int    @default(0)
+  lockedCon Int    @default(0)
 }

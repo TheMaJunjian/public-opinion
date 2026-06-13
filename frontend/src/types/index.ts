@@ -351,3 +351,38 @@ export interface CurrentRule {
   parameters: Record<string, unknown>;
   createdAt: string;
 }
+
+// ============================================================
+// Stake & BetPool Types (Phase 2)
+// ============================================================
+
+export interface StakeResult {
+  message: string;
+  stakeId: string;
+  side: 'PRO' | 'CON';
+  amount: number;
+  newAvailable: number;
+  newLocked: number;
+  newBalance: number;
+}
+
+export interface StakeItem {
+  id: string;
+  side: 'PRO' | 'CON';
+  amount: number;
+  createdAt: string;
+  user: User;
+}
+
+export interface MessageStakes {
+  messageId: string;
+  pool: {
+    lockedPro: number;
+    lockedCon: number;
+  };
+  stakes: StakeItem[];
+  counts: {
+    pro: number;
+    con: number;
+  };
+}

@@ -604,6 +604,7 @@ export default function TopicDetailPage() {
   } | null>(null);
   // DEBUG
   const [debugRects, setDebugRects] = useState("");
+  const [stakeAmount, setStakeAmount] = useState(1); // Phase 2: inline stake amount
 
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
@@ -1073,7 +1074,7 @@ export default function TopicDetailPage() {
     if (text.trim().length === 0) return null;
     if (!topicId) return null;
     try {
-      const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT' });
+      const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT', stakeAmount });
       const msg: DemoMessage = {
         id: backendMsg.id,
         author: backendMsg.createdBy.username,
@@ -3388,6 +3389,15 @@ export default function TopicDetailPage() {
                 );
               })()}
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={stakeAmount}
+                  onChange={e => setStakeAmount(Math.max(1, parseInt(e.target.value) || 1))}
+                  style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
+                />
+                <span style={{ fontSize: 11, color: "#666" }}>点</span>
                 <button
                   onClick={handleQuickSendAndRelateFromDraftTargets}
                   disabled={!singleButtonEnabled}

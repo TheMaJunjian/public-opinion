@@ -24,12 +24,13 @@ async function main() {
     data: {
       version: 1,
       status: 'ACTIVE',
-      description: '初始默认规则 — 线性权重、最小押注 1、无单注上限',
+      description: '初始默认规则 — 线性权重、最小押注 1、无单注上限、创建消息自押 1 点',
       parameters: {
         minStake: 1,
         maxSingleStake: null,       // 无单注保护上限
         weightFunction: 'linear',   // 线性权重
         concurrentRoundLimit: 1,    // 同一消息最多 1 个进行中轮次
+        selfStakeOnCreate: 1,       // 创建消息时自动自押 PRO 点数（0=关闭）
       },
     },
   });

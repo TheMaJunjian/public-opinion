@@ -14,6 +14,7 @@ const createMessageSchema = z.object({
   quotedText: z.string().max(2000, '引用文本最多 2000 个字符').optional(),
   quoteContextBefore: z.string().max(200, '前置上下文最多 200 个字符').optional(),
   quoteContextAfter: z.string().max(200, '后置上下文最多 200 个字符').optional(),
+  stakeAmount: z.number().int().min(1).optional(), // Phase 2: inline stake amount
 });
 
 const paginationSchema = z.object({
@@ -87,6 +88,7 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
         quotedTextHash: quotedTextHash ?? null,
         quoteContextBefore: data.quoteContextBefore ?? null,
         quoteContextAfter: data.quoteContextAfter ?? null,
+        stakeAmount: data.stakeAmount,
       },
     });
 

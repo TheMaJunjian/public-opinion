@@ -470,3 +470,36 @@ export async function getCurrentRules() {
     createdAt: '2024-01-01T00:00:00Z',
   };
 }
+
+// ============================================================
+// Stake Mock API (Phase 2)
+// ============================================================
+
+const mockStakes: Record<string, { pro: number; con: number }> = {};
+
+export async function placeStake(messageId: string, data: { side: 'PRO' | 'CON'; amount: number }) {
+  await delay(100);
+  if (!mockUser) throw new Error('请先登录');
+  if (!mockStakes[messageId]) mockStakes[messageId] = { pro: 0, con: 0 };
+  mockStakes[messageId][data.side === 'PRO' ? 'pro' : 'con'] += data.amount;
+  return {
+    message: '押注成功',
+    stakeId: `stake-${Date.now()}`,
+    side: data.side,
+    amount: data.amount,
+    newAvailable: 99,
+    newLocked: 1,
+    newBalance: 99,
+  };
+}
+
+export async function getMessageStakes(messageId: string) {
+  await delay(50);
+  const pool = mockStakes[messageId] ?? { pro: 0, con: 0 };
+  return {
+    messageId,
+    pool: { lockedPro: pool.pro, lockedCon: pool.con },
+    stakes: [],
+    counts: { pro: 0, con: 0 },
+  };
+}

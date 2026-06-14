@@ -85,8 +85,8 @@ export default function RoundHistory({ messageId, compact = false }: Props) {
           <span key={round.id} className="inline-flex items-center gap-1">
             {idx > 0 && <span className="text-gray-300">→</span>}
             <button
-              onClick={() => setExpandedRound(expandedRound === round.id ? null : round.id)}
-              className={`px-2 py-0.5 rounded-full border text-xs font-mono transition-colors ${
+              onDoubleClick={(e) => { e.stopPropagation(); setExpandedRound(expandedRound === round.id ? null : round.id); }}
+              className={`px-2 py-0.5 rounded-full border text-xs font-mono transition-colors cursor-pointer select-none ${
                 round.status === 'SETTLED'
                   ? `border-gray-300 ${resultColor(round.result)} bg-white hover:bg-gray-50`
                   : round.status === 'VOTING'
@@ -106,6 +106,7 @@ export default function RoundHistory({ messageId, compact = false }: Props) {
       {expandedRound && (
         <RoundDetail
           roundId={expandedRound}
+          messageId={messageId}
           round={rounds.find(r => r.id === expandedRound) ?? null}
           onClose={() => setExpandedRound(null)}
         />
@@ -137,13 +138,16 @@ function buildChain(rounds: SettlementRoundItem[]): SettlementRoundItem[] {
 }
 
 /** Expanded detail for a single round */
-function RoundDetail({ roundId, round, onClose }: {
+function RoundDetail({ roundId, messageId, round, onClose }: {
   roundId: string;
+  messageId: string;
   round: SettlementRoundItem | null;
   onClose: () => void;
 }) {
   const [detail, setDetail] = useState<SettlementRoundItem | null>(round);
   const [loading, setLoading] = useState(!round);
+  const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; user: { username: string } }>>([]);
+  const [stakesLoading, setStakesLoading] = useState(false);
 
   useEffect(() => {
     if (detail?.votes) return;
@@ -152,6 +156,14 @@ function RoundDetail({ roundId, round, onClose }: {
       .then(d => { setDetail(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [roundId, detail?.votes]);
+
+  // Fetch stakes for the message
+  useEffect(() => {
+    setStakesLoading(true);
+    api.getMessageStakes(messageId)
+      .then(s => { setStakes(s.stakes); setStakesLoading(false); })
+      .catch(() => setStakesLoading(false));
+  }, [messageId]);
 
   if (!detail) {
     return (
@@ -227,12 +239,38 @@ function RoundDetail({ roundId, round, onClose }: {
                     {v.vote}
                   </span>
                   <span className="text-gray-400">{v.amount} 点</span>
+                  <span className="text-gray-400">{new Date(v.createdAt).toLocaleString('zh-CN')}</span>
                 </span>
               </li>
             ))}
           </ul>
         </div>
       )}
+
+      {/* Stakes on this message */}
+      <div className="max-h-40 overflow-auto">
+        <div className="text-xs text-gray-500 mb-1">消息押注记录:</div>
+        {stakesLoading ? (
+          <div className="text-xs text-gray-400">加载中...</div>
+        ) : stakes.length === 0 ? (
+          <div className="text-xs text-gray-400">无押注记录</div>
+        ) : (
+          <ul className="divide-y divide-gray-200 text-xs">
+            {stakes.map(s => (
+              <li key={s.id} className="py-1 flex justify-between items-center">
+                <span className="text-gray-600">{s.user.username}</span>
+                <span className="flex items-center gap-2">
+                  <span className={`font-semibold ${s.side === 'PRO' ? 'text-green-700' : 'text-red-700'}`}>
+                    {s.side}
+                  </span>
+                  <span className="text-gray-400">{s.amount} 点</span>
+                  <span className="text-gray-400">{new Date(s.createdAt).toLocaleString('zh-CN')}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {/* Previous round link */}
       {detail.previousRoundId && (

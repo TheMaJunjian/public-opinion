@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats } from '../utils/modelBridge';
@@ -531,6 +531,7 @@ type FocusEntry = {
 
 export default function TopicDetailPage() {
   const { topicId } = useParams<{ topicId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
 
   const [topic, setTopic] = useState<Topic | null>(null);
@@ -596,6 +597,37 @@ export default function TopicDetailPage() {
     return () => { cancelled = true; };
   }, [topicId]);
 
+  // Phase 3: auto-open settlement from URL params (triggered by points-navigate)
+  const pendingScrollMsgRef = useRef<string | null>(null);
+  useEffect(() => {
+    const targetMsgId = searchParams.get('msg');
+    const settlementMsgId = searchParams.get('settlement');
+    if (targetMsgId || settlementMsgId) {
+      const msgId = targetMsgId || settlementMsgId!;
+      pendingScrollMsgRef.current = msgId;
+      // Clear all selections and select the target message
+      setDraftUnits([{ messageId: msgId, selection: { kind: "whole" } }]);
+      setActiveTextSelectId(null);
+      if (settlementMsgId) {
+        setSettlementOpenMsgId(settlementMsgId);
+        const highlightRoundId = searchParams.get('highlightRound');
+        if (highlightRoundId) sessionStorage.setItem('settlementHighlightRound', highlightRoundId);
+        searchParams.delete('settlement');
+        searchParams.delete('highlightRound');
+      }
+      searchParams.delete('msg');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  // Scroll to message after data loads and renders
+  useEffect(() => {
+    if (!loading && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
+      scrollMsgToCenter(pendingScrollMsgRef.current);
+      pendingScrollMsgRef.current = null;
+    }
+  }, [loading, messages]);
+
   const [relationType, setRelationType] = useState<RelationType | null>(null);
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
   const [relationLabel, setRelationLabel] = useState("");
@@ -638,6 +670,19 @@ export default function TopicDetailPage() {
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null); // Phase 3: settlement panel toggle
+
+  // Close settlement panel on click outside
+  useEffect(() => {
+    if (!settlementOpenMsgId) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Keep panel open if clicking inside it or on the ⚖️ toggle button
+      if (target.closest('[data-settlement-panel]') || target.closest('[data-settlement-toggle]')) return;
+      setSettlementOpenMsgId(null);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [settlementOpenMsgId]);
 
   // Keep available points in sync
   useEffect(() => {
@@ -3212,6 +3257,7 @@ export default function TopicDetailPage() {
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{
+                        position: "relative",
                         borderRadius: isTopicMsg ? 8 : 6,
                         border: isWholeSelected
                           ? "2px solid #0b84ff"
@@ -3249,6 +3295,7 @@ export default function TopicDetailPage() {
                               )}
                               {/* Phase 3: settlement toggle */}
                               <button
+                                data-settlement-toggle
                                 onClick={(e) => { e.stopPropagation(); setSettlementOpenMsgId(settlementOpenMsgId === msg.id ? null : msg.id); }}
                                 style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: "0 2px", color: settlementOpenMsgId === msg.id ? "#818cf8" : "#6b7280" }}
                                 title="结算市场"
@@ -3311,10 +3358,10 @@ export default function TopicDetailPage() {
                             )
                             : <div style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#d1d5db" }}>{msg.content}</div>}
                       </div>
-                      {/* Phase 3: Settlement Panel inline */}
+                      {/* Phase 3: Settlement Panel as floating overlay */}
                       {settlementOpenMsgId === msg.id && (
-                        <div style={{ marginTop: 8 }}>
-                          <SettlementPanel messageId={msg.id} topicId={topicId!} />
+                        <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
+                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} />
                           <div style={{ marginTop: 4 }}>
                             <RoundHistory messageId={msg.id} compact />
                           </div>
@@ -3345,6 +3392,8 @@ export default function TopicDetailPage() {
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
                   stakeCounts={stakeCounts}
+                  onSettlementToggle={(msgId) => setSettlementOpenMsgId(settlementOpenMsgId === msgId ? null : msgId)}
+                  settlementOpenMsgId={settlementOpenMsgId}
                   onDebugRects={setDebugRects}
                 />
             )}

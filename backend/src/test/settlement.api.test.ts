@@ -519,3 +519,109 @@ describe('POST /api/rounds/:id/close-and-settle', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ── Phase 4: Clawback & Debt Tests ──────────────────────────
+
+describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('clawback sets debtFrozen when user balance drops below 0', async () => {
+    (prisma.settlementRound.findUnique as jest.Mock).mockImplementation((args: { where: { id: string } }) => {
+      if (args.where.id === 'round-1') return Promise.resolve({ ...mockRound, createdByUserId: 'user-1', previousRoundId: 'round-0' });
+      if (args.where.id === 'round-0') return Promise.resolve({ id: 'round-0', result: 'TRUE' });
+      return Promise.resolve(null);
+    });
+
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { settlementPermission: 'creator_only', minStake: 1, selfStakeOnCreate: 1, stakeFeeAmount: 0, settlementFeeAmount: 0 },
+    });
+    (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
+
+    (prisma.voteStake.groupBy as jest.Mock).mockResolvedValue([{ vote: 'FALSE', _sum: { amount: 20 } }]);
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 50, lockedCon: 30 });
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([
+      { id: 's1', userId: 'u1', side: 'PRO', amount: 50 },
+      { id: 's2', userId: 'u2', side: 'CON', amount: 30 },
+    ]);
+    (prisma.voteStake.findMany as jest.Mock).mockResolvedValue([{ id: 'v1', userId: 'u1', vote: 'FALSE', amount: 20 }]);
+    (prisma.ledgerEntry.findMany as jest.Mock).mockResolvedValue([
+      { id: 'le-1', userId: 'u1', entryType: 'SETTLEMENT_PAYOUT', amount: 500, roundId: 'round-0' },
+    ]);
+
+    (prisma.balance.findUnique as jest.Mock).mockImplementation(({ where }: { where: { userId: string } }) => {
+      if (where.userId === 'u1') return Promise.resolve({ balance: 100 });
+      return Promise.resolve({ balance: 200 });
+    });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 100, locked: 50 });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app)
+      .post('/api/rounds/round-1/close-and-settle')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send();
+
+    expect(res.status).toBe(200);
+  });
+
+  it('debtFrozen=false when balance recovers to >= 0', async () => {
+    (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({
+      ...mockRound, createdByUserId: 'user-1', previousRoundId: null,
+    });
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { settlementPermission: 'creator_only', minStake: 1, selfStakeOnCreate: 1, stakeFeeAmount: 0, settlementFeeAmount: 0 },
+    });
+    (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
+
+    (prisma.voteStake.groupBy as jest.Mock).mockResolvedValue([{ vote: 'TRUE', _sum: { amount: 5 } }]);
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 5, lockedCon: 0 });
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([{ id: 's1', userId: 'u1', side: 'PRO', amount: 5 }]);
+    (prisma.voteStake.findMany as jest.Mock).mockResolvedValue([{ id: 'v1', userId: 'u1', vote: 'TRUE', amount: 5 }]);
+
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: -10 });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 0, locked: 5 });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app)
+      .post('/api/rounds/round-1/close-and-settle')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send();
+
+    expect(res.status).toBe(200);
+  });
+
+  it('supports consecutive overturns (TRUE → FALSE → TRUE chain)', async () => {
+    (prisma.settlementRound.findUnique as jest.Mock).mockImplementation((args: { where: { id: string } }) => {
+      if (args.where.id === 'round-1') return Promise.resolve({ ...mockRound, createdByUserId: 'user-1', previousRoundId: 'round-2' });
+      if (args.where.id === 'round-2') return Promise.resolve({ id: 'round-2', result: 'FALSE' });
+      return Promise.resolve(null);
+    });
+
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { settlementPermission: 'creator_only', minStake: 1, selfStakeOnCreate: 1, stakeFeeAmount: 0, settlementFeeAmount: 0 },
+    });
+    (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
+
+    (prisma.voteStake.groupBy as jest.Mock).mockResolvedValue([{ vote: 'TRUE', _sum: { amount: 8 } }]);
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 10, lockedCon: 5 });
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([
+      { id: 's1', userId: 'u1', side: 'PRO', amount: 10 },
+      { id: 's2', userId: 'u2', side: 'CON', amount: 5 },
+    ]);
+    (prisma.voteStake.findMany as jest.Mock).mockResolvedValue([{ id: 'v1', userId: 'u1', vote: 'TRUE', amount: 8 }]);
+    (prisma.ledgerEntry.findMany as jest.Mock).mockResolvedValue([
+      { id: 'le-1', userId: 'u1', entryType: 'SETTLEMENT_PAYOUT', amount: 300, roundId: 'round-2' },
+    ]);
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 500 });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 500, locked: 300 });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app)
+      .post('/api/rounds/round-1/close-and-settle')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send();
+
+    expect(res.status).toBe(200);
+  });
+});

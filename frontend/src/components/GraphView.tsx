@@ -3,6 +3,8 @@ import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } fr
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
+import SettlementPanel from './SettlementPanel';
+import RoundHistory from './RoundHistory';
 import {
   CARD_W, MIN_CARD_H, GRID_LEFT, GRID_TOP, COL_GAP, ROW_GAP,
   CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H,
@@ -1662,6 +1664,10 @@ export interface GraphViewProps {
   hideMessageIds?: Set<string>;
   /** Phase 2: stake counts per message (pro/con) for display on cards */
   stakeCounts?: Record<string, { pro: number; con: number }>;
+  /** Phase 3: callback when ⚖️ settlement toggle is clicked on a message card */
+  onSettlementToggle?: (messageId: string) => void;
+  /** Phase 3: currently open settlement message ID (for active state styling) */
+  settlementOpenMsgId?: string | null;
   /** DEBUG: callback to report frame/card rectangles */
   onDebugRects?: (text: string) => void;
 }
@@ -1679,6 +1685,8 @@ export default function GraphView(props: GraphViewProps) {
     onInlineBadgeClick, onInlineBadgeDoubleClick,
     hideMessageIds,
     stakeCounts,
+    onSettlementToggle,
+    settlementOpenMsgId,
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
@@ -2970,9 +2978,17 @@ export default function GraphView(props: GraphViewProps) {
                     const sc = stakeCounts?.[msg.id];
                     if (sc && (sc.pro > 0 || sc.con > 0)) {
                       return (
-                        <div style={{ display: "flex", gap: 6, fontSize: 10, marginTop: 2 }}>
+                        <div style={{ display: "flex", gap: 6, fontSize: 10, marginTop: 2, alignItems: "center" }}>
                           {sc.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc.pro}</span>}
                           {sc.con > 0 && <span style={{ color: "#f87171" }}>👎{sc.con}</span>}
+                          {onSettlementToggle && (
+                            <button
+                              data-settlement-toggle
+                              onClick={(e) => { e.stopPropagation(); onSettlementToggle(msg.id); }}
+                              style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: "0 2px", color: settlementOpenMsgId === msg.id ? "#818cf8" : "#6b7280", lineHeight: 1 }}
+                              title="结算市场"
+                            >⚖️</button>
+                          )}
                         </div>
                       );
                     }
@@ -2988,6 +3004,19 @@ export default function GraphView(props: GraphViewProps) {
           );
         })}
       </div>
+      {/* Phase 3: Floating settlement panel in graph view */}
+      {settlementOpenMsgId && layout[settlementOpenMsgId] && (
+        <div data-settlement-panel style={{
+          position: "absolute",
+          left: layout[settlementOpenMsgId].x,
+          top: layout[settlementOpenMsgId].y + layout[settlementOpenMsgId].height + 8,
+          width: 360,
+          zIndex: 100,
+        }}>
+          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} />
+          <RoundHistory messageId={settlementOpenMsgId} compact />
+        </div>
+      )}
       {/* SVG layer: frame visuals (behind cards, zIndex:0) so cards float above frames.
           Wide arrange frames (spanning multiple columns) no longer visually encompass
           unrelated cards that happen to share the same horizontal range. */}

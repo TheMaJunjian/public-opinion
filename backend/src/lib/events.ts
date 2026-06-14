@@ -891,7 +891,7 @@ async function applyVoteCast(event: VoteCastEvent) {
         type: 'LOCK',
         amount: -totalCost,
         balanceAfter: newAvailable,
-        data: { vote: payload.vote, roundId: payload.roundId, messageId: round.messageId, amount: payload.amount, feeAmount },
+        data: { vote: payload.vote, roundId: payload.roundId, messageId: round.messageId, topicId, amount: payload.amount, feeAmount },
       },
     }),
     prisma.ledgerEntry.create({
@@ -1010,7 +1010,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 
   // ── Clawback: if there's a previous round with a different result, clawback ──
   if (round.previousRoundId) {
-    await executeClawback(round.previousRoundId, messageId);
+    await executeClawback(round.previousRoundId, messageId, topicId);
   }
 
   // ── Compute vote weights ──
@@ -1160,7 +1160,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
           type: delta >= 0 ? 'UNLOCK' : 'SPEND',
           amount: delta,
           balanceAfter: newAvail,
-          data: { roundId: payload.roundId, messageId, settlementResult: result },
+          data: { roundId: payload.roundId, messageId, topicId, settlementResult: result },
         },
       }),
       prisma.ledgerEntry.create({
@@ -1227,7 +1227,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
  * For each user who received a SETTLEMENT_PAYOUT in the previous round,
  * generate a SETTLEMENT_CLAWBACK entry that reverses it.
  */
-async function executeClawback(previousRoundId: string, messageId: string) {
+async function executeClawback(previousRoundId: string, messageId: string, topicId: string) {
   const prevRound = await prisma.settlementRound.findUnique({
     where: { id: previousRoundId },
     select: { result: true },
@@ -1274,7 +1274,7 @@ async function executeClawback(previousRoundId: string, messageId: string) {
           type: 'SPEND',
           amount: clawbackAmount,
           balanceAfter: newAvail,
-          data: { clawbackFromRound: previousRoundId, messageId },
+          data: { clawbackFromRound: previousRoundId, messageId, topicId },
         },
       }),
       prisma.ledgerEntry.create({

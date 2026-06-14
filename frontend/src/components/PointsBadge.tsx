@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getPointsBalance, getPointsTransactions } from '../api/client';
 import type { PointsBalance, PointTransaction } from '../types';
@@ -10,6 +11,7 @@ import type { PointsBalance, PointTransaction } from '../types';
  */
 export default function PointsBadge() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [balance, setBalance] = useState<PointsBalance | null>(null);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState(false);
@@ -133,8 +135,26 @@ export default function PointsBadge() {
             <div className="px-3 py-4 text-sm text-gray-400 text-center">暂无记录</div>
           ) : (
             <ul className="divide-y divide-gray-50">
-              {transactions.map((tx) => (
-                <li key={tx.id} className="px-3 py-2 text-xs flex justify-between items-center">
+              {transactions.map((tx) => {
+                const txData = tx.data as Record<string, unknown> | null;
+                const hasMessage = !!(txData?.messageId);
+                const canNavigate = !!(txData?.messageId && txData?.topicId);
+                return (
+                <li
+                  key={tx.id}
+                  className={`px-3 py-2 text-xs flex justify-between items-center select-none ${hasMessage ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
+                  onDoubleClick={canNavigate ? (e) => {
+                    e.preventDefault();
+                    const params = new URLSearchParams();
+                    params.set('msg', txData!.messageId as string);
+                    if (txData?.roundId) {
+                      params.set('settlement', txData!.messageId as string);
+                      params.set('highlightRound', txData.roundId as string);
+                    }
+                    navigate(`/topics/${txData!.topicId}?${params.toString()}`);
+                  } : undefined}
+                  title={canNavigate ? '双击跳转到相关消息并展开结算记录' : hasMessage ? '关联消息（无法跳转）' : undefined}
+                >
                   <div>
                     <span className="font-medium text-gray-700">
                       {typeLabel(tx.type)}
@@ -144,6 +164,9 @@ export default function PointsBadge() {
                         ({(tx.data as Record<string, unknown>).reason as string})
                       </span>
                     )}
+                    {hasMessage && !canNavigate && (
+                      <span className="ml-1 text-gray-300 text-xs">📎</span>
+                    )}
                   </div>
                   <div className="text-right">
                     <span className={tx.amount >= 0 ? 'text-green-600' : 'text-red-500'}>
@@ -152,9 +175,11 @@ export default function PointsBadge() {
                     <span className="ml-2 text-gray-400">
                       余额 {tx.balanceAfter.toLocaleString()}
                     </span>
+                    {canNavigate && <span className="ml-1 text-indigo-400" title="双击跳转到相关消息">↗</span>}
                   </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>

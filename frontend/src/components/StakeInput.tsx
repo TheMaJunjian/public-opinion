@@ -50,7 +50,7 @@ export default function StakeInput({ messageId, onStakePlaced }: StakeInputProps
           min={1}
           value={amount}
           onChange={(e) => setAmount(Math.max(1, parseInt(e.target.value) || 1))}
-          className="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-center"
+          className="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-center bg-white text-gray-800"
           disabled={loading}
         />
         <span className="text-xs text-gray-400">点</span>
@@ -74,7 +74,7 @@ export default function StakeInput({ messageId, onStakePlaced }: StakeInputProps
       </div>
 
       {error && (
-        <p className="text-red-500 text-xs mt-2">{error}</p>
+        <p className="text-red-700 text-xs mt-2">{error}</p>
       )}
 
       {lastResult && !error && (

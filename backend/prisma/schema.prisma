@@ -23,6 +23,8 @@ model User {
   balance           Balance?
   ledgerEntries     LedgerEntry[]
   stakes            Stake[]
+  settlementRounds  SettlementRound[]
+  voteStakes        VoteStake[]
 }
 
 model Topic {
@@ -75,8 +77,9 @@ model Message {
   topic     Topic    @relation(fields: [topicId], references: [id])
   createdBy User     @relation(fields: [createdById], references: [id])
 
-  stakes   Stake[]
-  betPool  BetPool?
+  stakes         Stake[]
+  betPool        BetPool?
+  settlementRounds SettlementRound[]
 }
 
 enum ContentType {
@@ -174,4 +177,37 @@ model BetPool {
   message   Message @relation(fields: [messageId], references: [id])
   lockedPro Int    @default(0)
   lockedCon Int    @default(0)
+}
+
+// ============================================================
+// Settlement Models (Phase 3 — 结算轮次与投票)
+// ============================================================
+
+model SettlementRound {
+  id               String   @id @default(cuid())
+  messageId        String
+  message          Message  @relation(fields: [messageId], references: [id])
+  createdByUserId  String
+  createdBy        User     @relation(fields: [createdByUserId], references: [id])
+  status           String   @default("OPEN") // OPEN | VOTING | SETTLED | CANCELLED
+  result           String?  // TRUE | FALSE | UNKNOWN
+  previousRoundId  String?
+  previousRound    SettlementRound? @relation("RoundChain", fields: [previousRoundId], references: [id])
+  nextRounds       SettlementRound[] @relation("RoundChain")
+  openedAt         DateTime @default(now())
+  closedAt         DateTime?
+  note             String?
+
+  votes VoteStake[]
+}
+
+model VoteStake {
+  id        String   @id @default(cuid())
+  roundId   String
+  round     SettlementRound @relation(fields: [roundId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  vote      String   // TRUE | FALSE | UNKNOWN
+  amount    Int
+  createdAt DateTime @default(now())
 }

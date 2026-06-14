@@ -150,3 +150,35 @@ export function placeStake(messageId: string, data: { side: 'PRO' | 'CON'; amoun
 export function getMessageStakes(messageId: string) {
   return request<import('../types').MessageStakes>(`/messages/${messageId}/stakes`);
 }
+
+// ============================================================
+// Settlement API (Phase 3)
+// ============================================================
+
+export function createRound(messageId: string, data?: { note?: string }) {
+  return request<import('../types').SettlementRoundItem>(`/messages/${messageId}/rounds`, {
+    method: 'POST',
+    body: JSON.stringify(data ?? {}),
+  });
+}
+
+export function getMessageRounds(messageId: string) {
+  return request<{ data: import('../types').SettlementRoundItem[] }>(`/messages/${messageId}/rounds`);
+}
+
+export function getRoundDetail(roundId: string) {
+  return request<import('../types').SettlementRoundItem>(`/rounds/${roundId}`);
+}
+
+export function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE' | 'UNKNOWN'; amount: number }) {
+  return request<import('../types').VoteCastResult>(`/rounds/${roundId}/votes`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function closeAndSettle(roundId: string) {
+  return request<import('../types').SettlementResult>(`/rounds/${roundId}/close-and-settle`, {
+    method: 'POST',
+  });
+}

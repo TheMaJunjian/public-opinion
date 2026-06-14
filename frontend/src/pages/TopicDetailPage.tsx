@@ -11,6 +11,8 @@ import type { Topic, TargetRef, Relation, RelationPayload } from '../types';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 import ErrorBoundary from '../components/ErrorBoundary';
+import SettlementPanel from '../components/SettlementPanel';
+import RoundHistory from '../components/RoundHistory';
 
 // ========================= Helpers =========================
 
@@ -635,6 +637,7 @@ export default function TopicDetailPage() {
   stakeAmountRef.current = stakeAmount;
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
+  const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null); // Phase 3: settlement panel toggle
 
   // Keep available points in sync
   useEffect(() => {
@@ -3244,6 +3247,12 @@ export default function TopicDetailPage() {
                               {stakeCounts[msg.id].con > 0 && (
                                 <span style={{ color: "#f87171" }}>👎{stakeCounts[msg.id].con}</span>
                               )}
+                              {/* Phase 3: settlement toggle */}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setSettlementOpenMsgId(settlementOpenMsgId === msg.id ? null : msg.id); }}
+                                style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: "0 2px", color: settlementOpenMsgId === msg.id ? "#818cf8" : "#6b7280" }}
+                                title="结算市场"
+                              >⚖️</button>
                             </div>
                           )}
                         </span>
@@ -3302,6 +3311,15 @@ export default function TopicDetailPage() {
                             )
                             : <div style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#d1d5db" }}>{msg.content}</div>}
                       </div>
+                      {/* Phase 3: Settlement Panel inline */}
+                      {settlementOpenMsgId === msg.id && (
+                        <div style={{ marginTop: 8 }}>
+                          <SettlementPanel messageId={msg.id} topicId={topicId!} />
+                          <div style={{ marginTop: 4 }}>
+                            <RoundHistory messageId={msg.id} compact />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

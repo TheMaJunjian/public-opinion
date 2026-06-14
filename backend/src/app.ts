@@ -12,6 +12,7 @@ import relationsRouter from './routes/relations';
 import pointsRouter from './routes/points';
 import rulesRouter from './routes/rules';
 import stakesRouter from './routes/stakes';
+import roundsRouter from './routes/rounds';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -55,6 +56,7 @@ app.use('/api/topics/:topicId/relations', writeLimiter, relationsRouter);
 app.use('/api/points', pointsRouter);
 app.use('/api/rules', rulesRouter);
 app.use('/api/messages/:id/stakes', writeLimiter, stakesRouter);
+app.use('/', writeLimiter, roundsRouter);
 
 // Health check
 app.get('/health', (_req, res) => {

@@ -386,3 +386,52 @@ export interface MessageStakes {
     con: number;
   };
 }
+
+// ============================================================
+// Settlement Types (Phase 3)
+// ============================================================
+
+export interface VoteStakeItem {
+  id: string;
+  vote: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  amount: number;
+  createdAt: string;
+  user: User;
+}
+
+export interface SettlementRoundItem {
+  id: string;
+  messageId: string;
+  createdByUserId: string;
+  createdBy: User;
+  status: 'OPEN' | 'VOTING' | 'SETTLED' | 'CANCELLED';
+  result: 'TRUE' | 'FALSE' | 'UNKNOWN' | null;
+  previousRoundId: string | null;
+  openedAt: string;
+  closedAt: string | null;
+  note: string | null;
+  votes?: VoteStakeItem[];
+  _count?: { votes: number };
+  weights?: { TRUE: number; FALSE: number; UNKNOWN: number };
+}
+
+export interface SettlementResult {
+  message: string;
+  roundId: string;
+  messageId: string;
+  result: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  weights: { TRUE: number; FALSE: number; UNKNOWN: number };
+  totalPro: number;
+  totalCon: number;
+  affectedUsers: number;
+}
+
+export interface VoteCastResult {
+  message: string;
+  voteId: string;
+  vote: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  amount: number;
+  newAvailable: number;
+  newLocked: number;
+  newBalance: number;
+}

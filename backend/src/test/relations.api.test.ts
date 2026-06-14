@@ -40,6 +40,22 @@ jest.mock('../lib/prisma', () => ({
       create: jest.fn(),
       updateMany: jest.fn(),
     },
+    balance: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
+    ruleVersion: {
+      findFirst: jest.fn(),
+    },
+    pointAccount: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(),
+    },
+    pointTransaction: { create: jest.fn() },
+    stake: { create: jest.fn(), findMany: jest.fn(), count: jest.fn(), aggregate: jest.fn() },
+    betPool: { findUnique: jest.fn(), upsert: jest.fn() },
+    ledgerEntry: { create: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn().mockResolvedValue([{}, {}]),
   },
 }));
@@ -569,6 +585,12 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
     (prisma.message.create as jest.Mock).mockResolvedValue({
       ...mockRelationMsg,
       id: 'rel-new',
@@ -667,6 +689,12 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
   beforeEach(() => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
     (prisma.message.create as jest.Mock).mockResolvedValue({
       ...mockRelationMsg,
       id: 'rel-new',

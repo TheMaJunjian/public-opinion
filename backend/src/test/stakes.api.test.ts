@@ -18,6 +18,7 @@ jest.mock('../lib/prisma', () => ({
       create: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
+      aggregate: jest.fn(),
     },
     betPool: {
       findUnique: jest.fn(),
@@ -142,9 +143,9 @@ describe('GET /api/messages/:id/stakes', () => {
       lockedCon: 5,
     });
     (prisma.stake.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.stake.count as jest.Mock)
-      .mockResolvedValueOnce(2)
-      .mockResolvedValueOnce(1);
+    (prisma.stake.aggregate as jest.Mock)
+      .mockResolvedValueOnce({ _sum: { amount: 20 } })
+      .mockResolvedValueOnce({ _sum: { amount: 15 } });
   });
 
   it('returns stake stats without auth', async () => {
@@ -152,6 +153,6 @@ describe('GET /api/messages/:id/stakes', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.pool).toEqual({ lockedPro: 10, lockedCon: 5 });
-    expect(res.body.counts).toEqual({ pro: 2, con: 1 });
+    expect(res.body.counts).toEqual({ pro: 20, con: 15 });
   });
 });

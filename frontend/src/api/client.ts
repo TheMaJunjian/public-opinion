@@ -91,6 +91,7 @@ export function createRelation(topicId: string, data: {
   targetRefs: import('../types').TargetRef[];
   payload?: import('../types').RelationPayload;
   supersedesRelationId?: string;
+  stakeAmount?: number;
 }) {
   return request<import('../types').Relation>(`/topics/${topicId}/relations`, {
     method: 'POST',

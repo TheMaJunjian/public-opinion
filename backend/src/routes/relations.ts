@@ -53,14 +53,10 @@ const createRelationSchema = z.object({
   relationType: z.enum(RELATION_TYPES, {
     errorMap: () => ({ message: `关系类型必须是以下之一: ${RELATION_TYPES.join(', ')}` }),
   }),
-  // sourceMessageId is required for most relation types, but optional for
-  // relation types that support source-less semantics (AGREE, DISAGREE, ARRANGE,
-  // CORRECT, REPLY, TAG, CLASSIFY, MERGE).
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').nullable().optional(),
-  // targetRefs schema allows empty arrays; route-level validation below enforces non-empty
-  // for relation types not listed in TARGET_OPTIONAL_RELATION_TYPES (currently only CLASSIFY).
   targetRefs: z.array(targetRefSchema).max(200),
   supersedesRelationId: z.string().nullable().optional(),
+  stakeAmount: z.number().int().min(1).optional(),
   payload: z.object({
     label: z.string().trim().min(1).max(200).optional(),
     title: z.string().trim().min(1).max(200).optional(),
@@ -336,6 +332,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
         targetRefs: data.targetRefs,
         relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
         supersedesRelationId: data.supersedesRelationId ?? null,
+        stakeAmount: data.stakeAmount,
       },
     });
 

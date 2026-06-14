@@ -61,6 +61,7 @@ export interface RelationCreatedEvent {
     targetRefs: unknown[];
     relationPayload?: Record<string, unknown> | null;
     supersedesRelationId?: string | null;
+    stakeAmount?: number;
   };
 }
 
@@ -267,6 +268,21 @@ async function applyTopicStatusChanged(event: TopicStatusChangedEvent) {
 async function applyMessageCreated(event: MessageCreatedEvent) {
   const { actorId, topicId, payload } = event;
 
+  // Check if user has enough balance for self-stake
+  const rule = await prisma.ruleVersion.findFirst({
+    where: { status: 'ACTIVE' },
+    orderBy: { version: 'desc' },
+    select: { parameters: true },
+  });
+  const requiredStake = payload.stakeAmount
+    ?? (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number | undefined;
+  if (requiredStake && requiredStake > 0) {
+    const userBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
+    if (!userBalance || userBalance.debtFrozen || userBalance.balance < requiredStake) {
+      throw new Error('贡献点余额不足');
+    }
+  }
+
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
@@ -315,6 +331,21 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
 async function applyRelationCreated(event: RelationCreatedEvent) {
   const { actorId, topicId, payload } = event;
 
+  // Check balance for self-stake
+  const rule = await prisma.ruleVersion.findFirst({
+    where: { status: 'ACTIVE' },
+    orderBy: { version: 'desc' },
+    select: { parameters: true },
+  });
+  const requiredStake = payload.stakeAmount
+    ?? (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number | undefined;
+  if (requiredStake && requiredStake > 0) {
+    const userBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
+    if (!userBalance || userBalance.debtFrozen || userBalance.balance < requiredStake) {
+      throw new Error('贡献点余额不足');
+    }
+  }
+
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
@@ -362,15 +393,28 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     data: { entityId: message.id },
   });
 
-  // Auto-self-stake PRO (Phase 2.6)
-  await autoSelfStake(actorId, topicId, message.id);
+  // Auto-stake based on relation type (Phase 2.6)
+  const relType = payload.relationType?.toUpperCase();
+  if (relType === 'AGREE' || relType === 'DISAGREE') {
+    // AGREE = PRO on target, DISAGREE = CON on target
+    const side = relType === 'AGREE' ? 'PRO' : 'CON';
+    const targets = payload.targetRefs as Array<{ kind?: string; messageId?: string }>;
+    for (const ref of targets) {
+      if (ref.messageId) {
+        await autoSelfStake(actorId, topicId, ref.messageId, payload.stakeAmount, side);
+      }
+    }
+  } else {
+    // Other relations: PRO on the relation message itself
+    await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount);
+  }
 
   return message;
 }
 
 // ── Auto Self-Stake Helper (Phase 2.5-2.6) ───────────────────
 
-async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number) {
+async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number, side: 'PRO' | 'CON' = 'PRO') {
   try {
     const rule = await prisma.ruleVersion.findFirst({
       where: { status: 'ACTIVE' },
@@ -388,7 +432,7 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
       userId,
       topicId,
       messageId,
-      side: 'PRO',
+      side,
       amount: selfStakeAmount,
     });
   } catch {

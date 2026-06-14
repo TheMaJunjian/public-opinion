@@ -36,6 +36,10 @@ export function errorHandler(
   }
 
   // 通用错误 → 500
+  if (err instanceof Error && err.message === '贡献点余额不足') {
+    res.status(402).json({ error: '贡献点余额不足，无法发送消息' });
+    return;
+  }
   console.error('[未处理错误]', err);
   res.status(500).json({ error: '服务器内部错误' });
 }

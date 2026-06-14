@@ -538,6 +538,7 @@ export default function TopicDetailPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [stakeCounts, setStakeCounts] = useState<Record<string, { pro: number; con: number }>>({});
+  const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!topicId) return;
@@ -559,18 +560,25 @@ export default function TopicDetailPage() {
         setMessages(demoMsgs);
         setEdges(demoEdges);
 
-        // Phase 2: batch-load stake counts for all TEXT messages
-        const textMsgIds = messagesData.data.map((m: { id: string }) => m.id);
-        if (textMsgIds.length > 0) {
+        // Phase 2: batch-load stake counts for ALL messages (text + relation)
+        const allMsgIds = demoMsgs.map((m: { id: string }) => m.id);
+        if (allMsgIds.length > 0) {
           try {
             const stakes = await Promise.all(
-              textMsgIds.map((id: string) =>
-                api.getMessageStakes(id).then(r => ({ id, pro: r.counts.pro, con: r.counts.con }))
+              allMsgIds.map((id: string) =>
+                api.getMessageStakes(id).then(r => {
+                  const msg = demoMsgs.find((m: { id: string; author: string }) => m.id === id);
+                  const authorStake = msg
+                    ? r.stakes.find(s => s.user.username === msg.author && s.side === 'PRO')?.amount ?? 0
+                    : 0;
+                  return { id, pro: r.counts.pro, con: r.counts.con, authorStake };
+                })
               )
             );
             const map: Record<string, { pro: number; con: number }> = {};
-            for (const s of stakes) map[s.id] = { pro: s.pro, con: s.con };
-            if (!cancelled) setStakeCounts(map);
+            const aMap: Record<string, number> = {};
+            for (const s of stakes) { map[s.id] = { pro: s.pro, con: s.con }; aMap[s.id] = s.authorStake; }
+            if (!cancelled) { setStakeCounts(map); setAuthorStakes(aMap); }
           } catch {
             // stake fetch is best-effort; don't block the page
           }
@@ -623,6 +631,24 @@ export default function TopicDetailPage() {
   // DEBUG
   const [debugRects, setDebugRects] = useState("");
   const [stakeAmount, setStakeAmount] = useState(1); // Phase 2: inline stake amount
+  const stakeAmountRef = useRef(stakeAmount);
+  stakeAmountRef.current = stakeAmount;
+  const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
+  const [sendError, setSendError] = useState<string | null>(null);
+
+  // Keep available points in sync
+  useEffect(() => {
+    const update = () => {
+      api.getPointsBalance().then(b => {
+        setAvailablePoints(b.points.available);
+        // Cap displayed stake amount to available
+        setStakeAmount(prev => Math.max(1, Math.min(prev, b.points.available)));
+      }).catch(() => {});
+    };
+    update();
+    window.addEventListener('points-refresh', update);
+    return () => window.removeEventListener('points-refresh', update);
+  }, []);
 
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
@@ -631,7 +657,35 @@ export default function TopicDetailPage() {
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
     setRelations(prev => [...prev, backendRel]);
     setMessages(prev => [...prev, buildRelationDemoMessage(backendRel)]);
+    // Update stakeCounts for AGREE/DISAGREE on target messages (by point amount)
+    const relType = backendRel.relationType?.toUpperCase();
+    if (relType === 'AGREE' || relType === 'DISAGREE') {
+      const side = relType === 'AGREE' ? 'pro' : 'con';
+      const stakePts = stakeAmountRef.current;
+      const targetMsgIds = backendRel.targetRefs
+        .filter((ref): ref is Extract<typeof ref, { kind: 'message' }> => ref.kind === 'message')
+        .map(ref => ref.messageId);
+      if (targetMsgIds.length > 0) {
+        setStakeCounts(prev => {
+          const next = { ...prev };
+          for (const mid of targetMsgIds) {
+            const cur = next[mid] ?? { pro: 0, con: 0 };
+            next[mid] = side === 'pro'
+              ? { ...cur, pro: cur.pro + stakePts }
+              : { ...cur, con: cur.con + stakePts };
+          }
+          return next;
+        });
+      }
+    }
+    // Also set authorStake for the relation message itself
+    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: stakeAmountRef.current }));
     window.dispatchEvent(new Event('points-refresh'));
+  }, []);
+
+  // Helper: auto-inject stakeAmount into relation creation
+  const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
+    return api.createRelation(topicId, { ...data, stakeAmount: stakeAmountRef.current });
   }, []);
 
   // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
@@ -1092,6 +1146,7 @@ export default function TopicDetailPage() {
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
     if (!topicId) return null;
+    setSendError(null);
     try {
       const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT', stakeAmount });
       const msg: DemoMessage = {
@@ -1104,6 +1159,8 @@ export default function TopicDetailPage() {
       setMessages(prev => [...prev, msg]);
       // Optimistic stake count update for the new message (self-stake PRO)
       setStakeCounts(prev => ({ ...prev, [msg.id]: { pro: stakeAmount, con: 0 } }));
+      setAuthorStakes(prev => ({ ...prev, [msg.id]: stakeAmount }));
+      setStakeAmount(1); // reset to default after send
       if (isTopicFocus) {
         setFocusEntries(prev => {
           if (prev.length === 0) return prev;
@@ -1140,7 +1197,8 @@ export default function TopicDetailPage() {
       window.dispatchEvent(new Event('points-refresh'));
       return msg;
     } catch (e: any) {
-      alert(`发送消息失败: ${e?.message ?? e}`);
+      setSendError(e?.message ?? '发送失败');
+      setTimeout(() => setSendError(null), 4000);
       return null;
     }
   }
@@ -1489,7 +1547,7 @@ export default function TopicDetailPage() {
     if (!topicId) return null;
     const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
     try {
-      const backendRel = await api.createRelation(topicId, {
+      const backendRel = await createRel(topicId, {
         relationType: 'TAG',
         sourceMessageId: null,
         targetRefs: [backendTargetRef],
@@ -1548,7 +1606,7 @@ export default function TopicDetailPage() {
       for (const srcId of uniqueSources) {
         const targetRefs = toReply.map(t => unitSelectionToTargetRef(t, msgMap));
         try {
-          const backendRel = await api.createRelation(topicId, {
+          const backendRel = await createRel(topicId, {
             relationType: relationType.toUpperCase(),
             sourceMessageId: srcId,
             targetRefs,
@@ -1576,7 +1634,7 @@ export default function TopicDetailPage() {
         for (const srcId of uniqueSources) {
           try {
             const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -1589,7 +1647,7 @@ export default function TopicDetailPage() {
         // Pure-stance: no source — persist to backend (relation messages are first-class messages)
         for (const targetMid of uniqueTargetMids) {
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
+            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -1604,7 +1662,7 @@ export default function TopicDetailPage() {
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       for (const targetMid of uniqueTargetMids) {
         try {
-          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
+          const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
           const relId = backendRel.id;
           appendCreatedRelation(backendRel);
           addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -1629,7 +1687,7 @@ export default function TopicDetailPage() {
         for (const srcUnit of srcs) {
           const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -1693,7 +1751,7 @@ export default function TopicDetailPage() {
         for (const tgtMid of uniqueTargetMids) {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
           try {
-            const backendRel = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+            const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -1768,7 +1826,7 @@ export default function TopicDetailPage() {
             // Whole selected: one combined correction covering all edges (original behavior)
             const newTargetRefs = uniqueTargetRefsFromEdges(edgesToCorrect, msgMap);
             // Step 1: Create the new relation of secondary type with the same endpoints
-            const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
+            const newRelBackend = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
             const newRelId = newRelBackend.id;
             appendCreatedRelation(newRelBackend);
             addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
@@ -1777,7 +1835,7 @@ export default function TopicDetailPage() {
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
             }
             // Step 2: Create the CORRECT relation with the new relation as source, old relation as target
-            const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
+            const corrBackendRel = await createRel(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
             const corrRelId = corrBackendRel.id;
             appendCreatedRelation(corrBackendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
@@ -1787,14 +1845,14 @@ export default function TopicDetailPage() {
             for (const edge of edgesToCorrect) {
               const newTargetRefs = uniqueTargetRefsFromEdges([edge], msgMap);
               // Step 1: Create a new relation of secondary type for this fragment only
-              const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
+              const newRelBackend = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
               const newRelId = newRelBackend.id;
               appendCreatedRelation(newRelBackend);
               addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
               const newFromId = newSourceId ?? `anon:${newRelId}`;
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...edge.to }, relationLabel: secTypeName } as DemoEdge);
               // Step 2: Create the CORRECT relation for this fragment
-              const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
+              const corrBackendRel = await createRel(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
               const corrRelId = corrBackendRel.id;
               appendCreatedRelation(corrBackendRel);
               addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
@@ -1813,7 +1871,7 @@ export default function TopicDetailPage() {
       const typeName = relationTypeName(relationType);
       const newEdgesList: DemoEdge[] = [];
       try {
-        const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
+        const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -1844,7 +1902,7 @@ export default function TopicDetailPage() {
         for (const tgtMid of uniqueTargetMids) {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
           try {
-            const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+            const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -1883,7 +1941,7 @@ export default function TopicDetailPage() {
       // Determine targetLayout from secondaryRelationType: 'single-column' (纵) or 'single-row' (横)
       const targetLayout = secondaryRelationType === 'horizontal' ? 'single-row' as const : 'single-column' as const;
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'ARRANGE',
           sourceMessageId: null,
           targetRefs,
@@ -1944,7 +2002,7 @@ export default function TopicDetailPage() {
       }
       const targetRefs = getClassifyTargetRefs(effectiveTargets);
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'CLASSIFY',
           sourceMessageId: null,
           targetRefs,
@@ -1998,7 +2056,7 @@ export default function TopicDetailPage() {
         return;
       }
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'SUMMARY',
           sourceMessageId: null,
           targetRefs: summaryTargetRefs,
@@ -2057,7 +2115,7 @@ export default function TopicDetailPage() {
         return;
       }
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'MERGE',
           sourceMessageId: null,
           targetRefs: mergeTargetRefs,
@@ -2873,7 +2931,7 @@ export default function TopicDetailPage() {
     // Quick send: pure-stance agree/disagree — relation messages are first-class, persist to backend
     if (!topicId) return;
     try {
-      const backendRel = await api.createRelation(topicId, {
+      const backendRel = await createRel(topicId, {
         relationType: kind.toUpperCase(),
         sourceMessageId: null,
         targetRefs: [{ kind: 'message', messageId }],
@@ -3175,18 +3233,21 @@ export default function TopicDetailPage() {
                       }}>
                       <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
                         <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
-                        <span>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</span>
+                        <span style={{textAlign:"right"}}>
+                          <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
+                          <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] || 1} 点</div>
+                          {stakeCounts[msg.id] && (stakeCounts[msg.id].pro > 0 || stakeCounts[msg.id].con > 0) && (
+                            <div style={{ display: "flex", gap: 6, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
+                              {stakeCounts[msg.id].pro > 0 && (
+                                <span style={{ color: "#4ade80" }}>👍{stakeCounts[msg.id].pro}</span>
+                              )}
+                              {stakeCounts[msg.id].con > 0 && (
+                                <span style={{ color: "#f87171" }}>👎{stakeCounts[msg.id].con}</span>
+                              )}
+                            </div>
+                          )}
+                        </span>
                       </div>
-                      {stakeCounts[msg.id] && (stakeCounts[msg.id].pro > 0 || stakeCounts[msg.id].con > 0) && (
-                        <div style={{ display: "flex", gap: 10, marginBottom: 4, fontSize: 11 }}>
-                          {stakeCounts[msg.id].pro > 0 && (
-                            <span style={{ color: "#4ade80" }}>👍 PRO {stakeCounts[msg.id].pro}</span>
-                          )}
-                          {stakeCounts[msg.id].con > 0 && (
-                            <span style={{ color: "#f87171" }}>👎 CON {stakeCounts[msg.id].con}</span>
-                          )}
-                        </div>
-                      )}
                       {isTopicMsg && (
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                           <div style={{ fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -3426,11 +3487,15 @@ export default function TopicDetailPage() {
                 <input
                   type="number"
                   min={1}
+                  max={availablePoints}
                   value={stakeAmount}
-                  onChange={e => setStakeAmount(Math.max(1, parseInt(e.target.value) || 1))}
+                  onChange={e => {
+                    const v = Math.max(1, parseInt(e.target.value) || 1);
+                    setStakeAmount(Math.min(v, availablePoints));
+                  }}
                   style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
                 />
-                <span style={{ fontSize: 11, color: "#666" }}>点</span>
+                <span style={{ fontSize: 11, color: "#666" }}>点 / {availablePoints}</span>
                 <button
                   onClick={handleQuickSendAndRelateFromDraftTargets}
                   disabled={!singleButtonEnabled}
@@ -3442,6 +3507,9 @@ export default function TopicDetailPage() {
                   {singleButtonLabel}
                 </span>
               </div>
+              {sendError && (
+                <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{sendError}</div>
+              )}
               </div>
             </div>
           )}

@@ -31,12 +31,16 @@ describe('GET /api/rules/current', () => {
       id: 'rule-v1',
       version: 1,
       status: 'ACTIVE',
-      description: '初始默认规则 — 线性权重、最小押注 1、无单注上限',
+      description: '初始默认规则 — 线性权重、最小押注 1、无单注上限、创建消息自押 1 点、仅发起者可结算、每次押注/投票燃烧 1 点、结算燃烧 1 点',
       parameters: {
         minStake: 1,
         maxSingleStake: null,
         weightFunction: 'linear',
         concurrentRoundLimit: 1,
+        selfStakeOnCreate: 1,
+        settlementPermission: 'creator_only',
+        stakeFeeAmount: 1,
+        settlementFeeAmount: 1,
       },
       createdAt: new Date().toISOString(),
     };

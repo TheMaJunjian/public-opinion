@@ -77,7 +77,7 @@ describe('POST /api/messages/:id/stakes', () => {
       locked: 0,
     });
     (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
-      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+      parameters: { minStake: 1, selfStakeOnCreate: 1, stakeFeeAmount: 1 },
     });
   });
 

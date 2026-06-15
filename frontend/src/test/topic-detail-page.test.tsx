@@ -8,6 +8,14 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
     getTopic: vi.fn(),
     getMessages: vi.fn(),
     getRelations: vi.fn(),
+    getPointsBalance: vi.fn().mockResolvedValue({ points: { available: 100, locked: 0 }, balance: { amount: 100, debtFrozen: false } }),
+    getPointsTransactions: vi.fn().mockResolvedValue({ data: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 } }),
+    getMessageStakes: vi.fn().mockResolvedValue({ messageId: '', pool: { lockedPro: 0, lockedCon: 0 }, stakes: [], counts: { pro: 0, con: 0 } }),
+    getMessageRounds: vi.fn().mockResolvedValue({ data: [] }),
+    getRoundDetail: vi.fn().mockResolvedValue(null),
+    createRound: vi.fn(),
+    castVote: vi.fn(),
+    closeAndSettle: vi.fn(),
   },
   mockNavigate: vi.fn(),
   mockGraphView: vi.fn(),
@@ -25,6 +33,7 @@ vi.mock('react-router-dom', async () => {
     ...actual,
     useParams: () => ({ topicId: 'topic-1' }),
     useNavigate: () => mockNavigate,
+    useSearchParams: () => [new URLSearchParams(), vi.fn()] as const,
   };
 });
 vi.mock('../components/GraphView', async () => {

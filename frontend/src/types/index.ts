@@ -393,7 +393,7 @@ export interface MessageStakes {
 
 export interface VoteStakeItem {
   id: string;
-  vote: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  vote: 'TRUE' | 'FALSE';
   amount: number;
   createdAt: string;
   user: User;
@@ -429,7 +429,7 @@ export interface SettlementResult {
 export interface VoteCastResult {
   message: string;
   voteId: string;
-  vote: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  vote: 'TRUE' | 'FALSE';
   amount: number;
   newAvailable: number;
   newLocked: number;

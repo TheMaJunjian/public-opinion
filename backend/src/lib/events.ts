@@ -116,7 +116,7 @@ export interface VoteCastEvent {
   topicId: string;
   payload: {
     roundId: string;
-    vote: 'TRUE' | 'FALSE' | 'UNKNOWN';
+    vote: 'TRUE' | 'FALSE';
     amount: number;
   };
 }
@@ -492,9 +492,12 @@ async function applyPointMinted(event: PointMintedEvent) {
     throw new Error('PointAccount not found for user');
   }
 
+  // Query current balance before transaction for atomic ledger entry
+  const currentBal = await prisma.balance.findUnique({ where: { userId: actorId } });
+  const newBalance = (currentBal?.balance ?? 0) + payload.amount;
   const newAvailable = account.available + payload.amount;
 
-  const [, , currentBalance] = await prisma.$transaction([
+  await prisma.$transaction([
     prisma.pointAccount.update({
       where: { userId: actorId },
       data: { available: newAvailable },
@@ -517,7 +520,7 @@ async function applyPointMinted(event: PointMintedEvent) {
         userId: actorId,
         entryType: payload.reason === 'REGISTRATION_BONUS' ? 'MINT_INITIAL' : 'MINT_DAILY',
         amount: payload.amount,
-        balanceAfter: 0,
+        balanceAfter: newBalance,
         data: { reason: payload.reason, note: payload.note },
       },
     }),
@@ -532,14 +535,7 @@ async function applyPointMinted(event: PointMintedEvent) {
     }),
   ]);
 
-  // Update ledger entry with correct balance_after
-  const actualBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
-  await prisma.ledgerEntry.updateMany({
-    where: { userId: actorId, entryType: payload.reason === 'REGISTRATION_BONUS' ? 'MINT_INITIAL' : 'MINT_DAILY', balanceAfter: 0 },
-    data: { balanceAfter: actualBalance?.balance ?? 0 },
-  });
-
-  return { available: newAvailable, balance: currentBalance.balance };
+  return { available: newAvailable, balance: newBalance };
 }
 
 async function applyPointTransferred(event: PointTransferredEvent) {
@@ -681,10 +677,10 @@ export async function executeStake(params: {
     prisma.pointTransaction.create({
       data: {
         userId,
-        type: 'LOCK',
+        type: 'STAKE_LOCK',
         amount: -totalCost,
         balanceAfter: newAvailable,
-        data: { side, messageId, topicId, amount, feeAmount },
+        data: { side, messageId, topicId, staked: amount, burned: feeAmount },
       },
     }),
     // Upsert BetPool (full amount enters the pool)
@@ -888,10 +884,10 @@ async function applyVoteCast(event: VoteCastEvent) {
     prisma.pointTransaction.create({
       data: {
         userId: actorId,
-        type: 'LOCK',
+        type: 'VOTE_LOCK',
         amount: -totalCost,
         balanceAfter: newAvailable,
-        data: { vote: payload.vote, roundId: payload.roundId, messageId: round.messageId, topicId, amount: payload.amount, feeAmount },
+        data: { vote: payload.vote, roundId: payload.roundId, messageId: round.messageId, topicId, staked: payload.amount, burned: feeAmount },
       },
     }),
     prisma.ledgerEntry.create({
@@ -1013,52 +1009,46 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     await executeClawback(round.previousRoundId, messageId, topicId);
   }
 
-  // ── Compute vote weights ──
+  // ── Compute total weights = Stakes (baseline) + VoteStakes (override) ──
+  // Stakes act as baseline: PRO → TRUE weight, CON → FALSE weight
+  // BetPool mirrors all stakes exactly
+  const betPool = await prisma.betPool.findUnique({
+    where: { messageId },
+    select: { lockedPro: true, lockedCon: true },
+  });
+  const stakeWeightTrue = betPool?.lockedPro ?? 0;
+  const stakeWeightFalse = betPool?.lockedCon ?? 0;
+
+  // VoteStakes add on top of baseline
   const voteAgg = await prisma.voteStake.groupBy({
     by: ['vote'],
     where: { roundId: payload.roundId },
     _sum: { amount: true },
   });
 
-  const weights: Record<string, number> = { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
+  const weights: Record<string, number> = {
+    TRUE: stakeWeightTrue,
+    FALSE: stakeWeightFalse,
+    UNKNOWN: 0, // UNKNOWN is only a result, not a votable option
+  };
   for (const row of voteAgg) {
-    weights[row.vote] = row._sum.amount ?? 0;
+    weights[row.vote] = (weights[row.vote] ?? 0) + (row._sum.amount ?? 0);
   }
 
-  // Determine result
+  const totalPro = stakeWeightTrue;
+  const totalCon = stakeWeightFalse;
+
+  // Determine result: UNKNOWN only on tie
   let result: 'TRUE' | 'FALSE' | 'UNKNOWN';
-  const maxWeight = Math.max(weights.TRUE, weights.FALSE, weights.UNKNOWN);
-  const winners = Object.entries(weights).filter(([, w]) => w === maxWeight);
-  if (winners.length === 1) {
-    result = winners[0][0] as 'TRUE' | 'FALSE' | 'UNKNOWN';
+  if (weights.TRUE > weights.FALSE) {
+    result = 'TRUE';
+  } else if (weights.FALSE > weights.TRUE) {
+    result = 'FALSE';
   } else {
     result = 'UNKNOWN';
   }
 
-  // ── Distribution ──
-  const betPool = await prisma.betPool.findUnique({
-    where: { messageId },
-    select: { lockedPro: true, lockedCon: true },
-  });
-  const totalPro = betPool?.lockedPro ?? 0;
-  const totalCon = betPool?.lockedCon ?? 0;
   const totalPool = totalPro + totalCon;
-
-  // ── Settlement fixed fee ──
-  const settlementRule = await prisma.ruleVersion.findFirst({
-    where: { status: 'ACTIVE' },
-    orderBy: { version: 'desc' },
-    select: { parameters: true },
-  });
-  const settlementFeeTotal = Math.min(
-    (settlementRule?.parameters as Record<string, unknown> | null)?.settlementFeeAmount as number | undefined ?? 0,
-    totalPool
-  );
-  // Deduct fee proportionally from PRO and CON pools
-  const feeFromPro = totalPool > 0 ? Math.floor(settlementFeeTotal * (totalPro / totalPool)) : 0;
-  const feeFromCon = settlementFeeTotal - feeFromPro;
-  const distributablePro = totalPro - feeFromPro;
-  const distributableCon = totalCon - feeFromCon;
 
   // Get all stakes for this message (all stakes, not just votes)
   const allStakes = await prisma.stake.findMany({
@@ -1085,30 +1075,26 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   }
 
   if (result === 'TRUE') {
-    // PRO wins: PRO gets their stake back + proportional share of distributable CON
+    // PRO wins: full stake return + all of CON pool
     for (const stake of allStakes) {
       if (stake.side === 'PRO') {
-        // Return PRO stake
         addUserDelta(stake.userId, stake.amount);
-        // PRO shares distributable CON pool proportionally
-        if (totalPro > 0 && distributableCon > 0) {
-          const share = Math.floor((stake.amount / totalPro) * distributableCon);
+        if (totalPro > 0 && totalCon > 0) {
+          const share = Math.floor((stake.amount / totalPro) * totalCon);
           addUserDelta(stake.userId, share);
         }
       }
-      // CON loses their stake (no return)
     }
   } else if (result === 'FALSE') {
-    // CON wins: CON gets their stake back + proportional share of distributable PRO
+    // CON wins: full stake return + all of PRO pool
     for (const stake of allStakes) {
       if (stake.side === 'CON') {
         addUserDelta(stake.userId, stake.amount);
-        if (totalCon > 0 && distributablePro > 0) {
-          const share = Math.floor((stake.amount / totalCon) * distributablePro);
+        if (totalCon > 0 && totalPro > 0) {
+          const share = Math.floor((stake.amount / totalCon) * totalPro);
           addUserDelta(stake.userId, share);
         }
       }
-      // PRO loses their stake
     }
   } else {
     // UNKNOWN: return all stakes
@@ -1138,12 +1124,23 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     });
   }
 
+  // Build per-user stake totals for correct lock accounting
+  const userStakeMap = new Map<string, number>();
+  for (const s of allStakes) {
+    userStakeMap.set(s.userId, (userStakeMap.get(s.userId) ?? 0) + s.amount);
+  }
+
   // Build transaction operations
   for (const [uid, delta] of userDelta) {
     const cur = currentBalances.get(uid)!;
     const newBal = cur.balance + delta;
     const newAvail = cur.available + delta;
-    const newLocked = Math.max(0, cur.locked - Math.max(0, delta)); // unlock returned amounts
+    // Unlock logic: winners get stake returned + winnings; losers' stake cleared
+    const userStake = userStakeMap.get(uid) ?? 0;
+    const unlockAmount = delta >= 0
+      ? Math.min(cur.locked, Math.max(delta, userStake))  // unlock at least the stake amount
+      : 0;  // clawback: don't unlock
+    const newLocked = Math.max(0, cur.locked - unlockAmount);
 
     ledgerOps.push(
       prisma.balance.update({
@@ -1157,10 +1154,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
       prisma.pointTransaction.create({
         data: {
           userId: uid,
-          type: delta >= 0 ? 'UNLOCK' : 'SPEND',
+          type: delta >= 0 ? 'SETTLEMENT_GAIN' : 'SETTLEMENT_LOSS',
           amount: delta,
           balanceAfter: newAvail,
-          data: { roundId: payload.roundId, messageId, topicId, settlementResult: result },
+          data: { roundId: payload.roundId, messageId, topicId, settlementResult: result, side: userStakeMap.has(uid) ? 'staker' : 'voter' },
         },
       }),
       prisma.ledgerEntry.create({
@@ -1177,11 +1174,23 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     );
   }
 
+  // ── Compute dust (rounding leftovers) ──
+  const totalDistributed = [...userDelta.values()].reduce((s, d) => s + d, 0);
+  const dust = totalPool - totalDistributed;
+
   // Update round status
   ledgerOps.push(
     prisma.settlementRound.update({
       where: { id: payload.roundId },
       data: { status: 'SETTLED', result, closedAt: now },
+    }),
+  );
+
+  // ── Reset BetPool: funds have been distributed ──
+  ledgerOps.push(
+    prisma.betPool.update({
+      where: { messageId },
+      data: { lockedPro: 0, lockedCon: 0 },
     }),
   );
 
@@ -1200,6 +1209,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
           weights,
           totalPro,
           totalCon,
+          dust,
           affectedUsers: affectedUsers.length,
         },
       },
@@ -1215,9 +1225,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     weights,
     totalPro,
     totalCon,
-    distributablePro,
-    distributableCon,
-    settlementFeeTotal,
+    dust,
     affectedUsers: affectedUsers.length,
   };
 }
@@ -1246,9 +1254,21 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     },
   });
 
+  // ── Look up original stakes for all payout users (to re-lock) ──
+  const payoutUserIds = [...new Set(payouts.map(p => p.userId))];
+  const userStakes = await prisma.stake.findMany({
+    where: { messageId, userId: { in: payoutUserIds } },
+    select: { userId: true, amount: true },
+  });
+  const userStakeTotal = new Map<string, number>();
+  for (const s of userStakes) {
+    userStakeTotal.set(s.userId, (userStakeTotal.get(s.userId) ?? 0) + s.amount);
+  }
+
   const clawbackOps: Prisma.PrismaPromise<unknown>[] = [];
   for (const payout of payouts) {
     const clawbackAmount = -payout.amount; // reverse the payout
+    const originalStake = userStakeTotal.get(payout.userId) ?? 0;
 
     const [bal, pa] = await Promise.all([
       prisma.balance.findUnique({ where: { userId: payout.userId } }),
@@ -1257,7 +1277,8 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
 
     const newBal = (bal?.balance ?? 0) + clawbackAmount;
     const newAvail = (pa?.available ?? 0) + clawbackAmount;
-    const newLocked = pa?.locked ?? 0;
+    // Re-lock the original stake that was unlocked during previous settlement
+    const newLocked = (pa?.locked ?? 0) + originalStake;
 
     clawbackOps.push(
       prisma.balance.update({
@@ -1271,10 +1292,10 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
       prisma.pointTransaction.create({
         data: {
           userId: payout.userId,
-          type: 'SPEND',
+          type: 'CLAWBACK',
           amount: clawbackAmount,
           balanceAfter: newAvail,
-          data: { clawbackFromRound: previousRoundId, messageId, topicId },
+          data: { clawbackFromRound: previousRoundId, messageId, topicId, reLockedStake: originalStake },
         },
       }),
       prisma.ledgerEntry.create({
@@ -1285,11 +1306,52 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
           balanceAfter: newBal,
           roundId: previousRoundId,
           messageId,
-          data: { originalPayoutId: payout.id },
+          data: { originalPayoutId: payout.id, reLockedStake: originalStake },
         },
       }),
     );
   }
+
+  // ── Restore BetPool from original stakes ──
+  // After clawback, the BetPool should reflect the staked amounts again
+  // so that the new round can redistribute them.
+  const stakes = await prisma.stake.findMany({
+    where: { messageId },
+    select: { side: true, amount: true },
+  });
+  let restoredPro = 0;
+  let restoredCon = 0;
+  for (const s of stakes) {
+    if (s.side === 'PRO') restoredPro += s.amount;
+    else restoredCon += s.amount;
+  }
+  clawbackOps.push(
+    prisma.betPool.upsert({
+      where: { messageId },
+      create: { messageId, lockedPro: restoredPro, lockedCon: restoredCon },
+      update: { lockedPro: restoredPro, lockedCon: restoredCon },
+    }),
+  );
+
+  // ── Audit log for clawback ──
+  clawbackOps.push(
+    prisma.auditLog.create({
+      data: {
+        actorId: 'SYSTEM',
+        action: 'SETTLEMENT_CLAWBACK',
+        entityType: 'SettlementRound',
+        entityId: previousRoundId,
+        topicId,
+        data: {
+          messageId,
+          previousRoundId,
+          restoredPro,
+          restoredCon,
+          affectedUsers: payouts.length,
+        },
+      },
+    }),
+  );
 
   if (clawbackOps.length > 0) {
     await prisma.$transaction(clawbackOps);

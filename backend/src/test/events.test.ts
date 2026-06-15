@@ -125,7 +125,7 @@ describe('applyEvent — Phase 0 + Phase 1 event sourcing', () => {
         {}, // ledgerEntry.create
         {}, // auditLog.create
       ]);
-      (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 150, debtFrozen: false });
+      (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 100, debtFrozen: false });
 
       const result = await applyEvent({
         type: 'POINT_MINTED',

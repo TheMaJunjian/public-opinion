@@ -159,11 +159,9 @@ export default function PointsBadge() {
                     <span className="font-medium text-gray-700">
                       {typeLabel(tx.type)}
                     </span>
-                    {(tx.data as Record<string, unknown> | null)?.reason && (
-                      <span className="ml-1 text-gray-400">
-                        ({(tx.data as Record<string, unknown>).reason as string})
-                      </span>
-                    )}
+                    <span className="ml-1 text-gray-500">
+                      {txDetail(tx)}
+                    </span>
                     {hasMessage && !canNavigate && (
                       <span className="ml-1 text-gray-300 text-xs">📎</span>
                     )}
@@ -191,11 +189,59 @@ export default function PointsBadge() {
 function typeLabel(type: string): string {
   const labels: Record<string, string> = {
     MINT: '铸造',
-    LOCK: '锁定',
+    STAKE_LOCK: '押注',
+    VOTE_LOCK: '投票',
+    SETTLEMENT_GAIN: '结算收益',
+    SETTLEMENT_LOSS: '结算损失',
+    CLAWBACK: '推翻扣回',
     UNLOCK: '解锁',
     SPEND: '支出',
     TRANSFER: '转入',
   };
   return labels[type] ?? type;
+}
+
+function txDetail(tx: import('../types').PointTransaction): string {
+  const d = tx.data as Record<string, unknown> | null;
+  if (!d) return '';
+
+  // Stake: show side + staked/burned
+  if (tx.type === 'STAKE_LOCK') {
+    const side = d.side === 'PRO' ? '看好' : '看空';
+    const staked = d.staked as number | undefined;
+    const burned = d.burned as number | undefined;
+    let detail = `${side}`;
+    if (staked) detail += ` · 押 ${staked} 点`;
+    if (burned && burned > 0) detail += ` · 燃 ${burned} 点`;
+    return detail;
+  }
+
+  // Vote: show direction + staked/burned
+  if (tx.type === 'VOTE_LOCK') {
+    const vote = d.vote === 'TRUE' ? '支持' : '反对';
+    const staked = d.staked as number | undefined;
+    const burned = d.burned as number | undefined;
+    let detail = `投${vote}`;
+    if (staked) detail += ` · ${staked} 点`;
+    if (burned && burned > 0) detail += ` · 燃 ${burned} 点`;
+    return detail;
+  }
+
+  // Settlement
+  if (tx.type === 'SETTLEMENT_GAIN' || tx.type === 'SETTLEMENT_LOSS') {
+    const result = d.settlementResult as string | undefined;
+    return result ? `结果 ${result}` : '';
+  }
+
+  // Clawback
+  if (tx.type === 'CLAWBACK') {
+    const reLocked = d.reLockedStake as number | undefined;
+    return reLocked ? `重新锁定 ${reLocked} 点` : '';
+  }
+
+  // Mint: show reason
+  if (d.reason) return String(d.reason);
+
+  return '';
 }
 

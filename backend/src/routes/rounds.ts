@@ -13,7 +13,7 @@ const createRoundSchema = z.object({
 });
 
 const voteSchema = z.object({
-  vote: z.enum(['TRUE', 'FALSE', 'UNKNOWN']),
+  vote: z.enum(['TRUE', 'FALSE']),
   amount: z.number().int().min(1, '投票金额至少为 1 点'),
 });
 

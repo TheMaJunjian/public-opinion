@@ -170,7 +170,7 @@ export function getRoundDetail(roundId: string) {
   return request<import('../types').SettlementRoundItem>(`/rounds/${roundId}`);
 }
 
-export function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE' | 'UNKNOWN'; amount: number }) {
+export function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; amount: number }) {
   return request<import('../types').VoteCastResult>(`/rounds/${roundId}/votes`, {
     method: 'POST',
     body: JSON.stringify(data),

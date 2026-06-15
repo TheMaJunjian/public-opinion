@@ -131,6 +131,22 @@ describe('POST /api/messages/:id/stakes', () => {
 
     expect(res.status).toBe(404);
   });
+
+  it('rejects stake when debt-frozen (Phase 4)', async () => {
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1',
+      balance: -50,
+      debtFrozen: true,
+    });
+
+    const res = await request(app)
+      .post('/api/messages/msg-1/stakes')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ side: 'PRO', amount: 5 });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain('服务器内部错误');
+  });
 });
 
 // ─── GET /api/messages/:id/stakes ─────────────────────────────────────────

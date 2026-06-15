@@ -13,6 +13,7 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
     getMessageStakes: vi.fn().mockResolvedValue({ messageId: '', pool: { lockedPro: 0, lockedCon: 0 }, stakes: [], counts: { pro: 0, con: 0 } }),
     getMessageRounds: vi.fn().mockResolvedValue({ data: [] }),
     getRoundDetail: vi.fn().mockResolvedValue(null),
+    getCurrentRules: vi.fn().mockResolvedValue({ parameters: { selfStakeOnCreate: 10, minStake: 1, stakeFeeAmount: 1 } }),
     createRound: vi.fn(),
     castVote: vi.fn(),
     closeAndSettle: vi.fn(),

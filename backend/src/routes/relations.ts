@@ -56,7 +56,7 @@ const createRelationSchema = z.object({
   sourceMessageId: z.string().min(1, '来源消息 ID 不能为空').nullable().optional(),
   targetRefs: z.array(targetRefSchema).max(200),
   supersedesRelationId: z.string().nullable().optional(),
-  stakeAmount: z.number().int().min(1).optional(),
+  stakeAmount: z.number().int().min(0).optional(),
   payload: z.object({
     label: z.string().trim().min(1).max(200).optional(),
     title: z.string().trim().min(1).max(200).optional(),

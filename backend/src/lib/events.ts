@@ -372,14 +372,17 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
 async function applyRelationCreated(event: RelationCreatedEvent) {
   const { actorId, topicId, payload } = event;
 
-  // Check balance for self-stake
+  // Check balance for self-stake (relation-type-specific minimum)
   const rule = await prisma.ruleVersion.findFirst({
     where: { status: 'ACTIVE' },
     orderBy: { version: 'desc' },
     select: { parameters: true },
   });
-  const requiredStake = payload.stakeAmount
-    ?? (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number | undefined;
+  const ruleParams = rule?.parameters as Record<string, unknown> | null;
+  const relationTypeMinStake = (ruleParams?.relationTypeMinStake as Record<string, number> | null) ?? {};
+  const typeDefault = relationTypeMinStake[payload.relationType.toUpperCase()]
+    ?? (ruleParams?.selfStakeOnCreate as number | undefined);
+  const requiredStake = payload.stakeAmount ?? typeDefault;
   if (requiredStake && requiredStake > 0) {
     const userBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
     if (!userBalance || userBalance.debtFrozen || userBalance.balance < requiredStake) {
@@ -784,12 +787,20 @@ async function applyRoundCreated(event: RoundCreatedEvent) {
     throw new Error('该消息已有进行中的结算轮次');
   }
 
+  // ── Auto-link to the most recent SETTLED round (overturn chain) ──
+  const latestSettled = await prisma.settlementRound.findFirst({
+    where: { messageId: payload.messageId, status: 'SETTLED' },
+    orderBy: { closedAt: 'desc' },
+    select: { id: true },
+  });
+
   const [round] = await prisma.$transaction([
     prisma.settlementRound.create({
       data: {
         messageId: payload.messageId,
         createdByUserId: actorId,
         status: 'OPEN',
+        previousRoundId: latestSettled?.id ?? null,
         note: payload.note ?? null,
       },
     }),
@@ -800,7 +811,7 @@ async function applyRoundCreated(event: RoundCreatedEvent) {
         entityType: 'SettlementRound',
         entityId: '',
         topicId,
-        data: { messageId: payload.messageId },
+        data: { messageId: payload.messageId, previousRoundId: latestSettled?.id ?? null },
       },
     }),
   ]);
@@ -1050,6 +1061,19 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 
   const totalPool = totalPro + totalCon;
 
+  // ── Fetch message creator & rule params for creator reward ──
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    select: { createdById: true },
+  });
+  const creatorId = message?.createdById ?? '';
+  const settlementRule = await prisma.ruleVersion.findFirst({
+    where: { status: 'ACTIVE' },
+    orderBy: { version: 'desc' },
+    select: { parameters: true },
+  });
+  const ruleParams = settlementRule?.parameters as Record<string, unknown> | null;
+
   // Get all stakes for this message (all stakes, not just votes)
   const allStakes = await prisma.stake.findMany({
     where: { messageId },
@@ -1075,15 +1099,25 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   }
 
   if (result === 'TRUE') {
-    // PRO wins: full stake return + all of CON pool
+    // PRO wins: full stake return + CON pool (message creator gets priority share)
+    const creatorRewardRatio = (ruleParams?.creatorRewardRatio as number | undefined) ?? 0;
+    const creatorReward = totalCon > 0
+      ? Math.floor(totalCon * creatorRewardRatio)
+      : 0;
+    const sharedCon = totalCon - creatorReward; // remainder shared among PRO
+
     for (const stake of allStakes) {
       if (stake.side === 'PRO') {
-        addUserDelta(stake.userId, stake.amount);
-        if (totalPro > 0 && totalCon > 0) {
-          const share = Math.floor((stake.amount / totalPro) * totalCon);
+        addUserDelta(stake.userId, stake.amount); // full stake return
+        if (totalPro > 0 && sharedCon > 0) {
+          const share = Math.floor((stake.amount / totalPro) * sharedCon);
           addUserDelta(stake.userId, share);
         }
       }
+    }
+    // Creator gets priority reward on top of their stake return
+    if (creatorReward > 0) {
+      addUserDelta(creatorId, creatorReward);
     }
   } else if (result === 'FALSE') {
     // CON wins: full stake return + all of PRO pool
@@ -1265,48 +1299,53 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     userStakeTotal.set(s.userId, (userStakeTotal.get(s.userId) ?? 0) + s.amount);
   }
 
-  const clawbackOps: Prisma.PrismaPromise<unknown>[] = [];
+  // ── Accumulate clawback per user (avoids duplicate reads overwriting) ──
+  const userClawback = new Map<string, { amount: number; originalStake: number }>();
   for (const payout of payouts) {
-    const clawbackAmount = -payout.amount; // reverse the payout
-    const originalStake = userStakeTotal.get(payout.userId) ?? 0;
+    const cur = userClawback.get(payout.userId) ?? { amount: 0, originalStake: 0 };
+    cur.amount += -payout.amount;
+    cur.originalStake = userStakeTotal.get(payout.userId) ?? 0;
+    userClawback.set(payout.userId, cur);
+  }
 
+  const clawbackOps: Prisma.PrismaPromise<unknown>[] = [];
+  for (const [userId, acc] of userClawback) {
     const [bal, pa] = await Promise.all([
-      prisma.balance.findUnique({ where: { userId: payout.userId } }),
-      prisma.pointAccount.findUnique({ where: { userId: payout.userId } }),
+      prisma.balance.findUnique({ where: { userId } }),
+      prisma.pointAccount.findUnique({ where: { userId } }),
     ]);
 
-    const newBal = (bal?.balance ?? 0) + clawbackAmount;
-    const newAvail = (pa?.available ?? 0) + clawbackAmount;
-    // Re-lock the original stake that was unlocked during previous settlement
-    const newLocked = (pa?.locked ?? 0) + originalStake;
+    const newBal = (bal?.balance ?? 0) + acc.amount;
+    const newAvail = (pa?.available ?? 0) + acc.amount;
+    const newLocked = (pa?.locked ?? 0) + acc.originalStake;
 
     clawbackOps.push(
       prisma.balance.update({
-        where: { userId: payout.userId },
+        where: { userId },
         data: { balance: newBal, debtFrozen: newBal < 0 },
       }),
       prisma.pointAccount.update({
-        where: { userId: payout.userId },
+        where: { userId },
         data: { available: newAvail, locked: newLocked },
       }),
       prisma.pointTransaction.create({
         data: {
-          userId: payout.userId,
+          userId,
           type: 'CLAWBACK',
-          amount: clawbackAmount,
+          amount: acc.amount,
           balanceAfter: newAvail,
-          data: { clawbackFromRound: previousRoundId, messageId, topicId, reLockedStake: originalStake },
+          data: { clawbackFromRound: previousRoundId, messageId, topicId, reLockedStake: acc.originalStake },
         },
       }),
       prisma.ledgerEntry.create({
         data: {
-          userId: payout.userId,
+          userId,
           entryType: 'SETTLEMENT_CLAWBACK',
-          amount: clawbackAmount,
+          amount: acc.amount,
           balanceAfter: newBal,
           roundId: previousRoundId,
           messageId,
-          data: { originalPayoutId: payout.id, reLockedStake: originalStake },
+          data: { reLockedStake: acc.originalStake },
         },
       }),
     );
@@ -1333,11 +1372,11 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     }),
   );
 
-  // ── Audit log for clawback ──
+  // ── Audit log for clawback (actorId=null since it's system-triggered) ──
   clawbackOps.push(
     prisma.auditLog.create({
       data: {
-        actorId: 'SYSTEM',
+        actorId: null,
         action: 'SETTLEMENT_CLAWBACK',
         entityType: 'SettlementRound',
         entityId: previousRoundId,

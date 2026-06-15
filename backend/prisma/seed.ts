@@ -24,7 +24,7 @@ async function main() {
     data: {
       version: 1,
       status: 'ACTIVE',
-      description: '初始默认规则 — 线性权重、最小押注 1、无单注上限、创建消息自押 10 点、仅发起者可结算、每次押注/投票燃烧 1 点',
+      description: '初始默认规则 — 关系分级 1~50、自押 10、燃烧 1、创建者奖励 20%',
       parameters: {
         minStake: 1,
         maxSingleStake: null,       // 无单注保护上限
@@ -33,7 +33,16 @@ async function main() {
         selfStakeOnCreate: 10,      // 创建消息时自动自押 PRO 点数（0=关闭）
         settlementPermission: 'creator_only', // 结算权限：creator_only | any_voter | anyone
         stakeFeeAmount: 1,          // 每次押注/投票固定燃烧点数（0=关闭）
-        settlementFeeAmount: 0,     // 结算不燃烧（燃烧仅在押注/投票时发生）
+        settlementFeeAmount: 0,     // 结算不燃烧
+        creatorRewardRatio: 0.2,    // 结算 TRUE 时创建者优先获得 CON 池的 20%
+        relationTypeMinStake: {     // 不同关系类型的最低自押点数
+          REFERENCE:   1,  AGREE:       1,  DISAGREE:    1,
+          TAG:         3,  RECOMMEND:   3,
+          ANNOTATION:  5,  REPLY:       5,
+          ARCHIVE:     7,
+          ARRANGE:    10,  CORRECT:    10,
+          CLASSIFY:   20,  MERGE:      30,  SUMMARY:     50,
+        },
       },
     },
   });

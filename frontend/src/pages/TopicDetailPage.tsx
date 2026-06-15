@@ -572,7 +572,9 @@ export default function TopicDetailPage() {
                 api.getMessageStakes(id).then(r => {
                   const msg = demoMsgs.find((m: { id: string; author: string }) => m.id === id);
                   const authorStake = msg
-                    ? r.stakes.find(s => s.user.username === msg.author && s.side === 'PRO')?.amount ?? 0
+                    ? r.stakes
+                        .filter(s => s.user.username === msg.author && s.side === 'PRO')
+                        .reduce((sum, s) => sum + s.amount, 0)
                     : 0;
                   return { id, pro: r.counts.pro, con: r.counts.con, authorStake };
                 })
@@ -597,6 +599,26 @@ export default function TopicDetailPage() {
     return () => { cancelled = true; };
   }, [topicId]);
 
+  // Auto-enter classify topic if msg belongs to one
+  const autoClassifyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || relations.length === 0) return;
+    const msgId = autoClassifyRef.current;
+    if (!msgId) return;
+    // Find classify/summary relation that targets this message
+    for (const rel of relations) {
+      const rt = rel.relationType?.toUpperCase();
+      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      const targets = (rel.targetRefs ?? []) as TargetRef[];
+      if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId === msgId)) {
+        enterClassifyTopic(rel.id);
+        autoClassifyRef.current = null;
+        return;
+      }
+    }
+    autoClassifyRef.current = null;
+  }, [loading, relations]);
+
   // Phase 3: auto-open settlement from URL params (triggered by points-navigate)
   const pendingScrollMsgRef = useRef<string | null>(null);
   useEffect(() => {
@@ -605,6 +627,7 @@ export default function TopicDetailPage() {
     if (targetMsgId || settlementMsgId) {
       const msgId = targetMsgId || settlementMsgId!;
       pendingScrollMsgRef.current = msgId;
+      autoClassifyRef.current = msgId; // try auto-enter classify
       // Clear all selections and select the target message
       setDraftUnits([{ messageId: msgId, selection: { kind: "whole" } }]);
       setActiveTextSelectId(null);
@@ -664,14 +687,28 @@ export default function TopicDetailPage() {
   } | null>(null);
   // DEBUG
   const [debugRects, setDebugRects] = useState("");
-  const [stakeAmount, setStakeAmount] = useState(1); // Phase 2: inline stake amount
-  const stakeAmountRef = useRef(stakeAmount);
-  stakeAmountRef.current = stakeAmount;
+  const [stakeAmount, setStakeAmount] = useState<number | ''>(10);
+  const [relStakeAmount, setRelStakeAmount] = useState<number | ''>(10);
+  const [minSelfStake, setMinSelfStake] = useState(10);
+  const stakeAmountRef = useRef<number>(10);
+  const relStakeRef = useRef<number>(10);
+  stakeAmountRef.current = typeof stakeAmount === 'number' ? stakeAmount : 0;
+  relStakeRef.current = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
-  const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null); // Phase 3: settlement panel toggle
+  const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
+  const stakeDefaultLoaded = useRef(false);
+  const relationStakeMap = useRef<Record<string, number>>({});
 
-  // Close settlement panel on click outside
+  // Update relStakeAmount when relation type changes (text stays at 10)
+  useEffect(() => {
+    if (!stakeDefaultLoaded.current) return;
+    const typeMin = relationType
+      ? (relationStakeMap.current[relationType.toUpperCase()] ?? 10)
+      : 10;
+    setMinSelfStake(typeMin);
+    setRelStakeAmount(typeMin);
+  }, [relationType]);
   useEffect(() => {
     if (!settlementOpenMsgId) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -684,13 +721,29 @@ export default function TopicDetailPage() {
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [settlementOpenMsgId]);
 
-  // Keep available points in sync
+  // Keep available points in sync + load rule default stake
   useEffect(() => {
     const update = () => {
-      api.getPointsBalance().then(b => {
+      Promise.all([
+        api.getPointsBalance(),
+        api.getCurrentRules().catch(() => null),
+      ]).then(([b, rule]) => {
         setAvailablePoints(b.points.available);
-        // Cap displayed stake amount to available
-        setStakeAmount(prev => Math.max(1, Math.min(prev, b.points.available)));
+        // Set initial default from rule on first load only
+        if (!stakeDefaultLoaded.current) {
+          const defaultStake = (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number ?? 10;
+          const map = (rule?.parameters as Record<string, unknown> | null)?.relationTypeMinStake as Record<string, number> | null;
+          if (map) relationStakeMap.current = map;
+          setMinSelfStake(defaultStake);
+          setStakeAmount(Math.min(defaultStake, b.points.available));
+          stakeDefaultLoaded.current = true;
+        } else {
+          // Clamp to available on refresh
+          setStakeAmount(prev => {
+            if (typeof prev !== 'number') return prev;
+            return Math.max(minSelfStake, Math.min(prev, b.points.available));
+          });
+        }
       }).catch(() => {});
     };
     update();
@@ -709,7 +762,7 @@ export default function TopicDetailPage() {
     const relType = backendRel.relationType?.toUpperCase();
     if (relType === 'AGREE' || relType === 'DISAGREE') {
       const side = relType === 'AGREE' ? 'pro' : 'con';
-      const stakePts = stakeAmountRef.current;
+      const stakePts = relStakeRef.current;
       const targetMsgIds = backendRel.targetRefs
         .filter((ref): ref is Extract<typeof ref, { kind: 'message' }> => ref.kind === 'message')
         .map(ref => ref.messageId);
@@ -727,13 +780,28 @@ export default function TopicDetailPage() {
       }
     }
     // Also set authorStake for the relation message itself
-    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: stakeAmountRef.current }));
+    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: relStakeRef.current }));
     window.dispatchEvent(new Event('points-refresh'));
   }, []);
 
   // Helper: auto-inject stakeAmount into relation creation
   const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
-    return api.createRelation(topicId, { ...data, stakeAmount: stakeAmountRef.current });
+    return api.createRelation(topicId, { ...data, stakeAmount: relStakeRef.current });
+  }, []);
+
+  // Helper: supersede a relation (no new stake — just update targets)
+  const supersedeRel = useCallback((topicId: string, relationId: string, data: {
+    relationType: string;
+    targetRefs: import('../types').TargetRef[];
+    payload?: import('../types').RelationPayload;
+  }) => {
+    return api.createRelation(topicId, {
+      relationType: data.relationType,
+      targetRefs: data.targetRefs,
+      payload: data.payload,
+      supersedesRelationId: relationId,
+      stakeAmount: 0, // no new stake for administrative update
+    });
   }, []);
 
   // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
@@ -1124,7 +1192,7 @@ export default function TopicDetailPage() {
     if (!topicRelation) return;
     const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
     const updatedRefs = [...existingRefs, newTargetRef];
-    api.updateRelation(topicId, topicFocusRelMsgId, {
+    supersedeRel(topicId, topicFocusRelMsgId, {
       relationType: topicRelation.relationType,
       targetRefs: updatedRefs,
       payload: topicRelation.payload,
@@ -1194,9 +1262,18 @@ export default function TopicDetailPage() {
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
     if (!topicId) return null;
+    const pts = typeof stakeAmount === 'number' ? stakeAmount : 0;
+    if (pts < 10) {
+      setSendError('文本消息最低押注为 10 点');
+      return null;
+    }
+    if (pts > availablePoints) {
+      setSendError(`贡献点余额不足（可用 ${availablePoints}，需要 ${pts + 1} 含燃烧）`);
+      return null;
+    }
     setSendError(null);
     try {
-      const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT', stakeAmount });
+      const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT', stakeAmount: pts });
       const msg: DemoMessage = {
         id: backendMsg.id,
         author: backendMsg.createdBy.username,
@@ -1205,10 +1282,13 @@ export default function TopicDetailPage() {
         kind: "normal",
       };
       setMessages(prev => [...prev, msg]);
-      // Optimistic stake count update for the new message (self-stake PRO)
-      setStakeCounts(prev => ({ ...prev, [msg.id]: { pro: stakeAmount, con: 0 } }));
-      setAuthorStakes(prev => ({ ...prev, [msg.id]: stakeAmount }));
-      setStakeAmount(1); // reset to default after send
+      // Fetch real stake counts from backend (not optimistic)
+      api.getMessageStakes(msg.id).then(s => {
+        setStakeCounts(prev => ({ ...prev, [msg.id]: { pro: s.counts.pro, con: s.counts.con } }));
+        setAuthorStakes(prev => ({ ...prev, [msg.id]: s.stakes.find(st => st.side === 'PRO' && st.user.username === msg.author)?.amount ?? 0 }));
+      }).catch(() => {});
+      // Reset to rule default
+      setStakeAmount(minSelfStake);
       if (isTopicFocus) {
         setFocusEntries(prev => {
           if (prev.length === 0) return prev;
@@ -1216,6 +1296,7 @@ export default function TopicDetailPage() {
           if (last.mode !== "topic") return prev;
           return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
         });
+        setFocusExitKey(k => k + 1); // force StructureView remount
         if (topicFocusRelMsgId) {
           // Persist the new message as a target of the classify/summary topic
           // so the message remains scoped inside the topic after exit / reload.
@@ -1757,6 +1838,23 @@ export default function TopicDetailPage() {
 
   async function handleQuickSendAndRelateFromDraftTargets() {
     const text = newMessageContent.trim();
+
+    // Validate both stakes — collect all errors
+    const errors: string[] = [];
+    if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) {
+      errors.push(`文本消息最低押注 10 点（当前 ${stakeAmount}）`);
+    }
+    if (relationType) {
+      const typeMin = relationStakeMap.current[relationType.toUpperCase()] ?? 10;
+      if (typeof relStakeAmount === 'number' && relStakeAmount < typeMin) {
+        errors.push(`关系消息最低押注 ${typeMin} 点（当前 ${relStakeAmount}）`);
+      }
+    }
+    if (errors.length > 0) {
+      setSendError(errors.join('；'));
+      return;
+    }
+    setSendError(null);
 
     // No relation type selected: just send a plain message
     if (relationType === null) {
@@ -2377,6 +2475,7 @@ export default function TopicDetailPage() {
   //   - Other types: (draft or target collection) not empty AND text not empty
   // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
+  const hasTextContent = newMessageContent.trim().length > 0;
   const singleButtonEnabled = (() => {
     if (relationType === null) return newMessageContent.trim().length > 0;
     // CORRECT targeting a relation message: special mode (no text, no source, use secondary selector)
@@ -3284,7 +3383,7 @@ export default function TopicDetailPage() {
                         <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
                         <span style={{textAlign:"right"}}>
                           <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
-                          <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] || 1} 点</div>
+                          <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
                           {stakeCounts[msg.id] && (stakeCounts[msg.id].pro > 0 || stakeCounts[msg.id].con > 0) && (
                             <div style={{ display: "flex", gap: 6, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
                               {stakeCounts[msg.id].pro > 0 && (
@@ -3549,19 +3648,67 @@ export default function TopicDetailPage() {
                   />
                 );
               })()}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={availablePoints}
-                  value={stakeAmount}
-                  onChange={e => {
-                    const v = Math.max(1, parseInt(e.target.value) || 1);
-                    setStakeAmount(Math.min(v, availablePoints));
-                  }}
-                  style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
-                />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {/* Text stake: only when text creates a separate message */}
+                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
+                  <>
+                    <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={availablePoints}
+                      value={stakeAmount}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        if (raw === '') { setStakeAmount(''); return; }
+                        const v = parseInt(raw);
+                        if (isNaN(v)) return;
+                        setStakeAmount(Math.min(v, availablePoints));
+                      }}
+                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
+                    />
+                  </>
+                )}
+                {/* Relation stake */}
+                {relationType && (
+                  <>
+                    <span style={{ fontSize: 11, color: "#888" }}>{hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
+                    <input
+                      type="number"
+                      min={minSelfStake}
+                      max={availablePoints}
+                      value={relStakeAmount}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        if (raw === '') { setRelStakeAmount(''); return; }
+                        const v = parseInt(raw);
+                        if (isNaN(v)) return;
+                        setRelStakeAmount(Math.min(v, availablePoints));
+                      }}
+                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #666", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
+                    />
+                  </>
+                )}
+                {/* Default: plain text message */}
+                {!hasTextContent && !relationType && (
+                  <>
+                    <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={availablePoints}
+                      value={stakeAmount}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        if (raw === '') { setStakeAmount(''); return; }
+                        const v = parseInt(raw);
+                        if (isNaN(v)) return;
+                        setStakeAmount(Math.min(v, availablePoints));
+                      }}
+                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
+                    />
+                  </>
+                )}
                 <span style={{ fontSize: 11, color: "#666" }}>点 / {availablePoints}</span>
                 <button
                   onClick={handleQuickSendAndRelateFromDraftTargets}

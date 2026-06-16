@@ -8,6 +8,7 @@
  */
 import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
+import { logSettlement, logUserSettlement, logLoserSettlement, logClawback, logClawbackLoser, logBetPoolRestore } from './settlementLogger';
 
 // ============================================================
 // Event Type Definitions
@@ -366,6 +367,9 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
   // Auto-self-stake PRO (Phase 2.5)
   await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount);
 
+  // Auto-create voting round for this message (Phase 3.1)
+  await ensureVotingRound(message.id, actorId, topicId);
+
   return message;
 }
 
@@ -446,6 +450,8 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     for (const ref of targets) {
       if (ref.messageId) {
         await autoSelfStake(actorId, topicId, ref.messageId, payload.stakeAmount, side);
+        // Auto-create voting round — the stake itself is the vote data (Phase 3.1)
+        await ensureVotingRound(ref.messageId, actorId, topicId);
       }
     }
   } else {
@@ -458,7 +464,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
 
 // ── Auto Self-Stake Helper (Phase 2.5-2.6) ───────────────────
 
-async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number, side: 'PRO' | 'CON' = 'PRO') {
+async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number, side: 'PRO' | 'CON' = 'PRO'): Promise<number | undefined> {
   try {
     const rule = await prisma.ruleVersion.findFirst({
       where: { status: 'ACTIVE' },
@@ -467,10 +473,10 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
     });
     const selfStakeAmount = overrideAmount
       ?? (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number | undefined;
-    if (!selfStakeAmount || selfStakeAmount <= 0) return;
+    if (!selfStakeAmount || selfStakeAmount <= 0) return undefined;
 
     const userBalance = await prisma.balance.findUnique({ where: { userId } });
-    if (!userBalance || userBalance.debtFrozen || userBalance.balance < selfStakeAmount) return;
+    if (!userBalance || userBalance.debtFrozen || userBalance.balance < selfStakeAmount) return undefined;
 
     await executeStake({
       userId,
@@ -479,10 +485,64 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
       side,
       amount: selfStakeAmount,
     });
+
+    return selfStakeAmount;
   } catch {
     // Silently skip auto-stake if it fails (e.g., balance too low);
     // the message was already created successfully.
+    return undefined;
   }
+}
+
+// ── Auto Round & Vote Helpers (Phase 3.1) ─────────────────────
+
+/**
+ * Ensure a VOTING settlement round exists for a message.
+ * If none exists, creates one. Returns the round or undefined.
+ */
+async function ensureVotingRound(messageId: string, actorId: string, topicId: string) {
+  // Check for existing active round
+  const existing = await prisma.settlementRound.findFirst({
+    where: { messageId, status: { in: ['OPEN', 'VOTING'] } },
+    select: { id: true },
+  });
+  if (existing) return existing;
+
+  // Link to latest settled round for overturn chain
+  const latestSettled = await prisma.settlementRound.findFirst({
+    where: { messageId, status: 'SETTLED' },
+    orderBy: { closedAt: 'desc' },
+    select: { id: true },
+  });
+
+  const [round] = await prisma.$transaction([
+    prisma.settlementRound.create({
+      data: {
+        messageId,
+        createdByUserId: actorId,
+        status: 'VOTING',
+        previousRoundId: latestSettled?.id ?? null,
+        note: null,
+      },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId,
+        action: 'ROUND_CREATED',
+        entityType: 'SettlementRound',
+        entityId: '',
+        topicId,
+        data: { messageId, previousRoundId: latestSettled?.id ?? null, autoCreated: true },
+      },
+    }),
+  ]);
+
+  await prisma.auditLog.updateMany({
+    where: { action: 'ROUND_CREATED', entityId: '', actorId, topicId },
+    data: { entityId: round.id },
+  });
+
+  return round;
 }
 
 // ── Points & Ledger Handlers ─────────────────────────────────
@@ -1046,8 +1106,12 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     weights[row.vote] = (weights[row.vote] ?? 0) + (row._sum.amount ?? 0);
   }
 
-  const totalPro = stakeWeightTrue;
-  const totalCon = stakeWeightFalse;
+  // ── Compute total pools (stakes + votes combined) ──
+  // Vote amounts are pooled together with stakes: losing side's votes go to winners
+  const voteWeightTrue = weights.TRUE - stakeWeightTrue;
+  const voteWeightFalse = weights.FALSE - stakeWeightFalse;
+  const totalPro = weights.TRUE;   // PRO stakes + TRUE votes
+  const totalCon = weights.FALSE;  // CON stakes + FALSE votes
 
   // Determine result: UNKNOWN only on tie
   let result: 'TRUE' | 'FALSE' | 'UNKNOWN';
@@ -1058,6 +1122,8 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   } else {
     result = 'UNKNOWN';
   }
+
+  logSettlement(payload.roundId, result, totalPro, totalCon);
 
   const totalPool = totalPro + totalCon;
 
@@ -1091,38 +1157,55 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   const pointOps: Array<{ userId: string; available: number; locked: number }> = [];
   const balanceOps: Array<{ userId: string; balance: number }> = [];
 
-  // Track per-user balance changes
+  // Track per-user balance changes and which users are settlement winners
   const userDelta = new Map<string, number>();
+  const settlementWinners = new Set<string>(); // users whose stakes should be unlocked
 
   function addUserDelta(userId: string, delta: number) {
     userDelta.set(userId, (userDelta.get(userId) ?? 0) + delta);
   }
 
   if (result === 'TRUE') {
-    // PRO wins: full stake return + CON pool (message creator gets priority share)
+    // TRUE wins: PRO stakers + TRUE voters share the losing pool (CON stakes + FALSE votes)
     const creatorRewardRatio = (ruleParams?.creatorRewardRatio as number | undefined) ?? 0;
     const creatorReward = totalCon > 0
       ? Math.floor(totalCon * creatorRewardRatio)
       : 0;
-    const sharedCon = totalCon - creatorReward; // remainder shared among PRO
+    const sharedPool = totalCon - creatorReward; // remainder shared among winners
 
+    // PRO stakers: return stake + proportional share of losing pool
     for (const stake of allStakes) {
       if (stake.side === 'PRO') {
-        addUserDelta(stake.userId, stake.amount); // full stake return
-        if (totalPro > 0 && sharedCon > 0) {
-          const share = Math.floor((stake.amount / totalPro) * sharedCon);
+        settlementWinners.add(stake.userId);
+        addUserDelta(stake.userId, stake.amount);
+        if (totalPro > 0 && sharedPool > 0) {
+          const share = Math.floor((stake.amount / totalPro) * sharedPool);
           addUserDelta(stake.userId, share);
         }
       }
     }
-    // Creator gets priority reward on top of their stake return
+    // TRUE voters: return vote + proportional share of losing pool
+    for (const vs of voteStakes) {
+      if (vs.vote === 'TRUE') {
+        settlementWinners.add(vs.userId);
+        addUserDelta(vs.userId, vs.amount);
+        if (totalPro > 0 && sharedPool > 0) {
+          const share = Math.floor((vs.amount / totalPro) * sharedPool);
+          addUserDelta(vs.userId, share);
+        }
+      }
+      // FALSE voters: stake is lost — nothing returned
+    }
+    // Creator reward — also counts as totalEarned (pure profit, no stake deducted)
     if (creatorReward > 0) {
+      settlementWinners.add(creatorId);
       addUserDelta(creatorId, creatorReward);
     }
   } else if (result === 'FALSE') {
-    // CON wins: full stake return + all of PRO pool
+    // FALSE wins: CON stakers + FALSE voters share the losing pool (PRO stakes + TRUE votes)
     for (const stake of allStakes) {
       if (stake.side === 'CON') {
+        settlementWinners.add(stake.userId);
         addUserDelta(stake.userId, stake.amount);
         if (totalCon > 0 && totalPro > 0) {
           const share = Math.floor((stake.amount / totalCon) * totalPro);
@@ -1130,16 +1213,36 @@ async function applyRoundSettled(event: RoundSettledEvent) {
         }
       }
     }
+    // FALSE voters: return vote + proportional share
+    for (const vs of voteStakes) {
+      if (vs.vote === 'FALSE') {
+        settlementWinners.add(vs.userId);
+        addUserDelta(vs.userId, vs.amount);
+        if (totalCon > 0 && totalPro > 0) {
+          const share = Math.floor((vs.amount / totalCon) * totalPro);
+          addUserDelta(vs.userId, share);
+        }
+      }
+      // TRUE voters: stake is lost — nothing returned
+    }
   } else {
-    // UNKNOWN: return all stakes
+    // UNKNOWN: return all stakes and votes
     for (const stake of allStakes) {
+      settlementWinners.add(stake.userId);
       addUserDelta(stake.userId, stake.amount);
+    }
+    for (const vs of voteStakes) {
+      settlementWinners.add(vs.userId);
+      addUserDelta(vs.userId, vs.amount);
     }
   }
 
-  // Return locked vote amounts to voters (votes are returned regardless of result)
-  for (const vs of voteStakes) {
-    addUserDelta(vs.userId, vs.amount);
+  // ── Distribute dust (rounding leftovers) to first winner BEFORE unlock loop ──
+  const totalDistributed = [...userDelta.values()].reduce((s, d) => s + d, 0);
+  const dust = totalPool - totalDistributed;
+  if (dust > 0 && settlementWinners.size > 0) {
+    const firstWinner = [...settlementWinners][0];
+    addUserDelta(firstWinner, dust);
   }
 
   // ── Apply all balance changes atomically ──
@@ -1158,10 +1261,23 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     });
   }
 
-  // Build per-user stake totals for correct lock accounting
-  const userStakeMap = new Map<string, number>();
+  // Build per-user contribution totals (stakes + votes from current & clawed-back rounds)
+  const userContributionMap = new Map<string, number>();
   for (const s of allStakes) {
-    userStakeMap.set(s.userId, (userStakeMap.get(s.userId) ?? 0) + s.amount);
+    userContributionMap.set(s.userId, (userContributionMap.get(s.userId) ?? 0) + s.amount);
+  }
+  for (const vs of voteStakes) {
+    userContributionMap.set(vs.userId, (userContributionMap.get(vs.userId) ?? 0) + vs.amount);
+  }
+  // If clawback happened, also include previous round votes (they were re-locked)
+  if (round.previousRoundId) {
+    const prevRoundVotes = await prisma.voteStake.findMany({
+      where: { roundId: round.previousRoundId },
+      select: { userId: true, amount: true },
+    });
+    for (const pv of prevRoundVotes) {
+      userContributionMap.set(pv.userId, (userContributionMap.get(pv.userId) ?? 0) + pv.amount);
+    }
   }
 
   // Build transaction operations
@@ -1169,17 +1285,28 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     const cur = currentBalances.get(uid)!;
     const newBal = cur.balance + delta;
     const newAvail = cur.available + delta;
-    // Unlock logic: winners get stake returned + winnings; losers' stake cleared
-    const userStake = userStakeMap.get(uid) ?? 0;
+    // Unlock logic: only unlock own contribution; profit is already in delta→available
+    const userContribution = userContributionMap.get(uid) ?? 0;
+    const isSettlementWinner = settlementWinners.has(uid);
     const unlockAmount = delta >= 0
-      ? Math.min(cur.locked, Math.max(delta, userStake))  // unlock at least the stake amount
+      ? (isSettlementWinner
+          ? Math.min(cur.locked, userContribution)  // only unlock own stake/vote (profit stays in available)
+          : Math.min(cur.locked, delta))  // non-winner: only unlock delta amount
       : 0;  // clawback: don't unlock
     const newLocked = Math.max(0, cur.locked - unlockAmount);
+    const netEarned = isSettlementWinner && delta > userContribution ? delta - userContribution : 0;
+
+    // ── DEBUG: log settlement per-user state ──
+    logUserSettlement(uid, isSettlementWinner, delta, userContribution, cur.locked, newLocked, cur.available, newAvail, netEarned);
 
     ledgerOps.push(
       prisma.balance.update({
         where: { userId: uid },
-        data: { balance: newBal, debtFrozen: newBal < 0 },
+        data: {
+          balance: newBal,
+          debtFrozen: newBal < 0,
+          ...(isSettlementWinner && delta > userContribution ? { totalEarned: { increment: delta - userContribution } } : {}),
+        },
       }),
       prisma.pointAccount.update({
         where: { userId: uid },
@@ -1191,7 +1318,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
           type: delta >= 0 ? 'SETTLEMENT_GAIN' : 'SETTLEMENT_LOSS',
           amount: delta,
           balanceAfter: newAvail,
-          data: { roundId: payload.roundId, messageId, topicId, settlementResult: result, side: userStakeMap.has(uid) ? 'staker' : 'voter' },
+          data: { roundId: payload.roundId, messageId, topicId, settlementResult: result, side: userContributionMap.has(uid) ? 'staker' : 'voter' },
         },
       }),
       prisma.ledgerEntry.create({
@@ -1208,9 +1335,61 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     );
   }
 
-  // ── Compute dust (rounding leftovers) ──
-  const totalDistributed = [...userDelta.values()].reduce((s, d) => s + d, 0);
-  const dust = totalPool - totalDistributed;
+  // ── Move loser contributions from locked → totalLost ──
+  // Only count losing-side contributions (not all-time total) to avoid cross-message pollution
+  const losingSide = result === 'TRUE' ? 'CON' : 'PRO';
+  const losingVote = result === 'TRUE' ? 'FALSE' : 'TRUE';
+  const loserContributionMap = new Map<string, number>();
+  if (result !== 'UNKNOWN') {
+    for (const s of allStakes) {
+      if (s.side === losingSide) {
+        loserContributionMap.set(s.userId, (loserContributionMap.get(s.userId) ?? 0) + s.amount);
+      }
+    }
+    for (const vs of voteStakes) {
+      if (vs.vote === losingVote) {
+        loserContributionMap.set(vs.userId, (loserContributionMap.get(vs.userId) ?? 0) + vs.amount);
+      }
+    }
+  }
+  for (const [uid, losingContribution] of loserContributionMap) {
+    if (settlementWinners.has(uid)) continue;
+    const pa = await prisma.pointAccount.findUnique({ where: { userId: uid }, select: { locked: true, available: true } });
+    if (!pa || pa.locked <= 0) continue;
+    const lostAmount = Math.min(pa.locked, losingContribution);
+    if (lostAmount <= 0) continue;
+    logLoserSettlement(uid, losingContribution, pa.locked, pa.locked - lostAmount, lostAmount);
+    ledgerOps.push(
+      prisma.pointAccount.update({
+        where: { userId: uid },
+        data: { locked: { decrement: lostAmount } },
+      }),
+      prisma.balance.update({
+        where: { userId: uid },
+        data: { totalLost: { increment: lostAmount } },
+      }),
+      prisma.pointTransaction.create({
+        data: {
+          userId: uid,
+          type: 'SETTLEMENT_LOSS',
+          amount: -lostAmount,
+          balanceAfter: pa.available,
+          data: { roundId: payload.roundId, messageId, topicId, settlementResult: result, lostAmount },
+        },
+      }),
+      prisma.ledgerEntry.create({
+        data: {
+          userId: uid,
+          entryType: 'SETTLEMENT_PAYOUT',
+          amount: -lostAmount,
+          balanceAfter: 0,
+          roundId: payload.roundId,
+          messageId,
+          data: { settlementResult: result, lost: true },
+        },
+      }),
+    );
+  }
 
   // Update round status
   ledgerOps.push(
@@ -1272,7 +1451,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 async function executeClawback(previousRoundId: string, messageId: string, topicId: string) {
   const prevRound = await prisma.settlementRound.findUnique({
     where: { id: previousRoundId },
-    select: { result: true },
+    select: { result: true, closedAt: true },
   });
 
   if (!prevRound || !prevRound.result || prevRound.result === 'UNKNOWN') {
@@ -1280,32 +1459,59 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     return;
   }
 
-  // Find all payout ledger entries from the previous round
+  // Find all WINNER payout entries from the previous round (positive = actual payouts)
   const payouts = await prisma.ledgerEntry.findMany({
     where: {
       roundId: previousRoundId,
       entryType: 'SETTLEMENT_PAYOUT',
+      amount: { gt: 0 },
     },
   });
 
-  // ── Look up original stakes for all payout users (to re-lock) ──
+  // ── Look up original stakes (only those from before previous round ended) AND votes ──
   const payoutUserIds = [...new Set(payouts.map(p => p.userId))];
-  const userStakes = await prisma.stake.findMany({
-    where: { messageId, userId: { in: payoutUserIds } },
-    select: { userId: true, amount: true },
-  });
+  const [userStakes, userVotes] = await Promise.all([
+    prisma.stake.findMany({
+      where: {
+        messageId,
+        userId: { in: payoutUserIds },
+        createdAt: prevRound.closedAt ? { lte: prevRound.closedAt } : undefined,
+      },
+      select: { userId: true, amount: true },
+    }),
+    prisma.voteStake.findMany({
+      where: { roundId: previousRoundId, userId: { in: payoutUserIds } },
+      select: { userId: true, amount: true },
+    }),
+  ]);
   const userStakeTotal = new Map<string, number>();
   for (const s of userStakes) {
     userStakeTotal.set(s.userId, (userStakeTotal.get(s.userId) ?? 0) + s.amount);
   }
+  const userVoteTotal = new Map<string, number>();
+  for (const v of userVotes) {
+    userVoteTotal.set(v.userId, (userVoteTotal.get(v.userId) ?? 0) + v.amount);
+  }
 
   // ── Accumulate clawback per user (avoids duplicate reads overwriting) ──
-  const userClawback = new Map<string, { amount: number; originalStake: number }>();
+  const userClawback = new Map<string, { amount: number; originalStake: number; payoutTotal: number }>();
   for (const payout of payouts) {
-    const cur = userClawback.get(payout.userId) ?? { amount: 0, originalStake: 0 };
+    const cur = userClawback.get(payout.userId) ?? { amount: 0, originalStake: 0, payoutTotal: 0 };
     cur.amount += -payout.amount;
-    cur.originalStake = userStakeTotal.get(payout.userId) ?? 0;
+    cur.payoutTotal += payout.amount;
+    // Re-lock both stake and vote amounts
+    cur.originalStake = (userStakeTotal.get(payout.userId) ?? 0) + (userVoteTotal.get(payout.userId) ?? 0);
     userClawback.set(payout.userId, cur);
+  }
+
+  // ── Also reverse totalLost for previous losers ──
+  const prevLostEntries = await prisma.ledgerEntry.findMany({
+    where: { roundId: previousRoundId, entryType: 'SETTLEMENT_PAYOUT', amount: { lt: 0 } },
+    select: { userId: true, amount: true },
+  });
+  const prevLost = new Map<string, number>();
+  for (const e of prevLostEntries) {
+    prevLost.set(e.userId, (prevLost.get(e.userId) ?? 0) + Math.abs(e.amount));
   }
 
   const clawbackOps: Prisma.PrismaPromise<unknown>[] = [];
@@ -1318,11 +1524,18 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     const newBal = (bal?.balance ?? 0) + acc.amount;
     const newAvail = (pa?.available ?? 0) + acc.amount;
     const newLocked = (pa?.locked ?? 0) + acc.originalStake;
+    // Reverse previous round's net profit: totalEarned -= (payout - own contribution)
+    const prevNetProfit = Math.max(0, acc.payoutTotal - acc.originalStake);
+    logClawback(userId, acc.payoutTotal, acc.originalStake, prevNetProfit, pa?.available ?? 0, newAvail, pa?.locked ?? 0, newLocked);
 
     clawbackOps.push(
       prisma.balance.update({
         where: { userId },
-        data: { balance: newBal, debtFrozen: newBal < 0 },
+        data: {
+          balance: newBal,
+          debtFrozen: newBal < 0,
+          ...(prevNetProfit > 0 ? { totalEarned: { decrement: prevNetProfit } } : {}),
+        },
       }),
       prisma.pointAccount.update({
         where: { userId },
@@ -1351,12 +1564,31 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     );
   }
 
-  // ── Restore BetPool from original stakes ──
-  // After clawback, the BetPool should reflect the staked amounts again
+  // ── Reverse previous round's totalLost for losers AND re-lock their points ──
+  for (const [userId, lostAmount] of prevLost) {
+    logClawbackLoser(userId, lostAmount);
+    clawbackOps.push(
+      prisma.balance.update({
+        where: { userId },
+        data: { totalLost: { decrement: lostAmount } },
+      }),
+      prisma.pointAccount.update({
+        where: { userId },
+        data: { locked: { increment: lostAmount } },
+      }),
+    );
+  }
+
+  // ── Restore BetPool from original stakes AND votes ──
+  // After clawback, the BetPool should reflect all contributions again
   // so that the new round can redistribute them.
   const stakes = await prisma.stake.findMany({
     where: { messageId },
     select: { side: true, amount: true },
+  });
+  const prevVotes = await prisma.voteStake.findMany({
+    where: { roundId: previousRoundId },
+    select: { vote: true, amount: true },
   });
   let restoredPro = 0;
   let restoredCon = 0;
@@ -1364,6 +1596,22 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     if (s.side === 'PRO') restoredPro += s.amount;
     else restoredCon += s.amount;
   }
+  for (const v of prevVotes) {
+    if (v.vote === 'TRUE') restoredPro += v.amount;
+    else if (v.vote === 'FALSE') restoredCon += v.amount;
+  }
+  // Add back creator reward — it was taken from the losing side's pool
+  let creatorRewardClawback = 0;
+  for (const [, acc] of userClawback) {
+    if (acc.originalStake === 0 && acc.payoutTotal > 0) {
+      creatorRewardClawback += acc.payoutTotal;
+    }
+  }
+  if (creatorRewardClawback > 0) {
+    if (prevRound.result === 'TRUE') restoredCon += creatorRewardClawback;
+    else restoredPro += creatorRewardClawback;
+  }
+  logBetPoolRestore(restoredPro, restoredCon, creatorRewardClawback);
   clawbackOps.push(
     prisma.betPool.upsert({
       where: { messageId },

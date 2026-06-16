@@ -751,6 +751,18 @@ export default function TopicDetailPage() {
     return () => window.removeEventListener('points-refresh', update);
   }, []);
 
+  // Listen for stake count refreshes (triggered after vote/settle)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId } = (e as CustomEvent<{ messageId: string }>).detail;
+      api.getMessageStakes(messageId).then(s => {
+        setStakeCounts(prev => ({ ...prev, [messageId]: { pro: s.counts.pro, con: s.counts.con } }));
+      }).catch(() => {});
+    };
+    window.addEventListener('stakes-refresh', handler);
+    return () => window.removeEventListener('stakes-refresh', handler);
+  }, []);
+
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
   const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
@@ -764,7 +776,8 @@ export default function TopicDetailPage() {
       const side = relType === 'AGREE' ? 'pro' : 'con';
       const stakePts = relStakeRef.current;
       const targetMsgIds = backendRel.targetRefs
-        .filter((ref): ref is Extract<typeof ref, { kind: 'message' }> => ref.kind === 'message')
+        .filter((ref): ref is { kind: string; messageId: string } => 
+          (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
         .map(ref => ref.messageId);
       if (targetMsgIds.length > 0) {
         setStakeCounts(prev => {

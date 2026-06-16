@@ -175,7 +175,7 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
   }
 
   const weights = detail.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
-  const totalVotes = weights.TRUE + weights.FALSE + weights.UNKNOWN;
+  const totalWeight = weights.TRUE + weights.FALSE + weights.UNKNOWN;
 
   return (
     <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
@@ -193,31 +193,31 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
         </div>
         <div className="text-gray-500">发起者: {detail.createdBy?.username ?? '—'}</div>
         <div className="text-gray-500">
-          投票数: {detail._count?.votes ?? 0} · 总权重: {totalVotes}
+          投票数: {detail._count?.votes ?? 0} · 总权重: {totalWeight}
         </div>
       </div>
 
       {/* Vote weights bar */}
-      {totalVotes > 0 && (
+      {totalWeight > 0 && (
         <div className="flex h-3 rounded-full overflow-hidden border border-gray-200">
           {weights.TRUE > 0 && (
             <div
               className="bg-green-400 h-full"
-              style={{ width: `${(weights.TRUE / totalVotes) * 100}%` }}
+              style={{ width: `${(weights.TRUE / totalWeight) * 100}%` }}
               title={`TRUE: ${weights.TRUE}`}
             />
           )}
           {weights.FALSE > 0 && (
             <div
               className="bg-red-400 h-full"
-              style={{ width: `${(weights.FALSE / totalVotes) * 100}%` }}
+              style={{ width: `${(weights.FALSE / totalWeight) * 100}%` }}
               title={`FALSE: ${weights.FALSE}`}
             />
           )}
           {weights.UNKNOWN > 0 && (
             <div
               className="bg-yellow-400 h-full"
-              style={{ width: `${(weights.UNKNOWN / totalVotes) * 100}%` }}
+              style={{ width: `${(weights.UNKNOWN / totalWeight) * 100}%` }}
               title={`UNKNOWN: ${weights.UNKNOWN}`}
             />
           )}

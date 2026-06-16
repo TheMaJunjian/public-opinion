@@ -140,6 +140,8 @@ model Balance {
   user        User    @relation(fields: [userId], references: [id])
   balance     Int     @default(0)
   debtFrozen  Boolean @default(false)
+  totalLost   Int     @default(0)  // cumulative permanently lost stakes & votes
+  totalEarned Int     @default(0)  // cumulative net profit from settlements
 }
 
 model LedgerEntry {

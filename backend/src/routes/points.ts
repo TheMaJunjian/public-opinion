@@ -9,14 +9,22 @@ router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next
   try {
     const userId = req.user!.id;
 
-    const [pointAccount, balance] = await Promise.all([
+    const [pointAccount, balance, mintAgg, burnedEntries] = await Promise.all([
       prisma.pointAccount.findUnique({
         where: { userId },
         select: { available: true, locked: true },
       }),
       prisma.balance.findUnique({
         where: { userId },
-        select: { balance: true, debtFrozen: true },
+        select: { balance: true, debtFrozen: true, totalLost: true, totalEarned: true },
+      }),
+      prisma.ledgerEntry.aggregate({
+        where: { userId, entryType: 'MINT_INITIAL' },
+        _sum: { amount: true },
+      }),
+      prisma.ledgerEntry.findMany({
+        where: { userId, entryType: { in: ['STAKE_LOCK', 'VOTE_LOCK'] } },
+        select: { amount: true, data: true },
       }),
     ]);
 
@@ -24,6 +32,13 @@ router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next
       res.status(404).json({ error: '账户不存在' });
       return;
     }
+
+    const initialMinted = mintAgg._sum.amount ?? 0;
+    const totalBurned = burnedEntries
+      .filter(e => (e.data as Record<string, unknown> | null)?.fee === true)
+      .reduce((sum, e) => sum + Math.abs(e.amount), 0);
+    const totalLost = balance.totalLost ?? 0;
+    const totalEarned = balance.totalEarned ?? 0;  // net profit (excludes own stake/vote return)
 
     res.json({
       points: {
@@ -33,6 +48,12 @@ router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next
       balance: {
         amount: balance.balance,
         debtFrozen: balance.debtFrozen,
+      },
+      breakdown: {
+        initialMinted,
+        totalEarned,
+        totalLost,
+        totalBurned,
       },
     });
   } catch (err) {

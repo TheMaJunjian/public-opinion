@@ -23,6 +23,10 @@ jest.mock('../lib/prisma', () => ({
       findMany: jest.fn(),
       count: jest.fn(),
     },
+    ledgerEntry: {
+      aggregate: jest.fn(),
+      findMany: jest.fn(),
+    },
   },
 }));
 
@@ -43,6 +47,8 @@ function makeToken(): string {
 describe('GET /api/points/balance', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (prisma.ledgerEntry.aggregate as jest.Mock).mockResolvedValue({ _sum: { amount: 0 } });
+    (prisma.ledgerEntry.findMany as jest.Mock).mockResolvedValue([]);
   });
 
   it('returns 401 without auth token', async () => {
@@ -75,6 +81,7 @@ describe('GET /api/points/balance', () => {
     expect(res.body).toHaveProperty('points');
     expect(res.body.points).toEqual({ available: 100, locked: 0 });
     expect(res.body.balance).toEqual({ amount: 100, debtFrozen: false });
+    expect(res.body).toHaveProperty('breakdown');
   });
 
   it('returns debtFrozen=true when user has negative balance', async () => {

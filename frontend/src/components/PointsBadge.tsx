@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getPointsBalance, getPointsTransactions } from '../api/client';
 import type { PointsBalance, PointTransaction } from '../types';
+import { debugLog } from '../utils/debugLog';
 
 /**
  * PointsBadge — 导航栏贡献点显示组件。
@@ -23,6 +24,7 @@ export default function PointsBadge() {
     if (!user) return;
     try {
       const data = await getPointsBalance();
+      debugLog('贡献点', `avail=${data.points.available} lock=${data.points.locked} lost=${data.breakdown.totalLost} burn=${data.breakdown.totalBurned} earn=${data.breakdown.totalEarned} | ${data.points.available}+${data.points.locked}+${data.breakdown.totalLost}+${data.breakdown.totalBurned}=${data.points.available+data.points.locked+data.breakdown.totalLost+data.breakdown.totalBurned} vs init+earn=${data.breakdown.initialMinted+data.breakdown.totalEarned}`);
       setBalance(data);
       setError(false);
     } catch {
@@ -88,23 +90,30 @@ export default function PointsBadge() {
     );
   }
 
-  const { points, balance: bal } = balance;
+  const { points, balance: bal, breakdown } = balance;
 
   return (
     <div className="relative" ref={popRef}>
       <button
         onClick={handleClick}
         className="flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer"
-        title="点击查看流水"
+        title={`可用${points.available} · 锁定${points.locked} · 损失${breakdown.totalLost} · 燃烧${breakdown.totalBurned} · 收益${breakdown.totalEarned}`}
       >
         <span className="text-indigo-200">
           💎 {points.available.toLocaleString()}
         </span>
-        {points.locked > 0 && (
-          <span className="text-indigo-400 text-xs" title={`锁定: ${points.locked}`}>
-            🔒{points.locked}
-          </span>
-        )}
+        <span className="text-indigo-400 text-xs" title={`锁定: ${points.locked}`}>
+          🔒{points.locked}
+        </span>
+        <span className="text-red-400 text-xs" title={`累计损失: ${breakdown.totalLost}`}>
+          📉{breakdown.totalLost}
+        </span>
+        <span className="text-orange-400 text-xs" title={`累计燃烧: ${breakdown.totalBurned}`}>
+          🔥{breakdown.totalBurned}
+        </span>
+        <span className="text-green-400 text-xs" title={`累计收益: ${breakdown.totalEarned}`}>
+          📈{breakdown.totalEarned}
+        </span>
         {bal.debtFrozen && (
           <span className="text-red-400 text-xs font-bold animate-pulse" title="账户负债冻结">
             ❄️冻结

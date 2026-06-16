@@ -131,16 +131,26 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
       return;
     }
 
-    // Compute current weights
-    const weights = await prisma.voteStake.groupBy({
-      by: ['vote'],
-      where: { roundId },
-      _sum: { amount: true },
-    });
+    // Compute current weights: VoteStakes + BetPool stakes (combined)
+    const [voteWeights, betPool] = await Promise.all([
+      prisma.voteStake.groupBy({
+        by: ['vote'],
+        where: { roundId },
+        _sum: { amount: true },
+      }),
+      prisma.betPool.findUnique({
+        where: { messageId: round.messageId },
+        select: { lockedPro: true, lockedCon: true },
+      }),
+    ]);
 
-    const weightMap: Record<string, number> = { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
-    for (const row of weights) {
-      weightMap[row.vote] = row._sum.amount ?? 0;
+    const weightMap: Record<string, number> = {
+      TRUE: betPool?.lockedPro ?? 0,
+      FALSE: betPool?.lockedCon ?? 0,
+      UNKNOWN: 0,
+    };
+    for (const row of voteWeights) {
+      weightMap[row.vote] = (weightMap[row.vote] ?? 0) + (row._sum.amount ?? 0);
     }
 
     res.json({ ...round, weights: weightMap });

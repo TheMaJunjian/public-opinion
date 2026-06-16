@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import type { SettlementRoundItem, MessageStakes } from '../types';
+import { debugLog } from '../utils/debugLog';
 
 interface Props {
   messageId: string;
@@ -65,6 +66,7 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
     try {
       setError(null);
       const round = await api.createRound(messageId);
+      debugLog('结算', `创建轮次 msg=${messageId.slice(-6)} round=${round.id.slice(-6)}`);
       setActiveRound(round);
       setRounds(prev => [round, ...prev]);
       window.dispatchEvent(new Event('points-refresh'));
@@ -79,8 +81,10 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
       setVoting(true);
       setError(null);
       await api.castVote(activeRound.id, { vote: voteDirection, amount: voteAmount });
+      debugLog('结算', `投票 round=${activeRound.id.slice(-6)} ${voteDirection} ${voteAmount}`);
       setVoteAmount(1);
       window.dispatchEvent(new Event('points-refresh'));
+      window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
       // Reload round to get updated weights
       const updated = await api.getRoundDetail(activeRound.id);
       setActiveRound(updated);
@@ -97,6 +101,7 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
     try {
       setError(null);
       const result = await api.closeAndSettle(activeRound.id);
+      debugLog('结算', `结算完成 round=${activeRound.id.slice(-6)} result=${result.result} weights TRUE=${result.weights?.TRUE} FALSE=${result.weights?.FALSE} dust=${(result as Record<string,unknown>).dust}`);
       setActiveRound(null);
       setRounds(prev => prev.map(r =>
         r.id === activeRound.id
@@ -104,6 +109,7 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
           : r
       ));
       window.dispatchEvent(new Event('points-refresh'));
+      window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
       // Reload stakes to get updated pool
       const stakesData = await api.getMessageStakes(messageId);
       setStakes(stakesData);
@@ -129,7 +135,11 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
   const poolPro = stakes?.pool?.lockedPro ?? 0;
   const poolCon = stakes?.pool?.lockedCon ?? 0;
   const weights = activeRound?.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
-  const totalVotes = weights.TRUE + weights.FALSE + weights.UNKNOWN;
+  const totalWeight = weights.TRUE + weights.FALSE + weights.UNKNOWN;
+
+  // Total accumulated data across all rounds (for win/loss comparison)
+  const totalPro = stakes?.counts.pro ?? 0;
+  const totalCon = stakes?.counts.con ?? 0;
 
   // Find previous round for overturn context
   const previousRound = activeRound?.previousRoundId
@@ -236,25 +246,30 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
             </div>
           </div>
 
-          {/* Weights = stakes (baseline) + votes (override) */}
+          {/* Weights = stakes (baseline) + votes (override) */} 
           <div className="text-xs text-gray-500">总权重（押注 + 投票）</div>
-          <div className="grid grid-cols-2 gap-2 text-center text-xs">
-            <div className="bg-white rounded px-2 py-1">
+          <div className="flex items-stretch gap-1 text-center text-xs">
+            <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${totalPro > totalCon ? 'border-green-400' : 'border-gray-200'}`}>
               <div className="font-semibold text-green-800">{weights.TRUE}</div>
               <div className="text-green-700">TRUE</div>
             </div>
-            <div className="bg-white rounded px-2 py-1">
+            <div className="flex items-center justify-center px-1">
+              <span className={`text-lg font-bold ${totalPro > totalCon ? 'text-green-600' : totalCon > totalPro ? 'text-red-600' : totalPro + totalCon > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                {totalPro > totalCon ? '>' : totalCon > totalPro ? '<' : totalPro + totalCon > 0 ? '=' : ''}
+              </span>
+            </div>
+            <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${totalCon > totalPro ? 'border-red-400' : 'border-gray-200'}`}>
               <div className="font-semibold text-red-800">{weights.FALSE}</div>
               <div className="text-red-700">FALSE</div>
             </div>
           </div>
-          {weights.TRUE === weights.FALSE && totalVotes > 0 && (
+          {weights.TRUE === weights.FALSE && totalWeight > 0 && (
             <div className="text-xs text-amber-700 text-center">⚖️ 平局 → 结算为 UNKNOWN</div>
           )}
 
-          {totalVotes > 0 && (
+          {totalWeight > 0 && (
             <div className="text-xs text-gray-500 text-center">
-              总投票权重: {totalVotes} 点
+              总权重（押注 + 投票）: {totalWeight} 点
             </div>
           )}
 

@@ -36,6 +36,7 @@ jest.mock('../lib/prisma', () => ({
     ledgerEntry: { create: jest.fn() },
     auditLog: { create: jest.fn(), updateMany: jest.fn() },
     ruleVersion: { findFirst: jest.fn() },
+    voteStake: { aggregate: jest.fn() },
     $transaction: jest.fn().mockResolvedValue([{}, {}, {}, {}, {}, {}, {}]),
   },
 }));
@@ -162,6 +163,9 @@ describe('GET /api/messages/:id/stakes', () => {
     (prisma.stake.aggregate as jest.Mock)
       .mockResolvedValueOnce({ _sum: { amount: 20 } })
       .mockResolvedValueOnce({ _sum: { amount: 15 } });
+    (prisma.voteStake.aggregate as jest.Mock)
+      .mockResolvedValueOnce({ _sum: { amount: 0 } })
+      .mockResolvedValueOnce({ _sum: { amount: 0 } });
   });
 
   it('returns stake stats without auth', async () => {

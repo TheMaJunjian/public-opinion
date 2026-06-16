@@ -332,6 +332,12 @@ export interface PointsBalance {
     amount: number;
     debtFrozen: boolean;
   };
+  breakdown: {
+    initialMinted: number;
+    totalEarned: number;   // 收益（结算成功）
+    totalLost: number;     // 损失（结算失败）
+    totalBurned: number;   // 燃烧（手续费）
+  };
 }
 
 export interface PointTransaction {

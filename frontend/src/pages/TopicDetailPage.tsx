@@ -925,7 +925,11 @@ export default function TopicDetailPage() {
     const targetMsgIds: string[] = [];
     if (relType === 'AGREE' || relType === 'DISAGREE') {
       const side = relType === 'AGREE' ? 'pro' : 'con';
-      const stakePts = relStakeRef.current;
+      // Read stake amount: vote-created relations have relationPayload, others have payload
+      const rawPayload = (backendRel as Record<string, unknown>).relationPayload
+        ?? backendRel.payload;
+      const relPayload = rawPayload as Record<string, unknown> | null;
+      const stakePts = (relPayload?.amount as number) ?? relStakeRef.current;
       targetMsgIds.push(...backendRel.targetRefs
         .filter((ref) => 
           (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
@@ -942,9 +946,27 @@ export default function TopicDetailPage() {
           return next;
         });
       }
+      // Add edge for AGREE/DISAGREE relation
+      const srcMsgId = backendRel.sourceMessageId ?? null;
+      const fromMsgId = srcMsgId || `anon:${backendRel.id}`;
+      for (const mid of targetMsgIds) {
+        const edge: DemoEdge = {
+          id: nextId("edge"),
+          relationMessageId: backendRel.id,
+          relationType: relType.toLowerCase() as RelationType,
+          from: { messageId: fromMsgId, selection: { kind: "whole" } },
+          to: { messageId: mid, selection: { kind: "whole" } },
+          relationLabel: relationTypeName(relType.toLowerCase()),
+        };
+        setEdges(prev => [...prev, edge]);
+      }
     }
     // Also set authorStake for the relation message itself
-    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: relStakeRef.current }));
+    const rawPayload2 = (backendRel as Record<string, unknown>).relationPayload
+      ?? backendRel.payload;
+    const relPayload2 = rawPayload2 as Record<string, unknown> | null;
+    const stakeAmount = (relPayload2?.amount as number) ?? relStakeRef.current;
+    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: stakeAmount }));
     window.dispatchEvent(new Event('points-refresh'));
     // Notify SettlementPanel to reload stakes for target messages
     for (const mid of targetMsgIds) {
@@ -956,6 +978,18 @@ export default function TopicDetailPage() {
   const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
     return api.createRelation(topicId, { ...data, stakeAmount: relStakeRef.current });
   }, []);
+
+  // Listen for relation-created events (triggered after vote creates AGREE/DISAGREE relation)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<Relation>).detail;
+      if (detail && detail.id && detail.relationType) {
+        appendCreatedRelation(detail);
+      }
+    };
+    window.addEventListener('relation-created', handler);
+    return () => window.removeEventListener('relation-created', handler);
+  }, [appendCreatedRelation]);
 
   // Helper: supersede a relation (no new stake — just update targets)
   const supersedeRel = useCallback((topicId: string, relationId: string, data: {
@@ -1940,19 +1974,14 @@ export default function TopicDetailPage() {
     } else if (relationType === "agree" || relationType === "disagree") {
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
-      // Deduplicate targets by messageId — agree/disagree always creates one edge per unique target
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       if (uniqueSources.length > 0) {
         for (const srcId of uniqueSources) {
           try {
             const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
             const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
-            const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            for (const targetMid of uniqueTargetMids) {
-              newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
-            }
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
       } else {
@@ -1960,11 +1989,8 @@ export default function TopicDetailPage() {
         for (const targetMid of uniqueTargetMids) {
           try {
             const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
-            const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            const anonSrcId = `anon:${backendRel.id}`;
-            newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
@@ -3424,12 +3450,8 @@ export default function TopicDetailPage() {
         sourceMessageId: null,
         targetRefs: [{ kind: 'message', messageId }],
       });
-      const relId = backendRel.id;
-      const anonSrcId = `anon:${backendRel.id}`;
-      const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relId, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };
       appendCreatedRelation(backendRel);
       addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-      setEdges(prev => [...prev, edge]);
     } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
   }
 

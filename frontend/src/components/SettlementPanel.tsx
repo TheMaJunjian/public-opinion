@@ -109,11 +109,14 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
     try {
       setVoting(true);
       setError(null);
-      await api.castVote(activeRound.id, { vote: voteDirection, amount: voteAmount });
+      const result = await api.castVote(activeRound.id, { vote: voteDirection, amount: voteAmount });
       debugLog('结算', `投票 round=${activeRound.id.slice(-6)} ${voteDirection} ${voteAmount}`);
       setVoteAmount(1);
       window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
+      // Notify TopicDetailPage to add the created AGREE/DISAGREE relation message
+      // result is the RELATION_CREATED response: { message, id, relationType, relationPayload, createdBy, targetRefs, ... }
+      window.dispatchEvent(new CustomEvent('relation-created', { detail: result }));
       // Reload round to get updated weights
       const updated = await api.getRoundDetail(activeRound.id);
       setActiveRound(updated);
@@ -315,16 +318,11 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
             </button>
           </div>
 
-          {/* Round entries (votes + stakes merged chronologically) */}
+          {/* Round entries (stakes only — votes unified into stakes in Phase 5) */}
           {(() => {
             const roundStakes = (stakes?.stakes ?? []).filter(s => s.roundId === activeRound.id);
-            const votes = activeRound.votes ?? [];
 
             const entries = [
-              ...votes.map(v => ({
-                id: v.id, entryId: v.id, kind: 'vote' as const, username: v.user.username,
-                label: v.vote, amount: v.amount, createdAt: v.createdAt,
-              })),
               ...roundStakes.map(s => ({
                 id: s.id, entryId: s.id, kind: 'stake' as const, username: s.user.username,
                 label: s.side, amount: s.amount, createdAt: s.createdAt,
@@ -439,13 +437,9 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   if (loading) return <div className="text-xs text-gray-400 p-2">加载中...</div>;
   if (!detail) return <div className="text-xs text-gray-400 p-2">加载失败</div>;
 
-  // Merge votes + round-specific stakes into single chronological list
+  // Merge stakes into chronological list (votes unified into stakes in Phase 5)
   const roundStakes = stakes.filter(s => s.roundId === roundId);
   const entries = [
-    ...(detail.votes ?? []).map(v => ({
-      id: v.id, entryId: v.id, kind: 'vote' as const, username: v.user.username,
-      label: v.vote, amount: v.amount, createdAt: v.createdAt,
-    })),
     ...roundStakes.map(s => ({
       id: s.id, entryId: s.id, kind: 'stake' as const, username: s.user.username,
       label: s.side, amount: s.amount, createdAt: s.createdAt,

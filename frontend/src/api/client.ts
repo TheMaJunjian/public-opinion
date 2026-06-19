@@ -179,7 +179,8 @@ export function getRoundDetail(roundId: string) {
 }
 
 export function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; amount: number }) {
-  return request<import('../types').VoteCastResult>(`/rounds/${roundId}/votes`, {
+  // Voting now creates an AGREE/DISAGREE relation message (Phase 5 unification)
+  return request<import('../types').Relation & { message: string }>(`/rounds/${roundId}/votes`, {
     method: 'POST',
     body: JSON.stringify(data),
   });

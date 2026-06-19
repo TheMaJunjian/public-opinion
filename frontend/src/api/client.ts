@@ -190,3 +190,15 @@ export function closeAndSettle(roundId: string) {
     method: 'POST',
   });
 }
+
+// ============================================================
+// Stance API (Phase 5)
+// ============================================================
+
+export function getUserStances(userId: string, params?: { page?: number; limit?: number; topicId?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.topicId) qs.set('topicId', params.topicId);
+  return request<import('../types').StanceHistoryResponse>(`/users/${userId}/stances?${qs}`);
+}

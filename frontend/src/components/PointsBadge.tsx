@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getPointsBalance, getPointsTransactions } from '../api/client';
 import type { PointsBalance, PointTransaction } from '../types';
@@ -9,10 +9,12 @@ import { debugLog } from '../utils/debugLog';
  * PointsBadge — 导航栏贡献点显示组件。
  * - 窗口聚焦时自动刷新余额
  * - 点击展开贡献点流水面板
+ * - 双击记录项：同 Topic 原地定位（发事件），跨 Topic 路由跳转
  */
 export default function PointsBadge() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [balance, setBalance] = useState<PointsBalance | null>(null);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState(false);
@@ -154,13 +156,36 @@ export default function PointsBadge() {
                   className={`px-3 py-2 text-xs flex justify-between items-center select-none ${hasMessage ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
                   onDoubleClick={canNavigate ? (e) => {
                     e.preventDefault();
-                    const params = new URLSearchParams();
-                    params.set('msg', txData!.messageId as string);
-                    if (txData?.roundId) {
-                      params.set('settlement', txData!.messageId as string);
-                      params.set('highlightRound', txData.roundId as string);
+                    const msgId = txData!.messageId as string;
+                    const tId = txData!.topicId as string;
+                    const roundId = txData?.roundId as string | undefined;
+
+                    // Check if we're already on the same topic page
+                    const currentPath = location.pathname;
+                    const targetPath = `/topics/${tId}`;
+                    if (currentPath === targetPath || currentPath.startsWith(targetPath + '/')) {
+                      // Same topic — dispatch event for in-place navigation
+                      window.dispatchEvent(new CustomEvent('points-navigate', {
+                        detail: {
+                          messageId: msgId,
+                          topicId: tId,
+                          roundId: roundId ?? null,
+                          txType: tx.type,
+                          txData: txData,  // pass full tx data for settlement highlighting
+                          username: user.username,
+                        },
+                      }));
+                      setOpen(false);
+                    } else {
+                      // Different topic — full navigation with URL params
+                      const params = new URLSearchParams();
+                      params.set('msg', msgId);
+                      if (roundId) {
+                        params.set('settlement', msgId);
+                        params.set('highlightRound', roundId);
+                      }
+                      navigate(`${targetPath}?${params.toString()}`);
                     }
-                    navigate(`/topics/${txData!.topicId}?${params.toString()}`);
                   } : undefined}
                   title={canNavigate ? '双击跳转到相关消息并展开结算记录' : hasMessage ? '关联消息（无法跳转）' : undefined}
                 >

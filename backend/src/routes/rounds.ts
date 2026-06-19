@@ -81,16 +81,6 @@ router.get('/api/messages/:id/rounds', async (req: AuthRequest, res: Response, n
       orderBy: { openedAt: 'desc' },
       include: {
         createdBy: { select: { id: true, username: true } },
-        votes: {
-          select: {
-            id: true,
-            vote: true,
-            amount: true,
-            createdAt: true,
-            user: { select: { id: true, username: true } },
-          },
-          orderBy: { createdAt: 'desc' },
-        },
         _count: { select: { votes: true } },
       },
     });
@@ -112,17 +102,6 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
       where: { id: roundId },
       include: {
         createdBy: { select: { id: true, username: true } },
-        votes: {
-          select: {
-            id: true,
-            vote: true,
-            amount: true,
-            createdAt: true,
-            user: { select: { id: true, username: true } },
-          },
-          orderBy: { createdAt: 'desc' },
-        },
-        _count: { select: { votes: true } },
       },
     });
 
@@ -131,49 +110,89 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
       return;
     }
 
-    // Compute current weights: VoteStakes + BetPool stakes (combined)
-    const [voteWeights, betPool] = await Promise.all([
-      prisma.voteStake.groupBy({
-        by: ['vote'],
-        where: { roundId },
-        _sum: { amount: true },
-      }),
-      prisma.betPool.findUnique({
-        where: { messageId: round.messageId },
-        select: { lockedPro: true, lockedCon: true },
-      }),
-    ]);
+    // Compute current weights from BetPool (unified stakes, including AGREE/DISAGREE votes)
+    const betPool = await prisma.betPool.findUnique({
+      where: { messageId: round.messageId },
+      select: { lockedPro: true, lockedCon: true },
+    });
+
+    // Query AGREE/DISAGREE pure-stance relations targeting this message (replaces VoteStake)
+    const messageTopic = await prisma.message.findUnique({
+      where: { id: round.messageId },
+      select: { topicId: true },
+    });
+    const voteRelations = await prisma.message.findMany({
+      where: {
+        kind: 'RELATION',
+        relationType: { in: ['AGREE', 'DISAGREE'] },
+        relSourceId: null,
+        topicId: messageTopic?.topicId,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        relationType: true,
+        relationPayload: true,
+        targetRefs: true,
+        createdAt: true,
+        createdBy: { select: { id: true, username: true } },
+      },
+    });
+
+    // Filter to only those targeting this message
+    const filteredVotes = voteRelations.filter(v => {
+      const refs = v.targetRefs as Array<{ messageId?: string }> | undefined;
+      return refs?.some(r => r.messageId === round.messageId);
+    });
 
     const weightMap: Record<string, number> = {
       TRUE: betPool?.lockedPro ?? 0,
       FALSE: betPool?.lockedCon ?? 0,
       UNKNOWN: 0,
     };
-    for (const row of voteWeights) {
-      weightMap[row.vote] = (weightMap[row.vote] ?? 0) + (row._sum.amount ?? 0);
-    }
 
-    res.json({ ...round, weights: weightMap });
+    const totalWeight = weightMap.TRUE + weightMap.FALSE;
+
+    res.json({
+      ...round,
+      _count: { votes: filteredVotes.length },
+      votes: filteredVotes.map(v => {
+        const payload = v.relationPayload as Record<string, unknown> | null;
+        return {
+          id: v.id,
+          vote: v.relationType === 'AGREE' ? 'TRUE' : 'FALSE',
+          amount: (payload?.amount as number) ?? 0,
+          createdAt: v.createdAt,
+          user: v.createdBy,
+        };
+      }),
+      weights: weightMap,
+      totalWeight,
+    });
   } catch (err) {
     next(err);
   }
 });
 
 // ============================================================
-// POST /api/rounds/:id/votes — 投票押注
+// POST /api/rounds/:id/votes — 投票（统一为发送无文本赞同/反对关系消息）
 // ============================================================
 router.post('/api/rounds/:id/votes', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const roundId = req.params.id as string;
     const { vote, amount } = voteSchema.parse(req.body);
 
-    // Get round info for topicId
+    // Get round info for topicId and messageId
     const round = await prisma.settlementRound.findUnique({
       where: { id: roundId },
-      select: { messageId: true },
+      select: { messageId: true, status: true },
     });
     if (!round) {
       res.status(404).json({ error: '结算轮次不存在' });
+      return;
+    }
+    if (round.status !== 'VOTING') {
+      res.status(400).json({ error: '该轮次不在投票阶段' });
       return;
     }
 
@@ -182,11 +201,20 @@ router.post('/api/rounds/:id/votes', requireAuth, async (req: AuthRequest, res: 
       select: { topicId: true },
     });
 
+    // Vote TRUE → AGREE relation, FALSE → DISAGREE relation (pure stance, no source text)
+    const relationType = vote === 'TRUE' ? 'AGREE' : 'DISAGREE';
+
     const result = await applyEvent({
-      type: 'VOTE_CAST',
+      type: 'RELATION_CREATED',
       actorId: req.user!.id,
       topicId: message!.topicId,
-      payload: { roundId, vote, amount },
+      payload: {
+        relationType,
+        sourceMessageId: null,  // pure stance — no attached text message
+        targetRefs: [{ kind: 'message', messageId: round.messageId }],
+        stakeAmount: amount,
+        relationPayload: { vote: true, amount, roundId },
+      },
     });
 
     res.status(201).json({ message: '投票成功', ...(result as Record<string, unknown>) });
@@ -223,11 +251,11 @@ router.post('/api/rounds/:id/close-and-settle', requireAuth, async (req: AuthReq
       if (permission === 'anyone') {
         // Anyone can settle — proceed
       } else if (permission === 'any_voter') {
-        // Check if user voted in this round
-        const userVoted = await prisma.voteStake.findFirst({
-          where: { roundId, userId: req.user!.id },
+        // Check if user staked on this message (unified: AGREE→PRO stake, DISAGREE→CON stake)
+        const userStaked = await prisma.stake.findFirst({
+          where: { messageId: round.messageId, userId: req.user!.id },
         });
-        if (!userVoted) {
+        if (!userStaked) {
           res.status(403).json({ error: '规则要求投票者才可结算，你尚未投票' });
           return;
         }

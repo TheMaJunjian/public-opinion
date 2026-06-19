@@ -1096,8 +1096,8 @@ describe('Frame containment invariants', () => {
     // m5 (inside r10 inside merge, col 0): x = colX(0) + FRAME_PAD(merge) + FRAME_PAD(r10) = 18 + 16 + 16 = 50 ✓
     expect(50).toBe(colX(0) + 16 + 16);
 
-    // m1 (direct merge card, col 1): x = colX(1) + FRAME_PAD = 418 + 16 = 434 ✓
-    expect(434).toBe(colX(1) + 16);
+    // m1 (direct merge card, col 1): x = colX(1) + FRAME_PAD = 438 + 16 = 454 ✓
+    expect(454).toBe(colX(1) + 16);
   });
 
   it('merge frame bottom edge leaves exactly FRAME_PAD below lowest card', () => {
@@ -1207,8 +1207,8 @@ describe('Frame-as-card placement invariants', () => {
 
     // The frame top should be exactly ROW_GAP below card-a's bottom
     expect(frameTop).toBe(GRID_TOP + 86 + ROW_GAP);
-    // = 48 + 86 + 32 = 166
-    expect(frameTop).toBe(166);
+    // = 48 + 86 + 32 = 172
+    expect(frameTop).toBe(172);
   });
 
   it('a frame in col 1 and a card in col 0 can be at the same y (different columns)', () => {
@@ -1237,8 +1237,8 @@ describe('Frame-as-card placement invariants', () => {
     // Frame 1 at col 0, height 200. Frame 2 at col 0, height 150.
     // Frame 2 should be at frame1.y + frame1.h + ROW_GAP
     const frame1 = { x: colX(0), y: GRID_TOP, width: CARD_W, height: 200 };
-    const frame2ExpectedY = frame1.y + frame1.height + ROW_GAP; // 48 + 200 + 32 = 280
-    expect(frame2ExpectedY).toBe(280);
+    const frame2ExpectedY = frame1.y + frame1.height + ROW_GAP; // 48 + 200 + 32 = 280 → 286
+    expect(frame2ExpectedY).toBe(286);
   });
 
   it('frames and cards only collide when x-ranges overlap', () => {
@@ -1252,7 +1252,7 @@ describe('Frame-as-card placement invariants', () => {
     expect(findOverlaps(layout)).toHaveLength(0);
     // card-col0 bottom = 48+86 = 134
     // frame-col0 top = 48+86+32 = 166 → no overlap ✓
-    expect(layout['frame-col0'].y).toBe(166);
+    expect(layout['frame-col0'].y).toBe(172);
   });
 
   it('FRAME_PAD is internal to the frame, not part of top-level placement', () => {
@@ -1595,10 +1595,10 @@ describe('compactAnnoRefClusters', () => {
     });
     // Middle card (s2) top should be at targetY=362
     expect(result.layout['s2'].y).toBe(362);
-    // s1 above s2: 362 - 86 - 32 = 244
-    expect(result.layout['s1'].y).toBe(244);
-    // s3 below s2: 362 + 86 + 32 = 480
-    expect(result.layout['s3'].y).toBe(480);
+    // s1 above s2: 362 - 86 - 32 = 244 → 238
+    expect(result.layout['s1'].y).toBe(238);
+    // s3 below s2: 362 + 86 + 32 = 480 → 486
+    expect(result.layout['s3'].y).toBe(486);
     // target unchanged
     expect(result.layout['tgt'].y).toBe(362);
   });
@@ -1606,7 +1606,7 @@ describe('compactAnnoRefClusters', () => {
   it('respects upper bound from unrelated card above the cluster', () => {
     // Unrelated card X at y=48 (bottom=134).
     // n=2, middleIdx=1 (s2). heightAbove = 86+32 = 118. idealTop = 362-118 = 244.
-    // X bottom=134, upperBound = 134+32 = 166. 244 > 166, so top = 244.
+    // X bottom=134, upperBound = 134+32 = 166. 244 > 166, so top = 238.
     const normals = [makeNormal('X'), makeNormal('s1', 'a', '2024-01-01'), makeNormal('s2', 'b', '2024-01-02'), makeNormal('tgt')];
     const colOf = { X: 2, s1: 2, s2: 2, tgt: 0 };
     const layout = {
@@ -1622,15 +1622,15 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // s1 at 244, s2 at 362 (top aligned with target)
-    expect(result.layout['s1'].y).toBe(244);
+    // s1 at 238, s2 at 362 (top aligned with target)
+    expect(result.layout['s1'].y).toBe(238);
     expect(result.layout['s2'].y).toBe(362);
   });
 
   it('moves cluster toward target even when above it', () => {
     // Cluster at y=280, target at y=362. n=2, middleIdx=1.
     // heightAbove = 86+32 = 118. idealTop = 362-118 = 244.
-    // newTop = max(48, 244) = 244. s1 at 244, s2 at 362.
+    // newTop = max(48, 244) = 238. s1 at 238, s2 at 362.
     const normals = [makeNormal('s1'), makeNormal('s2'), makeNormal('tgt')];
     const colOf = { s1: 2, s2: 2, tgt: 0 };
     const layout = {
@@ -1645,8 +1645,8 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // Cluster should move to ideal position: s1 at 244, s2 at 362
-    expect(result.layout['s1'].y).toBe(244);
+    // Cluster should move to ideal position: s1 at 238, s2 at 362
+    expect(result.layout['s1'].y).toBe(238);
     expect(result.layout['s2'].y).toBe(362);
   });
 
@@ -1712,15 +1712,15 @@ describe('compactAnnoRefClusters', () => {
     });
     // Cluster A (a1, a2) → targetA at y=300
     // n=2, middleIdx=1, heightAbove=86+32=118, idealTop=300-118=182
-    // upperBound=48, newTop=182
-    expect(result.layout['a1'].y).toBe(182);
+    // upperBound=48, newTop=176
+    expect(result.layout['a1'].y).toBe(176);
     expect(result.layout['a2'].y).toBe(300);
     // Cluster B (b1, b2) → targetB at y=500. a2 bottom=300+86=386.
-    // upperBound = 386+32 = 418
+    // upperBound = 386+32 = 418 → 424
     // n=2, middleIdx=1, heightAbove=118, idealTop=500-118=382
-    // 382 < 418, so top = 418
-    expect(result.layout['b1'].y).toBe(418);
-    expect(result.layout['b2'].y).toBe(536);
+    // 382 < 424, so top = 424
+    expect(result.layout['b1'].y).toBe(424);
+    expect(result.layout['b2'].y).toBe(548);
   });
 
   it('uses frame top edge when target card is inside a frame (m7 → m5 bug)', () => {
@@ -1745,8 +1745,8 @@ describe('compactAnnoRefClusters', () => {
       layout, normals, colOf, edges, allFrameRects: frameRects, canvasHeight: 800,
     });
     // m7 should be pushed below r10 (frame avoidance):
-    // r10 bottom=586, +ROW_GAP=618. m7 at y=618.
-    expect(result.layout['m7'].y).toBe(618);
+    // r10 bottom=586, +ROW_GAP=618. m7 at y=624.
+    expect(result.layout['m7'].y).toBe(624);
     // m5 and m6 should NOT be moved (they're inside the frame, not sources)
     expect(result.layout['m5'].y).toBe(410);
     expect(result.layout['m6'].y).toBe(410);

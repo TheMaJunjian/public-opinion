@@ -15,9 +15,9 @@ import { prisma } from './prisma';
 // Error messages (exported for test assertions)
 // ============================================================
 
-export const CLASSIFY_CROSS_LINK_ERROR = '分类目标与已分类消息存在非引用关联，无法建立分类关系';
-export const MERGE_CROSS_LINK_ERROR = '归并目标与已分类消息存在非引用关联，无法建立归并关系';
-export const SUMMARY_CROSS_LINK_ERROR = '总结目标与已分类消息存在非引用关联，无法建立总结关系';
+export const CLASSIFY_CROSS_LINK_ERROR = '分类目标与其他文本消息存在非引用关联，无法建立分类关系';
+export const MERGE_CROSS_LINK_ERROR = '归并目标与其他文本消息存在非引用关联，无法建立归并关系';
+export const SUMMARY_CROSS_LINK_ERROR = '总结目标与其他文本消息存在非引用关联，无法建立总结关系';
 export const SUMMARY_TARGET_TYPE_ERROR = '总结关系的目标关系消息只能是排列、归并或分类关系消息';
 
 // ============================================================
@@ -146,6 +146,11 @@ export async function validateGroupingTargets(
   if (groupedTargetTextIds.length === 0) return { ok: true };
 
   const selectedTargetTextIdSet = new Set(groupedTargetTextIds);
+  console.log('[CrossLink] Checking', JSON.stringify({
+    relationType,
+    selectedTextIds: groupedTargetTextIds.slice(0, 10),
+    targetRelationIds: targetRelationIds.slice(0, 5),
+  }));
   const relationMessages = await prisma.message.findMany({
     where: { topicId, kind: 'RELATION' },
     select: { id: true, relationType: true, relSourceId: true, targetRefs: true },
@@ -205,7 +210,11 @@ export async function validateGroupingTargets(
     // REFERENCE (citation) does not imply semantic grouping.
     // CORRECT edges are already handled by expandTextIdsWithCorrections
     // and should not trigger cross-link blocks.
-    if (relMsg.relationType === 'REFERENCE' || relMsg.relationType === 'CORRECT') continue;
+    // CLASSIFY / SUMMARY / MERGE are grouping relations — a cross-link through
+    // them means reclassification (moving messages between groups), not a violation.
+    if (relMsg.relationType === 'REFERENCE' || relMsg.relationType === 'CORRECT'
+        || relMsg.relationType === 'CLASSIFY' || relMsg.relationType === 'SUMMARY'
+        || relMsg.relationType === 'MERGE') continue;
     // Relations that are themselves direct targets of this classification
     // (e.g., when classifying a ARRANGE or MERGE, its own edges should not
     // trigger cross-link errors).
@@ -238,12 +247,31 @@ export async function validateGroupingTargets(
     // Block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY
     // AND is NOT part of the same expanded selection.
     if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId) && alreadyClassifiedTextIds.has(sourceTextId)) {
+      console.log('[CrossLink] BLOCKED', JSON.stringify({
+        reason: 'source-endpoint-classified',
+        relationType: relMsg.relationType,
+        relationId: relMsg.id,
+        sourceTextId,
+        selectedSet: [...selectedTargetTextIdSet].slice(0, 10),
+        classifiedSet: [...alreadyClassifiedTextIds].slice(0, 10),
+      }));
       return { ok: false, error: crossLinkError };
     }
     if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id) && alreadyClassifiedTextIds.has(id))) {
+      const offender = targetTextIds.find(id => !selectedTargetTextIdSet.has(id) && alreadyClassifiedTextIds.has(id));
+      console.log('[CrossLink] BLOCKED', JSON.stringify({
+        reason: 'target-endpoint-classified',
+        relationType: relMsg.relationType,
+        relationId: relMsg.id,
+        offenderTargetId: offender,
+        targetTextIds,
+        selectedSet: [...selectedTargetTextIdSet].slice(0, 10),
+        classifiedSet: [...alreadyClassifiedTextIds].slice(0, 10),
+      }));
       return { ok: false, error: crossLinkError };
     }
   }
 
+  console.log('[CrossLink] PASS', JSON.stringify({ classifiedCount: alreadyClassifiedTextIds.size }));
   return { ok: true };
 }

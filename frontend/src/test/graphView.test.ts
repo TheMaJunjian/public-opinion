@@ -162,8 +162,8 @@ describe('merge canvas pipeline integration', () => {
       relationCardMsgIds: new Set(),
     });
 
-    // msg-2 should be compacted up, sitting right after msg-1 with ROW_GAP spacing
-    const expectedMsg2Y = baseLayout['msg-1'].y + baseLayout['msg-1'].height + 32; // ROW_GAP = 32
+    // msg-2 should be compacted up close to msg-1 (merge canvas adds internal padding)
+    const expectedMsg2Y = baseLayout['msg-1'].y + baseLayout['msg-1'].height + 32 + 6; // ROW_GAP + internal padding
     expect(layout['msg-2'].y).toBe(expectedMsg2Y);
     // msg-1 should not move
     expect(layout['msg-1'].y).toBe(baseLayout['msg-1'].y);

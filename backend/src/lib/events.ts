@@ -183,7 +183,7 @@ export async function applyEvent(event: AppEvent): Promise<unknown> {
 
 async function applyUserRegistered(event: UserRegisteredEvent) {
   const { actorId, payload } = event;
-  const REGISTRATION_BONUS = 100;
+  const REGISTRATION_BONUS = 200;
 
   const [user] = await prisma.$transaction([
     prisma.user.create({
@@ -449,9 +449,9 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     const targets = payload.targetRefs as Array<{ kind?: string; messageId?: string }>;
     for (const ref of targets) {
       if (ref.messageId) {
-        await autoSelfStake(actorId, topicId, ref.messageId, payload.stakeAmount, side);
-        // Auto-create voting round — the stake itself is the vote data (Phase 3.1)
-        await ensureVotingRound(ref.messageId, actorId, topicId);
+        // Auto-create voting round first, so the stake gets its roundId (Phase 3.1)
+        const round = await ensureVotingRound(ref.messageId, actorId, topicId);
+        await autoSelfStake(actorId, topicId, ref.messageId, payload.stakeAmount, side, round?.id);
       }
     }
   } else {
@@ -464,7 +464,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
 
 // ── Auto Self-Stake Helper (Phase 2.5-2.6) ───────────────────
 
-async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number, side: 'PRO' | 'CON' = 'PRO'): Promise<number | undefined> {
+async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number, side: 'PRO' | 'CON' = 'PRO', roundId?: string | null): Promise<number | undefined> {
   try {
     const rule = await prisma.ruleVersion.findFirst({
       where: { status: 'ACTIVE' },
@@ -484,6 +484,7 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
       messageId,
       side,
       amount: selfStakeAmount,
+      roundId: roundId ?? null,
     });
 
     return selfStakeAmount;
@@ -800,6 +801,19 @@ export async function executeStake(params: {
     data: { entityId: stake.id },
   });
 
+  // Patch pointTransaction with stakeId for precise settlement-panel highlighting
+  const pt = await prisma.pointTransaction.findFirst({
+    where: { userId, type: 'STAKE_LOCK' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, data: true },
+  });
+  if (pt) {
+    await prisma.pointTransaction.update({
+      where: { id: pt.id },
+      data: { data: { ...(pt.data as Record<string, unknown>), stakeId: stake.id } },
+    });
+  }
+
   return {
     stakeId: stake.id,
     side,
@@ -1001,6 +1015,19 @@ async function applyVoteCast(event: VoteCastEvent) {
     data: { entityId: vote.id },
   });
 
+  // Patch pointTransaction with voteId for precise settlement-panel highlighting
+  const pt = await prisma.pointTransaction.findFirst({
+    where: { userId: actorId, type: 'VOTE_LOCK' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, data: true },
+  });
+  if (pt) {
+    await prisma.pointTransaction.update({
+      where: { id: pt.id },
+      data: { data: { ...(pt.data as Record<string, unknown>), voteId: vote.id } },
+    });
+  }
+
   return {
     voteId: vote.id,
     vote: payload.vote,
@@ -1061,10 +1088,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     if (permission === 'anyone') {
       // Anyone can settle — proceed
     } else if (permission === 'any_voter') {
-      const userVoted = await prisma.voteStake.findFirst({
-        where: { roundId: payload.roundId, userId: actorId },
+      const userStaked = await prisma.stake.findFirst({
+        where: { messageId: round.messageId, userId: actorId },
       });
-      if (!userVoted) {
+      if (!userStaked) {
         throw new Error('规则要求投票者才可结算');
       }
     } else {
@@ -1080,38 +1107,20 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     await executeClawback(round.previousRoundId, messageId, topicId);
   }
 
-  // ── Compute total weights = Stakes (baseline) + VoteStakes (override) ──
-  // Stakes act as baseline: PRO → TRUE weight, CON → FALSE weight
-  // BetPool mirrors all stakes exactly
+  // ── Compute total weights from BetPool (all stakes, including auto-stakes from AGREE/DISAGREE votes) ──
+  // PRO stakes = AGREE votes, CON stakes = DISAGREE votes (unified in Phase 5)
   const betPool = await prisma.betPool.findUnique({
     where: { messageId },
     select: { lockedPro: true, lockedCon: true },
   });
-  const stakeWeightTrue = betPool?.lockedPro ?? 0;
-  const stakeWeightFalse = betPool?.lockedCon ?? 0;
-
-  // VoteStakes add on top of baseline
-  const voteAgg = await prisma.voteStake.groupBy({
-    by: ['vote'],
-    where: { roundId: payload.roundId },
-    _sum: { amount: true },
-  });
+  const totalPro = betPool?.lockedPro ?? 0;
+  const totalCon = betPool?.lockedCon ?? 0;
 
   const weights: Record<string, number> = {
-    TRUE: stakeWeightTrue,
-    FALSE: stakeWeightFalse,
-    UNKNOWN: 0, // UNKNOWN is only a result, not a votable option
+    TRUE: totalPro,
+    FALSE: totalCon,
+    UNKNOWN: 0,
   };
-  for (const row of voteAgg) {
-    weights[row.vote] = (weights[row.vote] ?? 0) + (row._sum.amount ?? 0);
-  }
-
-  // ── Compute total pools (stakes + votes combined) ──
-  // Vote amounts are pooled together with stakes: losing side's votes go to winners
-  const voteWeightTrue = weights.TRUE - stakeWeightTrue;
-  const voteWeightFalse = weights.FALSE - stakeWeightFalse;
-  const totalPro = weights.TRUE;   // PRO stakes + TRUE votes
-  const totalCon = weights.FALSE;  // CON stakes + FALSE votes
 
   // Determine result: UNKNOWN only on tie
   let result: 'TRUE' | 'FALSE' | 'UNKNOWN';
@@ -1140,16 +1149,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   });
   const ruleParams = settlementRule?.parameters as Record<string, unknown> | null;
 
-  // Get all stakes for this message (all stakes, not just votes)
+  // Get all stakes for this message (includes auto-stakes from AGREE/DISAGREE relations)
   const allStakes = await prisma.stake.findMany({
     where: { messageId },
     select: { id: true, userId: true, side: true, amount: true },
-  });
-
-  // Get all vote stakes for this round
-  const voteStakes = await prisma.voteStake.findMany({
-    where: { roundId: payload.roundId },
-    select: { id: true, userId: true, vote: true, amount: true },
   });
 
   const now = new Date();
@@ -1166,14 +1169,14 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   }
 
   if (result === 'TRUE') {
-    // TRUE wins: PRO stakers + TRUE voters share the losing pool (CON stakes + FALSE votes)
+    // TRUE wins: PRO stakers share the losing pool (CON stakes)
     const creatorRewardRatio = (ruleParams?.creatorRewardRatio as number | undefined) ?? 0;
     const creatorReward = totalCon > 0
       ? Math.floor(totalCon * creatorRewardRatio)
       : 0;
     const sharedPool = totalCon - creatorReward; // remainder shared among winners
 
-    // PRO stakers: return stake + proportional share of losing pool
+    // PRO stakers (including AGREE votes): return stake + proportional share of losing pool
     for (const stake of allStakes) {
       if (stake.side === 'PRO') {
         settlementWinners.add(stake.userId);
@@ -1183,18 +1186,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
           addUserDelta(stake.userId, share);
         }
       }
-    }
-    // TRUE voters: return vote + proportional share of losing pool
-    for (const vs of voteStakes) {
-      if (vs.vote === 'TRUE') {
-        settlementWinners.add(vs.userId);
-        addUserDelta(vs.userId, vs.amount);
-        if (totalPro > 0 && sharedPool > 0) {
-          const share = Math.floor((vs.amount / totalPro) * sharedPool);
-          addUserDelta(vs.userId, share);
-        }
-      }
-      // FALSE voters: stake is lost — nothing returned
+      // CON stakers (DISAGREE votes): stake is lost — nothing returned
     }
     // Creator reward — also counts as totalEarned (pure profit, no stake deducted)
     if (creatorReward > 0) {
@@ -1202,7 +1194,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
       addUserDelta(creatorId, creatorReward);
     }
   } else if (result === 'FALSE') {
-    // FALSE wins: CON stakers + FALSE voters share the losing pool (PRO stakes + TRUE votes)
+    // FALSE wins: CON stakers share the losing pool (PRO stakes)
     for (const stake of allStakes) {
       if (stake.side === 'CON') {
         settlementWinners.add(stake.userId);
@@ -1212,28 +1204,13 @@ async function applyRoundSettled(event: RoundSettledEvent) {
           addUserDelta(stake.userId, share);
         }
       }
-    }
-    // FALSE voters: return vote + proportional share
-    for (const vs of voteStakes) {
-      if (vs.vote === 'FALSE') {
-        settlementWinners.add(vs.userId);
-        addUserDelta(vs.userId, vs.amount);
-        if (totalCon > 0 && totalPro > 0) {
-          const share = Math.floor((vs.amount / totalCon) * totalPro);
-          addUserDelta(vs.userId, share);
-        }
-      }
-      // TRUE voters: stake is lost — nothing returned
+      // PRO stakers (AGREE votes): stake is lost — nothing returned
     }
   } else {
-    // UNKNOWN: return all stakes and votes
+    // UNKNOWN: return all stakes
     for (const stake of allStakes) {
       settlementWinners.add(stake.userId);
       addUserDelta(stake.userId, stake.amount);
-    }
-    for (const vs of voteStakes) {
-      settlementWinners.add(vs.userId);
-      addUserDelta(vs.userId, vs.amount);
     }
   }
 
@@ -1261,22 +1238,19 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     });
   }
 
-  // Build per-user contribution totals (stakes + votes from current & clawed-back rounds)
+  // Build per-user contribution totals (stakes from current & clawed-back rounds)
   const userContributionMap = new Map<string, number>();
   for (const s of allStakes) {
     userContributionMap.set(s.userId, (userContributionMap.get(s.userId) ?? 0) + s.amount);
   }
-  for (const vs of voteStakes) {
-    userContributionMap.set(vs.userId, (userContributionMap.get(vs.userId) ?? 0) + vs.amount);
-  }
-  // If clawback happened, also include previous round votes (they were re-locked)
+  // If clawback happened, also include previous round stakes (they were re-locked)
   if (round.previousRoundId) {
-    const prevRoundVotes = await prisma.voteStake.findMany({
-      where: { roundId: round.previousRoundId },
+    const prevRoundStakes = await prisma.stake.findMany({
+      where: { messageId, roundId: round.previousRoundId },
       select: { userId: true, amount: true },
     });
-    for (const pv of prevRoundVotes) {
-      userContributionMap.set(pv.userId, (userContributionMap.get(pv.userId) ?? 0) + pv.amount);
+    for (const ps of prevRoundStakes) {
+      userContributionMap.set(ps.userId, (userContributionMap.get(ps.userId) ?? 0) + ps.amount);
     }
   }
 
@@ -1338,17 +1312,11 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   // ── Move loser contributions from locked → totalLost ──
   // Only count losing-side contributions (not all-time total) to avoid cross-message pollution
   const losingSide = result === 'TRUE' ? 'CON' : 'PRO';
-  const losingVote = result === 'TRUE' ? 'FALSE' : 'TRUE';
   const loserContributionMap = new Map<string, number>();
   if (result !== 'UNKNOWN') {
     for (const s of allStakes) {
       if (s.side === losingSide) {
         loserContributionMap.set(s.userId, (loserContributionMap.get(s.userId) ?? 0) + s.amount);
-      }
-    }
-    for (const vs of voteStakes) {
-      if (vs.vote === losingVote) {
-        loserContributionMap.set(vs.userId, (loserContributionMap.get(vs.userId) ?? 0) + vs.amount);
       }
     }
   }
@@ -1468,9 +1436,10 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     },
   });
 
-  // ── Look up original stakes (only those from before previous round ended) AND votes ──
+  // ── Look up original stakes (only those from before previous round ended) ──
+  // Also query AGREE/DISAGREE relations from the previous round for re-lock amounts
   const payoutUserIds = [...new Set(payouts.map(p => p.userId))];
-  const [userStakes, userVotes] = await Promise.all([
+  const [userStakes, prevRoundVoteRels] = await Promise.all([
     prisma.stake.findMany({
       where: {
         messageId,
@@ -1479,18 +1448,31 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
       },
       select: { userId: true, amount: true },
     }),
-    prisma.voteStake.findMany({
-      where: { roundId: previousRoundId, userId: { in: payoutUserIds } },
-      select: { userId: true, amount: true },
+    // Query AGREE/DISAGREE relations with vote amounts from the topic
+    prisma.message.findMany({
+      where: {
+        topicId,
+        kind: 'RELATION',
+        relationType: { in: ['AGREE', 'DISAGREE'] },
+        relSourceId: null,
+        createdById: { in: payoutUserIds },
+        createdAt: prevRound.closedAt ? { lte: prevRound.closedAt } : undefined,
+      },
+      select: { createdById: true, relationPayload: true, targetRefs: true },
     }),
   ]);
   const userStakeTotal = new Map<string, number>();
   for (const s of userStakes) {
     userStakeTotal.set(s.userId, (userStakeTotal.get(s.userId) ?? 0) + s.amount);
   }
-  const userVoteTotal = new Map<string, number>();
-  for (const v of userVotes) {
-    userVoteTotal.set(v.userId, (userVoteTotal.get(v.userId) ?? 0) + v.amount);
+  // Count vote amounts from AGREE/DISAGREE relations targeting this message
+  for (const v of prevRoundVoteRels) {
+    const refs = v.targetRefs as Array<{ messageId?: string }> | undefined;
+    if (refs?.some(r => r.messageId === messageId)) {
+      const payload = v.relationPayload as Record<string, unknown> | null;
+      const voteAmount = (payload?.amount as number) ?? 0;
+      userStakeTotal.set(v.createdById, (userStakeTotal.get(v.createdById) ?? 0) + voteAmount);
+    }
   }
 
   // ── Accumulate clawback per user (avoids duplicate reads overwriting) ──
@@ -1499,8 +1481,8 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     const cur = userClawback.get(payout.userId) ?? { amount: 0, originalStake: 0, payoutTotal: 0 };
     cur.amount += -payout.amount;
     cur.payoutTotal += payout.amount;
-    // Re-lock both stake and vote amounts
-    cur.originalStake = (userStakeTotal.get(payout.userId) ?? 0) + (userVoteTotal.get(payout.userId) ?? 0);
+    // Re-lock stake amounts
+    cur.originalStake = userStakeTotal.get(payout.userId) ?? 0;
     userClawback.set(payout.userId, cur);
   }
 

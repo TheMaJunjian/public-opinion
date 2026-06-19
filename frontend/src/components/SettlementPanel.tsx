@@ -7,13 +7,21 @@ interface Props {
   messageId: string;
   topicId: string;
   highlightRoundId?: string | null;
+  /** Phase 5: which specific entries to highlight (from points-navigate) */
+  entryHighlight?: {
+    side?: 'PRO' | 'CON';
+    vote?: 'TRUE' | 'FALSE';
+    username?: string;
+    stakeId?: string;
+    voteId?: string;
+  } | null;
 }
 
 /**
  * SettlementPanel — 消息结算面板
  * 显示押注池状态、结算轮次、投票和结算操作
  */
-export default function SettlementPanel({ messageId, topicId: _topicId, highlightRoundId }: Props) {
+export default function SettlementPanel({ messageId, topicId: _topicId, highlightRoundId, entryHighlight }: Props) {
   const [loading, setLoading] = useState(true);
   const [stakes, setStakes] = useState<MessageStakes | null>(null);
   const [rounds, setRounds] = useState<SettlementRoundItem[]>([]);
@@ -54,6 +62,18 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
 
   useEffect(() => { load(); }, [load]);
 
+  // Listen for stakes-refresh to reload when new stakes are placed (e.g. via agree/disagree)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { messageId?: string };
+      if (!detail.messageId || detail.messageId === messageId) {
+        api.getMessageStakes(messageId).then(setStakes).catch(() => {});
+      }
+    };
+    window.addEventListener('stakes-refresh', handler);
+    return () => window.removeEventListener('stakes-refresh', handler);
+  }, [messageId]);
+
   // Auto-expand highlighted round from points-navigate
   useEffect(() => {
     if (highlightRoundId && rounds.some(r => r.id === highlightRoundId)) {
@@ -61,6 +81,15 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
       sessionStorage.removeItem('settlementHighlightRound');
     }
   }, [highlightRoundId, rounds]);
+
+  // Phase 5: Auto-expand most recent settled round when entryHighlight is set
+  useEffect(() => {
+    if (!entryHighlight || rounds.length === 0) return;
+    const settled = rounds.filter(r => r.status === 'SETTLED');
+    if (settled.length > 0) {
+      setExpandedSettledRound(settled[0].id);
+    }
+  }, [entryHighlight, rounds]);
 
   async function handleCreateRound() {
     try {
@@ -132,14 +161,12 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
   }
 
   const totalStaked = (stakes?.counts.pro ?? 0) + (stakes?.counts.con ?? 0);
-  const poolPro = stakes?.pool?.lockedPro ?? 0;
-  const poolCon = stakes?.pool?.lockedCon ?? 0;
   const weights = activeRound?.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
   const totalWeight = weights.TRUE + weights.FALSE + weights.UNKNOWN;
 
-  // Total accumulated data across all rounds (for win/loss comparison)
-  const totalPro = stakes?.counts.pro ?? 0;
-  const totalCon = stakes?.counts.con ?? 0;
+  // 上一轮（本轮开始前的历史累计）：历史累计 - 本轮新增投票
+  const prevPro = Math.max(0, (stakes?.counts.pro ?? 0) - weights.TRUE);
+  const prevCon = Math.max(0, (stakes?.counts.con ?? 0) - weights.FALSE);
 
   // Find previous round for overturn context
   const previousRound = activeRound?.previousRoundId
@@ -176,39 +203,67 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
         </div>
       )}
 
-      {/* Pool Summary — cumulative historical stakes */}
-      <div>
-        <div className="text-xs text-gray-500 mb-1.5">
-          📊 历史累计押注
+      {/* Three-row stats: 历史累计 / 上一轮 / 投票 */}
+      {totalStaked > 0 && (
+        <div className="space-y-3">
+          {/* Row 1: 历史累计押注（含本轮，全量） */}
+          <div>
+            <div className="text-xs text-gray-500 mb-1.5">📊 历史累计押注</div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-green-50 border border-green-200 rounded px-3 py-2 text-center">
+                <div className="text-green-700 font-semibold text-lg">{stakes?.counts.pro ?? 0}</div>
+                <div className="text-green-800">PRO 押注</div>
+              </div>
+              <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-center">
+                <div className="text-red-700 font-semibold text-lg">{stakes?.counts.con ?? 0}</div>
+                <div className="text-red-800">CON 押注</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Row 2: 上一轮（本轮开始前的基线） */}
+          {activeRound && (
+            <div>
+              <div className="text-xs text-gray-500 mb-1.5">📋 上一轮</div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-center">
+                  <div className="text-green-700 font-semibold">{prevPro}</div>
+                  <div className="text-gray-500">PRO 押注</div>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-center">
+                  <div className="text-red-700 font-semibold">{prevCon}</div>
+                  <div className="text-gray-500">CON 押注</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Row 3: 投票（本轮新增押注） */}
+          {activeRound && totalWeight > 0 && (
+            <div>
+              <div className="text-xs text-gray-500 mb-1.5">🗳️ 投票（本轮新增）</div>
+              <div className="flex items-stretch gap-1 text-center text-xs">
+                <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${weights.TRUE > weights.FALSE ? 'border-green-400' : 'border-gray-200'}`}>
+                  <div className="font-semibold text-green-800">{weights.TRUE}</div>
+                  <div className="text-green-700">TRUE</div>
+                </div>
+                <div className="flex items-center justify-center px-1">
+                  <span className={`text-lg font-bold ${weights.TRUE > weights.FALSE ? 'text-green-600' : weights.FALSE > weights.TRUE ? 'text-red-600' : 'text-amber-600'}`}>
+                    {weights.TRUE > weights.FALSE ? '>' : weights.FALSE > weights.TRUE ? '<' : '='}
+                  </span>
+                </div>
+                <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${weights.FALSE > weights.TRUE ? 'border-red-400' : 'border-gray-200'}`}>
+                  <div className="font-semibold text-red-800">{weights.FALSE}</div>
+                  <div className="text-red-700">FALSE</div>
+                </div>
+              </div>
+              {weights.TRUE === weights.FALSE && (
+                <div className="text-xs text-amber-700 text-center mt-1">⚖️ 平局 → 结算为 UNKNOWN</div>
+              )}
+            </div>
+          )}
         </div>
-        <div className="grid grid-cols-2 gap-3 text-xs">
-          <div className="bg-green-50 border border-green-200 rounded px-3 py-2 text-center">
-            <div className="text-green-700 font-semibold text-lg">
-              {stakes?.counts.pro ?? 0}
-            </div>
-            <div className="text-green-800">PRO 押注</div>
-          </div>
-          <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-center">
-            <div className="text-red-700 font-semibold text-lg">
-              {stakes?.counts.con ?? 0}
-            </div>
-            <div className="text-red-800">CON 押注</div>
-          </div>
-        </div>
-        {/* Show current pool state when it differs from cumulative (e.g., after clawback or new stakes) */}
-        {activeRound && (poolPro !== (stakes?.counts.pro ?? 0) || poolCon !== (stakes?.counts.con ?? 0)) && (
-          <div className="mt-2 grid grid-cols-2 gap-3 text-xs">
-            <div className="bg-green-100 border border-green-300 rounded px-3 py-1.5 text-center">
-              <div className="text-green-800 font-semibold">{poolPro}</div>
-              <div className="text-green-700">当前池 PRO</div>
-            </div>
-            <div className="bg-red-100 border border-red-300 rounded px-3 py-1.5 text-center">
-              <div className="text-red-800 font-semibold">{poolCon}</div>
-              <div className="text-red-700">当前池 CON</div>
-            </div>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Active Round */}
       {activeRound && (
@@ -216,7 +271,7 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
           <div className="flex items-center justify-between">
             <div>
               <span className="text-xs font-semibold text-indigo-800">
-                🔵 投票中 · 轮次 {activeRound.id.slice(-6)}
+                🔵 结算中 · 轮次 {activeRound.id.slice(-6)}
               </span>
               {/* Overturn context */}
               {previousRound && previousRound.result && (
@@ -233,45 +288,6 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
               结算
             </button>
           </div>
-
-          {/* Historical stake comparison during voting */}
-          <div className="bg-white rounded px-3 py-2 text-xs space-y-1">
-            <div className="flex justify-between text-gray-500">
-              <span>历史总押注</span>
-              <span>
-                <span className="text-green-700 font-semibold">PRO {stakes?.counts.pro ?? 0}</span>
-                <span className="mx-1">:</span>
-                <span className="text-red-700 font-semibold">CON {stakes?.counts.con ?? 0}</span>
-              </span>
-            </div>
-          </div>
-
-          {/* Weights = stakes (baseline) + votes (override) */} 
-          <div className="text-xs text-gray-500">总权重（押注 + 投票）</div>
-          <div className="flex items-stretch gap-1 text-center text-xs">
-            <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${totalPro > totalCon ? 'border-green-400' : 'border-gray-200'}`}>
-              <div className="font-semibold text-green-800">{weights.TRUE}</div>
-              <div className="text-green-700">TRUE</div>
-            </div>
-            <div className="flex items-center justify-center px-1">
-              <span className={`text-lg font-bold ${totalPro > totalCon ? 'text-green-600' : totalCon > totalPro ? 'text-red-600' : totalPro + totalCon > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
-                {totalPro > totalCon ? '>' : totalCon > totalPro ? '<' : totalPro + totalCon > 0 ? '=' : ''}
-              </span>
-            </div>
-            <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${totalCon > totalPro ? 'border-red-400' : 'border-gray-200'}`}>
-              <div className="font-semibold text-red-800">{weights.FALSE}</div>
-              <div className="text-red-700">FALSE</div>
-            </div>
-          </div>
-          {weights.TRUE === weights.FALSE && totalWeight > 0 && (
-            <div className="text-xs text-amber-700 text-center">⚖️ 平局 → 结算为 UNKNOWN</div>
-          )}
-
-          {totalWeight > 0 && (
-            <div className="text-xs text-gray-500 text-center">
-              总权重（押注 + 投票）: {totalWeight} 点
-            </div>
-          )}
 
           {/* Vote Form */}
           <div className="flex items-center gap-2">
@@ -298,6 +314,50 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
               {voting ? '投票中...' : '投票'}
             </button>
           </div>
+
+          {/* Round entries (votes + stakes merged chronologically) */}
+          {(() => {
+            const roundStakes = (stakes?.stakes ?? []).filter(s => s.roundId === activeRound.id);
+            const votes = activeRound.votes ?? [];
+
+            const entries = [
+              ...votes.map(v => ({
+                id: v.id, entryId: v.id, kind: 'vote' as const, username: v.user.username,
+                label: v.vote, amount: v.amount, createdAt: v.createdAt,
+              })),
+              ...roundStakes.map(s => ({
+                id: s.id, entryId: s.id, kind: 'stake' as const, username: s.user.username,
+                label: s.side, amount: s.amount, createdAt: s.createdAt,
+              })),
+            ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+            if (entries.length === 0) return null;
+
+            return (
+              <div>
+                <div className="text-xs text-gray-500 mb-1">记录 ({entries.length}):</div>
+                <ul className="divide-y divide-gray-200 max-h-32 overflow-y-auto bg-white rounded">
+                  {entries.map(e => {
+                    const isHighlighted = entryHighlight
+                      ? (entryHighlight.stakeId && e.kind === 'stake' && e.entryId === entryHighlight.stakeId) ||
+                        (entryHighlight.voteId && e.kind === 'vote' && e.entryId === entryHighlight.voteId) ||
+                        ((!entryHighlight.stakeId && !entryHighlight.voteId) && (
+                          (e.kind === 'vote' && entryHighlight.vote && e.label === entryHighlight.vote && (!entryHighlight.username || entryHighlight.username === e.username)) ||
+                          (e.kind === 'stake' && entryHighlight.side && e.label === entryHighlight.side && (!entryHighlight.username || entryHighlight.username === e.username))
+                        ))
+                      : false;
+                    const colorClass = e.label === 'TRUE' || e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
+                    return (
+                      <li key={e.id} className={`py-1 flex justify-between px-1.5 rounded text-xs ${isHighlighted ? 'bg-yellow-100 border border-yellow-300' : ''}`}>
+                        <span className="text-gray-700">{e.username}</span>
+                        <span className={colorClass}>{e.label} {e.amount}点</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -329,7 +389,7 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
                 </div>
                 {expandedSettledRound === round.id && (
                   <div className="mt-1 border border-indigo-200 rounded">
-                    <SettledRoundDetail roundId={round.id} messageId={messageId} />
+                    <SettledRoundDetail roundId={round.id} messageId={messageId} entryHighlight={entryHighlight} />
                   </div>
                 )}
               </div>
@@ -355,9 +415,13 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
 }
 
 /** Mini detail view for a settled round inside SettlementPanel */
-function SettledRoundDetail({ roundId, messageId }: { roundId: string; messageId: string }) {
+function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
+  roundId: string;
+  messageId: string;
+  entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
+}) {
   const [detail, setDetail] = useState<import('../types').SettlementRoundItem | null>(null);
-  const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; user: { username: string } }>>([]);
+  const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; roundId?: string | null; user: { username: string } }>>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -375,6 +439,19 @@ function SettledRoundDetail({ roundId, messageId }: { roundId: string; messageId
   if (loading) return <div className="text-xs text-gray-400 p-2">加载中...</div>;
   if (!detail) return <div className="text-xs text-gray-400 p-2">加载失败</div>;
 
+  // Merge votes + round-specific stakes into single chronological list
+  const roundStakes = stakes.filter(s => s.roundId === roundId);
+  const entries = [
+    ...(detail.votes ?? []).map(v => ({
+      id: v.id, entryId: v.id, kind: 'vote' as const, username: v.user.username,
+      label: v.vote, amount: v.amount, createdAt: v.createdAt,
+    })),
+    ...roundStakes.map(s => ({
+      id: s.id, entryId: s.id, kind: 'stake' as const, username: s.user.username,
+      label: s.side, amount: s.amount, createdAt: s.createdAt,
+    })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
   return (
     <div className="p-2 space-y-2 text-xs bg-gray-50 text-gray-700">
       <div className="flex justify-between text-gray-500">
@@ -382,38 +459,30 @@ function SettledRoundDetail({ roundId, messageId }: { roundId: string; messageId
         <span>{new Date(detail.openedAt).toLocaleString('zh-CN')}</span>
       </div>
 
-      {/* Votes */}
+      {/* Merged chronological entries */}
       <div>
-        <div className="font-medium text-gray-600 mb-1">投票记录:</div>
-        {detail.votes && detail.votes.length > 0 ? (
-          <ul className="divide-y divide-gray-200">
-            {detail.votes.map(v => (
-              <li key={v.id} className="py-1 flex justify-between">
-                <span className="text-gray-700">{v.user.username}</span>
-                <span className={v.vote === 'TRUE' ? 'text-green-700' : v.vote === 'FALSE' ? 'text-red-700' : 'text-amber-700'}>
-                  {v.vote} {v.amount}点
-                </span>
-              </li>
-            ))}
+        <div className="font-medium text-gray-600 mb-1">记录 ({entries.length}):</div>
+        {entries.length > 0 ? (
+          <ul className="divide-y divide-gray-200 max-h-48 overflow-y-auto">
+            {entries.map(e => {
+              const isHighlighted = entryHighlight
+                ? (entryHighlight.stakeId && e.kind === 'stake' && e.entryId === entryHighlight.stakeId) ||
+                  (entryHighlight.voteId && e.kind === 'vote' && e.entryId === entryHighlight.voteId) ||
+                  ((!entryHighlight.stakeId && !entryHighlight.voteId) && (
+                    (e.kind === 'vote' && entryHighlight.vote && e.label === entryHighlight.vote && (!entryHighlight.username || entryHighlight.username === e.username)) ||
+                    (e.kind === 'stake' && entryHighlight.side && e.label === entryHighlight.side && (!entryHighlight.username || entryHighlight.username === e.username))
+                  ))
+                : false;
+              const colorClass = e.label === 'TRUE' || e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
+              return (
+                <li key={e.id} className={`py-1 flex justify-between px-1 rounded ${isHighlighted ? 'bg-yellow-100 border border-yellow-300' : ''}`}>
+                  <span className="text-gray-700">{e.username}</span>
+                  <span className={colorClass}>{e.label} {e.amount}点</span>
+                </li>
+              );
+            })}
           </ul>
-        ) : <div className="text-gray-400">无投票</div>}
-      </div>
-
-      {/* Stakes */}
-      <div>
-        <div className="font-medium text-gray-600 mb-1">押注记录:</div>
-        {stakes.length > 0 ? (
-          <ul className="divide-y divide-gray-200">
-            {stakes.map(s => (
-              <li key={s.id} className="py-1 flex justify-between">
-                <span className="text-gray-700">{s.user.username}</span>
-                <span className={s.side === 'PRO' ? 'text-green-700' : 'text-red-700'}>
-                  {s.side} {s.amount}点
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : <div className="text-gray-400">无押注</div>}
+        ) : <div className="text-gray-400">无记录</div>}
       </div>
     </div>
   );

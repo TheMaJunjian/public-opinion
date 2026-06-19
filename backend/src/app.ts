@@ -13,6 +13,7 @@ import pointsRouter from './routes/points';
 import rulesRouter from './routes/rules';
 import stakesRouter from './routes/stakes';
 import roundsRouter from './routes/rounds';
+import stancesRouter from './routes/stances';
 import debugLogRouter from './routes/debugLog';
 import { errorHandler } from './middleware/errorHandler';
 
@@ -23,7 +24,7 @@ app.use(express.json());
 
 // Rate limiters
 // Rate limiters — higher limits in test environments to avoid interference
-const writeLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 60;
+const writeLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 600;
 const authLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 20;
 
 const authLimiter = rateLimit({
@@ -58,6 +59,7 @@ app.use('/api/points', pointsRouter);
 app.use('/api/rules', rulesRouter);
 app.use('/api/messages/:id/stakes', writeLimiter, stakesRouter);
 app.use('/', writeLimiter, roundsRouter);
+app.use('/', writeLimiter, stancesRouter);
 app.use('/api/debug-log', debugLogRouter);
 
 // Health check

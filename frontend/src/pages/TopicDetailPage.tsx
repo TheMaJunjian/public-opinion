@@ -13,6 +13,7 @@ import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relatio
 import ErrorBoundary from '../components/ErrorBoundary';
 import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
+import StanceHistoryPanel from '../components/StanceHistoryPanel';
 
 // ========================= Helpers =========================
 
@@ -33,6 +34,8 @@ function secondaryRelationLabel(t: string): string {
   if (t === "answer") return "回答";
   if (t === "vertical") return "纵";
   if (t === "horizontal") return "横";
+  if (t === "evidence") return "证据";
+  if (t === "custom") return "自定义";
   if (t === "recommend" || t === "archive") return relationTypeName(t);
   if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
   return t; // existing tag label text
@@ -117,10 +120,10 @@ function buildRelationPayload(params: {
 function relationTargetRefsSummary(targetRefs: TargetRef[]): string {
   if (targetRefs.length === 0) return '（无目标）';
   return targetRefs.map(ref => {
-    if (ref.kind === 'message') return `消息 ${ref.messageId}`;
-    if (ref.kind === 'text-fragment') return `消息 ${ref.messageId} 的片段`;
-    return `关系 ${ref.relationId}`;
-  }).join('；');
+    if (ref.kind === 'message') return ref.messageId;
+    if (ref.kind === 'text-fragment') return `${ref.messageId} 的片段`;
+    return ref.relationId;
+  }).join(', ');
 }
 
 function buildRelationDemoMessage(relation: Relation): DemoMessage {
@@ -135,11 +138,11 @@ function buildRelationDemoMessage(relation: Relation): DemoMessage {
   } else if (relType === 'summary') {
     content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'tag' && label) {
-    content = `建立${typeName}关系「${label}」\n目标：${targetSummary}`;
+    content = `标签「${label}」\n目标：${targetSummary}`;
   } else if (relation.sourceMessageId) {
-    content = `建立${typeName}关系\n来源：${relation.sourceMessageId}\n目标：${targetSummary}`;
+    content = `${typeName}  ${relation.sourceMessageId} → ${targetSummary}`;
   } else {
-    content = `建立${typeName}关系（无来源消息）\n目标：${targetSummary}`;
+    content = `${typeName}（无来源）\n目标：${targetSummary}`;
   }
   return {
     id: relation.id,
@@ -643,14 +646,6 @@ export default function TopicDetailPage() {
     }
   }, [searchParams, setSearchParams]);
 
-  // Scroll to message after data loads and renders
-  useEffect(() => {
-    if (!loading && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
-      scrollMsgToCenter(pendingScrollMsgRef.current);
-      pendingScrollMsgRef.current = null;
-    }
-  }, [loading, messages]);
-
   const [relationType, setRelationType] = useState<RelationType | null>(null);
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
   const [relationLabel, setRelationLabel] = useState("");
@@ -664,6 +659,15 @@ export default function TopicDetailPage() {
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
   const [focusExitKey, setFocusExitKey] = useState(0);
+
+  // Scroll to message after data loads and renders (also triggers on focus changes for in-place nav)
+  useEffect(() => {
+    if (!loading && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
+      scrollMsgToCenter(pendingScrollMsgRef.current);
+      pendingScrollMsgRef.current = null;
+    }
+  }, [loading, messages, focusExitKey]);
+
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [focusHop, setFocusHop] = useState<number>(1);
@@ -697,6 +701,152 @@ export default function TopicDetailPage() {
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
+  const [settlementEntryHighlight, setSettlementEntryHighlight] = useState<{
+    side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string;
+    stakeId?: string; voteId?: string;
+  } | null>(null);
+  const [stanceHighlight, setStanceHighlight] = useState<{ stanceMsgId: string; evidenceMsgIds: string[] } | null>(null);
+  const stanceHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showStanceHistory, setShowStanceHistory] = useState(false);
+
+  // Phase 5: Refs to avoid stale closure in points-navigate handler
+  // (initialized empty; values synced via useEffect below after all useMemos run)
+  const focusEntriesRef = useRef<FocusEntry[]>([]);
+  const relationsRef = useRef<Relation[]>([]);
+  const relationByIdRef = useRef<Map<string, Relation>>(new Map());
+  const relationTypeByRelMsgIdRef = useRef<Map<string, string>>(new Map());
+  // Phase 5: Track supersede chain (oldId → newId) for point-record message ID resolution
+  const supersedeMapRef = useRef<Map<string, string>>(new Map());
+
+  // Phase 5: Listen for points-navigate custom event (in-place navigation from PointsBadge)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        messageId: string; topicId: string; roundId: string | null; txType: string;
+        txData?: Record<string, unknown> | null; username?: string;
+      };
+      const { messageId, roundId, txType, txData, username } = detail;
+
+      // Read latest state from refs (avoids stale closure)
+      const currentFocusEntries = focusEntriesRef.current;
+      const currentRelations = relationsRef.current;
+      const currentRelationById = relationByIdRef.current;
+      const currentRelationTypeByRelMsgId = relationTypeByRelMsgIdRef.current;
+
+      // Phase 5: Resolve message ID through supersede chain
+      // When a classify is updated (e.g. via agree inside it), the old relation
+      // is superseded. Point records still reference the old ID — resolve to current.
+      let resolvedMessageId = messageId;
+      const chain = supersedeMapRef.current;
+      if (chain.has(messageId)) {
+        let cur = messageId;
+        const visited = new Set<string>();
+        while (cur && chain.has(cur) && !visited.has(cur)) {
+          visited.add(cur);
+          cur = chain.get(cur)!;
+        }
+        if (cur !== messageId) resolvedMessageId = cur;
+      }
+
+      // ── Smart classify enter/exit ──
+      const currentFocus = currentFocusEntries.length > 0 ? currentFocusEntries[currentFocusEntries.length - 1] : null;
+      if (currentFocus?.mode === 'topic' && currentFocus.topicRelMsgId) {
+        const owned = collectOwnedByRelation(currentFocus.topicRelMsgId, currentRelationById);
+        const allOwnedIds = new Set([...owned.textIds, ...owned.relationIds]);
+        if (!allOwnedIds.has(resolvedMessageId)) {
+          setFocusEntries([]);
+          setFocusExitKey(k => k + 1);
+        }
+      }
+
+      // Auto-enter classify if target belongs to one (and not already in one)
+      const isInClassify = currentFocusEntries.length > 0 && currentFocusEntries[currentFocusEntries.length - 1]?.mode === 'topic';
+      if (!isInClassify) {
+        for (const rel of currentRelations) {
+          const rt = rel.relationType?.toUpperCase();
+          if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+          const targets = (rel.targetRefs ?? []) as TargetRef[];
+          if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId === resolvedMessageId)) {
+            const targetTextIds = getTextTargetIds(rel.targetRefs as TargetRef[]);
+            const targetRelationIds = getRelationTargetIds(rel.targetRefs as TargetRef[]).filter(mid => {
+              const rtm = currentRelationTypeByRelMsgId.get(mid);
+              return rtm === 'classify' || rtm === 'merge' || rtm === 'arrange' || rtm === 'summary';
+            });
+            const targetIds = new Set<string>(targetTextIds);
+            for (const trid of targetRelationIds) {
+              if (currentRelationTypeByRelMsgId.get(trid) === 'classify' || currentRelationTypeByRelMsgId.get(trid) === 'summary') {
+                targetIds.add(trid); continue;
+              }
+              const childOwned = collectOwnedByRelation(trid, currentRelationById);
+              childOwned.textIds.forEach(id => targetIds.add(id));
+              childOwned.relationIds.forEach(id => targetIds.add(id));
+            }
+            if (targetIds.size > 0) {
+              setFocusEntries([{ ids: Array.from(targetIds), snapshot: null, mode: 'topic', topicRelMsgId: rel.id }]);
+              setFocusHop(0);
+              setFocusExitKey(k => k + 1);
+            }
+            break;
+          }
+        }
+      }
+
+      // Clear existing draft and select target message
+      setDraftUnits([{ messageId: resolvedMessageId, selection: { kind: "whole" } }]);
+      setActiveTextSelectId(null);
+      pendingScrollMsgRef.current = resolvedMessageId;
+
+      // Phase 5: Open settlement panel for all stake/vote/settlement transactions
+      const settlementTypes = ['STAKE_LOCK', 'VOTE_LOCK', 'SETTLEMENT_GAIN', 'SETTLEMENT_LOSS', 'CLAWBACK'];
+      const highlightMessageTypes = ['MINT', 'STAKE_LOCK', 'VOTE_LOCK'];
+
+      if (settlementTypes.includes(txType)) {
+        setSettlementOpenMsgId(resolvedMessageId);
+        if (roundId) sessionStorage.setItem('settlementHighlightRound', roundId);
+
+        // Extract settlement entry highlight from txData
+        const highlight: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } = {};
+        if (txData?.side) highlight.side = txData.side as 'PRO' | 'CON';
+        if (txData?.vote) highlight.vote = txData.vote as 'TRUE' | 'FALSE';
+        if (txData?.stakeId) highlight.stakeId = txData.stakeId as string;
+        if (txData?.voteId) highlight.voteId = txData.voteId as string;
+
+        // For SETTLEMENT_GAIN/LOSS: derive highlight from settlementResult
+        if (!highlight.side && !highlight.vote && txData?.settlementResult) {
+          const result = txData.settlementResult as string;
+          if (txType === 'SETTLEMENT_GAIN') {
+            if (result === 'TRUE') { highlight.side = 'PRO'; highlight.vote = 'TRUE'; }
+            else if (result === 'FALSE') { highlight.side = 'CON'; highlight.vote = 'FALSE'; }
+          } else if (txType === 'SETTLEMENT_LOSS' || txType === 'CLAWBACK') {
+            if (result === 'TRUE') { highlight.side = 'CON'; highlight.vote = 'FALSE'; }
+            else if (result === 'FALSE') { highlight.side = 'PRO'; highlight.vote = 'TRUE'; }
+          }
+        }
+
+        if (username) highlight.username = username;
+        setSettlementEntryHighlight(Object.keys(highlight).length > 0 ? highlight : null);
+        setTimeout(() => setSettlementEntryHighlight(null), 1000);
+      } else {
+        setSettlementOpenMsgId(null);
+        setSettlementEntryHighlight(null);
+      }
+
+      // Phase 5: Message card highlight — any tx linked to a message gets a golden flash
+      if (highlightMessageTypes.includes(txType) && txData?.messageId) {
+        setStanceHighlight({ stanceMsgId: resolvedMessageId, evidenceMsgIds: [] });
+        if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
+        stanceHighlightTimerRef.current = setTimeout(() => {
+          setStanceHighlight(null);
+        }, 1000);
+      } else if (!settlementTypes.includes(txType)) {
+        setStanceHighlight(null);
+      }
+    };
+
+    window.addEventListener('points-navigate', handler);
+    return () => window.removeEventListener('points-navigate', handler);
+  }, []);
+
   const stakeDefaultLoaded = useRef(false);
   const relationStakeMap = useRef<Record<string, number>>({});
 
@@ -772,13 +922,14 @@ export default function TopicDetailPage() {
     setMessages(prev => [...prev, buildRelationDemoMessage(backendRel)]);
     // Update stakeCounts for AGREE/DISAGREE on target messages (by point amount)
     const relType = backendRel.relationType?.toUpperCase();
+    const targetMsgIds: string[] = [];
     if (relType === 'AGREE' || relType === 'DISAGREE') {
       const side = relType === 'AGREE' ? 'pro' : 'con';
       const stakePts = relStakeRef.current;
-      const targetMsgIds = backendRel.targetRefs
-        .filter((ref): ref is { kind: string; messageId: string } => 
+      targetMsgIds.push(...backendRel.targetRefs
+        .filter((ref) => 
           (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
-        .map(ref => ref.messageId);
+        .map(ref => (ref as { messageId: string }).messageId));
       if (targetMsgIds.length > 0) {
         setStakeCounts(prev => {
           const next = { ...prev };
@@ -795,6 +946,10 @@ export default function TopicDetailPage() {
     // Also set authorStake for the relation message itself
     setAuthorStakes(prev => ({ ...prev, [backendRel.id]: relStakeRef.current }));
     window.dispatchEvent(new Event('points-refresh'));
+    // Notify SettlementPanel to reload stakes for target messages
+    for (const mid of targetMsgIds) {
+      window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
+    }
   }, []);
 
   // Helper: auto-inject stakeAmount into relation creation
@@ -876,6 +1031,12 @@ export default function TopicDetailPage() {
     }
     return map;
   }, [relations]);
+
+  // Phase 5: Keep refs in sync with derived state for points-navigate handler
+  focusEntriesRef.current = focusEntries;
+  relationsRef.current = relations;
+  relationByIdRef.current = relationById;
+  relationTypeByRelMsgIdRef.current = relationTypeByRelMsgId as unknown as Map<string, string>;
   const replacedRelationMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -1019,6 +1180,7 @@ export default function TopicDetailPage() {
     // so mergeOwnership.textIds is intentionally excluded here.
     return ids;
   }, [classifyOwnershipTextIdsExpanded, summaryOwnershipTextIdsExpanded]);
+
   const graphOwnedRelationIds = useMemo(() => {
     const ids = new Set<string>(classifyOwnership.relationIds);
     mergeOwnership.relationIds.forEach(id => ids.add(id));
@@ -1029,6 +1191,7 @@ export default function TopicDetailPage() {
     () => collectExclusiveRelationMsgIds(graphHiddenTextIds, graphOwnedRelationIds),
     [edges, msgMap, graphHiddenTextIds, graphOwnedRelationIds]
   );
+
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   // Saved scroll positions for each view mode, so switching modes does not reset to top.
@@ -1108,11 +1271,14 @@ export default function TopicDetailPage() {
     if (left !== null) container.scrollLeft = Math.min(Math.max(0, left), maxLeft);
   }
 
-  function restoreSnapshot(s: FocusSnapshot | null) {
+  function restoreSnapshot(s: FocusSnapshot | null, opts?: { restoreSelection?: boolean }) {
     if (!s) return;
-    setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
-    setSourceUnits(s.sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
-    setTargetUnits(s.targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+    const restoreSel = opts?.restoreSelection !== false; // 默认 true，焦点模式恢复候选区
+    if (restoreSel) {
+      setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+      setSourceUnits(s.sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+      setTargetUnits(s.targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+    }
     setActiveTextSelectId(s.activeTextSelectId);
     setLastClickedMessageId(s.lastClickedMessageId);
     setFocusHop(s.focusHop);
@@ -1150,13 +1316,16 @@ export default function TopicDetailPage() {
     // Pop the focus stack and bump the exit key to force GraphView remount,
     // avoiding React 18 concurrent reconciliation bugs (removeChild errors).
     // The ErrorBoundary provides a safety net with automatic retry.
-    const snapshot = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].snapshot : null;
+    const entry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
+    const snapshot = entry?.snapshot ?? null;
+    const isTopic = entry?.mode === "topic";
     setFocusEntries(prev => {
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
     setFocusExitKey(k => k + 1);
-    if (snapshot) restoreSnapshot(snapshot);
+    // 焦点模式：恢复进入前的候选区；分类模式：保留当前选择
+    if (snapshot) restoreSnapshot(snapshot, { restoreSelection: !isTopic });
   }
 
   function exitAllFocus() {
@@ -1213,6 +1382,8 @@ export default function TopicDetailPage() {
       .then(updatedRel => {
         const newRelId = updatedRel.id;
         const oldRelId = topicFocusRelMsgId;
+        // Track supersede chain for point-record message ID resolution
+        supersedeMapRef.current.set(oldRelId, newRelId);
         // Replace old relation with superseding new one.
         // Also update any parent relation's targetRefs that reference the old ID,
         // so the ownership chain (collectOwnedByRelation) stays intact.
@@ -1737,35 +1908,34 @@ export default function TopicDetailPage() {
     };
 
     if (relationType === "reply") {
-      const fromReply = foldUpToWhole(sources);
-      const toReply = foldUpToWhole(targets);
-      // Relation messages are also messages — include relation-message sources
-      const uniqueSources = Array.from(new Set(fromReply.map(s => s.messageId)));
+      // REPLY: 每条边一个关系消息（source→target 一一对应）
       const replyAdditional = secondaryRelationType === "question" || secondaryRelationType === "answer"
         ? secondaryRelationType
         : "none";
       const replyEdgeLabel = replyAdditional === "none" ? "reply" : replyAdditional;
+      const replyPayload = buildRelationPayload({
+        relationType: "REPLY",
+        label: replyAdditional === "none" ? undefined : replyAdditional,
+      });
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
-        const targetRefs = toReply.map(t => unitSelectionToTargetRef(t, msgMap));
-        try {
-          const backendRel = await createRel(topicId, {
-            relationType: relationType.toUpperCase(),
-            sourceMessageId: srcId,
-            targetRefs,
-            payload: buildRelationPayload({
-              relationType: relationType.toUpperCase(),
-              label: replyAdditional === "none" ? undefined : replyAdditional,
-            }),
-          });
-          const relId = backendRel.id;
-          appendCreatedRelation(backendRel);
-          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-          for (const s of fromReply) {
-            for (const t of toReply) {
-              newEdgesList.push(buildEdges({ ...s }, { ...t }, "reply", replyEdgeLabel, relId));
-            }
+        const srcs = sources.filter(s => s.messageId === srcId);
+        for (const srcUnit of srcs) {
+          for (const t of targets) {
+            try {
+              const backendRel = await createRel(topicId, {
+                relationType: "REPLY",
+                sourceMessageId: srcId,
+                targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+                payload: replyPayload,
+              });
+              const relId = backendRel.id;
+              appendCreatedRelation(backendRel);
+              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+              newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reply", replyEdgeLabel, relId));
+            } catch (e: any) { alert(`建立回复关系失败: ${e?.message ?? e}`); }
           }
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        }
       }
     } else if (relationType === "agree" || relationType === "disagree") {
       // Relation messages are also messages — include relation-message sources
@@ -1821,15 +1991,68 @@ export default function TopicDetailPage() {
         const edge = await sendTagRelation(targetMid, tagLabel);
         if (edge) newEdgesList.push(edge);
       }
+    } else if (relationType === "reference") {
+      // REFERENCE: 每条边一个关系消息（source→target 一一对应）
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
+      const uniqueTargets = targets; // 不去重——每条边独立
+      const refPayload = secondaryRelationType !== "none"
+        ? buildRelationPayload({
+            relationType: "reference",
+            label: secondaryRelationType === "custom" ? (label || "自定义") : secondaryRelationType,
+          })
+        : undefined;
+      const refEdgeLabel = secondaryRelationType !== "none"
+        ? (secondaryRelationType === "custom" ? (label || "自定义") : secondaryRelationLabel(secondaryRelationType))
+        : "ref"; // none → default type label
+      for (const srcId of uniqueSources) {
+        const srcs = sources.filter(s => s.messageId === srcId);
+        for (const srcUnit of srcs) {
+          for (const t of uniqueTargets) {
+            try {
+              const backendRel = await createRel(topicId, {
+                relationType: "REFERENCE",
+                sourceMessageId: srcId,
+                targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+                payload: refPayload,
+              });
+              const relId = backendRel.id;
+              appendCreatedRelation(backendRel);
+              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+              newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reference", refEdgeLabel, relId));
+            } catch (e: any) { alert(`建立引用关系失败: ${e?.message ?? e}`); }
+          }
+        }
+      }
+    } else if (relationType === "annotation") {
+      // ANNOTATION: 每条边一个关系消息（source→target 一一对应）
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
+      for (const srcId of uniqueSources) {
+        const srcs = sources.filter(s => s.messageId === srcId);
+        for (const srcUnit of srcs) {
+          for (const t of targets) {
+            try {
+              const backendRel = await createRel(topicId, {
+                relationType: "ANNOTATION",
+                sourceMessageId: srcId,
+                targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+              });
+              const relId = backendRel.id;
+              appendCreatedRelation(backendRel);
+              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+              newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "annotation", label, relId));
+            } catch (e: any) { alert(`建立注释关系失败: ${e?.message ?? e}`); }
+          }
+        }
+      }
     } else {
-      // Relation messages are also messages — include relation-message sources
+      // Generic types (CORRECT etc.) with source message
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
         const srcs = sources.filter(s => s.messageId === srcId);
         for (const srcUnit of srcs) {
           const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
           try {
-            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs, payload: undefined });
             const relId = backendRel.id;
             appendCreatedRelation(backendRel);
             addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -2026,19 +2249,29 @@ export default function TopicDetailPage() {
       }
 
       // CORRECT (no secondary) targeting a relation message: create null-source relation
+      // Generic path also covers REFERENCE/ANNOTATION with secondary labels
       const targetRefs = draftUnits.map(u => unitSelectionToTargetRef(u, msgMap));
       const typeName = relationTypeName(relationType);
       const newEdgesList: DemoEdge[] = [];
       try {
-        const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
+        const refPayload = relationType === "reference" && secondaryRelationType !== "none"
+          ? buildRelationPayload({
+              relationType: "reference",
+              label: secondaryRelationType === "custom" ? (relationLabel || "自定义") : secondaryRelationType,
+            })
+          : undefined;
+        const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs, payload: refPayload });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const anonSrcId = `anon:${backendRel.id}`;
+        const edgeLabel = relationType === "reference" && secondaryRelationType !== "none"
+          ? (secondaryRelationType === "custom" ? (relationLabel || "自定义") : secondaryRelationLabel(secondaryRelationType))
+          : typeName;
         for (const t of draftUnits) {
-          newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: typeName } as DemoEdge);
+          newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: edgeLabel } as DemoEdge);
         }
-        if (secondaryRelationType !== "none") {
+        if (secondaryRelationType !== "none" && relationType !== "reference") {
           const secType = secondaryRelationType as RelationType;
           for (const t of draftUnits) {
             newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: relationTypeName(secType) } as DemoEdge);
@@ -2133,7 +2366,7 @@ export default function TopicDetailPage() {
     if (relationType === "classify") {
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        alert("分类目标与已分类消息存在非引用关联，无法建立分类关系");
+        alert("分类目标与其他文本消息存在非引用关联，无法建立分类关系");
         return;
       }
       const selectedSet = new Set(targetTextIds);
@@ -2169,7 +2402,43 @@ export default function TopicDetailPage() {
         });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+
+        // Supersede existing CLASSIFY/SUMMARY that own reclassified text messages.
+        // Current focus: remove text messages and add new classify as target.
+        // Other classifies: just remove text messages.
+        const reclassifiedTextIds = new Set(targetTextIds);
+        const newClassifyRef: TargetRef = { kind: 'relation', relationId: backendRel.id };
+        for (const rel of relations) {
+          if (rel.relationType !== 'CLASSIFY' && rel.relationType !== 'SUMMARY') continue;
+          const owned = collectOwnedByRelation(rel.id, relationById);
+          const overlap = [...owned.textIds].filter(id => reclassifiedTextIds.has(id));
+          const isCurrent = isTopicFocus && topicFocusRelMsgId === rel.id;
+          if (overlap.length === 0 && !isCurrent) continue;
+          const remainingRefs = (rel.targetRefs as TargetRef[]).filter(
+            ref => !((ref.kind === 'message' || ref.kind === 'text-fragment') && reclassifiedTextIds.has(ref.messageId))
+          );
+          const updatedRefs = isCurrent ? [...remainingRefs, newClassifyRef] : remainingRefs;
+          if (updatedRefs.length === 0) continue;
+          supersedeRel(topicId!, rel.id, {
+            relationType: rel.relationType,
+            targetRefs: updatedRefs,
+            payload: rel.payload,
+          }).then(updatedRel => {
+            const newId = updatedRel.id; const oldId = rel.id;
+            supersedeMapRef.current.set(oldId, newId);
+            setRelations(prev => prev.filter(r => r.id !== oldId).map(r => {
+              const refs = (r.targetRefs ?? []) as TargetRef[];
+              return refs.some(ref => ref.kind === 'relation' && ref.relationId === oldId)
+                ? { ...r, targetRefs: refs.map(ref => ref.kind === 'relation' && ref.relationId === oldId ? { ...ref, relationId: newId } : ref) }
+                : r;
+            }).concat(updatedRel));
+            setMessages(prev => [...prev.filter(m => m.id !== oldId), buildRelationDemoMessage(updatedRel)]);
+            if (isCurrent) setFocusEntries(prev => prev.map(e =>
+              e.mode === 'topic' && e.topicRelMsgId === oldId ? { ...e, topicRelMsgId: newId } : e
+            ));
+          }).catch(() => {});
+        }
+
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
           targetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
@@ -2206,7 +2475,7 @@ export default function TopicDetailPage() {
       }
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        alert("总结目标与已分类消息存在非引用关联，无法建立总结关系");
+        alert("总结目标与其他文本消息存在非引用关联，无法建立总结关系");
         return;
       }
       const summaryTargetRefs = getClassifyTargetRefs(effectiveTargets);
@@ -2260,7 +2529,7 @@ export default function TopicDetailPage() {
 
       const mergeTargetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
       if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
-        alert("归并目标与已分类消息存在非引用关联，无法建立归并关系");
+        alert("归并目标与其他文本消息存在非引用关联，无法建立归并关系");
         return;
       }
       const mergeTargetRefs = Array.from(new Map(
@@ -2478,7 +2747,8 @@ export default function TopicDetailPage() {
     relationType === "reply"
     || (relationType === "correct" && draftHasRelationTarget)
     || relationType === "tag"
-    || relationType === "arrange";
+    || relationType === "arrange"
+    || relationType === "reference";
 
   // Send button enabled logic (single button):
   //   - No relation type: just send message → need text
@@ -2857,6 +3127,64 @@ export default function TopicDetailPage() {
   const topicFocusTitle = topicFocusRelMsg
     ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`)
     : "";
+
+  // 当前视图实际可见的文本消息ID集（考虑焦点/分类上下文）
+  const graphVisibleTextIds = useMemo(() => {
+    if (isTopicFocus && topicFocusRelMsgId) {
+      const topicRelation = relationById.get(topicFocusRelMsgId);
+      if (!topicRelation) return new Set<string>();
+      return new Set<string>(getTextTargetIds(topicRelation.targetRefs));
+    }
+    // 主画布：visible = NOT in hiddenTextIds
+    const visible = new Set<string>();
+    for (const m of messages) {
+      if (m.kind === "normal" && !graphHiddenTextIds.has(m.id)) visible.add(m.id);
+    }
+    return visible;
+  }, [isTopicFocus, topicFocusRelMsgId, relationById, messages, graphHiddenTextIds]);
+
+  // 跨分类引用标签：按二级标签分组（"证据" / "引用" / 自定义）
+  // 消息 A（可见）引用 B（不可见）→ A 上显示 outgoing 标签
+  // B（不可见）被 A 引用 → 若 B 在某视图中可见，显示 incoming 标签
+  const crossClassifyRefs = useMemo(() => {
+    const raw = new Map<string, { outgoing: Record<string, Set<string>>; incoming: Record<string, Set<string>> }>();
+    const labelOf = (raw: string): string => {
+      const n = raw.trim().toLowerCase();
+      if (n === "evidence" || n === "证据") return "证据";
+      if (n === "ref" || n === "reference" || !n) return "引用";
+      return raw; // custom label
+    };
+    for (const e of edges) {
+      if (e.relationType !== 'reference') continue;
+      const fromKind = msgMap.get(e.from.messageId)?.kind;
+      const toKind = msgMap.get(e.to.messageId)?.kind;
+      if (fromKind !== 'normal' || toKind !== 'normal') continue;
+      const fromVisible = graphVisibleTextIds.has(e.from.messageId);
+      const toVisible = graphVisibleTextIds.has(e.to.messageId);
+      if (fromVisible === toVisible) continue;
+      const lbl = labelOf(e.relationLabel);
+      if (fromVisible && !toVisible) {
+        let entry = raw.get(e.from.messageId);
+        if (!entry) { entry = { outgoing: {}, incoming: {} }; raw.set(e.from.messageId, entry); }
+        (entry.outgoing[lbl] ??= new Set()).add(e.relationMessageId);
+      } else if (!fromVisible && toVisible) {
+        let entry = raw.get(e.to.messageId);
+        if (!entry) { entry = { outgoing: {}, incoming: {} }; raw.set(e.to.messageId, entry); }
+        (entry.incoming[lbl] ??= new Set()).add(e.relationMessageId);
+      }
+    }
+    // 转换 Set → array 用于 props 传递
+    const result = new Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>();
+    for (const [msgId, entry] of raw) {
+      const out: Record<string, string[]> = {};
+      for (const [lbl, ids] of Object.entries(entry.outgoing)) out[lbl] = Array.from(ids);
+      const inc: Record<string, string[]> = {};
+      for (const [lbl, ids] of Object.entries(entry.incoming)) inc[lbl] = Array.from(ids);
+      result.set(msgId, { outgoing: out, incoming: inc });
+    }
+    return result;
+  }, [edges, msgMap, graphVisibleTextIds]);
+
   const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender } = useMemo(() => {
     const useFocusWindow = focusEntries.length > 0 && !isTopicFocus;
     const baseMessages = useFocusWindow ? messagesToShow : messages;
@@ -3126,6 +3454,49 @@ export default function TopicDetailPage() {
 
   function handleDecorationDoubleClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {
     e.stopPropagation();
+
+    // Phase 5: Stance path highlight — trace the argumentation chain
+    // 1. Find all AGREE/DISAGREE edges pointing to this message
+    const stanceEdges = edges.filter(
+      edge => edge.relationType === kind &&
+        edge.to.messageId === messageId &&
+        edge.to.selection.kind === 'whole'
+    );
+
+    // 2. Collect source TEXT messages (non-anonymous origins) from those edges
+    const sourceMsgIds = new Set<string>();
+    for (const edge of stanceEdges) {
+      if (!edge.from.messageId.startsWith('anon:')) {
+        sourceMsgIds.add(edge.from.messageId);
+      }
+    }
+
+    // 3. For each source TEXT message, find outgoing REFERENCE(证据) edges
+    const evidenceMsgIds: string[] = [];
+    const seenEvidence = new Set<string>();
+    for (const srcId of sourceMsgIds) {
+      const evidenceEdges = edges.filter(
+        edge => edge.relationType === 'reference' &&
+          edge.from.messageId === srcId &&
+          (edge.relationLabel === '证据' || edge.relationLabel === 'evidence')
+      );
+      for (const evEdge of evidenceEdges) {
+        if (!seenEvidence.has(evEdge.to.messageId)) {
+          seenEvidence.add(evEdge.to.messageId);
+          evidenceMsgIds.push(evEdge.to.messageId);
+        }
+      }
+    }
+
+    // 4. Highlight: stance target (this message) + all source text messages + evidence targets
+    const allHighlightIds = [messageId, ...sourceMsgIds, ...evidenceMsgIds];
+    setStanceHighlight({ stanceMsgId: messageId, evidenceMsgIds: allHighlightIds });
+    if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
+    stanceHighlightTimerRef.current = setTimeout(() => {
+      setStanceHighlight(null);
+    }, 3000);
+
+    // Also show the popup for reference
     setDecorationPopup({ messageId, kind, x: e.clientX, y: e.clientY });
   }
 
@@ -3174,6 +3545,22 @@ export default function TopicDetailPage() {
     e.stopPropagation();
     setLastClickedMessageId(relMsgId);
     toggleWholeUnit(relMsgId);
+  }
+
+  // 跨分类引用标签点击：选中关系消息
+  function handleCrossRefTagClick(e: React.MouseEvent, relMsgIds: string[]) {
+    e.stopPropagation();
+    if (relMsgIds.length === 0) return;
+    setLastClickedMessageId(relMsgIds[0]);
+    setDraftUnits(prev => {
+      const anySelected = relMsgIds.some(id => prev.some(u => u.messageId === id && u.selection.kind === "whole"));
+      if (anySelected) {
+        return prev.filter(u => !(relMsgIds.includes(u.messageId) && u.selection.kind === "whole"));
+      } else {
+        const toAdd = relMsgIds.filter(id => !prev.some(u => u.messageId === id && u.selection.kind === "whole"));
+        return [...prev, ...toAdd.map(id => ({ messageId: id, selection: { kind: "whole" as const } }))];
+      }
+    });
   }
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string) {
@@ -3473,7 +3860,7 @@ export default function TopicDetailPage() {
                       {/* Phase 3: Settlement Panel as floating overlay */}
                       {settlementOpenMsgId === msg.id && (
                         <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
-                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} />
+                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} />
                           <div style={{ marginTop: 4 }}>
                             <RoundHistory messageId={msg.id} compact />
                           </div>
@@ -3506,6 +3893,10 @@ export default function TopicDetailPage() {
                   stakeCounts={stakeCounts}
                   onSettlementToggle={(msgId) => setSettlementOpenMsgId(settlementOpenMsgId === msgId ? null : msgId)}
                   settlementOpenMsgId={settlementOpenMsgId}
+                  stanceHighlight={stanceHighlight}
+                  settlementEntryHighlight={settlementEntryHighlight}
+                  crossClassifyRefs={crossClassifyRefs}
+                  onCrossRefTagClick={handleCrossRefTagClick}
                   onDebugRects={setDebugRects}
                 />
             )}
@@ -3625,7 +4016,9 @@ export default function TopicDetailPage() {
                     ? tagSecondaryOptions
                     : relationType === "arrange"
                       ? ["vertical", "horizontal"]
-                      : correctSecondaryOptions;
+                      : relationType === "reference"
+                        ? ["none", "evidence", "custom"]
+                        : correctSecondaryOptions;
                 return (
                   <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
                     <span style={{ opacity: 0.85 }}>附加关系：</span>
@@ -3638,13 +4031,25 @@ export default function TopicDetailPage() {
                   </div>
                 );
               })()}
+              {/* Label input: REPLY (auto-filled, read-only) or REFERENCE+custom (editable) */}
+              {relationType === "reply" && (
               <input
                 style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: relationType === "reply" ? "#1a1a1a" : "#222", color: relationType === "reply" ? "#999" : "#eee", fontSize: 12 }}
-                placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签由附加关系决定" : "关系标签"}
+                placeholder={relationType === "annotation" ? "注释标签" : relationType === "reply" ? "回复标签由附加关系决定" : "关系标签"}
                 value={relationType === "reply" ? replyAdditionalLabel(secondaryRelationType) : relationLabel}
                 readOnly={relationType === "reply"}
                 onChange={e => relationType !== "reply" && setRelationLabel(e.target.value)}
               />
+              )}
+              {/* REFERENCE(自定义): show label input for custom text */}
+              {relationType === "reference" && secondaryRelationType === "custom" && (
+              <input
+                style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }}
+                placeholder="输入自定义引用标签"
+                value={relationLabel}
+                onChange={e => setRelationLabel(e.target.value)}
+              />
+              )}
               <div key={composerRefreshKey}>
               {(() => {
                 const textAreaDisabled =
@@ -3762,6 +4167,23 @@ export default function TopicDetailPage() {
                 {recentRelations.map(m => <li key={m.id}>{m.id}：{m.content.slice(0, 60)}{m.content.length > 60 ? "…" : ""}</li>)}
               </ul>
             </div>
+          </div>
+          {/* Phase 5: Stance History Panel */}
+          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 600 }}>📋 表态历史</div>
+              <button
+                onClick={() => setShowStanceHistory(!showStanceHistory)}
+                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showStanceHistory ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
+              >
+                {showStanceHistory ? '收起' : '展开'}
+              </button>
+            </div>
+            {showStanceHistory && user && (
+              <div style={{ marginTop: 8 }}>
+                <StanceHistoryPanel userId={user.id} topicId={topicId} />
+              </div>
+            )}
           </div>
           {/* DEBUG: rectangle info */}
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>

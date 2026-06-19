@@ -1668,6 +1668,14 @@ export interface GraphViewProps {
   onSettlementToggle?: (messageId: string) => void;
   /** Phase 3: currently open settlement message ID (for active state styling) */
   settlementOpenMsgId?: string | null;
+  /** Phase 5: Stance path highlight — { stanceMsgId, evidenceMsgIds } */
+  stanceHighlight?: { stanceMsgId: string; evidenceMsgIds: string[] } | null;
+  /** Phase 5: Settlement entry highlight filter for SettlementPanel */
+  settlementEntryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string } | null;
+  /** 跨分类引用标签：msgId → { outgoing: { "证据": [...], "引用": [...], ... }, incoming: {...} } */
+  crossClassifyRefs?: Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>;
+  /** 点击跨分类引用标签：选中关系消息 */
+  onCrossRefTagClick?: (e: React.MouseEvent, relMsgIds: string[]) => void;
   /** DEBUG: callback to report frame/card rectangles */
   onDebugRects?: (text: string) => void;
 }
@@ -1687,6 +1695,10 @@ export default function GraphView(props: GraphViewProps) {
     stakeCounts,
     onSettlementToggle,
     settlementOpenMsgId,
+    stanceHighlight,
+    settlementEntryHighlight,
+    crossClassifyRefs,
+    onCrossRefTagClick,
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
@@ -2547,8 +2559,14 @@ export default function GraphView(props: GraphViewProps) {
       if (normalized === "answer" || normalized === "回答") return "回答";
       return "回复";
     }
+    function referenceEdgeLabel(raw: string): string {
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === "evidence" || normalized === "证据") return "证据";
+      return (normalized === "reference" || normalized === "ref") ? "引用" : raw;
+    }
     const labelText = (e: DemoEdge, author: string) => {
       if (e.relationType === "reply") return `${author} · ${replyEdgeLabel(e.relationLabel)}`;
+      if (e.relationType === "reference") return `${author} · ${referenceEdgeLabel(e.relationLabel)}`;
       return `${author} · ${edgeLabelName(e.relationType)}`;
     };
 
@@ -2866,13 +2884,15 @@ export default function GraphView(props: GraphViewProps) {
             const topicTitle = getRelationTitle(msg.relationPayload) || `分类（${targetCount}）`;
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             const isActive = lastClickedMessageId === msg.id;
+            const isTopicStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
+            const isTopicStanceEvidence = stanceHighlight?.evidenceMsgIds.includes(msg.id) ?? false;
             return (
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
                 onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-                style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,
-                  border:isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
-                  padding:"12px 16px",boxShadow:isWhole?"0 8px 20px rgba(11,132,255,0.22)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
+                style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:isTopicStanceTarget?"#2a2410":"#1f1f1f",borderRadius:6,
+                  border:isTopicStanceTarget?"2px solid #f59e0b":isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  padding:"12px 16px",boxShadow:isTopicStanceTarget?"0 0 16px rgba(245,158,11,0.35), 0 4px 10px rgba(0,0,0,0.5)":isWhole?"0 8px 20px rgba(11,132,255,0.22)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
                   gap:8,cursor:"pointer",outline:isActive?"1px dashed #0b84ff":"none",userSelect:"none",color:"#f5f5f5"}}>
                 <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
                   <span>{`分类 ${msg.id}`}</span>
@@ -2900,11 +2920,31 @@ export default function GraphView(props: GraphViewProps) {
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
           const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
           const corrBadges = correctionsBySourceMsgId.get(msg.id) ?? [];
+
+          // Phase 5: Stance path highlighting
+          const isStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
+          const isStanceEvidence = stanceHighlight?.evidenceMsgIds.includes(msg.id) ?? false;
+          const stanceBorder = isStanceTarget
+            ? '2px solid #f59e0b'
+            : isStanceEvidence
+              ? '1px solid rgba(245,158,11,0.6)'
+              : undefined;
+          const stanceShadow = isStanceTarget
+            ? '0 0 16px rgba(245,158,11,0.35), 0 4px 10px rgba(0,0,0,0.5)'
+            : isStanceEvidence
+              ? '0 0 8px rgba(245,158,11,0.18), 0 4px 10px rgba(0,0,0,0.5)'
+              : undefined;
+          const stanceBg = isStanceTarget
+            ? '#2a2410'
+            : isStanceEvidence
+              ? '#242015'
+              : undefined;
+
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:stanceBg||"#1f1f1f",borderRadius:6,border:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444"),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
               {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
@@ -3000,6 +3040,36 @@ export default function GraphView(props: GraphViewProps) {
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
               </div>
+              {/* 跨分类引用标签（按二级标签分组） */}
+              {msg.kind === "normal" && crossClassifyRefs && (() => {
+                const ref = crossClassifyRefs.get(msg.id);
+                if (!ref) return null;
+                const tags: { label: string; relMsgIds: string[]; direction: "out" | "in" }[] = [];
+                for (const [lbl, ids] of Object.entries(ref.outgoing)) {
+                  if (ids.length > 0) tags.push({ label: lbl, relMsgIds: ids, direction: "out" });
+                }
+                for (const [lbl, ids] of Object.entries(ref.incoming)) {
+                  if (ids.length > 0) tags.push({ label: lbl, relMsgIds: ids, direction: "in" });
+                }
+                if (tags.length === 0) return null;
+                return (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                    {tags.map(({ label, relMsgIds, direction }) => (
+                      <span key={`${direction}-${label}`}
+                        onClick={ev => { ev.stopPropagation(); onCrossRefTagClick?.(ev, relMsgIds); }}
+                        title={`${direction === "out" ? "引用" : "被引用"}：${label}（${relMsgIds.length}条）\n单击选中关系消息`}
+                        style={{
+                          background: direction === "out" ? "rgba(99,102,241,0.15)" : "rgba(99,102,241,0.08)",
+                          color: direction === "out" ? "#a5b4fc" : "#c7d2fe", borderRadius: 4,
+                          fontSize: 10, padding: "1px 6px", cursor: "pointer", userSelect: "none",
+                          border: direction === "out" ? "1px solid rgba(99,102,241,0.3)" : "1px solid rgba(99,102,241,0.15)",
+                          fontWeight: 600,
+                        }}
+                      >{direction === "out" ? "📤→" : "📥←"} {label} {relMsgIds.length}</span>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           );
         })}
@@ -3013,7 +3083,7 @@ export default function GraphView(props: GraphViewProps) {
           width: 360,
           zIndex: 100,
         }}>
-          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} />
+          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} />
           <RoundHistory messageId={settlementOpenMsgId} compact />
         </div>
       )}
@@ -3060,7 +3130,29 @@ export default function GraphView(props: GraphViewProps) {
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
             const angle=Math.atan2(end.y-ctrl.y,end.x-ctrl.x),al=7,aa=Math.PI/7;
             const ax1=end.x-al*Math.cos(angle-aa),ay1=end.y-al*Math.sin(angle-aa),ax2=end.x-al*Math.cos(angle+aa),ay2=end.y-al*Math.sin(angle+aa);
-            const color=edge.relationType==="annotation"?"rgba(255,215,0,0.92)":edge.relationType==="reference"?"rgba(80,180,255,0.92)":edge.relationType==="reply"?"rgba(160,255,140,0.72)":edge.relationType==="agree"?"rgba(2,170,90,0.92)":edge.relationType==="disagree"?"rgba(210,50,50,0.92)":"rgba(120,120,120,0.72)";
+            // Phase 5: Stance highlight edge coloring
+            const isStanceEdge = stanceHighlight && (
+              (edge.relationType === 'agree' || edge.relationType === 'disagree') &&
+              edge.to.messageId === stanceHighlight.stanceMsgId &&
+              stanceHighlight.evidenceMsgIds.includes(edge.from.messageId)
+            );
+            const isEvidenceEdge = stanceHighlight && (
+              edge.relationType === 'reference' &&
+              (edge.relationLabel === '证据' || edge.relationLabel === 'evidence') &&
+              stanceHighlight.evidenceMsgIds.includes(edge.from.messageId) &&
+              stanceHighlight.evidenceMsgIds.includes(edge.to.messageId)
+            );
+            const color = isEvidenceEdge
+              ? 'rgba(245,158,11,0.95)'  // gold for evidence edges
+              : isStanceEdge
+                ? (edge.relationType === 'agree' ? 'rgba(34,197,94,0.95)' : 'rgba(239,68,68,0.95)')  // brighter green/red for stance edges
+                : edge.relationType === 'annotation' ? 'rgba(255,215,0,0.92)'
+                : edge.relationType === 'reference' ? 'rgba(80,180,255,0.92)'
+                : edge.relationType === 'reply' ? 'rgba(160,255,140,0.72)'
+                : edge.relationType === 'agree' ? 'rgba(2,170,90,0.92)'
+                : edge.relationType === 'disagree' ? 'rgba(210,50,50,0.92)'
+                : 'rgba(120,120,120,0.72)';
+            const edgeStrokeWidth = (isStanceEdge || isEvidenceEdge) ? 2.0 : edge.relationType === 'reply' ? 1.0 : 1.2;
             const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
             const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
             const labelStroke=isWhole||isFrag?"rgba(11,132,255,0.95)":"rgba(0,0,0,0.85)";
@@ -3068,7 +3160,7 @@ export default function GraphView(props: GraphViewProps) {
             const isBlankCorrected=anonCorrectedRelMsgIds.has(relId);
             return (
               <g key={pe.drawId}>
-                {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edge.relationType==="reply"?1.0:1.2} fill="none"/>}
+                {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edgeStrokeWidth} fill="none" strokeDasharray={isEvidenceEdge?"6 3":undefined}/>}
                 {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
                 {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
                 {/* Text with stroke for readability against any background */}

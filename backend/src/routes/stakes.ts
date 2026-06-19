@@ -41,11 +41,17 @@ router.post('/', requireAuth, async (req: AuthRequest, res: Response, next: Next
       return;
     }
 
+    // Auto-assign to active round if one exists for this message
+    const activeRound = await prisma.settlementRound.findFirst({
+      where: { messageId, status: { in: ['OPEN', 'VOTING'] } },
+      select: { id: true },
+    });
+
     const result = await applyEvent({
       type: 'STAKE_PLACED',
       actorId: userId,
       topicId: message.topicId,
-      payload: { messageId, side, amount },
+      payload: { messageId, side, amount, roundId: activeRound?.id ?? null },
     });
 
     res.status(201).json({ message: '押注成功', ...(result as Record<string, unknown>) });
@@ -59,7 +65,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const messageId = req.params.id as string;
 
-    const [betPool, stakes, proAgg, conAgg, trueVoteAgg, falseVoteAgg] = await Promise.all([
+    const [betPool, stakes, proAgg, conAgg] = await Promise.all([
       prisma.betPool.findUnique({
         where: { messageId },
         select: { lockedPro: true, lockedCon: true },
@@ -73,14 +79,12 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
           side: true,
           amount: true,
           createdAt: true,
+          roundId: true,
           user: { select: { id: true, username: true } },
         },
       }),
       prisma.stake.aggregate({ where: { messageId, side: 'PRO' }, _sum: { amount: true } }),
       prisma.stake.aggregate({ where: { messageId, side: 'CON' }, _sum: { amount: true } }),
-      // VoteStakes also count toward PRO/CON support (TRUE→PRO, FALSE→CON)
-      prisma.voteStake.aggregate({ where: { round: { messageId }, vote: 'TRUE' }, _sum: { amount: true } }),
-      prisma.voteStake.aggregate({ where: { round: { messageId }, vote: 'FALSE' }, _sum: { amount: true } }),
     ]);
 
     res.json({
@@ -88,8 +92,8 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
       pool: betPool ?? { lockedPro: 0, lockedCon: 0 },
       stakes,
       counts: {
-        pro: (proAgg._sum.amount ?? 0) + (trueVoteAgg._sum.amount ?? 0),
-        con: (conAgg._sum.amount ?? 0) + (falseVoteAgg._sum.amount ?? 0),
+        pro: proAgg._sum.amount ?? 0,
+        con: conAgg._sum.amount ?? 0,
       },
     });
   } catch (err) {

@@ -377,6 +377,7 @@ export interface StakeItem {
   side: 'PRO' | 'CON';
   amount: number;
   createdAt: string;
+  roundId?: string | null;
   user: User;
 }
 
@@ -440,4 +441,72 @@ export interface VoteCastResult {
   newAvailable: number;
   newLocked: number;
   newBalance: number;
+}
+
+// ============================================================
+// Stance Types (Phase 5)
+// ============================================================
+
+export interface StanceRelation {
+  kind: 'relation';
+  id: string;
+  topicId: string;
+  topicTitle: string;
+  type: string; // AGREE | DISAGREE
+  payload: unknown;
+  targetRefs: unknown;
+  createdAt: string;
+}
+
+export interface StanceVote {
+  kind: 'vote';
+  id: string;
+  topicId: string;
+  topicTitle: string;
+  messageId: string;
+  vote: string;
+  amount: number;
+  roundStatus: string;
+  roundResult: string | null;
+  createdAt: string;
+}
+
+export interface StanceStake {
+  kind: 'stake';
+  id: string;
+  topicId: string;
+  topicTitle: string;
+  messageId: string;
+  side: string;
+  amount: number;
+  createdAt: string;
+}
+
+export interface StanceEvidence {
+  id: string;
+  topicId: string;
+  topicTitle: string;
+  relationPayload: unknown;
+  targetRefs: unknown;
+  createdAt: string;
+}
+
+export type StanceEntry = StanceRelation | StanceVote | StanceStake;
+
+export interface StanceHistoryResponse {
+  user: { id: string };
+  stances: {
+    relations: StanceRelation[];
+    votes: StanceVote[];
+    stakes: StanceStake[];
+    evidence: StanceEvidence[];
+  };
+  pagination: {
+    page: number;
+    limit: number;
+    totalRelations: number;
+    totalVotes: number;
+    totalStakes: number;
+    totalEvidence: number;
+  };
 }

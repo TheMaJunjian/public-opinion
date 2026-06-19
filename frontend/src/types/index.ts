@@ -176,6 +176,13 @@ export interface PresentationSpec {
    * authoritative content with the original dimmed or accessible via double-click.
    */
   replacesTarget?: boolean;
+  /**
+   * True for container-type relations (CLASSIFY, MERGE, SUMMARY).
+   * Container relations group messages but do NOT count as focus-distance hops.
+   * In focus mode, container cards appear at the hop distance of their nearest
+   * connected message; their children are expanded at that distance + 1.
+   */
+  isContainer?: boolean;
 }
 
 /**
@@ -191,9 +198,9 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
   CORRECT:     { kind: 'correction-badge',  label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
   ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true   },
-  CLASSIFY:    { kind: 'edge-label',        label: '分类', color: 'gray',   formsTrees: false },
-  MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },
-  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true },
+  CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true,   isContainer: true  },
+  MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true,   isContainer: true  },
+  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true, isContainer: true  },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
 };

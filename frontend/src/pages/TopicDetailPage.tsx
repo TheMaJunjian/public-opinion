@@ -14,6 +14,7 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
 import StanceHistoryPanel from '../components/StanceHistoryPanel';
+import { applyContainerExpansion } from '../utils/focusContainer';
 
 // ========================= Helpers =========================
 
@@ -2919,6 +2920,12 @@ export default function TopicDetailPage() {
       adj.get(a)!.add(b); adj.get(b)!.add(a);
     }
     for (const e of edges) {
+      // Container-type relations (CLASSIFY, MERGE, SUMMARY) do NOT count as
+      // focus-distance hops.  They use a two-level visibility model:
+      //   - Container card is shown when its nearest connected message is within range.
+      //   - Container children are expanded when range has 1+ hop of budget remaining.
+      // This prevents the entire cluster from appearing at distance 1.
+      if (getPresentationSpec(e.relationType).isContainer) continue;
       // Only add a direct from↔to hop if at least one endpoint is a normal text message.
       // Relation-to-relation connections (e.g. a CORRECT relation linking two relation messages)
       // should not count as focus-distance hops.
@@ -2964,12 +2971,18 @@ export default function TopicDetailPage() {
       const m = msgMap.get(id);
       if (m && m.kind === "relation") {
         relationFocusIds.add(id);
-        const sizeBefore = effectiveStartIds.size;
-        collectNormalMessagesForRelation(id, new Set<string>());
-        // Fallback: relation has no connected normal messages (e.g. pure-stance
-        // with anon source).  Keep the relation message itself as BFS root so
-        // focus mode still shows something.
-        if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);
+        // When a container-type relation is the focus at hop=0, don't resolve
+        // its children — only the container card itself should be shown.
+        // At hop >= 1, resolve normally so children appear as the container expands.
+        const isContainer = m.relationType ? getPresentationSpec(m.relationType).isContainer : false;
+        if (!(focusHop === 0 && isContainer)) {
+          const sizeBefore = effectiveStartIds.size;
+          collectNormalMessagesForRelation(id, new Set<string>());
+          // Fallback: relation has no connected normal messages (e.g. pure-stance
+          // with anon source).  Keep the relation message itself as BFS root so
+          // focus mode still shows something.
+          if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);
+        }
         // Also include the relation message itself as a BFS root so that
         // external messages connected directly to the relation (not via its
         // resolved normal messages) are reachable at hop=1.
@@ -3059,6 +3072,11 @@ export default function TopicDetailPage() {
         q.push(nb);
       }
     }
+    // ── Container expansion (two-level visibility model) ──
+    // Delegated to applyContainerExpansion (focusContainer.ts) which is
+    // independently unit-tested.  See that module for the full expansion rules.
+    applyContainerExpansion(dist, edges, focusHop);
+
     const messagesToShowArr = messages.filter(m => dist.has(m.id));
     const shownIds = new Set(messagesToShowArr.map(m => m.id));
     const relationMessagesToAdd = new Set<string>();
@@ -3105,10 +3123,19 @@ export default function TopicDetailPage() {
     // Additionally, edges belonging to a directly-focused relation message are always
     // shown so that the relation structure is fully visible even at hop=0
     // (Bug fix: focus mode relation message visibility).
+    //
+    // Container-type edges (CLASSIFY, MERGE, SUMMARY): always show when the
+    // container is in shownSet.  The frame rendering in GraphView will only
+    // display children that are actually in messagesToShow (with layout boxes).
+    // Children not independently reachable are hidden inside the frame.
     const edgesToShowArr = edges.filter(e => {
       if (!shownSet.has(e.relationMessageId)) return false;
       // Always show all edges of a directly-focused relation message
       if (relationFocusIds.has(e.relationMessageId)) return true;
+      // Container edges: always visible when container is in shownSet.
+      // GraphView renders the frame border + header; only children with
+      // layout boxes (in messagesToShow) appear inside the frame.
+      if (getPresentationSpec(e.relationType).isContainer) return true;
       const fromOk = shownSet.has(e.from.messageId) || e.from.messageId.startsWith('anon:');
       const toOk = shownSet.has(e.to.messageId);
       return fromOk || toOk;
@@ -3211,7 +3238,7 @@ export default function TopicDetailPage() {
     return result;
   }, [edges, msgMap, graphVisibleTextIds]);
 
-  const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender } = useMemo(() => {
+  const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender, hideMessageIds } = useMemo(() => {
     const useFocusWindow = focusEntries.length > 0 && !isTopicFocus;
     const baseMessages = useFocusWindow ? messagesToShow : messages;
     const baseEdges = useFocusWindow ? edgesToShow : edges;
@@ -3366,17 +3393,23 @@ export default function TopicDetailPage() {
     // classified, and the arrange container itself should not appear in the main view.
     // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are classified (via listExclusiveRelMsgIds).
+    //
+    // In focus mode (useFocusWindow), baseMessages is already correctly filtered by
+    // the BFS + container expansion logic.  The classified-message hiding below is
+    // only for the main (non-focus) view.
     const listHiddenRelationIds = new Set<string>([
       ...classifyOwnership.relationIds,
       ...classifiedTargetSummaryRelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
-    const listMessages = baseMessages.filter(m => {
-      if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
-      if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
-      return true;
-    });
+    const listMessages = useFocusWindow
+      ? baseMessages
+      : baseMessages.filter(m => {
+          if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
+          if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
+          return true;
+        });
     const listVisibleIds = new Set(listMessages.map(m => m.id));
     // Edge is visible in list view when the relation message is visible AND
     // the edge does not connect to a classified (hidden) text endpoint.
@@ -3397,6 +3430,9 @@ export default function TopicDetailPage() {
     // classified via collectOwnedByRelation, and the arrange container should not appear.
     // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are in the hidden set (via graphExclusiveRelMsgIds).
+    //
+    // In focus mode (useFocusWindow), baseMessages is already correctly filtered by
+    // the BFS + container expansion logic — skip the classified-message hiding.
     const graphHiddenRelationIds = new Set<string>([
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
@@ -3406,12 +3442,21 @@ export default function TopicDetailPage() {
       ...graphExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
-    const graphMessages = baseMessages.filter(m => {
-      if (m.kind === "normal" && graphHiddenTextIds.has(m.id)) return false;
-      if (m.kind === "relation" && graphHiddenRelationIds.has(m.id)) return false;
-      return true;
-    });
+    const graphMessages = useFocusWindow
+      ? baseMessages
+      : baseMessages.filter(m => {
+          if (m.kind === "normal" && graphHiddenTextIds.has(m.id)) return false;
+          if (m.kind === "relation" && graphHiddenRelationIds.has(m.id)) return false;
+          return true;
+        });
     const graphVisibleIds = new Set(graphMessages.map(m => m.id));
+
+    // In focus mode, container-type relation messages (CLASSIFY, MERGE, SUMMARY)
+    // are rendered as frames (via their edges in GraphView), not as message cards.
+    // We keep them in graphMessagesToRender so that GraphView's msgMap can look up
+    // their author/title for frame headers.  GraphView skips card rendering for
+    // frame-type messages (isAnyFrameRel check).
+    const graphMessagesToRender = graphMessages;
     // Edge is visible in graph view when the relation message is visible AND
     // the edge does not connect to a classified (hidden) text endpoint.
     // Edges of directly-focused relation messages are always included
@@ -3428,11 +3473,23 @@ export default function TopicDetailPage() {
       const toOk = graphVisibleIds.has(e.to.messageId);
       return fromOk && toOk;
     });
+    // In focus mode, container-type relation messages (CLASSIFY, MERGE, SUMMARY)
+    // are rendered as group frames — skip their individual message cards.
+    // In non-focus mode, they show as topic cards (e.g. "双击进入分类").
+    const hideMessageIds = useFocusWindow
+      ? new Set(
+          graphMessages
+            .filter(m => m.kind === 'relation' && m.relationType && getPresentationSpec(m.relationType).isContainer)
+            .map(m => m.id)
+        )
+      : undefined;
+
     return {
-      graphMessagesToRender: graphMessages,
+      graphMessagesToRender: graphMessagesToRender,
       graphEdgesToRender: graphEdges,
       listMessagesToRender: listMessages,
       listEdgesToRender: listEdges,
+      hideMessageIds,
     };
   }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
 
@@ -3912,6 +3969,7 @@ export default function TopicDetailPage() {
                   onGroupFrameDoubleClick={handleGroupFrameDoubleClick}
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
+                  hideMessageIds={hideMessageIds}
                   stakeCounts={stakeCounts}
                   onSettlementToggle={(msgId) => setSettlementOpenMsgId(settlementOpenMsgId === msgId ? null : msgId)}
                   settlementOpenMsgId={settlementOpenMsgId}
@@ -3948,7 +4006,7 @@ export default function TopicDetailPage() {
                     设为焦点消息
                   </button>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isTopicFocus ? `退出当前${topicFocusKindLabel}并恢复进入前现场` : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>{isTopicFocus ? topicFocusExitLabel : "退出焦点"}</button>
+                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isTopicFocus ? `退出当前${topicFocusKindLabel}并恢复进入前现场` : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>退出焦点</button>
                     <button onClick={exitAllFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#333" : "#222", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
                   </div>
                 </div>

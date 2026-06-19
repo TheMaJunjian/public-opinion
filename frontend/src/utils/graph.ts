@@ -199,6 +199,9 @@ export function computeTextHops(
  *   2. A relation is shown only when ALL of its text-message endpoints are visible.
  *      (This includes recursive relations that target relation messages —
  *       those are shown when the text messages on both sides of the chain are visible.)
+ *   3. Container-type relations (CLASSIFY, MERGE, SUMMARY) use a two-level visibility
+ *      model: the container card is shown when any target is within range; the
+ *      container's children are expanded when maxHops >= 2.
  *
  * @param messages       All text messages in the topic
  * @param relations      All relations in the topic
@@ -223,6 +226,9 @@ export function buildFocusSubgraph(
   const visibleRelations = new Set<string>();
   const relMap = new Map<string, Relation>(relations.map(r => [r.id, r]));
 
+  // Container-type relations: CLASSIFY, MERGE, SUMMARY
+  const CONTAINER_TYPES = new Set(['CLASSIFY', 'MERGE', 'SUMMARY']);
+
   // First pass: mark relations whose source + all message-targets are visible
   let changed = true;
   while (changed) {
@@ -233,8 +239,13 @@ export function buildFocusSubgraph(
       // if their targets are visible (they have no source to check).
       if (rel.sourceMessageId && !visibleMessages.has(rel.sourceMessageId)) continue;
 
+      const isContainer = CONTAINER_TYPES.has(rel.relationType);
+
       const allTargetsVisible = rel.targetRefs.every(ref => {
         if (ref.kind === 'message' || ref.kind === 'text-fragment') {
+          // For container relations, only need at least one target visible
+          // (checked below).  Return true here to not block the every() check.
+          if (isContainer) return true;
           return visibleMessages.has(ref.messageId);
         }
         if (ref.kind === 'relation') {
@@ -244,9 +255,36 @@ export function buildFocusSubgraph(
         return true;
       });
 
-      if (allTargetsVisible) {
-        visibleRelations.add(rel.id);
-        changed = true;
+      // For container relations, the relation is visible if at least one
+      // text-message target is in the visible set (not all targets).
+      if (isContainer) {
+        const anyTextTargetVisible = rel.targetRefs.some(ref =>
+          (ref.kind === 'message' || ref.kind === 'text-fragment') &&
+          visibleMessages.has(ref.messageId)
+        );
+        if (!anyTextTargetVisible) continue;
+      } else if (!allTargetsVisible) {
+        continue;
+      }
+
+      visibleRelations.add(rel.id);
+      changed = true;
+
+      // Container expansion: add ALL text-message targets to the visible set
+      // when maxHops >= 2.  This implements the standard two-level model:
+      //   distance=1 → container card visible (children hidden)
+      //   distance>=2 → container expanded (all children visible)
+      //
+      // Note: the inline BFS in TopicDetailPage.tsx has a more precise expansion
+      // rule that also expands when children are reached through cross-cutting
+      // reference edges (minDist > 0 && hasVisibleChild).  That level of
+      // precision requires per-message distance tracking not available here.
+      if (isContainer && maxHops >= 2) {
+        for (const ref of rel.targetRefs) {
+          if (ref.kind === 'message' || ref.kind === 'text-fragment') {
+            visibleMessages.add(ref.messageId);
+          }
+        }
       }
     }
   }

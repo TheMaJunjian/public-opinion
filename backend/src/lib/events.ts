@@ -41,14 +41,17 @@ export interface MessageCreatedEvent {
   actorId: string;
   topicId: string;
   payload: {
+    kind?: 'TEXT' | 'ROUND' | 'GOVERNANCE' | 'CODE';
     contentType?: 'TEXT' | 'MARKDOWN';
-    content: string;
+    content?: string;
     quoteSourceId?: string | null;
     quotedText?: string | null;
     quotedTextHash?: string | null;
     quoteContextBefore?: string | null;
     quoteContextAfter?: string | null;
-    stakeAmount?: number; // Phase 2: override selfStakeOnCreate
+    stakeAmount?: number;
+    targetMessageId?: string;       // Phase 6: for ROUND messages
+    note?: string | null;           // Phase 6: round note
   };
 }
 
@@ -309,8 +312,83 @@ async function applyTopicStatusChanged(event: TopicStatusChangedEvent) {
 
 async function applyMessageCreated(event: MessageCreatedEvent) {
   const { actorId, topicId, payload } = event;
+  const kind = payload.kind ?? 'TEXT';
 
-  // Check if user has enough balance for self-stake
+  // ── ROUND messages: create SettlementRound as side effect ──
+  if (kind === 'ROUND') {
+    if (!payload.targetMessageId) throw new Error('ROUND 消息必须指定目标消息');
+
+    // Validate target message
+    const targetMsg = await prisma.message.findUnique({
+      where: { id: payload.targetMessageId },
+      select: { id: true, kind: true },
+    });
+    if (!targetMsg) throw new Error('目标消息不存在');
+
+    // Check user not debt-frozen
+    const bal = await prisma.balance.findUnique({
+      where: { userId: actorId },
+      select: { debtFrozen: true },
+    });
+    if (bal?.debtFrozen) throw new Error('账户负债冻结，无法发起结算');
+
+    // Concurrent constraint
+    const existing = await prisma.settlementRound.findFirst({
+      where: { messageId: payload.targetMessageId, status: { in: ['OPEN', 'VOTING'] } },
+    });
+    if (existing) throw new Error('该消息已有进行中的结算轮次');
+
+    // Link to latest settled round
+    const latestSettled = await prisma.settlementRound.findFirst({
+      where: { messageId: payload.targetMessageId, status: 'SETTLED' },
+      orderBy: { closedAt: 'desc' },
+      select: { id: true },
+    });
+
+    const [message] = await prisma.$transaction([
+      prisma.message.create({
+        data: {
+          topicId,
+          createdById: actorId,
+          kind: 'ROUND',
+          content: null,
+          targetRefs: [{ messageId: payload.targetMessageId }],
+          relationPayload: { note: payload.note ?? null },
+        },
+        include: { createdBy: { select: { id: true, username: true } } },
+      }),
+      // Create SettlementRound (settlement engine unchanged)
+      prisma.settlementRound.create({
+        data: {
+          messageId: payload.targetMessageId,
+          createdByUserId: actorId,
+          status: 'VOTING',
+          previousRoundId: latestSettled?.id ?? null,
+          note: payload.note ?? null,
+        },
+      }),
+      prisma.auditLog.create({
+        data: {
+          actorId,
+          action: 'MESSAGE_CREATED',
+          entityType: 'Message',
+          entityId: '',
+          topicId,
+          data: { kind: 'ROUND', targetMessageId: payload.targetMessageId },
+        },
+      }),
+    ]);
+
+    await prisma.auditLog.updateMany({
+      where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
+      data: { entityId: message.id },
+    });
+
+    return message;
+  }
+
+  // ── TEXT / GOVERNANCE / CODE messages ──
+  if (!payload.content) throw new Error(`${kind} 消息内容不能为空`);
   const rule = await prisma.ruleVersion.findFirst({
     where: { status: 'ACTIVE' },
     orderBy: { version: 'desc' },
@@ -325,12 +403,14 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     }
   }
 
+  if (!payload.content) throw new Error('TEXT 消息内容不能为空');
+
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
         topicId,
         createdById: actorId,
-        kind: 'TEXT',
+        kind: kind as 'TEXT' | 'GOVERNANCE' | 'CODE',
         contentType: payload.contentType ?? 'TEXT',
         content: payload.content,
         quoteSourceId: payload.quoteSourceId ?? null,
@@ -349,7 +429,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
         entityId: '',
         topicId,
         data: {
-          kind: 'TEXT',
+          kind,
           contentType: payload.contentType ?? 'TEXT',
           content: payload.content,
           quoteSourceId: payload.quoteSourceId,
@@ -1398,6 +1478,18 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   );
 
   await prisma.$transaction(ledgerOps);
+
+  // ── Phase 6: Create ROUND_RESULT message ──
+  await prisma.message.create({
+    data: {
+      topicId,
+      createdById: actorId,
+      kind: 'ROUND_RESULT',
+      content: null,
+      targetRefs: [{ messageId }],
+      relationPayload: { roundId: payload.roundId, result, weights, totalPro, totalCon },
+    },
+  });
 
   return {
     roundId: payload.roundId,

@@ -1,7 +1,7 @@
 import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 
-export type MessageKind = "normal" | "relation";
+export type MessageKind = "normal" | "relation" | "round" | "round_result" | "governance" | "code";
 export type RelationType =
   | "annotation"
   | "reference"
@@ -34,6 +34,7 @@ export type DemoMessage = {
   createdAt: string;
   content: string;
   kind: MessageKind;
+  backendKind?: string;        // Phase 6: for visual labels (round/governance/code)
   relationType?: RelationType;
   relationPayload?: RelationPayload;
 };
@@ -72,6 +73,25 @@ function relationTypeName(t: string): string {
   return getPresentationSpec(t).label;
 }
 
+function mapBackendKind(backendKind: string): MessageKind {
+  // ROUND/ROUND_RESULT/GOVERNANCE/CODE are content messages → "normal"
+  // RELATION stays "relation"
+  if (backendKind === 'RELATION') return 'relation';
+  return 'normal';
+}
+
+function kindLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    TEXT: '[文本消息]',
+    GOVERNANCE: '[治理提案]',
+    CODE: '[代码变更]',
+    ROUND: '[发起结算]',
+    ROUND_RESULT: '[结算完成]',
+    RELATION: '[关系消息]',
+  };
+  return labels[kind] ?? `[${kind}]`;
+}
+
 function normalizeReplyAdditional(label: string | undefined): "reply" | "question" | "answer" {
   if (!label) return "reply";
   const normalized = label.trim().toLowerCase();
@@ -98,8 +118,9 @@ export function convertMessagesToDemoModel(
     id: m.id,
     author: m.createdBy.username,
     createdAt: m.createdAt,
-    content: m.content,
-    kind: "normal",
+    content: m.content ?? kindLabel((m as any).kind ?? 'TEXT'),
+    kind: mapBackendKind((m as any).kind ?? 'TEXT'),
+    backendKind: (m as any).kind,
   }));
 
   const demoEdges: DemoEdge[] = [];

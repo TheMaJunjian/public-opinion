@@ -15,6 +15,8 @@ import stakesRouter from './routes/stakes';
 import roundsRouter from './routes/rounds';
 import stancesRouter from './routes/stances';
 import debugLogRouter from './routes/debugLog';
+import auditLogsRouter from './routes/auditLogs';
+import revenueRouter from './routes/revenue';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -57,10 +59,12 @@ app.use('/api/topics/:topicId/messages', writeLimiter, messagesRouter);
 app.use('/api/topics/:topicId/relations', writeLimiter, relationsRouter);
 app.use('/api/points', pointsRouter);
 app.use('/api/rules', rulesRouter);
-app.use('/api/messages/:id/stakes', writeLimiter, stakesRouter);
+app.use('/api/messages/:id/stakes', stakesRouter);
 app.use('/', writeLimiter, roundsRouter);
 app.use('/', writeLimiter, stancesRouter);
 app.use('/api/debug-log', debugLogRouter);
+app.use('/', auditLogsRouter);
+app.use('/', revenueRouter);
 
 // Health check
 app.get('/health', (_req, res) => {

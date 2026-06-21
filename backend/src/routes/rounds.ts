@@ -18,52 +18,44 @@ const voteSchema = z.object({
 });
 
 // ============================================================
-// POST /api/messages/:id/rounds — 发起结算轮次
+// POST /api/messages/:id/rounds — 发起结算（Phase 6：通过创建 ROUND 消息实现）
 // ============================================================
 router.post('/api/messages/:id/rounds', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const messageId = req.params.id as string;
     const data = createRoundSchema.parse(req.body);
 
-    // Validate message exists and get topicId
-    const message = await prisma.message.findUnique({
+    // Validate target message exists and get topicId
+    const targetMsg = await prisma.message.findUnique({
       where: { id: messageId },
       select: { id: true, topicId: true, kind: true },
     });
 
-    if (!message) {
+    if (!targetMsg) {
       res.status(404).json({ error: '消息不存在' });
       return;
     }
 
-    // Validate user not debt-frozen
-    const userBalance = await prisma.balance.findUnique({
-      where: { userId: req.user!.id },
-      select: { debtFrozen: true },
-    });
-    if (userBalance?.debtFrozen) {
-      res.status(403).json({ error: '账户负债冻结，无法发起结算' });
-      return;
-    }
-
-    // Create round (status=OPEN) then transition to VOTING
-    const round = await applyEvent({
-      type: 'ROUND_CREATED',
+    // Create ROUND message (SettlementRound created as side effect in applyMessageCreated)
+    const roundMsg = await applyEvent({
+      type: 'MESSAGE_CREATED',
       actorId: req.user!.id,
-      topicId: message.topicId,
-      payload: { messageId, note: data.note ?? null },
-    });
-
-    // Transition to VOTING
-    const updated = await prisma.settlementRound.update({
-      where: { id: (round as { id: string }).id },
-      data: { status: 'VOTING' },
-      include: {
-        createdBy: { select: { id: true, username: true } },
+      topicId: targetMsg.topicId,
+      payload: {
+        kind: 'ROUND',
+        targetMessageId: messageId,
+        note: data.note ?? null,
       },
     });
 
-    res.status(201).json(updated);
+    // Query the SettlementRound to return familiar data to frontend
+    const round = await prisma.settlementRound.findFirst({
+      where: { messageId, status: 'VOTING' },
+      orderBy: { openedAt: 'desc' },
+      include: { createdBy: { select: { id: true, username: true } } },
+    });
+
+    res.status(201).json({ ...round, roundMessageId: (roundMsg as { id: string }).id });
   } catch (err) {
     next(err);
   }

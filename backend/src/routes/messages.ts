@@ -8,6 +8,7 @@ import { applyEvent } from '../lib/events';
 const messagesRouter = Router({ mergeParams: true });
 
 const createMessageSchema = z.object({
+  kind: z.enum(['TEXT', 'GOVERNANCE', 'CODE']).optional().default('TEXT'),
   contentType: z.enum(['TEXT', 'MARKDOWN']).optional().default('TEXT'),
   content: z.string().min(1, '内容不能为空').max(20000, '内容最多 20000 个字符'),
   quoteSourceId: z.string().optional(),
@@ -36,9 +37,9 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     }
 
     const [total, messages] = await Promise.all([
-      prisma.message.count({ where: { topicId, kind: 'TEXT' } }),
+      prisma.message.count({ where: { topicId, kind: { in: ['TEXT', 'GOVERNANCE', 'CODE', 'ROUND', 'ROUND_RESULT'] } } }),
       prisma.message.findMany({
-        where: { topicId, kind: 'TEXT' },
+        where: { topicId, kind: { in: ['TEXT', 'GOVERNANCE', 'CODE', 'ROUND', 'ROUND_RESULT'] } },
         orderBy: { createdAt: 'asc' },
         skip,
         take: limit,
@@ -81,6 +82,7 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
       actorId: req.user!.id,
       topicId,
       payload: {
+        kind: data.kind,
         contentType: data.contentType,
         content: data.content,
         quoteSourceId: data.quoteSourceId ?? null,

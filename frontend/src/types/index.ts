@@ -26,6 +26,7 @@ export interface Topic {
 export interface Message {
   id: string;
   topicId: string;
+  kind: string;
   contentType: 'TEXT' | 'MARKDOWN';
   content: string;
   createdAt: string;
@@ -516,4 +517,36 @@ export interface StanceHistoryResponse {
     totalStakes: number;
     totalEvidence: number;
   };
+}
+
+// ============================================================
+// Phase 6: Audit Log, Revenue & Governance Types
+// ============================================================
+
+export interface AuditLogEntry {
+  id: string;
+  actorId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  topicId: string | null;
+  createdAt: string;
+  data?: Record<string, unknown> | null;
+  actor?: { id: string; username: string } | null;
+}
+
+export interface RevenuePoolData {
+  id: string;
+  totalReceived: number;
+  totalDistributed: number;
+  balance: number;
+  updatedAt: string;
+}
+
+export interface RevenueDistributionItem {
+  id: string;
+  userId: string;
+  user: { id: string; username: string };
+  amount: number;
+  createdAt: string;
 }

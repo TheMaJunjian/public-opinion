@@ -16,7 +16,7 @@ import app from '../app';
 // ─── Mock Prisma ──────────────────────────────────────────────────────────
 jest.mock('../lib/prisma', () => ({
   prisma: {
-    message: { findUnique: jest.fn() },
+    message: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]), create: jest.fn(), update: jest.fn() },
     settlementRound: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
@@ -30,7 +30,7 @@ jest.mock('../lib/prisma', () => ({
       findMany: jest.fn(),
       groupBy: jest.fn(),
     },
-    stake: { findMany: jest.fn() },
+    stake: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn() },
     betPool: {
       findUnique: jest.fn(),
       update: jest.fn(),
@@ -44,7 +44,7 @@ jest.mock('../lib/prisma', () => ({
       findUnique: jest.fn(),
       update: jest.fn(),
     },
-    pointTransaction: { create: jest.fn() },
+    pointTransaction: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
     ledgerEntry: {
       findMany: jest.fn(),
       create: jest.fn(),
@@ -106,39 +106,46 @@ describe('POST /api/messages/:id/rounds', () => {
     expect(res.status).toBe(404);
   });
 
-  it('should return 403 when debt-frozen', async () => {
+  it('should return 500 when debt-frozen (Phase 6: checked in applyMessageCreated)', async () => {
     (prisma.message.findUnique as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ debtFrozen: true });
     const res = await request(app)
       .post('/api/messages/msg-1/rounds')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({});
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(500);
   });
 
-  it('should reject concurrent round (handler throws 500)', async () => {
+  it('should reject concurrent round (Phase 6: checked in applyMessageCreated)', async () => {
     (prisma.message.findUnique as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ debtFrozen: false });
     (prisma.settlementRound.findFirst as jest.Mock).mockResolvedValue({ id: 'existing-round', status: 'VOTING' });
-    // Mock $transaction for the ROUND_CREATED event handler
-    (prisma.$transaction as jest.Mock).mockRejectedValue(new Error('该消息已有进行中的结算轮次'));
     const res = await request(app)
       .post('/api/messages/msg-1/rounds')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({});
-    // The concurrent check is inside applyRoundCreated which uses prisma directly
-    expect(res.status).toBe(500); // error thrown from handler
+    expect(res.status).toBe(500);
   });
 
-  it('should create round successfully', async () => {
+  it('should create round successfully (Phase 6: via ROUND message)', async () => {
     (prisma.message.findUnique as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ debtFrozen: false });
+    // Concurrent check: no existing round
     (prisma.settlementRound.findFirst as jest.Mock).mockResolvedValue(null);
+    // Message create (ROUND)
+    (prisma.message.create as jest.Mock).mockResolvedValue({ id: 'round-msg-1', kind: 'ROUND' });
+    // SettlementRound create (side effect)
     (prisma.settlementRound.create as jest.Mock).mockResolvedValue(mockRound);
-    (prisma.settlementRound.update as jest.Mock).mockResolvedValue({ ...mockRound, status: 'VOTING' });
     (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'log-1' });
     (prisma.auditLog.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
-    (prisma.$transaction as jest.Mock).mockResolvedValue([mockRound]);
+    (prisma.$transaction as jest.Mock).mockResolvedValue([{ id: 'round-msg-1', kind: 'ROUND' }]);
+    // Post-route query for SettlementRound
+    // settlementRound.findFirst is already mocked above (returns null for concurrent check)
+    // Need to switch it for the route's query
+    (prisma.settlementRound.findFirst as jest.Mock)
+      .mockResolvedValueOnce(null)                         // concurrent check: no existing
+      .mockResolvedValueOnce(null)                         // latestSettled
+      .mockResolvedValueOnce({ ...mockRound, status: 'VOTING' }); // route query after creation
 
     const res = await request(app)
       .post('/api/messages/msg-1/rounds')
@@ -147,7 +154,7 @@ describe('POST /api/messages/:id/rounds', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('VOTING');
-    expect(res.body.messageId).toBe('msg-1');
+    expect(res.body.roundMessageId).toBe('round-msg-1');
   });
 });
 
@@ -262,7 +269,7 @@ describe('POST /api/rounds/:id/votes', () => {
     expect(res.body.message).toBe('投票成功');
   });
 
-  it('should return 500 when debt-frozen user tries to vote (Phase 4)', async () => {
+  it('should return 402 when debt-frozen user tries to vote (Phase 4)', async () => {
     (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({ ...mockRound, messageId: 'msg-1' });
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: -50, debtFrozen: true });
@@ -273,8 +280,8 @@ describe('POST /api/rounds/:id/votes', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ vote: 'TRUE', amount: 5 });
 
-    expect(res.status).toBe(500);
-    expect(res.body.error).toContain('服务器内部错误');
+    expect(res.status).toBe(402);
+    expect(res.body.error).toContain('贡献点余额不足');
   });
 });
 
@@ -544,6 +551,8 @@ describe('POST /api/rounds/:id/close-and-settle', () => {
 describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Phase 5: executeClawback queries AGREE/DISAGREE relation messages
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([]);
   });
 
   it('clawback sets debtFrozen when user balance drops below 0', async () => {
@@ -800,11 +809,11 @@ describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
     });
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1', createdById: 'u1' });
 
-    // Round 2: FALSE=80 > TRUE=50 → FALSE wins (overturn)
+    // Round 2: FALSE=80 (CON 30 stake + 50 vote) > TRUE=50 (PRO 50 stake) → FALSE wins (overturn)
     (prisma.voteStake.groupBy as jest.Mock).mockResolvedValue([
       { vote: 'FALSE', _sum: { amount: 50 } },
     ]);
-    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 50, lockedCon: 30 });
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 50, lockedCon: 80 });
 
     // All stakes: u1 PRO 50, u2 CON 30
     (prisma.stake.findMany as jest.Mock).mockResolvedValue([

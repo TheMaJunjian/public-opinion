@@ -76,6 +76,7 @@ export function getMessages(topicId: string, params?: { page?: number; limit?: n
 }
 
 export function createMessage(topicId: string, data: {
+  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE';
   contentType?: 'TEXT' | 'MARKDOWN';
   content: string;
   stakeAmount?: number;
@@ -145,15 +146,8 @@ export function getCurrentRules() {
 }
 
 // ============================================================
-// Stake API (Phase 2)
+// Stake API (Phase 2 — read-only; writing via messages/relations)
 // ============================================================
-
-export function placeStake(messageId: string, data: { side: 'PRO' | 'CON'; amount: number }) {
-  return request<import('../types').StakeResult>(`/messages/${messageId}/stakes`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
 
 export function getMessageStakes(messageId: string) {
   return request<import('../types').MessageStakes>(`/messages/${messageId}/stakes`);
@@ -202,4 +196,31 @@ export function getUserStances(userId: string, params?: { page?: number; limit?:
   if (params?.limit) qs.set('limit', String(params.limit));
   if (params?.topicId) qs.set('topicId', params.topicId);
   return request<import('../types').StanceHistoryResponse>(`/users/${userId}/stances?${qs}`);
+}
+
+// ============================================================
+// Audit Log API (Phase 6)
+// ============================================================
+
+export function getAuditLogs(params?: { topicId?: string; page?: number; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.topicId) qs.set('topicId', params.topicId);
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.limit) qs.set('limit', String(params.limit));
+  return request<import('../types').PaginatedResponse<import('../types').AuditLogEntry>>(`/audit-logs?${qs}`);
+}
+
+// ============================================================
+// Revenue API (Phase 6)
+// ============================================================
+
+export function getRevenuePool() {
+  return request<import('../types').RevenuePoolData>('/revenue/pool');
+}
+
+export function getRevenueDistributions(params?: { page?: number; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.limit) qs.set('limit', String(params.limit));
+  return request<import('../types').PaginatedResponse<import('../types').RevenueDistributionItem>>(`/revenue/distributions?${qs}`);
 }

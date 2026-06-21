@@ -1,0 +1,60 @@
+FAIL src/test/e2e-flow.test.ts
+  鈼?Console
+
+    console.log
+        鈿?ARCHIVE #1: 400 鍐疯棌鍏崇郴涓嶅簲鎻愪緵鏉ユ簮娑堟伅 ID
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:195:17)
+
+    console.log
+        Round2 status: 201
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:239:13)
+
+    console.log
+        Settle2 status: 200
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:254:13)
+
+    console.log
+        馃搳 鎬绘秷鎭? 13 | kind鍒嗗竷: ["TEXT","RELATION","ROUND_RESULT","ROUND","GOVERNANCE","CODE"]
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:296:13)
+
+    console.log
+        鉁?ROUND娑堟伅: 1, ROUND_RESULT: 2
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:324:13)
+
+    console.log
+        鉁?缁撶畻杞: 2
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:325:13)
+
+    console.log
+        鉁?Alice: available=160, locked=32, balance=160
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:342:13)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?4. 鍒涘缓鍚勭被鍏崇郴娑堟伅
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+      195 |         console.log(`  鈿?ARCHIVE #${i + 1}: ${archive.status} ${archive.body?.error ?? ''}`);
+      196 |       }
+    > 197 |       expect(archive.status).toBe(201);
+          |                              ^
+      198 |     }
+      199 |   });
+      200 |
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:197:30)
+
+Test Suites: 1 failed, 7 skipped, 1 of 8 total
+Tests:       1 failed, 122 skipped, 9 passed, 132 total
+Snapshots:   0 total
+Time:        5.69 s, estimated 7 s
+Ran all test suites with tests matching "E2E".

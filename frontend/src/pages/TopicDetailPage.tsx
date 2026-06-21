@@ -660,6 +660,7 @@ export default function TopicDetailPage() {
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
   const [focusExitKey, setFocusExitKey] = useState(0);
+  const [cleanMode, setCleanMode] = useState(false);
 
   // Scroll to message after data loads and renders (also triggers on focus changes for in-place nav)
   useEffect(() => {
@@ -3698,6 +3699,21 @@ export default function TopicDetailPage() {
     document.addEventListener('mouseup', onMouseUp);
   }
 
+  // Phase 6: Clean mode — compute folded message IDs from ARCHIVE labels
+  const cleanFoldedIds = useMemo(() => {
+    if (!cleanMode) return new Set<string>();
+    const archiveCount = new Map<string, number>();
+    for (const r of relations) {
+      if (r.relationType === 'ARCHIVE') {
+        const targets = (r as Record<string, unknown>).targetRefs as Array<{ messageId?: string }> | undefined;
+        targets?.forEach(t => {
+          if (t.messageId) archiveCount.set(t.messageId, (archiveCount.get(t.messageId) ?? 0) + 1);
+        });
+      }
+    }
+    return new Set([...archiveCount.entries()].filter(([, c]) => c >= 5).map(([id]) => id));
+  }, [cleanMode, relations]);
+
   if (loading) {
     return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
   }
@@ -3711,6 +3727,10 @@ export default function TopicDetailPage() {
   }
 
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
+  // Phase 6: Apply clean mode filter
+  const messagesToRenderClean = cleanMode
+    ? messagesToRender.filter(m => !cleanFoldedIds.has(m.id))
+    : messagesToRender;
   const rawEdgesToRender = viewMode === "list" ? listEdgesToRender : graphEdgesToRender;
   // Filter edges based on current user's DISAGREE stances on relation messages.
   // When the user disagrees with a relation message, all edges produced by that
@@ -3769,6 +3789,9 @@ export default function TopicDetailPage() {
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
               </button>
+              <button onClick={() => setCleanMode(c => !c)} title="清爽模式：折叠被多数标记为冷藏的消息分支" style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #555", background: cleanMode ? "#2563eb" : "#333", color: "#eee", cursor: "pointer", fontSize: 12 }}>
+                {cleanMode ? '✨ 清爽' : '清爽模式'}
+              </button>
             </div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>
               {viewMode === "list" ? "线性视图：支持自由换行内容；双击 normal 进入文本选择模式；可点击高亮片段切换选中。" : "结构图：注释/引用 source 自动推到 target 右侧列（规则1）；label避让文字；高亮片段可点击。"}
@@ -3806,7 +3829,7 @@ export default function TopicDetailPage() {
               if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
               handleCanvasBlankClick();
             }}>
-            {messagesToRender.length === 0 ? (
+            {messagesToRenderClean.length === 0 ? (
               <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
                 <div>{isTopicFocus ? `当前${topicFocusKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
@@ -3818,7 +3841,7 @@ export default function TopicDetailPage() {
               </div>
             ) : viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {messagesToRender
+                {messagesToRenderClean
                   .filter(msg => !tagSourceIdsForList.has(msg.id))
                   .map(msg => {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
@@ -3859,7 +3882,7 @@ export default function TopicDetailPage() {
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
                       <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
-                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
+                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? `⚖️ 发起结算` : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码变更` : `消息 ${msg.id}`}</span>
                         <span style={{textAlign:"right"}}>
                           <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
@@ -3952,7 +3975,7 @@ export default function TopicDetailPage() {
             ) : (
               <GraphView
                   key={`gv-${focusExitKey}`}
-                  messages={messagesToRender} edges={edgesToRender} draftUnits={draftUnits}
+                  messages={messagesToRenderClean} edges={edgesToRender} draftUnits={draftUnits}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
                   onTextMouseUp={handleTextMouseUp} onEdgeLabelSingleClick={handleEdgeLabelSingleClick}

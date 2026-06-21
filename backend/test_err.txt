@@ -1,0 +1,92 @@
+PASS src/test/events.test.ts
+PASS src/test/validation.test.ts
+FAIL src/test/rules.api.test.ts
+  鈼?Test suite failed to run
+
+    src/routes/messages.ts:42:56 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    42       prisma.message.count({ where: { topicId, kind: { in: contentKinds } } }),
+                                                              ~~
+    src/routes/messages.ts:44:35 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    44         where: { topicId, kind: { in: contentKinds } },
+                                         ~~
+
+FAIL src/test/stakes.api.test.ts
+  鈼?Test suite failed to run
+
+    src/routes/messages.ts:42:56 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    42       prisma.message.count({ where: { topicId, kind: { in: contentKinds } } }),
+                                                              ~~
+    src/routes/messages.ts:44:35 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    44         where: { topicId, kind: { in: contentKinds } },
+                                         ~~
+
+FAIL src/test/relations.api.test.ts
+  鈼?Test suite failed to run
+
+    src/routes/messages.ts:42:56 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    42       prisma.message.count({ where: { topicId, kind: { in: contentKinds } } }),
+                                                              ~~
+    src/routes/messages.ts:44:35 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    44         where: { topicId, kind: { in: contentKinds } },
+                                         ~~
+
+FAIL src/test/points.api.test.ts
+  鈼?Test suite failed to run
+
+    src/routes/messages.ts:42:56 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    42       prisma.message.count({ where: { topicId, kind: { in: contentKinds } } }),
+                                                              ~~
+    src/routes/messages.ts:44:35 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    44         where: { topicId, kind: { in: contentKinds } },
+                                         ~~
+
+FAIL src/test/settlement.api.test.ts
+  鈼?Test suite failed to run
+
+    src/routes/messages.ts:42:56 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    42       prisma.message.count({ where: { topicId, kind: { in: contentKinds } } }),
+                                                              ~~
+    src/routes/messages.ts:44:35 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    44         where: { topicId, kind: { in: contentKinds } },
+                                         ~~
+
+FAIL src/test/e2e-flow.test.ts
+  鈼?Test suite failed to run
+
+    src/routes/messages.ts:42:56 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    42       prisma.message.count({ where: { topicId, kind: { in: contentKinds } } }),
+                                                              ~~
+    src/routes/messages.ts:44:35 - error TS2322: Type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is not assignable to type 'MessageKind[] | FieldRef<"Message", "MessageKind[]"> | undefined'.
+      The type 'readonly ["TEXT", "GOVERNANCE", "CODE"]' is 'readonly' and cannot be assigned to the mutable type 'MessageKind[]'.
+
+    44         where: { topicId, kind: { in: contentKinds } },
+                                         ~~
+
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+Test Suites: 6 failed, 2 passed, 8 total
+Tests:       32 passed, 32 total
+Snapshots:   0 total
+Time:        5479.719 s
+Ran all test suites.

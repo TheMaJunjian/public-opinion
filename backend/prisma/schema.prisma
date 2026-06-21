@@ -25,6 +25,7 @@ model User {
   stakes            Stake[]
   settlementRounds  SettlementRound[]
   voteStakes        VoteStake[]
+  revenueDistributions RevenueDistribution[]
 }
 
 model Topic {
@@ -49,6 +50,10 @@ enum TopicStatus {
 enum MessageKind {
   TEXT
   RELATION
+  ROUND
+  ROUND_RESULT
+  GOVERNANCE
+  CODE
 }
 
 model Message {
@@ -212,4 +217,28 @@ model VoteStake {
   vote      String   // TRUE | FALSE | UNKNOWN
   amount    Int
   createdAt DateTime @default(now())
+}
+
+// ============================================================
+// Revenue Models (Phase 6 — 收入池与分配)
+// ============================================================
+
+model RevenuePool {
+  id               String   @id @default(cuid())
+  totalReceived    Int      @default(0)  // 累计收入
+  totalDistributed Int      @default(0)  // 累计已分配
+  balance          Int      @default(0)  // 待分配余额
+  updatedAt        DateTime @updatedAt
+
+  distributions RevenueDistribution[]
+}
+
+model RevenueDistribution {
+  id            String      @id @default(cuid())
+  revenuePoolId String
+  revenuePool   RevenuePool @relation(fields: [revenuePoolId], references: [id])
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  amount        Int         // 本次分配金额
+  createdAt     DateTime    @default(now())
 }

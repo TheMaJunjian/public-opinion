@@ -31,7 +31,7 @@ jest.mock('../lib/prisma', () => ({
     },
     message: {
       findFirst: jest.fn(),
-      findMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),

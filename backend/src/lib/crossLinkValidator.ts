@@ -195,7 +195,7 @@ export async function validateGroupingTargets(
   )];
   const sourceTextRows = sourceIds.length > 0
     ? await prisma.message.findMany({
-        where: { topicId, kind: 'TEXT', id: { in: sourceIds } },
+        where: { topicId, kind: { not: 'RELATION' }, id: { in: sourceIds } },
         select: { id: true },
       })
     : [];

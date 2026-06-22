@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
-  RelationType,
+  RelationType, MessageKind,
 } from '../utils/modelBridge';
 import type { Topic, TargetRef, Relation, RelationPayload } from '../types';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
@@ -338,8 +338,8 @@ function applyTextCorrectionInheritance(
       next.push(e);
       continue;
     }
-    const fromIsNormal = msgMap.get(e.from.messageId)?.kind === "normal";
-    const toIsNormal = msgMap.get(e.to.messageId)?.kind === "normal";
+    const fromIsNormal = (() => { const m = msgMap.get(e.from.messageId); return m && isContentKind(m.kind); })();
+    const toIsNormal = (() => { const m = msgMap.get(e.to.messageId); return m && isContentKind(m.kind); })();
     const mappedFrom = fromIsNormal ? (replaceMap.get(e.from.messageId) ?? e.from.messageId) : e.from.messageId;
     const mappedTo = toIsNormal ? (replaceMap.get(e.to.messageId) ?? e.to.messageId) : e.to.messageId;
     const updated: DemoEdge = (mappedFrom === e.from.messageId && mappedTo === e.to.messageId)
@@ -985,7 +985,23 @@ export default function TopicDetailPage() {
     for (const mid of targetMsgIds) {
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
     }
-  }, []);
+    // Phase 6: auto-create settlement ROUND message for every relation message
+    if (topicId) {
+      const relAuthor = backendRel.createdBy?.username ?? '?';
+      api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: backendRel.id }).then(roundMsg => {
+        setMessages((prev: any) => [...prev, {
+          id: roundMsg.id,
+          author: roundMsg.createdBy?.username || relAuthor,
+          createdAt: roundMsg.createdAt,
+          content: '⚖️ 发起结算',
+          kind: 'round',
+          backendKind: 'ROUND',
+          settlementTargetId: backendRel.id,
+        }]);
+        scrollMsgToCenter(roundMsg.id);
+      }).catch(() => {});
+    }
+  }, [topicId]);
 
   // Helper: auto-inject stakeAmount into relation creation
   const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
@@ -1053,11 +1069,12 @@ export default function TopicDetailPage() {
     const shouldKeepVisible = new Set<string>();
     for (const e of edges) {
       const fromKind = msgMap.get(e.from.messageId)?.kind;
-      if (e.relationType === "tag" && fromKind === "normal") {
+      const toKind = msgMap.get(e.to.messageId)?.kind;
+      if (e.relationType === "tag" && fromKind && isContentKind(fromKind as MessageKind)) {
         hiddenTagSourceIds.add(e.from.messageId);
       }
-      if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
-      if (e.relationType !== "tag" && fromKind === "normal") {
+      if (toKind && isContentKind(toKind as MessageKind)) shouldKeepVisible.add(e.to.messageId);
+      if (e.relationType !== "tag" && fromKind && isContentKind(fromKind as MessageKind)) {
         shouldKeepVisible.add(e.from.messageId);
       }
     }
@@ -1186,16 +1203,17 @@ export default function TopicDetailPage() {
       if (ownedRelationIds.has(relMsgId)) continue;
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])
-        .filter(mid => msgMap.get(mid)?.kind === 'normal');
+        .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
       if (textEndpoints.length > 0) {
         if (relType === 'reference') {
           // Cross-topic REFERENCE: only hide the relation message when its source
           // (from) message is classified/hidden.  If the source is visible but the
           // target is in another classify topic, the reference should still appear
           // alongside the source in the linear and graph views.
-          const sourceHidden = relEdges.some(e =>
-            msgMap.get(e.from.messageId)?.kind === 'normal' && hiddenTextIds.has(e.from.messageId)
-          );
+          const sourceHidden = relEdges.some(e => {
+            const fromM = msgMap.get(e.from.messageId);
+            return fromM && isContentKind(fromM.kind) && hiddenTextIds.has(e.from.messageId);
+          });
           if (sourceHidden) {
             ids.add(relMsgId);
           }
@@ -1728,7 +1746,7 @@ export default function TopicDetailPage() {
   function getGroupedTargetTextMessageIds(units: UnitSelection[]): string[] {
     const ids = new Set<string>();
     for (const unit of foldUpToWhole(units)) {
-      if (msgMap.get(unit.messageId)?.kind === "normal") {
+      if (msgMap.get(unit.messageId)?.kind && isContentKind(msgMap.get(unit.messageId)!.kind)) {
         ids.add(unit.messageId);
         continue;
       }
@@ -1747,7 +1765,7 @@ export default function TopicDetailPage() {
       const mid = u.messageId;
       const m = msgMap.get(mid);
       if (!m) continue;
-      if (m.kind === "normal") {
+      if (m.kind && isContentKind(m.kind)) {
         const key = `message:${mid}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1804,8 +1822,8 @@ export default function TopicDetailPage() {
     for (const e of edges) {
       const fromMsg = msgMap.get(e.from.messageId);
       const toMsg = msgMap.get(e.to.messageId);
-      const fromIsSelectedNormal = fromMsg?.kind === 'normal' && selected.has(e.from.messageId);
-      const toIsSelectedNormal = toMsg?.kind === 'normal' && selected.has(e.to.messageId);
+      const fromIsSelectedNormal = fromMsg && isContentKind(fromMsg.kind) && selected.has(e.from.messageId);
+      const toIsSelectedNormal = toMsg && isContentKind(toMsg.kind) && selected.has(e.to.messageId);
       const relationEndpoint = fromIsSelectedNormal
         ? (toMsg?.kind === 'relation' && expandableTypes.has(toMsg.relationType ?? '') ? e.to.messageId : null)
         : toIsSelectedNormal
@@ -2672,7 +2690,7 @@ export default function TopicDetailPage() {
           e.relationType === 'correct' &&
           e.from.messageId === ancestorTargetMid &&
           !e.from.messageId.startsWith('anon:') &&
-          msgMap.get(e.to.messageId)?.kind === 'normal'
+          (() => { const m = msgMap.get(e.to.messageId); return m && isContentKind(m.kind); })()
         );
         if (!parentEdge) break;
         ancestorTargetMid = parentEdge.to.messageId;
@@ -2793,7 +2811,7 @@ export default function TopicDetailPage() {
   }
 
   const recentRelations = useMemo(() => messages.filter(m => m.kind === "relation").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5), [messages]);
-  const recentNormals = useMemo(() => messages.filter(m => m.kind === "normal").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
+  const recentNormals = useMemo(() => messages.filter(m => isContentKind(m.kind)).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isArrangeType = relationType === "arrange";
@@ -3091,7 +3109,7 @@ export default function TopicDetailPage() {
       // When the frame itself is the focus (relationFocusIds contains a frame that
       // contains cur), external connections should NOT be deferred — hop=1 should
       // expand one hop beyond the frame group.
-      const frameIsFocus = curMsg?.kind === 'normal' &&
+      const frameIsFocus = curMsg && isContentKind(curMsg.kind) &&
         (msgFrameMap.get(cur) ? Array.from(msgFrameMap.get(cur)!).some(f => relationFocusIds.has(f)) : false);
       for (const nb of neighbors) {
         if (dist.has(nb)) continue;
@@ -3257,7 +3275,7 @@ export default function TopicDetailPage() {
       if (e.relationType !== 'reference') continue;
       const fromKind = msgMap.get(e.from.messageId)?.kind;
       const toKind = msgMap.get(e.to.messageId)?.kind;
-      if (fromKind !== 'normal' || toKind !== 'normal') continue;
+      if (!isContentKind(fromKind as MessageKind) || !isContentKind(toKind as MessageKind)) continue;
       const fromVisible = graphVisibleTextIds.has(e.from.messageId);
       const toVisible = graphVisibleTextIds.has(e.to.messageId);
       if (fromVisible === toVisible) continue;
@@ -3312,7 +3330,7 @@ export default function TopicDetailPage() {
             const srcId = rel.sourceMessageId;
             if (!topicTextIds.has(srcId) && !topicRelationIds.has(srcId)) {
               const srcMsg = msgMap.get(srcId);
-              if (srcMsg?.kind === 'normal') {
+              if (srcMsg && isContentKind(srcMsg.kind)) {
                 topicTextIds.add(srcId);
               } else if (srcMsg?.kind === 'relation') {
                 topicRelationIds.add(srcId);
@@ -3379,7 +3397,7 @@ export default function TopicDetailPage() {
         if (relMsgId === topicFocusRelMsgId || topicRelationIds.has(relMsgId)) continue;
         const textEndpoints = relEdges
           .flatMap(e => [e.from.messageId, e.to.messageId])
-          .filter(mid => msgMap.get(mid)?.kind === 'normal');
+          .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
         if (textEndpoints.length > 0) {
           if (textEndpoints.every(mid => topicTextIds.has(mid))) {
             topicRelationIds.add(relMsgId);
@@ -3387,9 +3405,10 @@ export default function TopicDetailPage() {
             // Cross-topic REFERENCE: include the relation message when its source
             // message (from) is in the current topic, even if the target is in
             // a different classify topic.
-            const sourceInTopic = relEdges.some(e =>
-              msgMap.get(e.from.messageId)?.kind === 'normal' && topicTextIds.has(e.from.messageId)
-            );
+            const sourceInTopic = relEdges.some(e => {
+              const fromM = msgMap.get(e.from.messageId);
+              return fromM && isContentKind(fromM.kind) && topicTextIds.has(e.from.messageId);
+            });
             if (sourceInTopic) {
               topicRelationIds.add(relMsgId);
             }
@@ -3990,9 +4009,9 @@ export default function TopicDetailPage() {
                           )}
                         </div>
                       )}
-                      {isActiveText && msg.kind === "normal" && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
-                      <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => msg.kind === "normal" && handleTextMouseUp(e, msg.id)}>
-                        {msg.kind === "normal"
+                      {isActiveText && isContentKind(msg.kind) && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
+                      <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => isContentKind(msg.kind) && handleTextMouseUp(e, msg.id)}>
+                        {isContentKind(msg.kind)
                           ? renderMessageContentWithAnchorsForList(msg)
                           : isTopicMsg
                             ? (

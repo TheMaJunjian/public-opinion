@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
-import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats } from '../utils/modelBridge';
+import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
@@ -354,7 +354,7 @@ function getRelationBoundsFromLayout(params: {
         continue;
       }
       const endpointBox = params.boxFn ? (params.boxFn(endpointId) ?? layout[endpointId]) : layout[endpointId];
-      if (endpointBox && ((endpointMsg?.kind === "normal" || endpointMsg?.kind === "round" || endpointMsg?.kind === "round_result" || endpointMsg?.kind === "governance" || endpointMsg?.kind === "code") || relationCardMsgIds.has(endpointId))) {
+      if (endpointBox && (endpointMsg && isContentKind(endpointMsg.kind) || relationCardMsgIds.has(endpointId))) {
         boxes.push(endpointBox);
         cardIds.add(endpointId);
       }
@@ -424,7 +424,7 @@ export function buildMergeCanvasReservations(params: {
         }
       }
       const targetBox = layout[edge.to.messageId];
-      if (targetBox && ((targetMsg?.kind === "normal" || targetMsg?.kind === "round" || targetMsg?.kind === "round_result" || targetMsg?.kind === "governance" || targetMsg?.kind === "code") || relationCardMsgIds.has(edge.to.messageId))) {
+      if (targetBox && (targetMsg && isContentKind(targetMsg.kind) || relationCardMsgIds.has(edge.to.messageId))) {
         boxes.push(targetBox);
         cardIds.add(edge.to.messageId);
       }
@@ -649,7 +649,7 @@ function buildFrameAvoidanceReservations(params: {
     if (!sourceId.startsWith('anon:')) {
       const sourceMsg = msgMap.get(sourceId);
       const sourceBox = layout[sourceId];
-      if (sourceBox && (sourceMsg?.kind === 'normal' || relationCardMsgIds.has(sourceId))) {
+      if (sourceBox && (sourceMsg && isContentKind(sourceMsg.kind) || relationCardMsgIds.has(sourceId))) {
         boxes.push(sourceBox);
         cardIds.add(sourceId);
       }
@@ -679,7 +679,7 @@ function buildFrameAvoidanceReservations(params: {
         }
       }
       const targetBox = layout[edge.to.messageId];
-      if (targetBox && (targetMsg?.kind === 'normal' || relationCardMsgIds.has(edge.to.messageId))) {
+      if (targetBox && (targetMsg && isContentKind(targetMsg.kind) || relationCardMsgIds.has(edge.to.messageId))) {
         boxes.push(targetBox);
         cardIds.add(edge.to.messageId);
       }
@@ -1720,12 +1720,12 @@ export default function GraphView(props: GraphViewProps) {
     const isTagSource = new Set<string>();
     const shouldKeepVisible = new Set<string>();
     for (const e of edges) {
-      if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+      if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind && isContentKind(msgMap.get(e.from.messageId)!.kind)) {
         isTagSource.add(e.from.messageId);
       }
       // Keep visible: any message targeted by a relation, or source of a non-TAG relation
-      if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
-      if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+      if (msgMap.get(e.to.messageId)?.kind && isContentKind(msgMap.get(e.to.messageId)!.kind)) shouldKeepVisible.add(e.to.messageId);
+      if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind && isContentKind(msgMap.get(e.from.messageId)!.kind)) {
         shouldKeepVisible.add(e.from.messageId);
       }
     }
@@ -1760,7 +1760,7 @@ export default function GraphView(props: GraphViewProps) {
     return ids;
   }, [classifyRelMsgIds, summaryRelMsgIds]);
   const normals = useMemo(() => messages.filter(m =>
-    ((m.kind === "normal" || m.kind === "round" || m.kind === "round_result" || m.kind === "governance" || m.kind === "code") && !tagSourceIds.has(m.id)) ||
+    (isContentKind(m.kind) && !tagSourceIds.has(m.id)) ||
     (m.kind === "relation" && relationCardMsgIds.has(m.id))
   ), [messages, tagSourceIds, relationCardMsgIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
@@ -1887,7 +1887,7 @@ export default function GraphView(props: GraphViewProps) {
   const visibleCardIds = useMemo(() => {
     const ids = new Set(normalIds);
     for (const m of messages) {
-      if (m.kind === 'normal' || relationCardMsgIds.has(m.id)) ids.add(m.id);
+      if (isContentKind(m.kind) || relationCardMsgIds.has(m.id)) ids.add(m.id);
     }
     return ids;
   }, [messages, normalIds, relationCardMsgIds]);
@@ -2096,7 +2096,7 @@ export default function GraphView(props: GraphViewProps) {
     function endpointBoxForNormal(id: string): {box:LayoutBox;col:number}|null {
       const m = msgMap.get(id);
       // Accept both normal text messages and relation messages currently rendered as cards.
-      if (!m || (m.kind !== "normal" && !relationCardMsgIds.has(id))) return null;
+      if (!m || (!isContentKind(m.kind) && !relationCardMsgIds.has(id))) return null;
       const cardEl = cardRefs.current[id];
       if (cardEl) {
         const r = cardEl.getBoundingClientRect();
@@ -2360,7 +2360,7 @@ export default function GraphView(props: GraphViewProps) {
           if (tm?.kind === 'relation') {
             const nb = getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg: edgesByRelMsg2, layout, msgMap, relationCardMsgIds });
             if (nb) nb.cardIds.forEach(id => cids.add(id));
-          } else if (tm?.kind === 'normal') {
+          } else if (tm && isContentKind(tm.kind)) {
             cids.add(e.to.messageId);
           }
         }
@@ -2418,7 +2418,7 @@ export default function GraphView(props: GraphViewProps) {
       const mid = e.to.messageId;
       const targetMsg = msgMap.get(mid);
       const isInlineBadgeTargetCard = !!targetMsg && (
-        targetMsg.kind === 'normal' ||
+        isContentKind(targetMsg.kind) ||
         (targetMsg.kind === 'relation' && (
           relationCardMsgIds.has(mid) ||
           frameByRelMsgId.has(mid) ||
@@ -2529,7 +2529,7 @@ export default function GraphView(props: GraphViewProps) {
           fromBox = getRelVisualBox(te0.from.messageId, depth + 1);
         } else {
           const fm = msgMap.get(te0.from.messageId);
-          if (fm?.kind === "normal") fromBox = endpointBoxForNormal(te0.from.messageId)?.box ?? null;
+          if (fm && isContentKind(fm.kind)) fromBox = endpointBoxForNormal(te0.from.messageId)?.box ?? null;
         }
       }
       let toBox: LayoutBox | null = null;
@@ -2537,7 +2537,7 @@ export default function GraphView(props: GraphViewProps) {
         toBox = getRelVisualBox(te0.to.messageId, depth + 1);
       } else {
         const tm = msgMap.get(te0.to.messageId);
-        if (tm?.kind === "normal") toBox = endpointBoxForNormal(te0.to.messageId)?.box ?? null;
+        if (tm && isContentKind(tm.kind)) toBox = endpointBoxForNormal(te0.to.messageId)?.box ?? null;
       }
       if (fromBox && toBox) {
         const midX = (fromBox.x + fromBox.width / 2 + toBox.x + toBox.width / 2) / 2;
@@ -3043,7 +3043,7 @@ export default function GraphView(props: GraphViewProps) {
                 {renderContent(msg)}
               </div>
               {/* 跨分类引用标签（按二级标签分组） */}
-              {msg.kind === "normal" && crossClassifyRefs && (() => {
+              {isContentKind(msg.kind) && crossClassifyRefs && (() => {
                 const ref = crossClassifyRefs.get(msg.id);
                 if (!ref) return null;
                 const tags: { label: string; relMsgIds: string[]; direction: "out" | "in" }[] = [];

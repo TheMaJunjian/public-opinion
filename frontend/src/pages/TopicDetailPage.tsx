@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType,
@@ -661,6 +661,10 @@ export default function TopicDetailPage() {
   // that occur when the SVG canvas structure changes drastically.
   const [focusExitKey, setFocusExitKey] = useState(0);
   const [cleanMode, setCleanMode] = useState(false);
+  const setMessagesRef = useRef(setMessages);
+  setMessagesRef.current = setMessages;
+  // Phase 6: expose for SettlementPanel direct access
+  useEffect(() => { (window as any).__addSettlementMessage = (m: any) => { setMessagesRef.current((prev: any) => [...prev, {...m, author: m.author || user?.username || ''}]); setTimeout(() => scrollMsgToCenter(m.id), 50); }; return () => { delete (window as any).__addSettlementMessage; }; }, [user]);
 
   // Scroll to message after data loads and renders (also triggers on focus changes for in-place nav)
   useEffect(() => {
@@ -703,6 +707,13 @@ export default function TopicDetailPage() {
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
+  // Phase 6: auto-scroll settlement panel into view
+  useEffect(() => {
+    if (!settlementOpenMsgId) return;
+    setTimeout(() => {
+      document.querySelector('[data-settlement-panel]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
+  }, [settlementOpenMsgId]);
   const [settlementEntryHighlight, setSettlementEntryHighlight] = useState<{
     side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string;
     stakeId?: string; voteId?: string;
@@ -1544,6 +1555,19 @@ export default function TopicDetailPage() {
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
       window.dispatchEvent(new Event('points-refresh'));
+      // Phase 6: auto-create settlement ROUND message (same flow as text)
+      api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id }).then(roundMsg => {
+        setMessages((prev: any) => [...prev, {
+          id: roundMsg.id,
+          author: roundMsg.createdBy?.username || msg.author,
+          createdAt: roundMsg.createdAt,
+          content: '⚖️ 发起结算',
+          kind: 'round',
+          backendKind: 'ROUND',
+          settlementTargetId: msg.id,
+        }]);
+        scrollMsgToCenter(roundMsg.id);
+      }).catch(() => {});
       return msg;
     } catch (e: any) {
       setSendError(e?.message ?? '发送失败');
@@ -1627,6 +1651,25 @@ export default function TopicDetailPage() {
         return;
       }
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+      return;
+    }
+    // Phase 6: settlement → navigate classify + gold highlight + open panel (matches contribution-point dblclick)
+    if (m?.kind === "round" || m?.kind === "round_result") {
+      if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+      const targetId = (m as any).settlementTargetId || messageId;
+      setLastClickedMessageId(targetId);
+      setStanceHighlight({ stanceMsgId: targetId, evidenceMsgIds: [] });
+      if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
+      stanceHighlightTimerRef.current = setTimeout(() => setStanceHighlight(null), 1000);
+      // Highlight specific round in settlement panel
+      const rp = (m as any).roundPayload;
+      if (rp?.roundId) sessionStorage.setItem('settlementHighlightRound', rp.roundId as string);
+      const classifyRel = relations.find(r =>
+        r.relationType === 'CLASSIFY' &&
+        (r.targetRefs as Array<{ messageId?: string }>).some(t => t.messageId === targetId)
+      );
+      if (classifyRel) enterClassifyTopic(classifyRel.id);
+      setSettlementOpenMsgId(sid => sid === targetId ? null : targetId);
       return;
     }
     if (currentlyActive) {
@@ -2930,8 +2973,8 @@ export default function TopicDetailPage() {
       // Only add a direct from↔to hop if at least one endpoint is a normal text message.
       // Relation-to-relation connections (e.g. a CORRECT relation linking two relation messages)
       // should not count as focus-distance hops.
-      const fromIsNormal = msgMap.get(e.from.messageId)?.kind === "normal";
-      const toIsNormal = msgMap.get(e.to.messageId)?.kind === "normal";
+      const fromIsNormal = isContentKind(msgMap.get(e.from.messageId)?.kind ?? "normal");
+      const toIsNormal = isContentKind(msgMap.get(e.to.messageId)?.kind ?? "normal");
       if (fromIsNormal || toIsNormal) addEdgeAdj(e.from.messageId, e.to.messageId);
       // Connect the relation message to both endpoints so BFS can traverse through
       // relation messages (including those with anon: sources).  Skip anon: IDs
@@ -2961,10 +3004,10 @@ export default function TopicDetailPage() {
       for (const e of edges) {
         if (e.relationMessageId !== relId) continue;
         const mf = msgMap.get(e.from.messageId);
-        if (mf?.kind === "normal") effectiveStartIds.add(e.from.messageId);
+        if (mf && isContentKind(mf.kind)) effectiveStartIds.add(e.from.messageId);
         else if (mf?.kind === "relation") collectNormalMessagesForRelation(e.from.messageId, seen);
         const mt = msgMap.get(e.to.messageId);
-        if (mt?.kind === "normal") effectiveStartIds.add(e.to.messageId);
+        if (mt && isContentKind(mt.kind)) effectiveStartIds.add(e.to.messageId);
         else if (mt?.kind === "relation") collectNormalMessagesForRelation(e.to.messageId, seen);
       }
     }
@@ -3006,8 +3049,10 @@ export default function TopicDetailPage() {
       if (!spec.groupsTargets) continue;
       let members = frameMembers.get(e.relationMessageId);
       if (!members) { members = new Set<string>(); frameMembers.set(e.relationMessageId, members); }
-      if (msgMap.get(e.from.messageId)?.kind === 'normal') members.add(e.from.messageId);
-      if (msgMap.get(e.to.messageId)?.kind === 'normal') members.add(e.to.messageId);
+      const fromKind = msgMap.get(e.from.messageId)?.kind ?? "normal";
+      const toKind = msgMap.get(e.to.messageId)?.kind ?? "normal";
+      if (isContentKind(fromKind as MessageKind)) members.add(e.from.messageId);
+      if (isContentKind(toKind as MessageKind)) members.add(e.to.messageId);
     }
     // Reverse index: for each normal message, which frame IDs contain it.
     const msgFrameMap = new Map<string, Set<string>>();
@@ -3057,11 +3102,11 @@ export default function TopicDetailPage() {
         // Exception: when the containing frame itself is the focus, external
         // messages should appear at hop=1 (no deferral).
         let hopDelta = 1;
-        if (d === 0 && curMsg?.kind === 'normal' && !frameIsFocus) {
+        if (d === 0 && curMsg && isContentKind(curMsg.kind) && !frameIsFocus) {
           const curFrames = msgFrameMap.get(cur);
           if (curFrames && curFrames.size > 0) {
             const nbMsg = msgMap.get(nb);
-            if (nbMsg?.kind === 'normal') {
+            if (nbMsg && isContentKind(nbMsg.kind)) {
               const nbFrames = msgFrameMap.get(nb);
               if (!nbFrames || !Array.from(curFrames).some(f => nbFrames.has(f))) {
                 hopDelta = 2;
@@ -3192,7 +3237,7 @@ export default function TopicDetailPage() {
     // 主画布：visible = NOT in hiddenTextIds
     const visible = new Set<string>();
     for (const m of messages) {
-      if (m.kind === "normal" && !graphHiddenTextIds.has(m.id)) visible.add(m.id);
+      if (isContentKind(m.kind) && !graphHiddenTextIds.has(m.id)) visible.add(m.id);
     }
     return visible;
   }, [isTopicFocus, topicFocusRelMsgId, relationById, messages, graphHiddenTextIds]);
@@ -3407,7 +3452,7 @@ export default function TopicDetailPage() {
     const listMessages = useFocusWindow
       ? baseMessages
       : baseMessages.filter(m => {
-          if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
+          if (isContentKind(m.kind) && classifiedTargetTextIds.has(m.id)) return false;
           if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
           return true;
         });
@@ -3446,7 +3491,7 @@ export default function TopicDetailPage() {
     const graphMessages = useFocusWindow
       ? baseMessages
       : baseMessages.filter(m => {
-          if (m.kind === "normal" && graphHiddenTextIds.has(m.id)) return false;
+          if (isContentKind(m.kind) && graphHiddenTextIds.has(m.id)) return false;
           if (m.kind === "relation" && graphHiddenRelationIds.has(m.id)) return false;
           return true;
         });
@@ -3781,6 +3826,9 @@ export default function TopicDetailPage() {
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
+              <button onClick={() => setCleanMode(c => !c)} title="清爽模式：折叠被多数标记为冷藏的消息分支" style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #555", background: cleanMode ? "#2563eb" : "#333", color: "#eee", cursor: "pointer", fontSize: 12 }}>
+                {cleanMode ? '✨ 清爽' : '清爽模式'}
+              </button>
               <button onClick={() => {
                 if (leftPanelRef.current) {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
@@ -3788,9 +3836,6 @@ export default function TopicDetailPage() {
                 setViewMode(prev => prev === "list" ? "graph" : "list");
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
-              </button>
-              <button onClick={() => setCleanMode(c => !c)} title="清爽模式：折叠被多数标记为冷藏的消息分支" style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #555", background: cleanMode ? "#2563eb" : "#333", color: "#eee", cursor: "pointer", fontSize: 12 }}>
-                {cleanMode ? '✨ 清爽' : '清爽模式'}
               </button>
             </div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>
@@ -3962,7 +4007,7 @@ export default function TopicDetailPage() {
                       {/* Phase 3: Settlement Panel as floating overlay */}
                       {settlementOpenMsgId === msg.id && (
                         <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
-                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} />
+                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={(nm:any) => (window as any).__addSettlementMessage?.({...nm, kind: nm.kind})} />
                           <div style={{ marginTop: 4 }}>
                             <RoundHistory messageId={msg.id} compact />
                           </div>

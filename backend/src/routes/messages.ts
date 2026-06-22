@@ -8,14 +8,16 @@ import { applyEvent } from '../lib/events';
 const messagesRouter = Router({ mergeParams: true });
 
 const createMessageSchema = z.object({
-  kind: z.enum(['TEXT', 'GOVERNANCE', 'CODE']).optional().default('TEXT'),
+  kind: z.enum(['TEXT', 'GOVERNANCE', 'CODE', 'ROUND']).optional().default('TEXT'),
   contentType: z.enum(['TEXT', 'MARKDOWN']).optional().default('TEXT'),
-  content: z.string().min(1, '内容不能为空').max(20000, '内容最多 20000 个字符'),
+  content: z.string().max(20000, '内容最多 20000 个字符').optional(),
   quoteSourceId: z.string().optional(),
   quotedText: z.string().max(2000, '引用文本最多 2000 个字符').optional(),
   quoteContextBefore: z.string().max(200, '前置上下文最多 200 个字符').optional(),
   quoteContextAfter: z.string().max(200, '后置上下文最多 200 个字符').optional(),
-  stakeAmount: z.number().int().min(1).optional(), // Phase 2: inline stake amount
+  stakeAmount: z.number().int().min(1).optional(),
+  targetMessageId: z.string().optional(),  // Phase 6: for ROUND messages
+  note: z.string().optional(),              // Phase 6: round note
 });
 
 const paginationSchema = z.object({
@@ -91,6 +93,8 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
         quoteContextBefore: data.quoteContextBefore ?? null,
         quoteContextAfter: data.quoteContextAfter ?? null,
         stakeAmount: data.stakeAmount,
+        targetMessageId: data.targetMessageId,
+        note: data.note ?? null,
       },
     });
 

@@ -1,0 +1,62 @@
+PASS src/test/validation.test.ts
+FAIL src/test/events.test.ts
+  鈼?Test suite failed to run
+
+    src/lib/events.ts:389:25 - error TS18046: 'message' is of type 'unknown'.
+
+    389       data: { entityId: message.id },
+                                ~~~~~~~
+
+FAIL src/test/stakes.api.test.ts
+  鈼?Test suite failed to run
+
+    src/lib/events.ts:389:25 - error TS18046: 'message' is of type 'unknown'.
+
+    389       data: { entityId: message.id },
+                                ~~~~~~~
+
+FAIL src/test/points.api.test.ts
+  鈼?Test suite failed to run
+
+    src/lib/events.ts:389:25 - error TS18046: 'message' is of type 'unknown'.
+
+    389       data: { entityId: message.id },
+                                ~~~~~~~
+
+FAIL src/test/rules.api.test.ts
+  鈼?Test suite failed to run
+
+    src/lib/events.ts:389:25 - error TS18046: 'message' is of type 'unknown'.
+
+    389       data: { entityId: message.id },
+                                ~~~~~~~
+
+FAIL src/test/settlement.api.test.ts
+  鈼?Test suite failed to run
+
+    src/lib/events.ts:389:25 - error TS18046: 'message' is of type 'unknown'.
+
+    389       data: { entityId: message.id },
+                                ~~~~~~~
+
+FAIL src/test/relations.api.test.ts
+  鈼?Test suite failed to run
+
+    src/lib/events.ts:389:25 - error TS18046: 'message' is of type 'unknown'.
+
+    389       data: { entityId: message.id },
+                                ~~~~~~~
+
+FAIL src/test/e2e-flow.test.ts
+  鈼?Test suite failed to run
+
+    src/lib/events.ts:389:25 - error TS18046: 'message' is of type 'unknown'.
+
+    389       data: { entityId: message.id },
+                                ~~~~~~~
+
+Test Suites: 7 failed, 1 passed, 8 total
+Tests:       21 passed, 21 total
+Snapshots:   0 total
+Time:        4.6 s
+Ran all test suites.

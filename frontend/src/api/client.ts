@@ -76,10 +76,12 @@ export function getMessages(topicId: string, params?: { page?: number; limit?: n
 }
 
 export function createMessage(topicId: string, data: {
-  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE';
+  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND';
   contentType?: 'TEXT' | 'MARKDOWN';
-  content: string;
+  content?: string;
   stakeAmount?: number;
+  targetMessageId?: string;
+  note?: string;
 }) {
   return request<import('../types').Message>(`/topics/${topicId}/messages`, {
     method: 'POST',

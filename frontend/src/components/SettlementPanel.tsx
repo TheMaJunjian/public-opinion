@@ -7,7 +7,6 @@ interface Props {
   messageId: string;
   topicId: string;
   highlightRoundId?: string | null;
-  /** Phase 5: which specific entries to highlight (from points-navigate) */
   entryHighlight?: {
     side?: 'PRO' | 'CON';
     vote?: 'TRUE' | 'FALSE';
@@ -15,13 +14,14 @@ interface Props {
     stakeId?: string;
     voteId?: string;
   } | null;
+  onMessageCreated?: (msg: { id: string; content: string; createdAt: string; author: string; kind: string }) => void;
 }
 
 /**
  * SettlementPanel — 消息结算面板
  * 显示押注池状态、结算轮次、投票和结算操作
  */
-export default function SettlementPanel({ messageId, topicId: _topicId, highlightRoundId, entryHighlight }: Props) {
+export default function SettlementPanel({ messageId, topicId: _topicId, highlightRoundId, entryHighlight, onMessageCreated }: Props) {
   const [loading, setLoading] = useState(true);
   const [stakes, setStakes] = useState<MessageStakes | null>(null);
   const [rounds, setRounds] = useState<SettlementRoundItem[]>([]);
@@ -99,6 +99,16 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
       setActiveRound(round);
       setRounds(prev => [round, ...prev]);
       window.dispatchEvent(new Event('points-refresh'));
+      // Phase 6: add ROUND message to parent's message list immediately
+      if (onMessageCreated) {
+        onMessageCreated({
+          id: round.roundMessageId || round.id,
+          content: '⚖️ 发起结算',
+          createdAt: new Date().toISOString(),
+          author: '', // will be filled by parent from user context
+          kind: 'round',
+        });
+      }
     } catch (e: unknown) {
       setError((e as Error)?.message ?? '创建轮次失败');
     }
@@ -133,7 +143,19 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
     try {
       setError(null);
       const result = await api.closeAndSettle(activeRound.id);
-      debugLog('结算', `结算完成 round=${activeRound.id.slice(-6)} result=${result.result} weights TRUE=${result.weights?.TRUE} FALSE=${result.weights?.FALSE} dust=${(result as Record<string,unknown>).dust}`);
+      debugLog('结算', `结算完成 round=${activeRound.id.slice(-6)} result=${result.result}`);
+      // Phase 6: add ROUND_RESULT (will be replaced by real data on next load)
+      (window as any).__addSettlementMessage?.({
+        id: `settle-${activeRound.id}`,
+        content: `🏁 结算完成 — ${result.result}
+—— 资金池已按投票结果分配
+双击卡片查看分账明细`,
+        createdAt: new Date().toISOString(),
+        author: '',
+        kind: 'round_result',
+        settlementTargetId: messageId,
+        backendKind: 'ROUND_RESULT',
+      });
       setActiveRound(null);
       setRounds(prev => prev.map(r =>
         r.id === activeRound.id
@@ -142,7 +164,6 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
       ));
       window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
-      // Reload stakes to get updated pool
       const stakesData = await api.getMessageStakes(messageId);
       setStakes(stakesData);
     } catch (e: unknown) {

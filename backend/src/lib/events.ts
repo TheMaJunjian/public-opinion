@@ -332,11 +332,11 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     });
     if (bal?.debtFrozen) throw new Error('账户负债冻结，无法发起结算');
 
-    // Concurrent constraint
+    // Check for existing round — if exists, just record ROUND message
     const existing = await prisma.settlementRound.findFirst({
       where: { messageId: payload.targetMessageId, status: { in: ['OPEN', 'VOTING'] } },
+      select: { id: true },
     });
-    if (existing) throw new Error('该消息已有进行中的结算轮次');
 
     // Link to latest settled round
     const latestSettled = await prisma.settlementRound.findFirst({
@@ -345,7 +345,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
       select: { id: true },
     });
 
-    const [message] = await prisma.$transaction([
+    const ops: Prisma.PrismaPromise<unknown>[] = [
       prisma.message.create({
         data: {
           topicId,
@@ -357,8 +357,10 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
         },
         include: { createdBy: { select: { id: true, username: true } } },
       }),
-      // Create SettlementRound (settlement engine unchanged)
-      prisma.settlementRound.create({
+    ];
+    // Only create SettlementRound if none exists
+    if (!existing) {
+      ops.push(prisma.settlementRound.create({
         data: {
           messageId: payload.targetMessageId,
           createdByUserId: actorId,
@@ -366,8 +368,9 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
           previousRoundId: latestSettled?.id ?? null,
           note: payload.note ?? null,
         },
-      }),
-      prisma.auditLog.create({
+      }));
+    }
+    ops.push(prisma.auditLog.create({
         data: {
           actorId,
           action: 'MESSAGE_CREATED',
@@ -377,7 +380,9 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
           data: { kind: 'ROUND', targetMessageId: payload.targetMessageId },
         },
       }),
-    ]);
+    );
+
+    const [message] = await prisma.$transaction(ops) as [any, ...any[]];
 
     await prisma.auditLog.updateMany({
       where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
@@ -447,7 +452,6 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
   // Auto-self-stake PRO (Phase 2.5)
   await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount);
 
-  // Auto-create voting round for this message (Phase 3.1)
   await ensureVotingRound(message.id, actorId, topicId);
 
   return message;

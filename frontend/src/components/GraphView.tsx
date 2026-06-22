@@ -354,7 +354,7 @@ function getRelationBoundsFromLayout(params: {
         continue;
       }
       const endpointBox = params.boxFn ? (params.boxFn(endpointId) ?? layout[endpointId]) : layout[endpointId];
-      if (endpointBox && (endpointMsg?.kind === "normal" || relationCardMsgIds.has(endpointId))) {
+      if (endpointBox && ((endpointMsg?.kind === "normal" || endpointMsg?.kind === "round" || endpointMsg?.kind === "round_result" || endpointMsg?.kind === "governance" || endpointMsg?.kind === "code") || relationCardMsgIds.has(endpointId))) {
         boxes.push(endpointBox);
         cardIds.add(endpointId);
       }
@@ -424,7 +424,7 @@ export function buildMergeCanvasReservations(params: {
         }
       }
       const targetBox = layout[edge.to.messageId];
-      if (targetBox && (targetMsg?.kind === "normal" || relationCardMsgIds.has(edge.to.messageId))) {
+      if (targetBox && ((targetMsg?.kind === "normal" || targetMsg?.kind === "round" || targetMsg?.kind === "round_result" || targetMsg?.kind === "governance" || targetMsg?.kind === "code") || relationCardMsgIds.has(edge.to.messageId))) {
         boxes.push(targetBox);
         cardIds.add(edge.to.messageId);
       }
@@ -1760,7 +1760,7 @@ export default function GraphView(props: GraphViewProps) {
     return ids;
   }, [classifyRelMsgIds, summaryRelMsgIds]);
   const normals = useMemo(() => messages.filter(m =>
-    (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
+    ((m.kind === "normal" || m.kind === "round" || m.kind === "round_result" || m.kind === "governance" || m.kind === "code") && !tagSourceIds.has(m.id)) ||
     (m.kind === "relation" && relationCardMsgIds.has(m.id))
   ), [messages, tagSourceIds, relationCardMsgIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
@@ -1776,6 +1776,8 @@ export default function GraphView(props: GraphViewProps) {
   // Grouping column override: highest priority — arrange/frame-group/replace-overlay/correction-badge source must
   // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
   const { col: pipelineCol, maxCol: pipelineMaxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
+  // Phase 6: column spreading handled via edges in modelBridge
+  const layoutCol = useMemo(() => ({ col: pipelineCol, maxCol: pipelineMaxCol }), [pipelineCol, pipelineMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   // Reserved: populate via ResizeObserver when cards need variable widths (e.g. MERGE headers).
@@ -1919,8 +1921,8 @@ export default function GraphView(props: GraphViewProps) {
 
   // Column correction: push anno/ref/reply sources targeting frames to the right of the frame's actual visual boundary
   const correctedResult = useMemo(
-    () => computeFrameAwareColumnCorrection({ normals, edges, colOf: pipelineCol, maxCol: pipelineMaxCol, frameRects: pass1FrameRects }),
-    [normals, edges, pipelineCol, pipelineMaxCol, pass1FrameRects]
+    () => computeFrameAwareColumnCorrection({ normals, edges, colOf: layoutCol.col, maxCol: layoutCol.maxCol, frameRects: pass1FrameRects }),
+    [normals, edges, layoutCol.col, layoutCol.maxCol, pass1FrameRects]
   );
   const colOf = correctedResult.col;
   const maxCol = correctedResult.maxCol;

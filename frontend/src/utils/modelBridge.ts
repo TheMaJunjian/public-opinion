@@ -2,6 +2,13 @@ import type { Message as BackendMessage, Relation as BackendRelation, RelationPa
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 
 export type MessageKind = "normal" | "relation" | "round" | "round_result" | "governance" | "code";
+
+/** All content-like kinds (display as cards, participate in graph layout) */
+export const CONTENT_KINDS: MessageKind[] = ["normal", "round", "round_result", "governance", "code"];
+
+export function isContentKind(k: MessageKind): boolean {
+  return CONTENT_KINDS.includes(k as MessageKind);
+}
 export type RelationType =
   | "annotation"
   | "reference"
@@ -34,7 +41,9 @@ export type DemoMessage = {
   createdAt: string;
   content: string;
   kind: MessageKind;
-  backendKind?: string;        // Phase 6: for visual labels (round/governance/code)
+  backendKind?: string;
+  settlementTargetId?: string;   // Phase 6: target message for ROUND/ROUND_RESULT
+  roundPayload?: Record<string,unknown>;  // Phase 6: roundId/result for settlement highlight
   relationType?: RelationType;
   relationPayload?: RelationPayload;
 };
@@ -74,22 +83,27 @@ function relationTypeName(t: string): string {
 }
 
 function mapBackendKind(backendKind: string): MessageKind {
-  // ROUND/ROUND_RESULT/GOVERNANCE/CODE are content messages → "normal"
-  // RELATION stays "relation"
-  if (backendKind === 'RELATION') return 'relation';
-  return 'normal';
+  switch (backendKind) {
+    case 'TEXT': return 'normal';
+    case 'ROUND': return 'round';
+    case 'ROUND_RESULT': return 'round_result';
+    case 'GOVERNANCE': return 'governance';
+    case 'CODE': return 'code';
+    case 'RELATION': return 'relation';
+    default: return 'normal';
+  }
 }
 
-function kindLabel(kind: string): string {
+function kindLabel(backendKind: string, targetRefs?: any): string {
   const labels: Record<string, string> = {
     TEXT: '[文本消息]',
-    GOVERNANCE: '[治理提案]',
-    CODE: '[代码变更]',
-    ROUND: '[发起结算]',
-    ROUND_RESULT: '[结算完成]',
+    GOVERNANCE: '🏛️ 治理提案\n—— 可投票/讨论/结算',
+    CODE: '💻 代码变更\n—— 结算通过后将自动部署',
+    ROUND: '⚖️ 发起结算\n—— 目标消息进入投票阶段\n双击卡片查看结算详情',
+    ROUND_RESULT: '🏁 结算完成\n—— 资金池已按投票结果分配\n双击卡片查看分账明细',
     RELATION: '[关系消息]',
   };
-  return labels[kind] ?? `[${kind}]`;
+  return labels[backendKind] ?? `[${backendKind}]`;
 }
 
 function normalizeReplyAdditional(label: string | undefined): "reply" | "question" | "answer" {
@@ -114,14 +128,24 @@ export function convertMessagesToDemoModel(
   // Build a set of relation IDs to detect when sourceMessageId references a relation message.
   const relationIds = new Set(relations.map(r => r.id));
 
-  const demoMessages: DemoMessage[] = messages.map(m => ({
+  const demoMessages: DemoMessage[] = messages.map(m => {
+    const bk = (m as any).kind ?? 'TEXT';
+    // Extract settlement target from ROUND/ROUND_RESULT targetRefs
+    let settlementTargetId: string | undefined;
+    if (bk === 'ROUND' || bk === 'ROUND_RESULT') {
+      const refs = (m as any).targetRefs as Array<{ messageId?: string }> | undefined;
+      settlementTargetId = refs?.[0]?.messageId;
+    }
+    return {
     id: m.id,
     author: m.createdBy.username,
     createdAt: m.createdAt,
-    content: m.content ?? kindLabel((m as any).kind ?? 'TEXT'),
-    kind: mapBackendKind((m as any).kind ?? 'TEXT'),
-    backendKind: (m as any).kind,
-  }));
+    content: m.content ?? kindLabel(bk),
+    kind: mapBackendKind(bk),
+    backendKind: bk,
+    settlementTargetId,
+    roundPayload: (bk === 'ROUND_RESULT') ? ((m as any).relationPayload as Record<string,unknown> | undefined) : undefined,
+  }});
 
   const demoEdges: DemoEdge[] = [];
   const seenRelMsgIds = new Set<string>();

@@ -528,15 +528,16 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   // Auto-stake based on relation type (Phase 2.6)
   const relType = payload.relationType?.toUpperCase();
   if (relType === 'AGREE' || relType === 'DISAGREE') {
-    // AGREE = PRO on target, DISAGREE = CON on target
-    const side = relType === 'AGREE' ? 'PRO' : 'CON';
-    const targets = payload.targetRefs as Array<{ kind?: string; messageId?: string }>;
+    let effectiveSide = relType === 'AGREE' ? 'PRO' as const : 'CON' as const;
+    const targets = payload.targetRefs as Array<{ kind?: string; messageId?: string; relationId?: string }>;
     for (const ref of targets) {
-      if (ref.messageId) {
-        // Auto-create voting round first, so the stake gets its roundId (Phase 3.1)
-        const round = await ensureVotingRound(ref.messageId, actorId, topicId);
-        await autoSelfStake(actorId, topicId, ref.messageId, payload.stakeAmount, side, round?.id);
-      }
+      const directTargetId = ref.messageId || ref.relationId;
+      if (!directTargetId) continue;
+      // Resolve transitive chain: follow AGREE/DISAGREE relations to ultimate target,
+      // flipping effective side on each DISAGREE hop.
+      const resolved = await resolveStanceChain(directTargetId, effectiveSide);
+      const round = await ensureVotingRound(resolved.targetId, actorId, topicId);
+      await autoSelfStake(actorId, topicId, resolved.targetId, payload.stakeAmount, resolved.side, round?.id);
     }
   } else {
     // Other relations: PRO on the relation message itself
@@ -544,6 +545,42 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   }
 
   return message;
+}
+
+/**
+ * Follow AGREE/DISAGREE relation chain to find the ultimate non-stance target.
+ * Each DISAGREE hop flips the effective side.
+ * Returns { targetId, side } for the ultimate target.
+ */
+async function resolveStanceChain(
+  startTargetId: string,
+  startSide: 'PRO' | 'CON'
+): Promise<{ targetId: string; side: 'PRO' | 'CON' }> {
+  const MAX_DEPTH = 20;
+  const visited = new Set<string>();
+  let currentId = startTargetId;
+  let effectiveSide = startSide;
+
+  for (let depth = 0; depth < MAX_DEPTH; depth++) {
+    const rel = await prisma.message.findUnique({
+      where: { id: currentId },
+      select: { kind: true, relationType: true, targetRefs: true },
+    });
+    if (!rel || rel.kind !== 'RELATION') break;
+    const rt = rel.relationType?.toUpperCase();
+    if (rt !== 'AGREE' && rt !== 'DISAGREE') break;
+    if (visited.has(currentId)) break;
+    visited.add(currentId);
+
+    if (rt === 'DISAGREE') {
+      effectiveSide = effectiveSide === 'PRO' ? 'CON' : 'PRO';
+    }
+    const refs = rel.targetRefs as Array<{ messageId?: string; relationId?: string }>;
+    const nextId = refs[0]?.messageId || refs[0]?.relationId;
+    if (!nextId) break;
+    currentId = nextId;
+  }
+  return { targetId: currentId, side: effectiveSide };
 }
 
 // ── Auto Self-Stake Helper (Phase 2.5-2.6) ───────────────────
@@ -573,8 +610,6 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
 
     return selfStakeAmount;
   } catch {
-    // Silently skip auto-stake if it fails (e.g., balance too low);
-    // the message was already created successfully.
     return undefined;
   }
 }

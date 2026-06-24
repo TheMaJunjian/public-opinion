@@ -144,18 +144,18 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
       setError(null);
       const result = await api.closeAndSettle(activeRound.id);
       debugLog('结算', `结算完成 round=${activeRound.id.slice(-6)} result=${result.result}`);
-      // Phase 6: add ROUND_RESULT (will be replaced by real data on next load)
-      (window as any).__addSettlementMessage?.({
-        id: `settle-${activeRound.id}`,
-        content: `🏁 结算完成 — ${result.result}
-—— 资金池已按投票结果分配
-双击卡片查看分账明细`,
-        createdAt: new Date().toISOString(),
-        author: '',
-        kind: 'round_result',
-        settlementTargetId: messageId,
-        backendKind: 'ROUND_RESULT',
-      });
+      // Phase 6: add ROUND_RESULT via onMessageCreated
+      if (onMessageCreated) {
+        onMessageCreated({
+          id: `settle-${activeRound.id}`,
+          content: `🏁 结算完成 — ${result.result}`,
+          createdAt: new Date().toISOString(),
+          author: '',
+          kind: 'round_result',
+          settlementTargetId: messageId,
+          backendKind: 'ROUND_RESULT',
+        });
+      }
       setActiveRound(null);
       setRounds(prev => prev.map(r =>
         r.id === activeRound.id

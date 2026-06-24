@@ -218,15 +218,11 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    // Validate target content messages exist in this topic (TEXT, ROUND, ROUND_RESULT, GOVERNANCE, CODE)
+    // Validate target messages exist in this topic (any kind, including RELATION for AGREE/DISAGREE stances)
     if (targetMessageIds.length > 0) {
       const uniqueMessageIds = [...new Set(targetMessageIds)];
       const foundMessages = await prisma.message.findMany({
-        where: {
-          id: { in: uniqueMessageIds },
-          topicId,
-          kind: { not: 'RELATION' },
-        },
+        where: { id: { in: uniqueMessageIds }, topicId },
         select: { id: true },
       });
       if (foundMessages.length !== uniqueMessageIds.length) {

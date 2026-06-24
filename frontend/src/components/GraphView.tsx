@@ -1668,6 +1668,7 @@ export interface GraphViewProps {
   onSettlementToggle?: (messageId: string) => void;
   /** Phase 3: currently open settlement message ID (for active state styling) */
   settlementOpenMsgId?: string | null;
+  onSettlementMessageCreated?: (m: { id: string; content: string; createdAt: string; author: string; kind: string }) => void;
   /** Phase 5: Stance path highlight — { stanceMsgId, evidenceMsgIds } */
   stanceHighlight?: { stanceMsgId: string; evidenceMsgIds: string[] } | null;
   /** Phase 5: Settlement entry highlight filter for SettlementPanel */
@@ -1695,6 +1696,7 @@ export default function GraphView(props: GraphViewProps) {
     stakeCounts,
     onSettlementToggle,
     settlementOpenMsgId,
+    onSettlementMessageCreated,
     stanceHighlight,
     settlementEntryHighlight,
     crossClassifyRefs,
@@ -2893,21 +2895,42 @@ export default function GraphView(props: GraphViewProps) {
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
                 onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
                 style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:isTopicStanceTarget?"#2a2410":"#1f1f1f",borderRadius:6,
-                  border:isTopicStanceTarget?"2px solid #f59e0b":isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  borderTop:isTopicStanceTarget?"2px solid #f59e0b":isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  borderRight:isTopicStanceTarget?"2px solid #f59e0b":isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  borderBottom:isTopicStanceTarget?"2px solid #f59e0b":isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  borderLeft:"3px solid #a78bfa",
                   padding:"12px 16px",boxShadow:isTopicStanceTarget?"0 0 16px rgba(245,158,11,0.35), 0 4px 10px rgba(0,0,0,0.5)":isWhole?"0 8px 20px rgba(11,132,255,0.22)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
                   gap:8,cursor:"pointer",outline:isActive?"1px dashed #0b84ff":"none",userSelect:"none",color:"#f5f5f5"}}>
-                <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
-                  <span>{`分类 ${msg.id}`}</span>
-                  <span>双击进入分类</span>
+                <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <span style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontSize:10,fontWeight:600,padding:"0 5px",borderRadius:3,background:"rgba(167,139,250,0.18)",color:"#a78bfa",lineHeight:"16px"}}>分类</span>
+                    <span>{msg.id}</span>
+                  </span>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    {(() => {
+                      const sc = stakeCounts?.[msg.id];
+                      if (sc && sc.pro > 0) return <span style={{color:"#4ade80",fontSize:10}}>👍{sc.pro}</span>;
+                      return null;
+                    })()}
+                    {(() => {
+                      const sc = stakeCounts?.[msg.id];
+                      if (sc && sc.con > 0) return <span style={{color:"#f87171",fontSize:10}}>👎{sc.con}</span>;
+                      return null;
+                    })()}
+                    {onSettlementToggle && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onSettlementToggle(msg.id); }}
+                        style={{fontSize:13,cursor:"pointer",background:"none",border:"none",padding:0,color:settlementOpenMsgId===msg.id?"#818cf8":"#6b7280",lineHeight:1}}
+                        title="结算市场"
+                      >⚖️</button>
+                    )}
+                  </div>
                 </div>
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
                     <div style={{fontWeight:600,color:"#f3f4f6",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                       {topicTitle}
                     </div>
-                    <span style={{fontSize:11,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"rgba(2,150,80,0.2)",color:"#86efac",flexShrink:0}}>
-                      进行中
-                    </span>
                   </div>
                   <div style={{fontSize:12,color:"#9ca3af",display:"flex",gap:12,flexWrap:"wrap"}}>
                     <span>由 <span style={{fontWeight:600,color:"#e5e7eb"}}>{msg.author}</span> 发起</span>
@@ -3018,11 +3041,13 @@ export default function GraphView(props: GraphViewProps) {
                   <span style={{opacity:0.7}}>{msg.id}</span>
                   {(() => {
                     const sc = stakeCounts?.[msg.id];
-                    if (sc && (sc.pro > 0 || sc.con > 0)) {
+                    // Phase 6: always show settlement ⚖️ entry; PRO/CON counts when available
+                    const showProCon = sc && (sc.pro > 0 || sc.con > 0);
+                    if (showProCon || onSettlementToggle) {
                       return (
                         <div style={{ display: "flex", gap: 6, fontSize: 10, marginTop: 2, alignItems: "center" }}>
-                          {sc.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc.pro}</span>}
-                          {sc.con > 0 && <span style={{ color: "#f87171" }}>👎{sc.con}</span>}
+                          {showProCon && sc!.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>}
+                          {showProCon && sc!.con > 0 && <span style={{ color: "#f87171" }}>👎{sc!.con}</span>}
                           {onSettlementToggle && (
                             <button
                               data-settlement-toggle
@@ -3077,18 +3102,25 @@ export default function GraphView(props: GraphViewProps) {
         })}
       </div>
       {/* Phase 3: Floating settlement panel in graph view */}
-      {settlementOpenMsgId && layout[settlementOpenMsgId] && (
+      {settlementOpenMsgId && (() => {
+        const cardBox = layout[settlementOpenMsgId];
+        const gf = groupFrames.find(f => f.relMsgId === settlementOpenMsgId);
+        const sf = arrangeFrames.find(f => f.relMsgId === settlementOpenMsgId);
+        const box = cardBox || (gf ? { x: gf.rect.x, y: gf.rect.y, width: gf.rect.width, height: gf.rect.height } : null) || (sf ? { x: sf.rect.x, y: sf.rect.y, width: sf.rect.width, height: sf.rect.height } : null);
+        if (!box) return null;
+        return (
         <div data-settlement-panel style={{
           position: "absolute",
-          left: layout[settlementOpenMsgId].x,
-          top: layout[settlementOpenMsgId].y + layout[settlementOpenMsgId].height + 8,
+          left: box.x,
+          top: box.y + box.height + 8,
           width: 360,
           zIndex: 100,
         }}>
-          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} />
+          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} />
           <RoundHistory messageId={settlementOpenMsgId} compact />
         </div>
-      )}
+        );
+      })()}
       {/* SVG layer: frame visuals (behind cards, zIndex:0) so cards float above frames.
           Wide arrange frames (spanning multiple columns) no longer visually encompass
           unrelated cards that happen to share the same horizontal range. */}
@@ -3554,11 +3586,21 @@ export default function GraphView(props: GraphViewProps) {
                         : `分类（${targetIds.length}）`
                   );
                   if (isMergeTopic) {
+                    const scMerge = stakeCounts?.[gf.relMsgId];
                     return (
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, height: "100%" }}>
                         <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
                           {topicTitle}
                         </span>
+                        {scMerge && scMerge.pro > 0 && <span style={{ color: "#4ade80", fontSize: 10, flexShrink: 0 }}>👍{scMerge.pro}</span>}
+                        {scMerge && scMerge.con > 0 && <span style={{ color: "#f87171", fontSize: 10, flexShrink: 0 }}>👎{scMerge.con}</span>}
+                        {onSettlementToggle && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onSettlementToggle(gf.relMsgId); }}
+                            style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: 0, color: settlementOpenMsgId === gf.relMsgId ? "#818cf8" : "#6b7280", lineHeight: 1 }}
+                            title="结算市场"
+                          >⚖️</button>
+                        )}
                         <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 500, color: "#9ca3af" }}>
                           💬{targetIds.length}
                         </span>
@@ -3598,10 +3640,29 @@ export default function GraphView(props: GraphViewProps) {
           Body area: toggle selection of all agree/disagree relation messages on this arrange. */}
       {arrangeFrames.map(sf=>{
         const sfTagItems=tagsByRelMsgState.get(sf.relMsgId)??[];
-        if (sf.relAgreeCount===0&&sf.relDisagreeCount===0&&sfTagItems.length===0) return null;
         const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
         let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[];
+        // Phase 6: ⚖️ settlement entry at top-right of arrange frame
+        if (onSettlementToggle) {
+          const sc = stakeCounts?.[sf.relMsgId];
+          const sfPro = sc?.pro ?? 0;
+          const sfCon = sc?.con ?? 0;
+          nodes.push(
+            <div key={`sf-settle-${sf.relMsgId}`} data-rel-overlay="true"
+              style={{position:"absolute",left:sfDecLeft,top:sfDecTop,zIndex:7,
+                display:"flex",gap:4,alignItems:"center",pointerEvents:"auto"}}>
+              {sfPro > 0 && <span style={{color:"#4ade80",fontSize:10}}>👍{sfPro}</span>}
+              {sfCon > 0 && <span style={{color:"#f87171",fontSize:10}}>👎{sfCon}</span>}
+              <button
+                onClick={(e) => { e.stopPropagation(); onSettlementToggle(sf.relMsgId); }}
+                style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: 0, color: settlementOpenMsgId === sf.relMsgId ? "#818cf8" : "#6b7280", lineHeight: 1 }}
+                title="结算市场"
+              >⚖️</button>
+            </div>
+          );
+          sfDecTop += DEC_H + DEC_GAP;
+        }
         for (const kind of ["agree","disagree"] as const) {
           const count=kind==="agree"?sf.relAgreeCount:sf.relDisagreeCount;
           if (count<=0) continue;

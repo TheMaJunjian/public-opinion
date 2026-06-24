@@ -933,32 +933,24 @@ export default function TopicDetailPage() {
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
     setRelations(prev => [...prev, backendRel]);
     setMessages(prev => [...prev, buildRelationDemoMessage(backendRel)]);
-    // Update stakeCounts for AGREE/DISAGREE on target messages (by point amount)
     const relType = backendRel.relationType?.toUpperCase();
     const targetMsgIds: string[] = [];
+    let stanceSide: 'pro' | 'con' | null = null;
+    let stanceStakePts = 0;
     if (relType === 'AGREE' || relType === 'DISAGREE') {
-      const side = relType === 'AGREE' ? 'pro' : 'con';
-      // Read stake amount: vote-created relations have relationPayload, others have payload
+      stanceSide = relType === 'AGREE' ? 'pro' : 'con';
       const rawPayload = (backendRel as Record<string, unknown>).relationPayload
         ?? backendRel.payload;
       const relPayload = rawPayload as Record<string, unknown> | null;
-      const stakePts = (relPayload?.amount as number) ?? relStakeRef.current;
+      stanceStakePts = (relPayload?.amount as number) ?? relStakeRef.current;
       targetMsgIds.push(...backendRel.targetRefs
         .filter((ref) => 
           (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
         .map(ref => (ref as { messageId: string }).messageId));
-      if (targetMsgIds.length > 0) {
-        setStakeCounts(prev => {
-          const next = { ...prev };
-          for (const mid of targetMsgIds) {
-            const cur = next[mid] ?? { pro: 0, con: 0 };
-            next[mid] = side === 'pro'
-              ? { ...cur, pro: cur.pro + stakePts }
-              : { ...cur, con: cur.con + stakePts };
-          }
-          return next;
-        });
-      }
+      targetMsgIds.push(...backendRel.targetRefs
+        .filter((ref): ref is { kind: 'relation'; relationId: string } =>
+          ref.kind === 'relation' && 'relationId' in ref)
+        .map(ref => ref.relationId));
       // Add edge for AGREE/DISAGREE relation
       const srcMsgId = backendRel.sourceMessageId ?? null;
       const fromMsgId = srcMsgId || `anon:${backendRel.id}`;
@@ -974,18 +966,25 @@ export default function TopicDetailPage() {
         setEdges(prev => [...prev, edge]);
       }
     }
-    // Also set authorStake for the relation message itself
+    // Self-stake amount for the relation message itself
     const rawPayload2 = (backendRel as Record<string, unknown>).relationPayload
       ?? backendRel.payload;
     const relPayload2 = rawPayload2 as Record<string, unknown> | null;
-    const stakeAmount = (relPayload2?.amount as number) ?? relStakeRef.current;
-    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: stakeAmount }));
+    const selfStake = (relPayload2?.amount as number) ?? relStakeRef.current;
+    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: selfStake }));
+    // Re-fetch stakeCounts from backend (authoritative, avoids client-side sync issues)
+    const allIds = [backendRel.id, ...targetMsgIds];
+    for (const mid of allIds) {
+      api.getMessageStakes(mid).then(s => {
+        setStakeCounts(prev => ({ ...prev, [mid]: { pro: s.counts.pro, con: s.counts.con } }));
+      }).catch(() => {});
+    }
     window.dispatchEvent(new Event('points-refresh'));
     // Notify SettlementPanel to reload stakes for target messages
     for (const mid of targetMsgIds) {
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
     }
-    // Phase 6: auto-create settlement ROUND message for every relation message
+    // Phase 6: auto-create settlement ROUND message
     if (topicId) {
       const relAuthor = backendRel.createdBy?.username ?? '?';
       api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: backendRel.id }).then(roundMsg => {
@@ -1003,9 +1002,9 @@ export default function TopicDetailPage() {
     }
   }, [topicId]);
 
-  // Helper: auto-inject stakeAmount into relation creation
   const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
-    return api.createRelation(topicId, { ...data, stakeAmount: relStakeRef.current });
+    const amount = Math.max(relStakeRef.current, 1);
+    return api.createRelation(topicId, { ...data, stakeAmount: amount });
   }, []);
 
   // Listen for relation-created events (triggered after vote creates AGREE/DISAGREE relation)
@@ -1481,7 +1480,6 @@ export default function TopicDetailPage() {
         });
         setEdges(prev => {
           let next = prev.map(e => {
-            // Update edges emitted by the superseded relation message
             if (e.relationMessageId === oldRelId) {
               return {
                 ...e,
@@ -1491,7 +1489,6 @@ export default function TopicDetailPage() {
                   : e.from,
               };
             }
-            // Update edges that target the superseded relation message
             if (e.to.messageId === oldRelId && e.to.selection.kind === 'whole') {
               return {
                 ...e,
@@ -1499,6 +1496,14 @@ export default function TopicDetailPage() {
               };
             }
             return e;
+          });
+          // Deduplicate by relationMessageId + to.messageId
+          const seen = new Set<string>();
+          next = next.filter(e => {
+            const key = `${e.relationMessageId}::${e.to.messageId}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
           });
           onUpdated?.(newRelId);
           return next;
@@ -1671,7 +1676,7 @@ export default function TopicDetailPage() {
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
       return;
     }
-    // Phase 6: settlement → navigate classify + gold highlight + open panel (matches contribution-point dblclick)
+    // Phase 6: settlement → switch to list view + gold highlight + open panel
     if (m?.kind === "round" || m?.kind === "round_result") {
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
       const targetId = (m as any).settlementTargetId || messageId;
@@ -1679,6 +1684,8 @@ export default function TopicDetailPage() {
       setStanceHighlight({ stanceMsgId: targetId, evidenceMsgIds: [] });
       if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
       stanceHighlightTimerRef.current = setTimeout(() => setStanceHighlight(null), 1000);
+      // Switch to linear view so settlement panel has room to expand
+      setViewMode("list");
       // Highlight specific round in settlement panel
       const rp = (m as any).roundPayload;
       if (rp?.roundId) sessionStorage.setItem('settlementHighlightRound', rp.roundId as string);
@@ -2374,30 +2381,16 @@ export default function TopicDetailPage() {
     }
 
     if ((isAgreeDisagree || isInlineBadge) && text.length === 0) {
-      // Agree/disagree/inline-badge: one relation message per target (separate decoration badges).
-      // Relation messages are first-class messages — persist all of them to the backend.
-      const newEdgesList: DemoEdge[] = [];
+      // Agree/disagree: one relation per target. Edge created inside appendCreatedRelation.
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
-      {
-        // Agree/disagree/inline-badge (recommend/archive): one relation per target — persist to backend
-        for (const tgtMid of uniqueTargetMids) {
-          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
-          try {
-            const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
-            const relId = backendRel.id;
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            const anonSrcId = `anon:${backendRel.id}`;
-            newEdgesList.push({
-              id: nextId("edge"), relationMessageId: relId, relationType,
-              from: { messageId: anonSrcId, selection: { kind: "whole" } },
-              to: { messageId: tgtMid, selection: { kind: "whole" } },
-              relationLabel: relationTypeName(relationType),
-            } as DemoEdge);
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
-        }
+      for (const tgtMid of uniqueTargetMids) {
+        const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
+        try {
+          const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+          appendCreatedRelation(backendRel);
+          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       }
-      setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setRelationType(null); setSecondaryRelationType("none");
       return;
@@ -3802,6 +3795,29 @@ export default function TopicDetailPage() {
   const edgesToRender = computeUserFilteredEdges(rawEdgesToRender, messages, user?.username ?? null);
   // Also compute which relation messages are suppressed, for visual indicators in the list view.
   const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  // In graph view, hide suppressed relation messages (classify/merge cards/frames).
+  // List view keeps them visible with "你已反对" label so the user can undo.
+  const graphMessagesFiltered = viewMode === "graph"
+    ? messagesToRenderClean.filter(m => m.kind !== "relation" || !suppressedRelIds.has(m.id))
+    : messagesToRenderClean;
+  // When a classify is suppressed, release its owned text messages back to the canvas.
+  const suppressedClassifyTextIds = (() => {
+    if (suppressedRelIds.size === 0) return new Set<string>();
+    const ids = new Set<string>();
+    for (const relId of suppressedRelIds) {
+      const rel = relationById.get(relId);
+      if (rel?.relationType !== 'CLASSIFY') continue;
+      const owned = collectOwnedByRelation(relId, relationById);
+      owned.textIds.forEach(id => ids.add(id));
+    }
+    return ids;
+  })();
+  // Final graph messages: include released text messages from suppressed classifies
+  const graphMessagesFinal = viewMode === "graph"
+    ? [...graphMessagesFiltered, ...messagesToRenderClean.filter(m => 
+        isContentKind(m.kind) && suppressedClassifyTextIds.has(m.id) && !graphMessagesFiltered.some(gm => gm.id === m.id)
+      )]
+    : graphMessagesFiltered;
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
   const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRender, messages, user?.username ?? null);
@@ -3853,6 +3869,9 @@ export default function TopicDetailPage() {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
                 }
                 setViewMode(prev => prev === "list" ? "graph" : "list");
+                if (lastClickedMessageId) {
+                  setTimeout(() => scrollMsgToCenter(lastClickedMessageId), 100);
+                }
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
               </button>
@@ -3950,23 +3969,27 @@ export default function TopicDetailPage() {
                         <span style={{textAlign:"right"}}>
                           <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
-                          {stakeCounts[msg.id] && (stakeCounts[msg.id].pro > 0 || stakeCounts[msg.id].con > 0) && (
-                            <div style={{ display: "flex", gap: 6, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
-                              {stakeCounts[msg.id].pro > 0 && (
-                                <span style={{ color: "#4ade80" }}>👍{stakeCounts[msg.id].pro}</span>
-                              )}
-                              {stakeCounts[msg.id].con > 0 && (
-                                <span style={{ color: "#f87171" }}>👎{stakeCounts[msg.id].con}</span>
-                              )}
-                              {/* Phase 3: settlement toggle */}
-                              <button
-                                data-settlement-toggle
-                                onClick={(e) => { e.stopPropagation(); setSettlementOpenMsgId(settlementOpenMsgId === msg.id ? null : msg.id); }}
-                                style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: "0 2px", color: settlementOpenMsgId === msg.id ? "#818cf8" : "#6b7280" }}
-                                title="结算市场"
-                              >⚖️</button>
-                            </div>
-                          )}
+                          {(() => {
+                            const sc = stakeCounts[msg.id];
+                            const showProCon = sc && (sc.pro > 0 || sc.con > 0);
+                            // Phase 6: always show ⚖️ settlement entry; PRO/CON counts when available
+                            return (
+                              <div style={{ display: "flex", gap: 6, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
+                                {showProCon && sc!.pro > 0 && (
+                                  <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>
+                                )}
+                                {showProCon && sc!.con > 0 && (
+                                  <span style={{ color: "#f87171" }}>👎{sc!.con}</span>
+                                )}
+                                <button
+                                  data-settlement-toggle
+                                  onClick={(e) => { e.stopPropagation(); setSettlementOpenMsgId(settlementOpenMsgId === msg.id ? null : msg.id); }}
+                                  style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: "0 2px", color: settlementOpenMsgId === msg.id ? "#818cf8" : "#6b7280" }}
+                                  title="结算市场"
+                                >⚖️</button>
+                              </div>
+                            );
+                          })()}
                         </span>
                       </div>
                       {isTopicMsg && (
@@ -4039,7 +4062,7 @@ export default function TopicDetailPage() {
             ) : (
               <GraphView
                   key={`gv-${focusExitKey}`}
-                  messages={messagesToRenderClean} edges={edgesToRender} draftUnits={draftUnits}
+                  messages={graphMessagesFinal} edges={edgesToRender} draftUnits={draftUnits}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
                   onTextMouseUp={handleTextMouseUp} onEdgeLabelSingleClick={handleEdgeLabelSingleClick}
@@ -4060,6 +4083,10 @@ export default function TopicDetailPage() {
                   stakeCounts={stakeCounts}
                   onSettlementToggle={(msgId) => setSettlementOpenMsgId(settlementOpenMsgId === msgId ? null : msgId)}
                   settlementOpenMsgId={settlementOpenMsgId}
+                  onSettlementMessageCreated={(m: any) => {
+                    setMessages(prev => [...prev, { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' }]);
+                    setTimeout(() => scrollMsgToCenter(m.id), 50);
+                  }}
                   stanceHighlight={stanceHighlight}
                   settlementEntryHighlight={settlementEntryHighlight}
                   crossClassifyRefs={crossClassifyRefs}

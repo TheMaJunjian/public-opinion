@@ -525,6 +525,43 @@ export interface StanceHistoryResponse {
 }
 
 // ============================================================
+// Phase 6: Clean View Filter Rules
+// ============================================================
+
+/**
+ * 清爽视图过滤器规则 — 可组合的多维过滤条件。
+ * 每条规则是一个独立判断函数，所有规则之间为 AND 关系。
+ * 用户可以自由组合规则来投影消息图的不同切片。
+ */
+export type CleanFilterRule =
+  | { id: string; kind: 'sender'; username: string }
+  | { id: string; kind: 'tag'; tagType: string; minCount: number }
+  | { id: string; kind: 'stake'; minAmount: number; side?: 'PRO' | 'CON' }
+  | { id: string; kind: 'rounds'; minRounds: number }
+  | { id: string; kind: 'participants'; minCount: number };
+
+/** 过滤器规则中文标签 */
+export const CLEAN_FILTER_LABELS: Record<CleanFilterRule['kind'], string> = {
+  sender:       '按发送者',
+  tag:          '按标签',
+  stake:        '按押注额度',
+  rounds:       '按结算轮次',
+  participants: '按站队人数',
+};
+
+/** 过滤器规则默认值 */
+export function defaultCleanRule(kind: CleanFilterRule['kind']): CleanFilterRule {
+  const id = `cf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  switch (kind) {
+    case 'sender':       return { id, kind: 'sender', username: '' };
+    case 'tag':          return { id, kind: 'tag', tagType: 'ARCHIVE', minCount: 5 };
+    case 'stake':        return { id, kind: 'stake', minAmount: 50 };
+    case 'rounds':       return { id, kind: 'rounds', minRounds: 2 };
+    case 'participants': return { id, kind: 'participants', minCount: 8 };
+  }
+}
+
+// ============================================================
 // Phase 6: Audit Log, Revenue & Governance Types
 // ============================================================
 

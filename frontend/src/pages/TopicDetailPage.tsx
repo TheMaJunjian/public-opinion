@@ -15,6 +15,8 @@ import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
 import StanceHistoryPanel from '../components/StanceHistoryPanel';
 import { applyContainerExpansion } from '../utils/focusContainer';
+import { useCleanView } from '../hooks/useCleanView';
+import CleanFilterPanel from '../components/CleanFilterPanel';
 
 // ========================= Helpers =========================
 
@@ -667,7 +669,14 @@ export default function TopicDetailPage() {
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
   const [focusExitKey, setFocusExitKey] = useState(0);
-  const [cleanMode, setCleanMode] = useState(false);
+  // Phase 6: Clean view — multi-dimensional filter rules (replaces simple boolean)
+  const {
+    cleanMode, cleanFilters, cleanVisibleIds,
+    addFilter: addCleanFilter, removeFilter: removeCleanFilter,
+    updateFilter: updateCleanFilter, clearFilters: clearCleanFilters,
+  } = useCleanView({ messages, edges, stakeCounts });
+  // Count content messages for the filter panel stats
+  const contentMsgCount = useMemo(() => messages.filter(m => isContentKind(m.kind)).length, [messages]);
   const setMessagesRef = useRef(setMessages);
   setMessagesRef.current = setMessages;
   const messagesRef = useRef<DemoMessage[]>([]);
@@ -3853,20 +3862,7 @@ export default function TopicDetailPage() {
     document.addEventListener('mouseup', onMouseUp);
   }
 
-  // Phase 6: Clean mode — compute folded message IDs from ARCHIVE labels
-  const cleanFoldedIds = useMemo(() => {
-    if (!cleanMode) return new Set<string>();
-    const archiveCount = new Map<string, number>();
-    for (const r of relations) {
-      if (r.relationType === 'ARCHIVE') {
-        const targets = (r as Record<string, unknown>).targetRefs as Array<{ messageId?: string }> | undefined;
-        targets?.forEach(t => {
-          if (t.messageId) archiveCount.set(t.messageId, (archiveCount.get(t.messageId) ?? 0) + 1);
-        });
-      }
-    }
-    return new Set([...archiveCount.entries()].filter(([, c]) => c >= 5).map(([id]) => id));
-  }, [cleanMode, relations]);
+  // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
 
   if (loading) {
     return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
@@ -3881,17 +3877,22 @@ export default function TopicDetailPage() {
   }
 
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
-  // Phase 6: Apply clean mode filter
-  const messagesToRenderClean = cleanMode
-    ? messagesToRender.filter(m => !cleanFoldedIds.has(m.id))
+  // Phase 6: Apply clean mode filter (multi-dimensional rules via useCleanView)
+  const messagesToRenderClean = cleanVisibleIds
+    ? messagesToRender.filter(m =>
+        cleanVisibleIds.visibleTextIds.has(m.id) || cleanVisibleIds.visibleRelIds.has(m.id))
     : messagesToRender;
   const rawEdgesToRender = viewMode === "list" ? listEdgesToRender : graphEdgesToRender;
+  // Phase 6: Also filter edges through clean view
+  const rawEdgesToRenderClean = cleanVisibleIds
+    ? rawEdgesToRender.filter(e => cleanVisibleIds.visibleRelIds.has(e.relationMessageId))
+    : rawEdgesToRender;
   // Filter edges based on current user's DISAGREE stances on relation messages.
   // When the user disagrees with a relation message, all edges produced by that
   // relation are suppressed from this user's view (per-user branch semantics).
-  const edgesToRender = computeUserFilteredEdges(rawEdgesToRender, messages, user?.username ?? null);
+  const edgesToRender = computeUserFilteredEdges(rawEdgesToRenderClean, messages, user?.username ?? null);
   // Also compute which relation messages are suppressed, for visual indicators in the list view.
-  const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
   // In graph view, hide suppressed relation messages (classify/merge cards/frames).
   // List view keeps them visible with "你已反对" label so the user can undo.
   const graphMessagesFiltered = viewMode === "graph"
@@ -3917,7 +3918,7 @@ export default function TopicDetailPage() {
     : graphMessagesFiltered;
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
-  const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
   // Precomputed set of relation message IDs that are active stances.
   const activeStanceRelIds = new Set([...activeStanceMap.values()].map(v => v.relMsgId));
   // Reverse map: stance relation message ID → { target, type } for quick lookup.
@@ -3958,10 +3959,18 @@ export default function TopicDetailPage() {
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
-              <button onClick={() => setCleanMode(c => !c)} title="清爽模式：折叠被多数标记为冷藏的消息分支" style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #555", background: cleanMode ? "#2563eb" : "#333", color: "#eee", cursor: "pointer", fontSize: 12 }}>
-                {cleanMode ? '✨ 清爽' : '清爽模式'}
-              </button>
-              <button onClick={() => {
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <CleanFilterPanel
+                  active={cleanMode}
+                  filters={cleanFilters}
+                  matchCount={cleanVisibleIds?.visibleTextIds.size ?? 0}
+                  totalCount={contentMsgCount}
+                  onAdd={addCleanFilter}
+                  onRemove={removeCleanFilter}
+                  onUpdate={updateCleanFilter}
+                  onClear={clearCleanFilters}
+                />
+                <button onClick={() => {
                 if (leftPanelRef.current) {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
                 }
@@ -3972,6 +3981,7 @@ export default function TopicDetailPage() {
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
               </button>
+              </div>
             </div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>
               {viewMode === "list" ? "线性视图：支持自由换行内容；双击 normal 进入文本选择模式；可点击高亮片段切换选中。" : "结构图：注释/引用 source 自动推到 target 右侧列（规则1）；label避让文字；高亮片段可点击。"}

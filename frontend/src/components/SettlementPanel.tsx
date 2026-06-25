@@ -262,7 +262,7 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
             </div>
           )}
 
-          {/* Row 3: 投票（本轮新增押注） */}
+          {/* Row 3: 投票（本轮新增） */}
           {activeRound && totalWeight > 0 && (
             <div>
               <div className="text-xs text-gray-500 mb-1.5">🗳️ 投票（本轮新增）</div>

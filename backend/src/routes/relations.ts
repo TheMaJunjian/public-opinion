@@ -61,6 +61,7 @@ const createRelationSchema = z.object({
     label: z.string().trim().min(1).max(200).optional(),
     title: z.string().trim().min(1).max(200).optional(),
     targetLayout: z.enum(['single-column', 'multi-column', 'single-row']).optional(),
+    content: z.string().trim().min(1).max(50000).optional(),
   }).strict().optional(),
 }).superRefine((data, ctx) => {
   if (data.relationType === 'TAG' && !(data.payload && data.payload.label)) {
@@ -84,10 +85,17 @@ const createRelationSchema = z.object({
       path: ['payload', 'title'],
     });
   }
+  if ((data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE') && !data.payload?.content) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '提案/代码变更关系需要提供内容',
+      path: ['payload', 'content'],
+    });
+  }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE']);
-const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'PROPOSAL', 'CODE_CHANGE']);
+const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'CODE_CHANGE']);
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -304,7 +312,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     // Validate supersedesRelationId BEFORE any write, so we don't leave orphans.
     if (data.supersedesRelationId) {
       const oldRel = await prisma.message.findFirst({
-        where: { id: data.supersedesRelationId, topicId, kind: 'RELATION' },
+        where: { id: data.supersedesRelationId, topicId, kind: { in: ['RELATION', 'GOVERNANCE', 'CODE'] } },
       });
       if (!oldRel) {
         res.status(404).json({ error: '被取代的关系消息不存在或不属于该分类' });
@@ -321,20 +329,44 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     // Apply the event — state write + audit log on critical path.
+    // PROPOSAL / CODE_CHANGE: create a GOVERNANCE / CODE message (with relation fields)
+    // instead of a RELATION message, so they participate in the governance lifecycle.
+    const isGovernanceRelation = data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE';
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const message: any = await applyEvent({
-      type: 'RELATION_CREATED',
-      actorId: req.user!.id,
-      topicId,
-      payload: {
-        relationType: data.relationType,
-        sourceMessageId: data.sourceMessageId ?? null,
-        targetRefs: data.targetRefs,
-        relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
-        supersedesRelationId: data.supersedesRelationId ?? null,
-        stakeAmount: data.stakeAmount,
-      },
-    });
+    let message: any;
+    if (isGovernanceRelation) {
+      const messageKind = data.relationType === 'PROPOSAL' ? 'GOVERNANCE' as const : 'CODE' as const;
+      message = await applyEvent({
+        type: 'MESSAGE_CREATED',
+        actorId: req.user!.id,
+        topicId,
+        payload: {
+          kind: messageKind,
+          content: (relationPayload as Record<string, unknown>)?.content as string ?? '',
+          contentType: 'MARKDOWN' as const,
+          stakeAmount: data.stakeAmount,
+          relationType: data.relationType,
+          sourceMessageId: data.sourceMessageId ?? null,
+          targetRefs: data.targetRefs,
+          relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
+        },
+      });
+    } else {
+      message = await applyEvent({
+        type: 'RELATION_CREATED',
+        actorId: req.user!.id,
+        topicId,
+        payload: {
+          relationType: data.relationType,
+          sourceMessageId: data.sourceMessageId ?? null,
+          targetRefs: data.targetRefs,
+          relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
+          supersedesRelationId: data.supersedesRelationId ?? null,
+          stakeAmount: data.stakeAmount,
+        },
+      });
+    }
 
     // Return in the Relation API shape expected by the frontend.
     res.status(201).json({

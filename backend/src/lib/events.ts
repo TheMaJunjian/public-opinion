@@ -52,6 +52,11 @@ export interface MessageCreatedEvent {
     stakeAmount?: number;
     targetMessageId?: string;       // Phase 6: for ROUND messages
     note?: string | null;           // Phase 6: round note
+    // Governance/Code relation fields (PROPOSAL / CODE_CHANGE)
+    relationType?: string | null;
+    sourceMessageId?: string | null;
+    targetRefs?: unknown;
+    relationPayload?: Record<string, unknown>;
   };
 }
 
@@ -423,6 +428,11 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
         quotedTextHash: payload.quotedTextHash ?? null,
         quoteContextBefore: payload.quoteContextBefore ?? null,
         quoteContextAfter: payload.quoteContextAfter ?? null,
+        // Governance/Code relation fields
+        relationType: payload.relationType ?? null,
+        relSourceId: payload.sourceMessageId ?? null,
+        targetRefs: (payload.targetRefs as Prisma.InputJsonValue) ?? null,
+        relationPayload: (payload.relationPayload as Prisma.InputJsonValue) ?? null,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
@@ -439,6 +449,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
           content: payload.content,
           quoteSourceId: payload.quoteSourceId,
           quotedTextHash: payload.quotedTextHash,
+          relationType: payload.relationType,
         },
       },
     }),
@@ -449,10 +460,9 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     data: { entityId: message.id },
   });
 
-  // Auto-self-stake PRO (Phase 2.5)
-  await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount);
-
-  await ensureVotingRound(message.id, actorId, topicId);
+  // Auto-self-stake PRO (Phase 2.5) — must run AFTER ensureVotingRound so stake gets roundId
+  const round = await ensureVotingRound(message.id, actorId, topicId);
+  await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount, 'PRO', round?.id);
 
   return message;
 }

@@ -22,7 +22,9 @@ export type RelationType =
   | "merge"
   | "summary"
   | "recommend"
-  | "archive";
+  | "archive"
+  | "proposal"
+  | "code_change";
 export type SecondaryRelationType = "none" | "question" | "answer";
 
 export type Selection =
@@ -98,7 +100,7 @@ function kindLabel(backendKind: string, targetRefs?: any): string {
   const labels: Record<string, string> = {
     TEXT: '[文本消息]',
     GOVERNANCE: '🏛️ 治理提案\n—— 可投票/讨论/结算',
-    CODE: '💻 代码变更\n—— 结算通过后将自动部署',
+    CODE: '💻 代码\n—— 结算通过后将自动部署',
     ROUND: '⚖️ 发起结算\n—— 目标消息进入投票阶段\n双击卡片查看结算详情',
     ROUND_RESULT: '🏁 结算完成\n—— 资金池已按投票结果分配\n双击卡片查看分账明细',
     RELATION: '[关系消息]',
@@ -234,6 +236,47 @@ export function convertMessagesToDemoModel(
         relationMessageId: relMsgId,
         relationType: relType,
         from: { messageId: fromMessageId, selection: { kind: "whole" } },
+        to: toUnit,
+        relationLabel,
+      });
+    });
+  }
+
+  // Create edges from GOVERNANCE/CODE messages that have relationType and targetRefs
+  // (PROPOSAL / CODE_CHANGE sent via the relation creation path).
+  for (const m of messages) {
+    const bk = (m as any).kind as string | undefined;
+    if (bk !== 'GOVERNANCE' && bk !== 'CODE') continue;
+    const relType = (m as any).relationType as string | undefined;
+    const targetRefs = (m as any).targetRefs as TargetRef[] | undefined;
+    if (!relType || !targetRefs || targetRefs.length === 0) continue;
+
+    const lowerRelType = relType.toLowerCase() as RelationType;
+    const relMsgId = m.id;
+    const relationLabel: string = lowerRelType;
+
+    const seenRelationTargetIds = new Set<string>();
+    targetRefs.forEach((ref, index) => {
+      const edgeId = `${relMsgId}::gov::${index}`;
+      let toUnit: UnitSelection;
+      if (ref.kind === 'message') {
+        toUnit = { messageId: ref.messageId, selection: { kind: "whole" } };
+      } else if (ref.kind === 'text-fragment') {
+        const content = msgContentMap.get(ref.messageId) ?? '';
+        const pos = findTextInContent(content, ref.text);
+        toUnit = pos
+          ? { messageId: ref.messageId, selection: { kind: "text", start: pos.start, len: pos.len, text: ref.text } }
+          : { messageId: ref.messageId, selection: { kind: "whole" } };
+      } else {
+        if (seenRelationTargetIds.has(ref.relationId)) return;
+        seenRelationTargetIds.add(ref.relationId);
+        toUnit = { messageId: ref.relationId, selection: { kind: "whole" } };
+      }
+      demoEdges.push({
+        id: edgeId,
+        relationMessageId: relMsgId,
+        relationType: lowerRelType,
+        from: { messageId: relMsgId, selection: { kind: "whole" } },
         to: toUnit,
         relationLabel,
       });

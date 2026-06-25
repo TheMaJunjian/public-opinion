@@ -104,6 +104,7 @@ export interface RelationPayload {
   label?: string;
   title?: string;
   targetLayout?: RelationTargetLayout;
+  content?: string;
 }
 
 export interface Relation {
@@ -143,7 +144,9 @@ export type PresentationKind =
   | 'frame-group'       // Frames a group of messages
   | 'replace-overlay'   // Overlays / replaces the target message display (e.g. SUMMARY)
   | 'correction-badge'  // Small badge inside source message card; source replaces target (CORRECT)
-  | 'inline-badge';     // Small inline badge on target message
+  | 'inline-badge'      // Small inline badge on target message
+  | 'proposal-card'     // Governance proposal card with vote/settlement lifecycle
+  | 'code-card';        // Code change proposal card with vote/deploy lifecycle
 
 export interface PresentationSpec {
   /** How this relation is rendered */
@@ -204,6 +207,8 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true, isContainer: true  },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
+  PROPOSAL:    { kind: 'edge-label',        label: '🏛️ 提案', color: 'amber',  formsTrees: false },
+  CODE_CHANGE: { kind: 'edge-label',        label: '💻 代码', color: 'teal',  formsTrees: false },
 };
 
 /** Get the presentation spec for a relation type, with a sensible default.
@@ -269,7 +274,7 @@ export function getRelationLabel(payload: RelationPayload | undefined): string |
 }
 
 export function getRelationTitle(payload: RelationPayload | undefined): string | undefined {
-  return payload?.title?.trim() || undefined;
+  return payload?.title?.trim() || payload?.content?.trim() || undefined;
 }
 
 export function getRelationTargetLayout(relation: Pick<Relation, 'relationType' | 'payload'>): RelationTargetLayout {

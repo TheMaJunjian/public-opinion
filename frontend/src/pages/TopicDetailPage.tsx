@@ -21,6 +21,7 @@ import { applyContainerExpansion } from '../utils/focusContainer';
 const ALL_RELATION_TYPES: RelationType[] = [
   "annotation", "reference", "reply", "agree", "disagree", "tag", "arrange",
   "correct", "classify", "merge", "summary",
+  "proposal", "code_change",
   // "recommend" and "archive" are now accessible via TAG's secondary relation selector
 ];
 
@@ -107,11 +108,13 @@ function buildRelationPayload(params: {
   label?: string;
   title?: string;
   targetLayout?: RelationPayload['targetLayout'];
+  content?: string;
 }): RelationPayload | undefined {
   const payload: RelationPayload = {};
   if (params.label) payload.label = params.label;
   if (params.title) payload.title = params.title;
   if (params.targetLayout) payload.targetLayout = params.targetLayout;
+  if (params.content) payload.content = params.content;
   if ((params.relationType.toUpperCase() === 'MERGE' || params.relationType.toUpperCase() === 'SUMMARY') && !payload.targetLayout) {
     payload.targetLayout = 'multi-column';
   }
@@ -138,6 +141,10 @@ function buildRelationDemoMessage(relation: Relation): DemoMessage {
     content = `分类：${title ?? `分类（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'summary') {
     content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
+  } else if (relType === 'proposal' || relType === 'code_change') {
+    // PROPOSAL/CODE_CHANGE: show the proposal content from payload
+    const proposalContent = getRelationTitle(relation.payload) ?? '';
+    content = `${typeName}\n${proposalContent}\n目标：${targetSummary}`;
   } else if (relType === 'tag' && label) {
     content = `标签「${label}」\n目标：${targetSummary}`;
   } else if (relation.sourceMessageId) {
@@ -663,6 +670,8 @@ export default function TopicDetailPage() {
   const [cleanMode, setCleanMode] = useState(false);
   const setMessagesRef = useRef(setMessages);
   setMessagesRef.current = setMessages;
+  const messagesRef = useRef<DemoMessage[]>([]);
+  messagesRef.current = messages;
   // Phase 6: expose for SettlementPanel direct access
   useEffect(() => { (window as any).__addSettlementMessage = (m: any) => { setMessagesRef.current((prev: any) => [...prev, {...m, author: m.author || user?.username || ''}]); setTimeout(() => scrollMsgToCenter(m.id), 50); }; return () => { delete (window as any).__addSettlementMessage; }; }, [user]);
 
@@ -984,21 +993,32 @@ export default function TopicDetailPage() {
     for (const mid of targetMsgIds) {
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
     }
-    // Phase 6: auto-create settlement ROUND message
+    // Phase 6: auto-create settlement ROUND message.
+    // Each target gets exactly one auto-ROUND. Overturn rounds are manual via the panel.
+    // AGREE/DISAGREE: target the content message being agreed upon.
+    // Other relations: target the relation message itself.
     if (topicId) {
-      const relAuthor = backendRel.createdBy?.username ?? '?';
-      api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: backendRel.id }).then(roundMsg => {
-        setMessages((prev: any) => [...prev, {
-          id: roundMsg.id,
-          author: roundMsg.createdBy?.username || relAuthor,
-          createdAt: roundMsg.createdAt,
-          content: '⚖️ 发起结算',
-          kind: 'round',
-          backendKind: 'ROUND',
-          settlementTargetId: backendRel.id,
-        }]);
-        scrollMsgToCenter(roundMsg.id);
-      }).catch(() => {});
+      const settleTargetId = (relType === 'AGREE' || relType === 'DISAGREE') && targetMsgIds.length > 0
+        ? targetMsgIds[0]
+        : backendRel.id;
+      const hasRound = messagesRef.current.some(m =>
+        m.kind === 'round' && m.settlementTargetId === settleTargetId
+      );
+      if (!hasRound) {
+        const relAuthor = backendRel.createdBy?.username ?? '?';
+        api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
+          setMessages((prev: any) => [...prev, {
+            id: roundMsg.id,
+            author: roundMsg.createdBy?.username || relAuthor,
+            createdAt: roundMsg.createdAt,
+            content: '⚖️ 发起结算',
+            kind: 'round',
+            backendKind: 'ROUND',
+            settlementTargetId: settleTargetId,
+          }]);
+          scrollMsgToCenter(roundMsg.id);
+        }).catch(() => {});
+      }
     }
   }, [topicId]);
 
@@ -2213,7 +2233,7 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if (effectiveTargets.length === 0 && relationType !== "classify") return;
+    if (effectiveTargets.length === 0 && relationType !== "classify" && relationType !== "proposal" && relationType !== "code_change") return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isArrange = relationType === "arrange";
     // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
@@ -2726,6 +2746,75 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // PROPOSAL / CODE_CHANGE: governance messages with optional targets.
+    // Targets are optional — proposals can be standalone (new rules) or targeted (modify existing).
+    // Creates a GOVERNANCE/CODE message with relation fields via the relations API.
+    if (relationType === "proposal" || relationType === "code_change") {
+      const proposalContent = newMessageContent.trim();
+      if (!proposalContent) {
+        alert("提案/代码内容不能为空");
+        return;
+      }
+      const govTargetRefs = hasTargetsAvailable
+        ? effectiveTargets.map(u => unitSelectionToTargetRef(u, msgMap))
+        : [];
+      try {
+        const backendRel = await createRel(topicId!, {
+          relationType: relationType.toUpperCase(),
+          sourceMessageId: null,
+          targetRefs: govTargetRefs,
+          payload: buildRelationPayload({
+            relationType: relationType.toUpperCase(),
+            content: proposalContent,
+            title: proposalContent.slice(0, 200),
+          }),
+        });
+        // Add as governance/code content message (not relation), so it renders as a card
+        const govKind: MessageKind = relationType === "proposal" ? "governance" : "code";
+        const govMsg: DemoMessage = {
+          id: backendRel.id,
+          author: backendRel.createdBy?.username ?? user?.username ?? '?',
+          createdAt: backendRel.createdAt,
+          content: proposalContent,
+          kind: govKind,
+          backendKind: relationType === "proposal" ? "GOVERNANCE" : "CODE",
+        };
+        setMessages(prev => [...prev, govMsg]);
+        setRelations(prev => [...prev, backendRel]);
+        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        // Create edges if targets were selected
+        if (hasTargetsAvailable) {
+          const newEdgesList: DemoEdge[] = [];
+          const relId = backendRel.id;
+          for (const t of effectiveTargets) {
+            newEdgesList.push({
+              id: nextId("edge"),
+              relationMessageId: relId,
+              relationType: relationType,
+              from: { messageId: relId, selection: { kind: "whole" } },
+              to: { ...t },
+              relationLabel: relationType,
+            } as DemoEdge);
+          }
+          setEdges(prev => [...prev, ...newEdgesList]);
+        }
+        // Auto-self-stake
+        const selfStake = relStakeRef.current;
+        setAuthorStakes(prev => ({ ...prev, [backendRel.id]: selfStake }));
+        api.getMessageStakes(backendRel.id).then(s => {
+          setStakeCounts(prev => ({ ...prev, [backendRel.id]: { pro: s.counts.pro, con: s.counts.con } }));
+        }).catch(() => {});
+        window.dispatchEvent(new Event('points-refresh'));
+      } catch (e: any) {
+        alert(`建立${relationTypeName(relationType)}关系失败: ${e?.message ?? e}`);
+        return;
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
@@ -2811,6 +2900,7 @@ export default function TopicDetailPage() {
   const isClassifyType = relationType === "classify";
   const isMergeType = relationType === "merge";
   const isSummaryType = relationType === "summary";
+  const isProposalOrCodeType = relationType === "proposal" || relationType === "code_change";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
@@ -2850,6 +2940,7 @@ export default function TopicDetailPage() {
     if (isClassifyType) return newMessageContent.trim().length > 0;
     if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
+    if (isProposalOrCodeType) return newMessageContent.trim().length > 0;
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
     if (isAgreeDisagreeType || isArrangeType || isTagWithQuickAnnotate) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
@@ -2887,6 +2978,12 @@ export default function TopicDetailPage() {
       if (!hasTargetsAvailable) return "请在画布中选择要归并的目标消息";
       if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    }
+    if (isProposalOrCodeType) {
+      const govTypeLabel = relationType === "proposal" ? "提案" : "代码";
+      if (newMessageContent.trim().length === 0) return `请输入${govTypeLabel}内容（不能为空）`;
+      if (hasTargetsAvailable) return `发起${govTypeLabel}（含 ${effectiveTargets.length} 个目标引用）`;
+      return `发起${govTypeLabel}（无目标，独立提案）`;
     }
     if (isAgreeDisagreeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
@@ -3965,7 +4062,7 @@ export default function TopicDetailPage() {
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
                       <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
-                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? `⚖️ 发起结算` : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码变更` : `消息 ${msg.id}`}</span>
+                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? `⚖️ 发起结算` : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码` : `消息 ${msg.id}`}</span>
                         <span style={{textAlign:"right"}}>
                           <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
@@ -4250,10 +4347,16 @@ export default function TopicDetailPage() {
                   (draftHasRelationTarget && relationType === "correct")
                   || (isTagWithQuickAnnotate && hasTargetsAvailable)
                   || (isMergeType && hasTargetsAvailable);
+                const placeholderText = textAreaDisabled
+                  ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
+                  : isClassifyType ? "输入分类名称（不能为空）"
+                  : isSummaryType ? "输入总结内容（不能为空）"
+                  : isProposalOrCodeType ? (relationType === "proposal" ? "输入提案内容（不能为空，支持 Markdown）" : "输入代码内容（不能为空，支持 Markdown）")
+                  : "输入一条新普通消息（支持自由换行）";
                 return (
                   <textarea
                     style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容") : isClassifyType ? "输入分类名称（不能为空）" : isSummaryType ? "输入总结内容（不能为空）" : "输入一条新普通消息（支持自由换行）"}
+                    placeholder={placeholderText}
                     value={newMessageContent}
                     readOnly={textAreaDisabled}
                     onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}
@@ -4262,7 +4365,7 @@ export default function TopicDetailPage() {
               })()}
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 {/* Text stake: only when text creates a separate message */}
-                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
+                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isProposalOrCodeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
                   <>
                     <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
                     <input
@@ -4284,7 +4387,7 @@ export default function TopicDetailPage() {
                 {/* Relation stake */}
                 {relationType && (
                   <>
-                    <span style={{ fontSize: 11, color: "#888" }}>{hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
+                    <span style={{ fontSize: 11, color: "#888" }}>{hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isProposalOrCodeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
                     <input
                       type="number"
                       min={minSelfStake}

@@ -2965,11 +2965,22 @@ export default function GraphView(props: GraphViewProps) {
               ? '#242015'
               : undefined;
 
+          // Kind-based styling for governance / code / settlement messages
+          const kindMeta = (() => {
+            if (msg.kind === 'governance') return { color: '#f59e0b', label: '提案', bg: 'rgba(245,158,11,0.08)' };
+            if (msg.kind === 'code')        return { color: '#14b8a6', label: '代码', bg: 'rgba(20,184,166,0.08)' };
+            if (msg.kind === 'round')       return { color: '#818cf8', label: '⚖️ 结算中', bg: 'rgba(129,140,248,0.08)' };
+            if (msg.kind === 'round_result')return { color: '#34d399', label: '✅ 已结算', bg: 'rgba(52,211,153,0.08)' };
+            return null;
+          })();
+          const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
+          const kindBg = kindMeta ? kindMeta.bg : undefined;
+
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:stanceBg||"#1f1f1f",borderRadius:6,border:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444"),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:stanceBg||kindBg||"#1f1f1f",borderRadius:6,border:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444"),borderLeft:kindBorder||(stanceBorder?undefined:(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444")),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
               {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
@@ -2989,6 +3000,11 @@ export default function GraphView(props: GraphViewProps) {
                     </div>
                   ))}
                   <span>{msg.author}</span>
+                  {kindMeta && (
+                    <span style={{fontSize:9,fontWeight:600,padding:"0 5px",borderRadius:3,background:`${kindMeta.color}22`,color:kindMeta.color,lineHeight:"16px",border:`1px solid ${kindMeta.color}44`}}>
+                      {kindMeta.label}
+                    </span>
+                  )}
                 </div>
                 {/* For text messages, correction badges are centered between author and msgId,
                     with AGREE/DISAGREE mini-badges rendered inline to the right of each correction badge. */}

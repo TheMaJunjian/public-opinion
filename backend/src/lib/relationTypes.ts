@@ -46,6 +46,8 @@ export const RELATION_TYPES = [
   'SUMMARY',      // 总结
   'RECOMMEND',    // 推荐
   'ARCHIVE',      // 冷藏
+  'PROPOSAL',     // 提案（修改规则/制度的治理提案，需质押，可投票结算）
+  'CODE_CHANGE',  // 代码变更（修改程序代码的提案，需质押，可投票结算后自动部署）
 ] as const;
 
 /** The union type of all known relation types (for TypeScript type safety) */

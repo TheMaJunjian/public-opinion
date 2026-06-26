@@ -2969,6 +2969,7 @@ export default function GraphView(props: GraphViewProps) {
           const kindMeta = (() => {
             if (msg.kind === 'governance') return { color: '#f59e0b', label: '提案', bg: 'rgba(245,158,11,0.08)' };
             if (msg.kind === 'code')        return { color: '#14b8a6', label: '代码', bg: 'rgba(20,184,166,0.08)' };
+            if (msg.kind === 'operations')  return { color: '#06b6d4', label: '📊 运营', bg: 'rgba(6,182,212,0.08)' };
             if (msg.kind === 'round')       return { color: '#818cf8', label: '⚖️ 结算中', bg: 'rgba(129,140,248,0.08)' };
             if (msg.kind === 'round_result')return { color: '#34d399', label: '✅ 已结算', bg: 'rgba(52,211,153,0.08)' };
             return null;

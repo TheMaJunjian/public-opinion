@@ -2695,7 +2695,8 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if (text.length === 0) return;
+    // For most types below, text is required. Governance/ops types allow empty text when targets exist.
+    if (text.length === 0 && !isGovernanceOrOpsType) return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
 
@@ -2765,18 +2766,31 @@ export default function TopicDetailPage() {
       return;
     }
 
-    // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages with optional targets.
-    // Targets are optional — can be standalone (new rules/announcements) or targeted (modify existing).
-    // Creates a GOVERNANCE/CODE/OPERATIONS message with relation fields via the relations API.
+    // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages.
+    // Source is forbidden; targets are optional — selected text messages are "converted".
+    // Text is optional when targets are selected (auto-fills from targets if empty).
     if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
-      const proposalContent = newMessageContent.trim();
-      if (!proposalContent) {
-        alert("内容不能为空");
-        return;
-      }
+      let proposalContent = newMessageContent.trim();
       const govTargetRefs = hasTargetsAvailable
         ? effectiveTargets.map(u => unitSelectionToTargetRef(u, msgMap))
         : [];
+      if (!proposalContent && govTargetRefs.length === 0) {
+        alert("请输入内容或选择目标消息");
+        return;
+      }
+      // Auto-fill content from target text messages when input is empty
+      if (!proposalContent && govTargetRefs.length > 0) {
+        const targetContents: string[] = [];
+        for (const ref of govTargetRefs) {
+          if (ref.kind === 'message' || ref.kind === 'text-fragment') {
+            const m = msgMap.get(ref.messageId);
+            if (m && isContentKind(m.kind) && m.content) {
+              targetContents.push(m.content);
+            }
+          }
+        }
+        proposalContent = targetContents.join('\n\n---\n\n');
+      }
       try {
         const backendRel = await createRel(topicId!, {
           relationType: relationType.toUpperCase(),
@@ -2784,8 +2798,8 @@ export default function TopicDetailPage() {
           targetRefs: govTargetRefs,
           payload: buildRelationPayload({
             relationType: relationType.toUpperCase(),
-            content: proposalContent,
-            title: proposalContent.slice(0, 200),
+            content: proposalContent || '',
+            title: (proposalContent || '').slice(0, 200) || undefined,
           }),
         });
         // Add as governance/code/operations content message (not relation), so it renders as a card
@@ -2801,7 +2815,7 @@ export default function TopicDetailPage() {
         setMessages(prev => [...prev, govMsg]);
         setRelations(prev => [...prev, backendRel]);
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-        // Create edges if targets were selected
+        // Create edges for selected target messages
         if (hasTargetsAvailable) {
           const newEdgesList: DemoEdge[] = [];
           const relId = backendRel.id;
@@ -2987,9 +3001,9 @@ export default function TopicDetailPage() {
     if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
     if (isGovernanceOrOpsType) {
-      // 候选区/来源集合/目标集合非空时，治理/运营消息不应发送（无需目标）
-      if (hasTargetsAvailable || sourceUnits.length > 0) return false;
-      return newMessageContent.trim().length > 0;
+      // 来源禁止；目标可选；有目标时文本可不填
+      if (sourceUnits.length > 0) return false;
+      return newMessageContent.trim().length > 0 || hasTargetsAvailable;
     }
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
     if (isAgreeDisagreeType || isArrangeType || isTagWithQuickAnnotate) return hasTargetsAvailable;
@@ -3031,9 +3045,16 @@ export default function TopicDetailPage() {
     }
     if (isGovernanceOrOpsType) {
       const govTypeLabel = relationType === "proposal" ? "提案" : relationType === "code_change" ? "代码" : "运营";
-      if (hasTargetsAvailable || sourceUnits.length > 0)
-        return `请清空候选区、来源集合和目标集合（${govTypeLabel}消息无需选择目标）`;
-      if (newMessageContent.trim().length === 0) return `请输入${govTypeLabel}内容（不能为空）`;
+      if (sourceUnits.length > 0)
+        return `请清空来源集合（${govTypeLabel}消息不需要来源）`;
+      const usingDraft2 = draftUnits.length > 0;
+      const targetCount = (usingDraft2 ? draftUnits : targetUnits).length;
+      if (!hasTargetsAvailable && newMessageContent.trim().length === 0)
+        return `请输入${govTypeLabel}内容或选择目标消息`;
+      if (targetCount > 0 && newMessageContent.trim().length > 0)
+        return `发送${govTypeLabel}消息（引用 ${targetCount} 个目标）`;
+      if (targetCount > 0)
+        return `发送${govTypeLabel}消息（引用 ${targetCount} 个目标，无正文）`;
       return `发送${govTypeLabel}消息`;
     }
     if (isAgreeDisagreeType) {
@@ -4114,7 +4135,7 @@ export default function TopicDetailPage() {
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
                       <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
-                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? `⚖️ 发起结算` : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码` : `消息 ${msg.id}`}</span>
+                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? `⚖️ 发起结算` : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码` : (msg as any).backendKind === "OPERATIONS" ? `📊 运营` : `消息 ${msg.id}`}</span>
                         <span style={{textAlign:"right"}}>
                           <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>

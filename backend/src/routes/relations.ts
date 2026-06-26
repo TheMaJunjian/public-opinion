@@ -85,17 +85,26 @@ const createRelationSchema = z.object({
       path: ['payload', 'title'],
     });
   }
-  if ((data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE') && !data.payload?.content) {
+  if ((data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE' || data.relationType === 'OPERATIONS') && !data.payload?.content && data.targetRefs.length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: '提案/代码变更关系需要提供内容',
+      message: '提案/代码变更/运营关系需要提供内容或至少一个目标引用',
       path: ['payload', 'content'],
     });
   }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'PROPOSAL', 'CODE_CHANGE']);
-const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'CODE_CHANGE']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
+const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
+
+// Types that forbid sourceMessageId entirely (must be null)
+const SOURCE_FORBIDDEN_RELATION_TYPES: Record<string, string> = {
+  CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', ARRANGE: '排列',
+  RECOMMEND: '推荐', ARCHIVE: '冷藏',
+  PROPOSAL: '提案', CODE_CHANGE: '代码变更', OPERATIONS: '运营',
+};
+// Types that forbid targetRefs entirely (must be empty array)
+const TARGET_FORBIDDEN_RELATION_TYPES: Record<string, string> = {};
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -181,19 +190,20 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       return;
     }
 
-    if (!TARGET_OPTIONAL_RELATION_TYPES.has(data.relationType) && data.targetRefs.length === 0) {
-      res.status(400).json({ error: '至少需要一个目标引用' });
+    // Source-forbidden types: must not provide a sourceMessageId
+    if (data.relationType in SOURCE_FORBIDDEN_RELATION_TYPES && data.sourceMessageId) {
+      res.status(400).json({ error: `${SOURCE_FORBIDDEN_RELATION_TYPES[data.relationType]}关系不应提供来源消息 ID` });
       return;
     }
 
-    // CLASSIFY, MERGE, SUMMARY, and ARRANGE are user-to-message relations: no source text message.
-    // For ARRANGE: the arranged text messages are stored as targets, not sources.
-    const noSourceRelTypeNames: Record<string, string> = {
-      CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', ARRANGE: '排列',
-      RECOMMEND: '推荐', ARCHIVE: '冷藏',
-    };
-    if (data.relationType in noSourceRelTypeNames && data.sourceMessageId) {
-      res.status(400).json({ error: `${noSourceRelTypeNames[data.relationType]}关系不应提供来源消息 ID` });
+    // Target-forbidden types: must not provide targetRefs
+    if (data.relationType in TARGET_FORBIDDEN_RELATION_TYPES) {
+      if (data.targetRefs.length > 0) {
+        res.status(400).json({ error: `${TARGET_FORBIDDEN_RELATION_TYPES[data.relationType]}关系不应提供目标引用` });
+        return;
+      }
+    } else if (!TARGET_OPTIONAL_RELATION_TYPES.has(data.relationType) && data.targetRefs.length === 0) {
+      res.status(400).json({ error: '至少需要一个目标引用' });
       return;
     }
     // sourceMessageId can reference ANY message in this topic (TEXT or RELATION kind),

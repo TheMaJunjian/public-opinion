@@ -78,10 +78,20 @@ function rulePassesMessage(
       // relationType 规则：消息内容类型匹配指定的关系类型
       // 从 edges 中查找该消息作为 source 或 target 的关系，匹配 relationType
       const targetType = rule.relationType.toUpperCase();
-      return ctx.edges.some(
+      if (ctx.edges.some(
         e => e.relationType.toUpperCase() === targetType &&
           (e.from.messageId === msgId || e.to.messageId === msgId),
-      );
+      )) return true;
+
+      // 治理/运营类消息（PROPOSAL / CODE_CHANGE / OPERATIONS）不产生自身类型的边，
+      // 它们通过 REFERENCE 边连接目标，因此需直接检查消息的 kind
+      const msg = ctx.msgMap.get(msgId);
+      if (msg) {
+        if (targetType === 'PROPOSAL' && msg.kind === 'governance') return true;
+        if (targetType === 'CODE_CHANGE' && msg.kind === 'code') return true;
+        if (targetType === 'OPERATIONS' && msg.kind === 'operations') return true;
+      }
+      return false;
     }
     default:
       return true;

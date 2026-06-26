@@ -1,27 +1,31 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getUserStances } from '../api/client';
-import type { StanceRelation, StanceVote, StanceStake, StanceEvidence } from '../types';
+import type { StanceRelation, StanceStake } from '../types';
 
 interface Props {
   userId: string;
   topicId?: string;
 }
 
+const TYPE_ICON: Record<string, string> = {
+  AGREE: '👍', DISAGREE: '👎', SELF_AGREE: '✍️',
+};
+const TYPE_LABEL: Record<string, string> = {
+  AGREE: '赞同', DISAGREE: '反对', SELF_AGREE: '赞同自己',
+};
+
 /**
  * StanceHistoryPanel — 用户表态历史面板
- * 展示用户在系统中的所有立场表态（赞同/反对、投票、押注）
- * 以及 REFERENCE(证据) 引用。
+ * 站队（赞同/反对/赞同自己） + 立场（发消息消耗的贡献点）
  */
 export default function StanceHistoryPanel({ userId, topicId }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [relations, setRelations] = useState<StanceRelation[]>([]);
-  const [votes, setVotes] = useState<StanceVote[]>([]);
   const [stakes, setStakes] = useState<StanceStake[]>([]);
-  const [evidence, setEvidence] = useState<StanceEvidence[]>([]);
-  const [activeTab, setActiveTab] = useState<'all' | 'relations' | 'votes' | 'stakes' | 'evidence'>('all');
+  const [activeTab, setActiveTab] = useState<'relations' | 'stakes'>('relations');
 
   const load = useCallback(async () => {
     try {
@@ -29,9 +33,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
       setError(null);
       const data = await getUserStances(userId, { topicId, limit: 30 });
       setRelations(data.stances.relations);
-      setVotes(data.stances.votes);
       setStakes(data.stances.stakes);
-      setEvidence(data.stances.evidence ?? []);
     } catch (e: unknown) {
       setError((e as Error)?.message ?? '加载失败');
     } finally {
@@ -41,97 +43,61 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
 
   useEffect(() => { load(); }, [load]);
 
-  if (loading) {
-    return <div className="text-sm text-gray-500 p-4">加载表态历史...</div>;
-  }
+  if (loading) return <div className="text-sm text-gray-500 p-4">加载中...</div>;
+  if (error) return <div className="text-sm text-red-600 p-4">{error}</div>;
 
-  if (error) {
-    return <div className="text-sm text-red-600 p-4">{error}</div>;
-  }
-
-  const totalCount = relations.length + votes.length + stakes.length + evidence.length;
+  const totalCount = relations.length + stakes.length;
   if (totalCount === 0) {
     return (
       <div className="text-sm text-gray-500 p-4 space-y-2">
-        <div>暂无表态记录</div>
-        <div className="text-xs text-gray-400">你还没有对任何消息表示赞同或反对。在画布中双击一条消息，或通过发送器选择"赞同/反对"关系类型即可表态。表态会自动附带押注，表示你对该立场的信心程度。</div>
+        <div>暂无记录</div>
+        <div className="text-xs text-gray-400">发送消息会消耗贡献点，记录在「立场」中。对他人消息的赞同/反对，记录在「站队」中。赞同自己的消息会在站队中标注。</div>
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      {/* Tabs */}
       <div className="flex gap-1 border-b border-gray-200">
-        {(['all', 'relations', 'votes', 'stakes', 'evidence'] as const).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
+        {(['relations', 'stakes'] as const).map(tab => (
+          <button key={tab} onClick={() => setActiveTab(tab)}
             className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
-              activeTab === tab
-                ? 'border-indigo-500 text-indigo-700'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+              activeTab === tab ? 'border-indigo-500 text-indigo-700' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            {tab === 'all' && `全部 (${totalCount})`}
-            {tab === 'relations' && `赞同/反对 (${relations.length})`}
-            {tab === 'votes' && `投票 (${votes.length})`}
-            {tab === 'stakes' && `押注 (${stakes.length})`}
-            {tab === 'evidence' && `证据 (${evidence.length})`}
+            {tab === 'relations' ? `站队 (${relations.length})` : `立场 (${stakes.length})`}
           </button>
         ))}
       </div>
 
-      {/* Stance List */}
       <div className="space-y-2 max-h-96 overflow-auto">
-        {(activeTab === 'all' || activeTab === 'relations') && relations.map(r => (
+        {activeTab === 'relations' && relations.map(r => (
           <StanceCard
             key={`rel-${r.id}`}
-            icon={r.type === 'AGREE' ? '👍' : '👎'}
-            title={`${r.type === 'AGREE' ? '赞同' : '反对'} · ${r.topicTitle}`}
+            icon={TYPE_ICON[r.type] ?? '❓'}
+            title={`${TYPE_LABEL[r.type] ?? r.type} · ${r.topicTitle}`}
+            subtitle={`${r.amount} 点`}
+            highlight={r.type === 'SELF_AGREE'}
             time={r.createdAt}
-            onClick={() => navigate(`/topics/${r.topicId}?msg=${r.id}`)}
+            onDoubleClick={() => {
+              const params = new URLSearchParams();
+              params.set('msg', r.id);
+              if (r.targetMessageId) params.set('settlement', r.targetMessageId);
+              navigate(`/topics/${r.topicId}?${params}`);
+            }}
           />
         ))}
 
-        {(activeTab === 'all' || activeTab === 'votes') && votes.map(v => (
-          <StanceCard
-            key={`vote-${v.id}`}
-            icon={v.vote === 'TRUE' ? '✅' : '❌'}
-            title={`投票${v.vote === 'TRUE' ? 'TRUE' : 'FALSE'} · ${v.topicTitle}`}
-            subtitle={`${v.amount} 点 · ${v.roundStatus === 'SETTLED' ? `结果: ${v.roundResult ?? '—'}` : v.roundStatus}`}
-            time={v.createdAt}
-            onClick={() => v.topicId && navigate(`/topics/${v.topicId}?msg=${v.messageId}&settlement=${v.messageId}`)}
-          />
-        ))}
-
-        {(activeTab === 'all' || activeTab === 'stakes') && stakes.map(s => (
+        {activeTab === 'stakes' && stakes.map(s => (
           <StanceCard
             key={`stake-${s.id}`}
-            icon={s.side === 'PRO' ? '📈' : '📉'}
-            title={`押${s.side === 'PRO' ? '看好' : '看空'} · ${s.topicTitle}`}
-            subtitle={`${s.amount} 点`}
+            icon="🔒"
+            title={`消耗 ${s.amount} 点 · ${s.topicTitle}`}
+            subtitle={s.content ? (s.content.length > 40 ? s.content.slice(0, 40) + '…' : s.content) : '(无文本)'}
             time={s.createdAt}
-            onClick={() => navigate(`/topics/${s.topicId}?msg=${s.messageId}`)}
+            onDoubleClick={() => navigate(`/topics/${s.topicId}?msg=${s.messageId}`)}
           />
         ))}
-
-        {(activeTab === 'all' || activeTab === 'evidence') && evidence.map(e => {
-          const payload = e.relationPayload as Record<string, unknown> | null;
-          const label = payload?.label as string | undefined;
-          const targets = e.targetRefs as Array<{ messageId?: string }> | undefined;
-          const firstTarget = targets?.[0]?.messageId;
-          return (
-            <StanceCard
-              key={`ev-${e.id}`}
-              icon="📎"
-              title={`证据${label ? ` · ${label}` : ''} · ${e.topicTitle}`}
-              subtitle={firstTarget ? `→ ${firstTarget.slice(-6)}` : undefined}
-              time={e.createdAt}
-              onClick={() => firstTarget && navigate(`/topics/${e.topicId}?msg=${firstTarget}`)}
-            />
-          );
-        })}
       </div>
     </div>
   );
@@ -139,18 +105,20 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
 
 /** Single stance entry card */
 function StanceCard({
-  icon, title, subtitle, time, onClick,
+  icon, title, subtitle, time, highlight, onDoubleClick,
 }: {
   icon: string;
   title: string;
   subtitle?: string;
   time: string;
-  onClick: () => void;
+  highlight?: boolean;
+  onDoubleClick: () => void;
 }) {
   return (
     <div
-      className="border rounded-lg px-3 py-2 cursor-pointer hover:shadow-sm transition-shadow border-gray-200 bg-white"
-      onClick={onClick}
+      className={`border rounded-lg px-3 py-2 cursor-pointer hover:shadow-sm transition-shadow bg-white ${highlight ? 'border-amber-300 bg-amber-50' : 'border-gray-200'}`}
+      onDoubleClick={onDoubleClick}
+      title="双击跳转到对应消息"
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

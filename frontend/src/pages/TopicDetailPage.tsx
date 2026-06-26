@@ -16,7 +16,6 @@ import RoundHistory from '../components/RoundHistory';
 import StanceHistoryPanel from '../components/StanceHistoryPanel';
 import AuditLogView from '../components/AuditLogView';
 import RevenuePanel from '../components/RevenuePanel';
-import GovernancePanel from '../components/GovernancePanel';
 import { applyContainerExpansion } from '../utils/focusContainer';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
@@ -656,6 +655,8 @@ export default function TopicDetailPage() {
       }
       searchParams.delete('msg');
       setSearchParams(searchParams, { replace: true });
+      // Trigger scroll directly (also needed for same-topic nav where messages don't change)
+      setTimeout(() => scrollMsgToCenter(msgId), 150);
     }
   }, [searchParams, setSearchParams]);
 
@@ -744,7 +745,6 @@ export default function TopicDetailPage() {
   const [showStanceHistory, setShowStanceHistory] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showRevenue, setShowRevenue] = useState(false);
-  const [showGovernance, setShowGovernance] = useState(false);
 
   // Phase 5: Refs to avoid stale closure in points-navigate handler
   // (initialized empty; values synced via useEffect below after all useMemos run)
@@ -4580,7 +4580,7 @@ export default function TopicDetailPage() {
           {/* Phase 5: Stance History Panel */}
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>📋 表态历史</div>
+              <div style={{ fontWeight: 600 }}>📋 站队与立场</div>
               <button
                 onClick={() => setShowStanceHistory(!showStanceHistory)}
                 style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showStanceHistory ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
@@ -4625,23 +4625,6 @@ export default function TopicDetailPage() {
             {showRevenue && (
               <div style={{ marginTop: 8 }}>
                 <RevenuePanel />
-              </div>
-            )}
-          </div>
-          {/* Governance Panel */}
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>🏛️ 治理</div>
-              <button
-                onClick={() => setShowGovernance(!showGovernance)}
-                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showGovernance ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
-              >
-                {showGovernance ? '收起' : '展开'}
-              </button>
-            </div>
-            {showGovernance && (
-              <div style={{ marginTop: 8 }}>
-                <GovernancePanel topicId={topicId} />
               </div>
             )}
           </div>

@@ -22,170 +22,120 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
     const skip = (page - 1) * limit;
     const topicId = req.query.topicId as string | undefined;
 
-    // ── 1. AGREE/DISAGREE 关系表态 ──
-    const relationFilter: Record<string, unknown> = {
+    // ═══════════════════════════════════════════════════════════
+    // 1. 站队 — AGREE/DISAGREE 关系表态
+    // ═══════════════════════════════════════════════════════════
+    const stanceFilter: Record<string, unknown> = {
       createdById: targetUserId,
       kind: 'RELATION',
       relationType: { in: ['AGREE', 'DISAGREE'] },
     };
-    if (topicId) relationFilter.topicId = topicId;
+    if (topicId) stanceFilter.topicId = topicId;
 
     const stanceRelations = await prisma.message.findMany({
-      where: relationFilter,
+      where: stanceFilter,
       orderBy: { createdAt: 'desc' },
       skip,
       take: limit,
       select: {
-        id: true,
-        topicId: true,
-        relationType: true,
-        relationPayload: true,
-        targetRefs: true,
-        createdAt: true,
+        id: true, topicId: true, relationType: true,
+        targetRefs: true, createdAt: true,
         topic: { select: { id: true, title: true } },
       },
     });
 
-    // ── 1b. REFERENCE(证据) 关系（该用户发出的证据引用）──
-    // 证据引用复用 REFERENCE 关系 + payload.label = "evidence"
-    const evidenceFilter: Record<string, unknown> = {
+    // AGREE/DISAGEE stakes are on the TARGET message (events.ts line 556)
+    const targetMsgIds = new Set(
+      stanceRelations.flatMap(r =>
+        ((r.targetRefs as Array<{ messageId?: string }> | undefined) ?? [])
+          .map(ref => ref.messageId).filter(Boolean) as string[]
+      )
+    );
+    const [targetMsgs, targetStakes] = targetMsgIds.size > 0
+      ? await Promise.all([
+          prisma.message.findMany({
+            where: { id: { in: [...targetMsgIds] } },
+            select: { id: true, createdById: true },
+          }),
+          prisma.stake.findMany({
+            where: { messageId: { in: [...targetMsgIds] }, userId: targetUserId },
+            select: { messageId: true, amount: true },
+          }),
+        ])
+      : [[], []];
+
+    const ownMsgIds = new Set(targetMsgs.filter(m => m.createdById === targetUserId).map(m => m.id));
+    const stakeByTarget = new Map(targetStakes.map(s => [s.messageId, s.amount]));
+
+    const relations = stanceRelations.map(r => {
+      const refs = (r.targetRefs as Array<{ messageId?: string }> | undefined) ?? [];
+      const tid = refs.find(ref => ref.messageId)?.messageId;
+      return {
+        kind: 'relation' as const,
+        id: r.id, topicId: r.topicId, topicTitle: r.topic.title,
+        type: (tid && ownMsgIds.has(tid)) ? 'SELF_AGREE' : r.relationType as string,
+        amount: tid ? (stakeByTarget.get(tid) ?? 0) : 0,
+        targetMessageId: tid ?? null,
+        content: null as string | null,
+        createdAt: r.createdAt,
+      };
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // 2. 立场 — 所有非 AGREE/DISAGREE 的发送消息（含自押）
+    // ═══════════════════════════════════════════════════════════
+    const positionFilter: Record<string, unknown> = {
       createdById: targetUserId,
-      kind: 'RELATION',
-      relationType: 'REFERENCE',
+      NOT: [{ kind: 'RELATION', relationType: { in: ['AGREE', 'DISAGREE'] } }],
     };
-    if (topicId) evidenceFilter.topicId = topicId;
+    if (topicId) positionFilter.topicId = topicId;
 
-    const evidenceRefs = await prisma.message.findMany({
-      where: evidenceFilter,
+    const positionMessages = await prisma.message.findMany({
+      where: positionFilter,
       orderBy: { createdAt: 'desc' },
       skip,
       take: limit,
       select: {
-        id: true,
-        topicId: true,
-        relationPayload: true,
-        targetRefs: true,
-        createdAt: true,
+        id: true, content: true, kind: true, relationType: true,
+        topicId: true, createdAt: true,
         topic: { select: { id: true, title: true } },
       },
     });
 
-    // ── 2. 投票表态（AGREE/DISAGREE 关系消息，relationPayload.vote = true）──
-    const voteFilter: Record<string, unknown> = {
-      createdById: targetUserId,
-      kind: 'RELATION',
-      relationType: { in: ['AGREE', 'DISAGREE'] },
-      // Pure-stance votes: no source message, relationPayload carries vote metadata
-      relSourceId: null,
-    };
-    if (topicId) voteFilter.topicId = topicId;
+    // Non-AGREE/DISAGEE stakes are on the message itself
+    const posMsgIds = positionMessages.map(m => m.id);
+    const posStakes = posMsgIds.length > 0
+      ? new Map((await prisma.stake.findMany({
+          where: { messageId: { in: posMsgIds }, userId: targetUserId, side: 'PRO' },
+          orderBy: { createdAt: 'asc' },
+          distinct: ['messageId'],
+          select: { messageId: true, amount: true },
+        })).map(s => [s.messageId, s.amount]))
+      : new Map<string, number>();
 
-    const voteRelations = await prisma.message.findMany({
-      where: voteFilter,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        topicId: true,
-        relationType: true,
-        relationPayload: true,
-        targetRefs: true,
-        createdAt: true,
-        topic: { select: { id: true, title: true } },
-      },
-    });
+    const stakes = positionMessages
+      .filter(m => posStakes.has(m.id))
+      .map(m => ({
+        kind: 'stake' as const,
+        id: m.id, topicId: m.topicId, topicTitle: m.topic.title,
+        messageId: m.id,
+        content: m.content?.slice(0, 80) ?? '',
+        amount: posStakes.get(m.id)!,
+        createdAt: m.createdAt,
+      }));
 
-    // ── 3. 押注表态 ──
-    const stakeFilter: Record<string, unknown> = { userId: targetUserId };
-    if (topicId) stakeFilter.topicId = topicId;
-
-    const stakes = await prisma.stake.findMany({
-      where: stakeFilter,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        side: true,
-        amount: true,
-        messageId: true,
-        createdAt: true,
-        message: {
-          select: {
-            id: true,
-            topicId: true,
-            topic: { select: { id: true, title: true } },
-          },
-        },
-      },
-    });
-
-    // ── Counts for pagination ──
-    const [relationCount, voteCount, stakeCount, evidenceCount] = await Promise.all([
-      prisma.message.count({ where: relationFilter }),
-      prisma.message.count({ where: voteFilter }),
-      prisma.stake.count({ where: stakeFilter }),
-      prisma.message.count({ where: evidenceFilter }),
+    // ═══════════════════════════════════════════════════════════
+    // Response
+    // ═══════════════════════════════════════════════════════════
+    const [relationCount, positionCount] = await Promise.all([
+      prisma.message.count({ where: stanceFilter }),
+      prisma.message.count({ where: positionFilter }),
     ]);
 
     res.json({
       user: { id: targetUserId },
-      stances: {
-        relations: stanceRelations.map(r => ({
-          kind: 'relation' as const,
-          id: r.id,
-          topicId: r.topicId,
-          topicTitle: r.topic.title,
-          type: r.relationType as string,
-          payload: r.relationPayload,
-          targetRefs: r.targetRefs,
-          createdAt: r.createdAt,
-        })),
-        votes: voteRelations.map(v => {
-          const payload = v.relationPayload as Record<string, unknown> | null;
-          const targets = v.targetRefs as Array<{ messageId?: string }> | undefined;
-          const targetMessageId = targets?.[0]?.messageId;
-          return {
-            kind: 'vote' as const,
-            id: v.id,
-            topicId: v.topicId,
-            topicTitle: v.topic.title,
-            messageId: targetMessageId,
-            vote: v.relationType === 'AGREE' ? 'TRUE' : 'FALSE',
-            amount: (payload?.amount as number) ?? 0,
-            roundStatus: 'VOTING',
-            roundResult: null,
-            createdAt: v.createdAt,
-          };
-        }),
-        stakes: stakes.map(s => ({
-          kind: 'stake' as const,
-          id: s.id,
-          topicId: s.message?.topicId,
-          topicTitle: s.message?.topic?.title,
-          messageId: s.messageId,
-          side: s.side,
-          amount: s.amount,
-          createdAt: s.createdAt,
-        })),
-        evidence: evidenceRefs.map(e => ({
-          id: e.id,
-          topicId: e.topicId,
-          topicTitle: e.topic.title,
-          relationPayload: e.relationPayload,
-          targetRefs: e.targetRefs,
-          createdAt: e.createdAt,
-        })),
-      },
-      pagination: {
-        page,
-        limit,
-        totalRelations: relationCount,
-        totalVotes: voteCount,
-        totalStakes: stakeCount,
-        totalEvidence: evidenceCount,
-      },
+      stances: { relations, stakes },
+      pagination: { page, limit, totalRelations: relationCount, totalStakes: positionCount },
     });
   } catch (err) {
     next(err);

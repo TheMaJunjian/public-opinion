@@ -35,8 +35,10 @@ export default function AuditLogView({ topicId }: { topicId?: string }) {
       {loading ? (
         <div className="text-sm text-gray-500">加载中...</div>
       ) : entries.length === 0 ? (
-        <div className="text-sm text-gray-400">暂无记录</div>
-        <div className="text-xs text-gray-500 mt-1">系统尚无操作记录。当你或他人进行发消息、押注、发起结算、投票等操作后，所有记录会在此透明展示，任何人都可查阅。</div>
+        <div>
+          <div className="text-sm text-gray-400">暂无记录</div>
+          <div className="text-xs text-gray-500 mt-1">系统尚无操作记录。当你或他人进行发消息、押注、发起结算、投票等操作后，所有记录会在此透明展示，任何人都可查阅。</div>
+        </div>
       ) : (
         <div className="space-y-1 max-h-96 overflow-y-auto text-xs">
           {entries.map(e => (

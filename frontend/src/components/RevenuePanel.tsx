@@ -40,8 +40,10 @@ export default function RevenuePanel() {
           </div>
         </div>
       ) : (
-        <div className="text-sm text-gray-400">收入池尚未初始化</div>
-        <div className="text-xs text-gray-500 mt-1">收入池用于接收外部收入（赞助、捐赠等）并按贡献点分配给参与者。当前暂无收入记录。运营者可通过发布运营公告（OPERATIONS 消息）手动记录收入情况，待分红功能上线后进行分配。</div>
+        <div>
+          <div className="text-sm text-gray-400">收入池尚未初始化</div>
+          <div className="text-xs text-gray-500 mt-1">收入池用于接收外部收入（赞助、捐赠等）并按贡献点分配给参与者。当前暂无收入记录。运营者可通过发布运营公告（OPERATIONS 消息）手动记录收入情况，待分红功能上线后进行分配。</div>
+        </div>
       )}
 
       {dists.length > 0 && (

@@ -73,8 +73,10 @@ export default function GovernancePanel({ topicId }: { topicId: string }) {
       {loading ? (
         <div className="text-sm text-gray-500">加载中...</div>
       ) : proposals.length === 0 ? (
-        <div className="text-sm text-gray-400">暂无治理提案</div>
-        <div className="text-xs text-gray-500 mt-1">治理提案用于修改系统规则或参数。任何人都可以发起提案，经过社区讨论、投票（赞同/反对）、结算后决定是否采纳。通过后的提案由运营者执行并公告。</div>
+        <div>
+          <div className="text-sm text-gray-400">暂无治理提案</div>
+          <div className="text-xs text-gray-500 mt-1">治理提案用于修改系统规则或参数。任何人都可以发起提案，经过社区讨论、投票（赞同/反对）、结算后决定是否采纳。通过后的提案由运营者执行并公告。</div>
+        </div>
       ) : (
         <div className="space-y-2 max-h-64 overflow-y-auto">
           {proposals.map(p => (

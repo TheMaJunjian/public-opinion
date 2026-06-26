@@ -14,6 +14,9 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
 import StanceHistoryPanel from '../components/StanceHistoryPanel';
+import AuditLogView from '../components/AuditLogView';
+import RevenuePanel from '../components/RevenuePanel';
+import GovernancePanel from '../components/GovernancePanel';
 import { applyContainerExpansion } from '../utils/focusContainer';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
@@ -739,6 +742,9 @@ export default function TopicDetailPage() {
   const [stanceHighlight, setStanceHighlight] = useState<{ stanceMsgId: string; evidenceMsgIds: string[] } | null>(null);
   const stanceHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showStanceHistory, setShowStanceHistory] = useState(false);
+  const [showAuditLog, setShowAuditLog] = useState(false);
+  const [showRevenue, setShowRevenue] = useState(false);
+  const [showGovernance, setShowGovernance] = useState(false);
 
   // Phase 5: Refs to avoid stale closure in points-navigate handler
   // (initialized empty; values synced via useEffect below after all useMemos run)
@@ -4116,6 +4122,9 @@ export default function TopicDetailPage() {
               <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
                 <div>{isTopicFocus ? `当前${topicFocusKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
+                <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 360, lineHeight: 1.6 }}>
+                  {isTopicFocus ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : focusEntries.length > 0 ? "当前焦点范围内没有匹配的消息。尝试退出焦点或调整过滤规则。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他用户可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
+                </div>
                 {canExitFocus && (
                   <button onClick={exitFocus} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
                     {isTopicFocus ? topicFocusExitLabel : "退出焦点"}
@@ -4582,6 +4591,57 @@ export default function TopicDetailPage() {
             {showStanceHistory && user && (
               <div style={{ marginTop: 8 }}>
                 <StanceHistoryPanel userId={user.id} topicId={topicId} />
+              </div>
+            )}
+          </div>
+          {/* Audit Log Panel */}
+          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 600 }}>📋 审计日志</div>
+              <button
+                onClick={() => setShowAuditLog(!showAuditLog)}
+                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showAuditLog ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
+              >
+                {showAuditLog ? '收起' : '展开'}
+              </button>
+            </div>
+            {showAuditLog && (
+              <div style={{ marginTop: 8 }}>
+                <AuditLogView topicId={topicId} />
+              </div>
+            )}
+          </div>
+          {/* Revenue Panel */}
+          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 600 }}>💰 收入</div>
+              <button
+                onClick={() => setShowRevenue(!showRevenue)}
+                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showRevenue ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
+              >
+                {showRevenue ? '收起' : '展开'}
+              </button>
+            </div>
+            {showRevenue && (
+              <div style={{ marginTop: 8 }}>
+                <RevenuePanel />
+              </div>
+            )}
+          </div>
+          {/* Governance Panel */}
+          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 600 }}>🏛️ 治理</div>
+              <button
+                onClick={() => setShowGovernance(!showGovernance)}
+                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showGovernance ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
+              >
+                {showGovernance ? '收起' : '展开'}
+              </button>
+            </div>
+            {showGovernance && (
+              <div style={{ marginTop: 8 }}>
+                <GovernancePanel topicId={topicId} />
               </div>
             )}
           </div>

@@ -51,7 +51,12 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
 
   const totalCount = relations.length + votes.length + stakes.length + evidence.length;
   if (totalCount === 0) {
-    return <div className="text-sm text-gray-500 p-4">暂无表态记录</div>;
+    return (
+      <div className="text-sm text-gray-500 p-4 space-y-2">
+        <div>暂无表态记录</div>
+        <div className="text-xs text-gray-400">你还没有对任何消息表示赞同或反对。在画布中双击一条消息，或通过发送器选择"赞同/反对"关系类型即可表态。表态会自动附带押注，表示你对该立场的信心程度。</div>
+      </div>
+    );
   }
 
   return (

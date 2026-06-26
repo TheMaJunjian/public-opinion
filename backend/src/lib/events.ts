@@ -411,8 +411,10 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     ?? (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number | undefined;
   if (requiredStake && requiredStake > 0) {
     const userBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
-    if (!userBalance || userBalance.debtFrozen || userBalance.balance < requiredStake) {
-      throw new Error('贡献点余额不足');
+    if (!userBalance) throw new Error('Account not found');
+    if (userBalance.debtFrozen) throw new Error('账户负债冻结，无法发送消息。当前余额为负，还清负债后将自动解冻。');
+    if (userBalance.balance < requiredStake) {
+      throw new Error(`贡献点余额不足：发送此消息需要自押 ${requiredStake} 点，你当前余额为 ${userBalance.balance} 点，还差 ${requiredStake - userBalance.balance} 点。`);
     }
   }
 
@@ -486,8 +488,10 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   const requiredStake = payload.stakeAmount ?? typeDefault;
   if (requiredStake && requiredStake > 0) {
     const userBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
-    if (!userBalance || userBalance.debtFrozen || userBalance.balance < requiredStake) {
-      throw new Error('贡献点余额不足');
+    if (!userBalance) throw new Error('Account not found');
+    if (userBalance.debtFrozen) throw new Error('账户负债冻结，无法发送消息。当前余额为负，还清负债后将自动解冻。');
+    if (userBalance.balance < requiredStake) {
+      throw new Error(`贡献点余额不足：发送此关系需要自押 ${requiredStake} 点，你当前余额为 ${userBalance.balance} 点，还差 ${requiredStake - userBalance.balance} 点。`);
     }
   }
 
@@ -835,7 +839,7 @@ export async function executeStake(params: {
     throw new Error('Account not found');
   }
   if (userBalance.debtFrozen) {
-    throw new Error('Account is frozen due to negative balance');
+    throw new Error('账户负债冻结，无法执行此操作。当前余额为负，还清负债后将自动解冻。');
   }
 
   // ── Calculate fixed stake fee (extra burn on top of stake) ──

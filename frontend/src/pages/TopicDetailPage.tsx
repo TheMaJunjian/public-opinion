@@ -23,7 +23,7 @@ import CleanFilterPanel from '../components/CleanFilterPanel';
 const ALL_RELATION_TYPES: RelationType[] = [
   "annotation", "reference", "reply", "agree", "disagree", "tag", "arrange",
   "correct", "classify", "merge", "summary",
-  "proposal", "code_change",
+  "proposal", "code_change", "operations",
   // "recommend" and "archive" are now accessible via TAG's secondary relation selector
 ];
 
@@ -143,8 +143,8 @@ function buildRelationDemoMessage(relation: Relation): DemoMessage {
     content = `分类：${title ?? `分类（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'summary') {
     content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
-  } else if (relType === 'proposal' || relType === 'code_change') {
-    // PROPOSAL/CODE_CHANGE: show the proposal content from payload
+  } else if (relType === 'proposal' || relType === 'code_change' || relType === 'operations') {
+    // PROPOSAL/CODE_CHANGE/OPERATIONS: show the content from payload
     const proposalContent = getRelationTitle(relation.payload) ?? '';
     content = `${typeName}\n${proposalContent}\n目标：${targetSummary}`;
   } else if (relType === 'tag' && label) {
@@ -1003,17 +1003,22 @@ export default function TopicDetailPage() {
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
     }
     // Phase 6: auto-create settlement ROUND message.
-    // Each target gets exactly one auto-ROUND. Overturn rounds are manual via the panel.
+    // Create a new ROUND when: no round exists, or all existing rounds are settled.
+    // Skip when there's an active (unsettled) round — stakes just flow into existing pool.
     // AGREE/DISAGREE: target the content message being agreed upon.
     // Other relations: target the relation message itself.
     if (topicId) {
       const settleTargetId = (relType === 'AGREE' || relType === 'DISAGREE') && targetMsgIds.length > 0
         ? targetMsgIds[0]
         : backendRel.id;
-      const hasRound = messagesRef.current.some(m =>
+      const roundMsgs = messagesRef.current.filter(m =>
         m.kind === 'round' && m.settlementTargetId === settleTargetId
       );
-      if (!hasRound) {
+      const resultMsgs = messagesRef.current.filter(m =>
+        m.kind === 'round_result' && m.settlementTargetId === settleTargetId
+      );
+      const hasActiveRound = roundMsgs.length > resultMsgs.length;
+      if (!hasActiveRound) {
         const relAuthor = backendRel.createdBy?.username ?? '?';
         api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
           setMessages((prev: any) => [...prev, {
@@ -2242,7 +2247,7 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if (effectiveTargets.length === 0 && relationType !== "classify" && relationType !== "proposal" && relationType !== "code_change") return;
+    if (effectiveTargets.length === 0 && relationType !== "classify" && relationType !== "proposal" && relationType !== "code_change" && relationType !== "operations") return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isArrange = relationType === "arrange";
     // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
@@ -2755,13 +2760,13 @@ export default function TopicDetailPage() {
       return;
     }
 
-    // PROPOSAL / CODE_CHANGE: governance messages with optional targets.
-    // Targets are optional — proposals can be standalone (new rules) or targeted (modify existing).
-    // Creates a GOVERNANCE/CODE message with relation fields via the relations API.
-    if (relationType === "proposal" || relationType === "code_change") {
+    // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages with optional targets.
+    // Targets are optional — can be standalone (new rules/announcements) or targeted (modify existing).
+    // Creates a GOVERNANCE/CODE/OPERATIONS message with relation fields via the relations API.
+    if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
       const proposalContent = newMessageContent.trim();
       if (!proposalContent) {
-        alert("提案/代码内容不能为空");
+        alert("内容不能为空");
         return;
       }
       const govTargetRefs = hasTargetsAvailable
@@ -2778,15 +2783,15 @@ export default function TopicDetailPage() {
             title: proposalContent.slice(0, 200),
           }),
         });
-        // Add as governance/code content message (not relation), so it renders as a card
-        const govKind: MessageKind = relationType === "proposal" ? "governance" : "code";
+        // Add as governance/code/operations content message (not relation), so it renders as a card
+        const govKind: MessageKind = relationType === "proposal" ? "governance" : relationType === "code_change" ? "code" : "operations";
         const govMsg: DemoMessage = {
           id: backendRel.id,
           author: backendRel.createdBy?.username ?? user?.username ?? '?',
           createdAt: backendRel.createdAt,
           content: proposalContent,
           kind: govKind,
-          backendKind: relationType === "proposal" ? "GOVERNANCE" : "CODE",
+          backendKind: relationType === "proposal" ? "GOVERNANCE" : relationType === "code_change" ? "CODE" : "OPERATIONS",
         };
         setMessages(prev => [...prev, govMsg]);
         setRelations(prev => [...prev, backendRel]);
@@ -2814,6 +2819,33 @@ export default function TopicDetailPage() {
           setStakeCounts(prev => ({ ...prev, [backendRel.id]: { pro: s.counts.pro, con: s.counts.con } }));
         }).catch(() => {});
         window.dispatchEvent(new Event('points-refresh'));
+        // Phase 6: auto-create settlement ROUND message for governance/ops messages.
+        // Same logic as appendCreatedRelation.
+        if (topicId) {
+          const settleTargetId = backendRel.id;
+          const roundMsgs = messagesRef.current.filter(m =>
+            m.kind === 'round' && m.settlementTargetId === settleTargetId
+          );
+          const resultMsgs = messagesRef.current.filter(m =>
+            m.kind === 'round_result' && m.settlementTargetId === settleTargetId
+          );
+          const hasActiveRound = roundMsgs.length > resultMsgs.length;
+          if (!hasActiveRound) {
+            const govAuthor = backendRel.createdBy?.username ?? user?.username ?? '?';
+            api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
+              setMessages((prev: any) => [...prev, {
+                id: roundMsg.id,
+                author: roundMsg.createdBy?.username || govAuthor,
+                createdAt: roundMsg.createdAt,
+                content: '⚖️ 发起结算',
+                kind: 'round',
+                backendKind: 'ROUND',
+                settlementTargetId: settleTargetId,
+              }]);
+              scrollMsgToCenter(roundMsg.id);
+            }).catch(() => {});
+          }
+        }
       } catch (e: any) {
         alert(`建立${relationTypeName(relationType)}关系失败: ${e?.message ?? e}`);
         return;
@@ -2909,7 +2941,7 @@ export default function TopicDetailPage() {
   const isClassifyType = relationType === "classify";
   const isMergeType = relationType === "merge";
   const isSummaryType = relationType === "summary";
-  const isProposalOrCodeType = relationType === "proposal" || relationType === "code_change";
+  const isGovernanceOrOpsType = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
@@ -2949,7 +2981,11 @@ export default function TopicDetailPage() {
     if (isClassifyType) return newMessageContent.trim().length > 0;
     if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
-    if (isProposalOrCodeType) return newMessageContent.trim().length > 0;
+    if (isGovernanceOrOpsType) {
+      // 候选区/来源集合/目标集合非空时，治理/运营消息不应发送（无需目标）
+      if (hasTargetsAvailable || sourceUnits.length > 0) return false;
+      return newMessageContent.trim().length > 0;
+    }
     // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
     if (isAgreeDisagreeType || isArrangeType || isTagWithQuickAnnotate) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
@@ -2988,11 +3024,12 @@ export default function TopicDetailPage() {
       if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
-    if (isProposalOrCodeType) {
-      const govTypeLabel = relationType === "proposal" ? "提案" : "代码";
+    if (isGovernanceOrOpsType) {
+      const govTypeLabel = relationType === "proposal" ? "提案" : relationType === "code_change" ? "代码" : "运营";
+      if (hasTargetsAvailable || sourceUnits.length > 0)
+        return `请清空候选区、来源集合和目标集合（${govTypeLabel}消息无需选择目标）`;
       if (newMessageContent.trim().length === 0) return `请输入${govTypeLabel}内容（不能为空）`;
-      if (hasTargetsAvailable) return `发起${govTypeLabel}（含 ${effectiveTargets.length} 个目标引用）`;
-      return `发起${govTypeLabel}（无目标，独立提案）`;
+      return `发送${govTypeLabel}消息`;
     }
     if (isAgreeDisagreeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
@@ -4361,7 +4398,7 @@ export default function TopicDetailPage() {
                   ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
                   : isClassifyType ? "输入分类名称（不能为空）"
                   : isSummaryType ? "输入总结内容（不能为空）"
-                  : isProposalOrCodeType ? (relationType === "proposal" ? "输入提案内容（不能为空，支持 Markdown）" : "输入代码内容（不能为空，支持 Markdown）")
+                  : isGovernanceOrOpsType ? (relationType === "proposal" ? "输入提案内容（不能为空，支持 Markdown）" : relationType === "code_change" ? "输入代码内容（不能为空，支持 Markdown）" : "输入运营公告内容（不能为空，支持 Markdown）")
                   : "输入一条新普通消息（支持自由换行）";
                 return (
                   <textarea
@@ -4375,7 +4412,7 @@ export default function TopicDetailPage() {
               })()}
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 {/* Text stake: only when text creates a separate message */}
-                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isProposalOrCodeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
+                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isGovernanceOrOpsType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
                   <>
                     <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
                     <input
@@ -4397,7 +4434,7 @@ export default function TopicDetailPage() {
                 {/* Relation stake */}
                 {relationType && (
                   <>
-                    <span style={{ fontSize: 11, color: "#888" }}>{hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isProposalOrCodeType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
+                    <span style={{ fontSize: 11, color: "#888" }}>{hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isGovernanceOrOpsType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
                     <input
                       type="number"
                       min={minSelfStake}

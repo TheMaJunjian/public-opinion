@@ -74,6 +74,15 @@ function rulePassesMessage(
       ).length;
       return count >= rule.minCount;
     }
+    case 'relationType': {
+      // relationType 规则：消息内容类型匹配指定的关系类型
+      // 从 edges 中查找该消息作为 source 或 target 的关系，匹配 relationType
+      const targetType = rule.relationType.toUpperCase();
+      return ctx.edges.some(
+        e => e.relationType.toUpperCase() === targetType &&
+          (e.from.messageId === msgId || e.to.messageId === msgId),
+      );
+    }
     default:
       return true;
   }

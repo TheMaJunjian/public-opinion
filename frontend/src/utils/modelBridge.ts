@@ -1,10 +1,10 @@
 import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 
-export type MessageKind = "normal" | "relation" | "round" | "round_result" | "governance" | "code";
+export type MessageKind = "normal" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
 
 /** All content-like kinds (display as cards, participate in graph layout) */
-export const CONTENT_KINDS: MessageKind[] = ["normal", "round", "round_result", "governance", "code"];
+export const CONTENT_KINDS: MessageKind[] = ["normal", "round", "round_result", "governance", "code", "operations"];
 
 export function isContentKind(k: MessageKind): boolean {
   return CONTENT_KINDS.includes(k as MessageKind);
@@ -24,7 +24,8 @@ export type RelationType =
   | "recommend"
   | "archive"
   | "proposal"
-  | "code_change";
+  | "code_change"
+  | "operations";
 export type SecondaryRelationType = "none" | "question" | "answer";
 
 export type Selection =
@@ -91,6 +92,7 @@ function mapBackendKind(backendKind: string): MessageKind {
     case 'ROUND_RESULT': return 'round_result';
     case 'GOVERNANCE': return 'governance';
     case 'CODE': return 'code';
+    case 'OPERATIONS': return 'operations';
     case 'RELATION': return 'relation';
     default: return 'normal';
   }
@@ -101,6 +103,7 @@ function kindLabel(backendKind: string, targetRefs?: any): string {
     TEXT: '[文本消息]',
     GOVERNANCE: '🏛️ 治理提案\n—— 可投票/讨论/结算',
     CODE: '💻 代码\n—— 结算通过后将自动部署',
+    OPERATIONS: '📊 运营\n—— 收入、统计等程序运营信息',
     ROUND: '⚖️ 发起结算\n—— 目标消息进入投票阶段\n双击卡片查看结算详情',
     ROUND_RESULT: '🏁 结算完成\n—— 资金池已按投票结果分配\n双击卡片查看分账明细',
     RELATION: '[关系消息]',

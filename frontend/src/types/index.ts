@@ -68,6 +68,7 @@ export type RelationType =
   | 'SUMMARY'      // 总结
   | 'RECOMMEND'    // 推荐
   | 'ARCHIVE'      // 冷藏
+  | 'OPERATIONS'   // 运营（收入、统计等程序运营信息）
   | string;        // future extensibility
 
 /**
@@ -209,6 +210,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
   PROPOSAL:    { kind: 'edge-label',        label: '🏛️ 提案', color: 'amber',  formsTrees: false },
   CODE_CHANGE: { kind: 'edge-label',        label: '💻 代码', color: 'teal',  formsTrees: false },
+  OPERATIONS:  { kind: 'edge-label',        label: '📊 运营', color: 'cyan',   formsTrees: false },
 };
 
 /** Get the presentation spec for a relation type, with a sensible default.
@@ -538,7 +540,8 @@ export type CleanFilterRule =
   | { id: string; kind: 'tag'; tagType: string; minCount: number }
   | { id: string; kind: 'stake'; minAmount: number; side?: 'PRO' | 'CON' }
   | { id: string; kind: 'rounds'; minRounds: number }
-  | { id: string; kind: 'participants'; minCount: number };
+  | { id: string; kind: 'participants'; minCount: number }
+  | { id: string; kind: 'relationType'; relationType: string };
 
 /** 过滤器规则中文标签 */
 export const CLEAN_FILTER_LABELS: Record<CleanFilterRule['kind'], string> = {
@@ -547,6 +550,7 @@ export const CLEAN_FILTER_LABELS: Record<CleanFilterRule['kind'], string> = {
   stake:        '按押注额度',
   rounds:       '按结算轮次',
   participants: '按站队人数',
+  relationType: '按关系类型',
 };
 
 /** 过滤器规则默认值 */
@@ -558,6 +562,7 @@ export function defaultCleanRule(kind: CleanFilterRule['kind']): CleanFilterRule
     case 'stake':        return { id, kind: 'stake', minAmount: 50 };
     case 'rounds':       return { id, kind: 'rounds', minRounds: 2 };
     case 'participants': return { id, kind: 'participants', minCount: 8 };
+    case 'relationType': return { id, kind: 'relationType', relationType: 'OPERATIONS' };
   }
 }
 

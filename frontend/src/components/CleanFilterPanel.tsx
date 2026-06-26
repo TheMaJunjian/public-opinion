@@ -1,4 +1,4 @@
-// CleanFilterPanel.tsx — 清爽视图过滤器面板
+// CleanFilterPanel.tsx — 聚焦模式过滤器面板
 // 提供可视化界面来添加/移除/查看过滤规则，以及匹配结果统计。
 
 import { useState, useRef, useEffect } from 'react';
@@ -6,7 +6,7 @@ import type { CleanFilterRule } from '../types';
 import { CLEAN_FILTER_LABELS, defaultCleanRule } from '../types';
 
 interface CleanFilterPanelProps {
-  /** 是否激活清爽模式 */
+  /** 是否激活聚焦模式 */
   active: boolean;
   /** 当前规则列表 */
   filters: CleanFilterRule[];
@@ -24,7 +24,7 @@ interface CleanFilterPanelProps {
   onClear: () => void;
 }
 
-const RULE_KINDS: CleanFilterRule['kind'][] = ['sender', 'stake', 'participants', 'rounds', 'tag'];
+const RULE_KINDS: CleanFilterRule['kind'][] = ['sender', 'stake', 'participants', 'rounds', 'tag', 'relationType'];
 
 /** 单条规则的简要描述 */
 function ruleSummary(rule: CleanFilterRule): string {
@@ -41,6 +41,8 @@ function ruleSummary(rule: CleanFilterRule): string {
       return `结算轮次 ≥ ${rule.minRounds}`;
     case 'tag':
       return `${rule.tagType} 标签 ≥ ${rule.minCount}`;
+    case 'relationType':
+      return `关系类型: ${rule.relationType}`;
     default:
       return '未知规则';
   }
@@ -107,7 +109,7 @@ export default function CleanFilterPanel({
       {/* Toggle 按钮 */}
       <button
         onClick={handleToggle}
-        title={active ? '清爽模式已激活 — 点击关闭' : '清爽模式：按规则过滤消息视图'}
+        title={active ? '聚焦模式已激活 — 点击关闭' : '聚焦模式：按规则过滤消息视图'}
         style={{
           padding: '4px 10px',
           borderRadius: 4,
@@ -119,7 +121,7 @@ export default function CleanFilterPanel({
           fontWeight: active ? 600 : 400,
         }}
       >
-        {active ? `✨ 清爽 (${filters.length})` : '清爽模式'}
+        {active ? `🎯 聚焦 (${filters.length})` : '聚焦模式'}
       </button>
 
       {/* 下拉面板 */}
@@ -140,7 +142,7 @@ export default function CleanFilterPanel({
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#e2e8f0' }}>
-            🔍 清爽视图过滤器
+            🎯 聚焦模式过滤器
           </div>
 
           {/* 已有规则列表 */}
@@ -420,6 +422,47 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
               }}
             />
           </div>
+          <EditorButtons onConfirm={onConfirm} onCancel={onCancel} />
+        </div>
+      );
+
+    case 'relationType':
+      return (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>选择关系类型：</div>
+          <select
+            autoFocus
+            value={(rule as { relationType: string }).relationType}
+            onChange={e => onChange({ ...rule, relationType: e.target.value } as CleanFilterRule)}
+            onKeyDown={e => { if (e.key === 'Escape') onCancel(); }}
+            style={{
+              width: '100%',
+              padding: '4px 8px',
+              borderRadius: 4,
+              border: '1px solid #475569',
+              background: '#0f172a',
+              color: '#e2e8f0',
+              fontSize: 12,
+              boxSizing: 'border-box',
+            }}
+          >
+            <option value="OPERATIONS">📊 运营 (OPERATIONS)</option>
+            <option value="PROPOSAL">🏛️ 提案 (PROPOSAL)</option>
+            <option value="CODE_CHANGE">💻 代码 (CODE_CHANGE)</option>
+            <option value="ANNOTATION">注释 (ANNOTATION)</option>
+            <option value="REFERENCE">引用 (REFERENCE)</option>
+            <option value="REPLY">回复 (REPLY)</option>
+            <option value="AGREE">赞同 (AGREE)</option>
+            <option value="DISAGREE">反对 (DISAGREE)</option>
+            <option value="CORRECT">更正 (CORRECT)</option>
+            <option value="CLASSIFY">分类 (CLASSIFY)</option>
+            <option value="MERGE">归并 (MERGE)</option>
+            <option value="SUMMARY">总结 (SUMMARY)</option>
+            <option value="ARCHIVE">冷藏 (ARCHIVE)</option>
+            <option value="RECOMMEND">推荐 (RECOMMEND)</option>
+            <option value="TAG">标注 (TAG)</option>
+            <option value="ARRANGE">排列 (ARRANGE)</option>
+          </select>
           <EditorButtons onConfirm={onConfirm} onCancel={onCancel} />
         </div>
       );

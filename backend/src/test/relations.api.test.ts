@@ -56,6 +56,7 @@ jest.mock('../lib/prisma', () => ({
     stake: { create: jest.fn(), findMany: jest.fn(), count: jest.fn(), aggregate: jest.fn() },
     betPool: { findUnique: jest.fn(), upsert: jest.fn() },
     ledgerEntry: { create: jest.fn(), updateMany: jest.fn() },
+    settlementRound: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
     $transaction: jest.fn().mockResolvedValue([{}, {}]),
   },
 }));

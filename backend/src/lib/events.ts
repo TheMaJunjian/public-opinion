@@ -337,11 +337,17 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     });
     if (bal?.debtFrozen) throw new Error('账户负债冻结，无法发起结算');
 
-    // Check for existing round — if exists, just record ROUND message
+    // Check for existing active round — if found, still create ROUND message
+    // but skip SettlementRound (dedup via ensureVotingRound in TEXT/RELATION handlers)
     const existing = await prisma.settlementRound.findFirst({
       where: { messageId: payload.targetMessageId, status: { in: ['OPEN', 'VOTING'] } },
-      select: { id: true },
+      select: { id: true, status: true },
     });
+    if (existing) {
+      console.log(`[ROUND] 轮次已存在，仅创建消息卡 roundId=${existing.id} status=${existing.status}`);
+    } else {
+      console.log(`[ROUND] 创建新轮次 targetMessageId=${payload.targetMessageId}`);
+    }
 
     // Link to latest settled round
     const latestSettled = await prisma.settlementRound.findFirst({
@@ -362,10 +368,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
         },
         include: { createdBy: { select: { id: true, username: true } } },
       }),
-    ];
-    // Only create SettlementRound if none exists
-    if (!existing) {
-      ops.push(prisma.settlementRound.create({
+      prisma.settlementRound.create({
         data: {
           messageId: payload.targetMessageId,
           createdByUserId: actorId,
@@ -373,8 +376,8 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
           previousRoundId: latestSettled?.id ?? null,
           note: payload.note ?? null,
         },
-      }));
-    }
+      }),
+    ];
     ops.push(prisma.auditLog.create({
         data: {
           actorId,
@@ -550,8 +553,9 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       await autoSelfStake(actorId, topicId, resolved.targetId, payload.stakeAmount, resolved.side, round?.id);
     }
   } else {
-    // Other relations: PRO on the relation message itself
-    await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount);
+    // Other relations: PRO on the relation message itself, with settlement tracking
+    const round = await ensureVotingRound(message.id, actorId, topicId);
+    await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount, 'PRO', round?.id);
   }
 
   return message;

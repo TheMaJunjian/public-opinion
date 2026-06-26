@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import type { SettlementRoundItem, MessageStakes } from '../types';
+import { kindLabel } from '../utils/modelBridge';
 import { debugLog } from '../utils/debugLog';
 
 interface Props {
@@ -148,12 +149,13 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
       if (onMessageCreated) {
         onMessageCreated({
           id: `settle-${activeRound.id}`,
-          content: `🏁 结算完成 — ${result.result}`,
+          content: kindLabel('ROUND_RESULT'),
           createdAt: new Date().toISOString(),
           author: '',
           kind: 'round_result',
           settlementTargetId: messageId,
           backendKind: 'ROUND_RESULT',
+          roundPayload: { roundId: activeRound.id, result: result.result },
         });
       }
       setActiveRound(null);

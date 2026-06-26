@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType, MessageKind,
@@ -1002,30 +1002,27 @@ export default function TopicDetailPage() {
     for (const mid of targetMsgIds) {
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
     }
-    // Phase 6: auto-create settlement ROUND message.
-    // Create a new ROUND when: no round exists, or all existing rounds are settled.
-    // Skip when there's an active (unsettled) round — stakes just flow into existing pool.
-    // AGREE/DISAGREE: target the content message being agreed upon.
-    // Other relations: target the relation message itself.
+    // Phase 6: auto-create settlement ROUND message card.
+    // Skip if an un-settled ROUND card already exists for this target.
+    // (Backend ensures SettlementRound via ensureVotingRound; frontend just creates the card.)
     if (topicId) {
       const settleTargetId = (relType === 'AGREE' || relType === 'DISAGREE') && targetMsgIds.length > 0
         ? targetMsgIds[0]
         : backendRel.id;
-      const roundMsgs = messagesRef.current.filter(m =>
+      const rounds = messagesRef.current.filter(m =>
         m.kind === 'round' && m.settlementTargetId === settleTargetId
       );
-      const resultMsgs = messagesRef.current.filter(m =>
+      const results = messagesRef.current.filter(m =>
         m.kind === 'round_result' && m.settlementTargetId === settleTargetId
       );
-      const hasActiveRound = roundMsgs.length > resultMsgs.length;
-      if (!hasActiveRound) {
+      if (rounds.length <= results.length) {
         const relAuthor = backendRel.createdBy?.username ?? '?';
-        api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
+        api.createMessage(topicId!, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
           setMessages((prev: any) => [...prev, {
             id: roundMsg.id,
             author: roundMsg.createdBy?.username || relAuthor,
             createdAt: roundMsg.createdAt,
-            content: '⚖️ 发起结算',
+            content: kindLabel('ROUND'),
             kind: 'round',
             backendKind: 'ROUND',
             settlementTargetId: settleTargetId,
@@ -1612,19 +1609,27 @@ export default function TopicDetailPage() {
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
       window.dispatchEvent(new Event('points-refresh'));
-      // Phase 6: auto-create settlement ROUND message (same flow as text)
-      api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id }).then(roundMsg => {
-        setMessages((prev: any) => [...prev, {
-          id: roundMsg.id,
-          author: roundMsg.createdBy?.username || msg.author,
-          createdAt: roundMsg.createdAt,
-          content: '⚖️ 发起结算',
-          kind: 'round',
-          backendKind: 'ROUND',
-          settlementTargetId: msg.id,
-        }]);
-        scrollMsgToCenter(roundMsg.id);
-      }).catch(() => {});
+      // Phase 6: auto-create settlement ROUND message card (skip if already exists)
+      const rounds = messagesRef.current.filter(m =>
+        m.kind === 'round' && m.settlementTargetId === msg.id
+      );
+      const results = messagesRef.current.filter(m =>
+        m.kind === 'round_result' && m.settlementTargetId === msg.id
+      );
+      if (rounds.length <= results.length) {
+        api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id }).then(roundMsg => {
+          setMessages((prev: any) => [...prev, {
+            id: roundMsg.id,
+            author: roundMsg.createdBy?.username || msg.author,
+            createdAt: roundMsg.createdAt,
+            content: kindLabel('ROUND'),
+            kind: 'round',
+            backendKind: 'ROUND',
+            settlementTargetId: msg.id,
+          }]);
+          scrollMsgToCenter(roundMsg.id);
+        }).catch(() => {});
+      }
       return msg;
     } catch (e: any) {
       setSendError(e?.message ?? '发送失败');
@@ -2820,24 +2825,24 @@ export default function TopicDetailPage() {
         }).catch(() => {});
         window.dispatchEvent(new Event('points-refresh'));
         // Phase 6: auto-create settlement ROUND message for governance/ops messages.
-        // Same logic as appendCreatedRelation.
+        // Phase 6: auto-create settlement ROUND message card for governance/ops.
+        // Skip if an un-settled ROUND card already exists.
         if (topicId) {
           const settleTargetId = backendRel.id;
-          const roundMsgs = messagesRef.current.filter(m =>
+          const rounds = messagesRef.current.filter(m =>
             m.kind === 'round' && m.settlementTargetId === settleTargetId
           );
-          const resultMsgs = messagesRef.current.filter(m =>
+          const results = messagesRef.current.filter(m =>
             m.kind === 'round_result' && m.settlementTargetId === settleTargetId
           );
-          const hasActiveRound = roundMsgs.length > resultMsgs.length;
-          if (!hasActiveRound) {
+          if (rounds.length <= results.length) {
             const govAuthor = backendRel.createdBy?.username ?? user?.username ?? '?';
             api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
               setMessages((prev: any) => [...prev, {
                 id: roundMsg.id,
                 author: roundMsg.createdBy?.username || govAuthor,
                 createdAt: roundMsg.createdAt,
-                content: '⚖️ 发起结算',
+                content: kindLabel('ROUND'),
                 kind: 'round',
                 backendKind: 'ROUND',
                 settlementTargetId: settleTargetId,

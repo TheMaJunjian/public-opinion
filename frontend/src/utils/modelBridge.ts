@@ -98,7 +98,7 @@ function mapBackendKind(backendKind: string): MessageKind {
   }
 }
 
-function kindLabel(backendKind: string, targetRefs?: any): string {
+export function kindLabel(backendKind: string, targetRefs?: any): string {
   const labels: Record<string, string> = {
     TEXT: '[文本消息]',
     GOVERNANCE: '🏛️ 治理提案\n—— 可投票/讨论/结算',

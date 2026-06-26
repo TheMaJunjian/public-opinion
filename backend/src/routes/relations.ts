@@ -85,10 +85,10 @@ const createRelationSchema = z.object({
       path: ['payload', 'title'],
     });
   }
-  if ((data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE' || data.relationType === 'OPERATIONS') && !data.payload?.content && data.targetRefs.length === 0) {
+  if ((data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE' || data.relationType === 'OPERATIONS') && !data.payload?.content) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: '提案/代码变更/运营关系需要提供内容或至少一个目标引用',
+      message: '提案/代码变更/运营关系需要提供内容',
       path: ['payload', 'content'],
     });
   }

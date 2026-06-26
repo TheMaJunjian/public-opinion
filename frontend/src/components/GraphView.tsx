@@ -2576,7 +2576,7 @@ export default function GraphView(props: GraphViewProps) {
 
     for (const e of edges) {
       const fromMsg=msgMap.get(e.from.messageId);
-      if (!fromMsg || (fromMsg.kind !== "normal" && !relationCardMsgIds.has(fromMsg.id))) continue;
+      if (!fromMsg || (!isContentKind(fromMsg.kind) && !relationCardMsgIds.has(fromMsg.id))) continue;
       const fromEp=endpointBoxForNormal(fromMsg.id); if (!fromEp) continue;
       const fromAuthor=fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);

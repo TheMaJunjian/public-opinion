@@ -881,12 +881,19 @@ export default function TopicDetailPage() {
   const stakeDefaultLoaded = useRef(false);
   const relationStakeMap = useRef<Record<string, number>>({});
 
-  // Update relStakeAmount when relation type changes (text stays at 10)
+  // Update relStakeAmount when relation type changes (text stays at 10).
+  // For governance/ops types with targets selected, add reference costs.
   useEffect(() => {
     if (!stakeDefaultLoaded.current) return;
-    const typeMin = relationType
+    const typeMinBase = relationType
       ? (relationStakeMap.current[relationType.toUpperCase()] ?? 10)
       : 10;
+    const isGovOps = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
+    const targetCount = isGovOps ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
+    const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
+    const typeMin = isGovOps && targetCount > 0
+      ? typeMinBase + targetCount * refMin
+      : typeMinBase;
     setMinSelfStake(typeMin);
     setRelStakeAmount(typeMin);
   }, [relationType]);
@@ -2210,15 +2217,27 @@ export default function TopicDetailPage() {
   async function handleQuickSendAndRelateFromDraftTargets() {
     const text = newMessageContent.trim();
 
+    // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
+    const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+    const targetCount = hasTargetsAvailable ? effectiveTargets.length : 0;
+
     // Validate both stakes — collect all errors
     const errors: string[] = [];
     if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) {
       errors.push(`文本消息最低押注 10 点（当前 ${stakeAmount}）`);
     }
     if (relationType) {
-      const typeMin = relationStakeMap.current[relationType.toUpperCase()] ?? 10;
+      const isGovOps = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
+      const typeMinBase = relationStakeMap.current[relationType.toUpperCase()] ?? 10;
+      const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
+      const typeMin = isGovOps && targetCount > 0
+        ? typeMinBase + targetCount * refMin
+        : typeMinBase;
       if (typeof relStakeAmount === 'number' && relStakeAmount < typeMin) {
         errors.push(`关系消息最低押注 ${typeMin} 点（当前 ${relStakeAmount}）`);
+      }
+      if (typeof relStakeAmount === 'number' && relStakeAmount > availablePoints) {
+        errors.push(`贡献点余额不足（可用 ${availablePoints}，需要 ${relStakeAmount}）`);
       }
     }
     if (errors.length > 0) {
@@ -2234,11 +2253,6 @@ export default function TopicDetailPage() {
       setNewMessageContent("");
       return;
     }
-
-    // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
-    // This lets users either click on the canvas to pick draft candidates (quick path) or
-    // explicitly commit messages to the target collection via "加入目标集合".
-    const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
 
     // Scenario: source collection + target collection explicitly committed (no draft candidates).
     // Build the relation directly without creating a new text message.
@@ -2767,26 +2781,21 @@ export default function TopicDetailPage() {
     }
 
     // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages.
-    // Source is forbidden; targets are optional — selected text messages are "converted".
+    // Source forbidden, targetRefs always empty — targets expressed via REFERENCE relations.
     // Text is optional when targets are selected (auto-fills from targets if empty).
     if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
       let proposalContent = newMessageContent.trim();
-      const govTargetRefs = hasTargetsAvailable
-        ? effectiveTargets.map(u => unitSelectionToTargetRef(u, msgMap))
-        : [];
-      if (!proposalContent && govTargetRefs.length === 0) {
+      if (!proposalContent && !hasTargetsAvailable) {
         alert("请输入内容或选择目标消息");
         return;
       }
       // Auto-fill content from target text messages when input is empty
-      if (!proposalContent && govTargetRefs.length > 0) {
+      if (!proposalContent && hasTargetsAvailable) {
         const targetContents: string[] = [];
-        for (const ref of govTargetRefs) {
-          if (ref.kind === 'message' || ref.kind === 'text-fragment') {
-            const m = msgMap.get(ref.messageId);
-            if (m && isContentKind(m.kind) && m.content) {
-              targetContents.push(m.content);
-            }
+        for (const t of effectiveTargets) {
+          const m = msgMap.get(t.messageId);
+          if (m && isContentKind(m.kind) && m.content) {
+            targetContents.push(m.content);
           }
         }
         proposalContent = targetContents.join('\n\n---\n\n');
@@ -2795,7 +2804,7 @@ export default function TopicDetailPage() {
         const backendRel = await createRel(topicId!, {
           relationType: relationType.toUpperCase(),
           sourceMessageId: null,
-          targetRefs: govTargetRefs,
+          targetRefs: [],
           payload: buildRelationPayload({
             relationType: relationType.toUpperCase(),
             content: proposalContent || '',
@@ -2815,21 +2824,42 @@ export default function TopicDetailPage() {
         setMessages(prev => [...prev, govMsg]);
         setRelations(prev => [...prev, backendRel]);
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-        // Create edges for selected target messages
+        // Create REFERENCE relations from governance message to each target
         if (hasTargetsAvailable) {
-          const newEdgesList: DemoEdge[] = [];
-          const relId = backendRel.id;
+          const refMinStake = relationStakeMap.current['REFERENCE'] ?? 10;
+          const refStake = Math.max(refMinStake, 1);
+          // Phase 1: create all REFERENCE relations (API calls)
+          const refResults: Array<{ refRel: Relation; target: UnitSelection }> = [];
           for (const t of effectiveTargets) {
-            newEdgesList.push({
-              id: nextId("edge"),
-              relationMessageId: relId,
-              relationType: relationType,
-              from: { messageId: relId, selection: { kind: "whole" } },
-              to: { ...t },
-              relationLabel: relationType,
-            } as DemoEdge);
+            try {
+              const targetRef = unitSelectionToTargetRef(t, msgMap);
+              const refRel = await createRel(topicId!, {
+                relationType: 'REFERENCE',
+                sourceMessageId: backendRel.id,
+                targetRefs: [targetRef],
+                stakeAmount: refStake,
+              });
+              refResults.push({ refRel, target: t });
+            } catch (e: any) {
+              console.error(`创建引用关系失败: ${e?.message ?? e}`);
+            }
           }
-          setEdges(prev => [...prev, ...newEdgesList]);
+          // Phase 2: batch all state updates (messages, relations, edges) in one microtask
+          if (refResults.length > 0) {
+            const newEdgesList: DemoEdge[] = [];
+            for (const { refRel, target } of refResults) {
+              appendCreatedRelation(refRel);
+              newEdgesList.push({
+                id: nextId("edge"),
+                relationMessageId: refRel.id,
+                relationType: "reference",
+                from: { messageId: backendRel.id, selection: { kind: "whole" } },
+                to: { ...target },
+                relationLabel: "reference",
+              } as DemoEdge);
+            }
+            setEdges(prev => [...prev, ...newEdgesList]);
+          }
         }
         // Auto-self-stake
         const selfStake = relStakeRef.current;

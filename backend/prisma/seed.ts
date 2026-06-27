@@ -31,7 +31,7 @@ async function main() {
         weightFunction: 'linear',   // 线性权重
         concurrentRoundLimit: 1,    // 同一消息最多 1 个进行中轮次
         selfStakeOnCreate: 10,      // 创建消息时自动自押 PRO 点数（0=关闭）
-        settlementPermission: 'creator_only', // 结算权限：creator_only | any_voter | anyone
+        settlementPermission: 'anyone', // 结算权限：creator_only | any_voter | anyone
         stakeFeeAmount: 1,          // 每次押注/投票固定燃烧点数（0=关闭）
         settlementFeeAmount: 0,     // 结算不燃烧
         creatorRewardRatio: 0.2,    // 结算 TRUE 时创建者优先获得 CON 池的 20%

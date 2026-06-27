@@ -1220,7 +1220,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
       orderBy: { version: 'desc' },
       select: { parameters: true },
     });
-    const permission = (rule?.parameters as Record<string, unknown> | null)?.settlementPermission ?? 'creator_only';
+    const permission = (rule?.parameters as Record<string, unknown> | null)?.settlementPermission ?? 'anyone';
 
     if (permission === 'anyone') {
       // Anyone can settle — proceed

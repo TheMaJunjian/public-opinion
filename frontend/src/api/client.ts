@@ -82,6 +82,7 @@ export function createMessage(topicId: string, data: {
   stakeAmount?: number;
   targetMessageId?: string;
   note?: string;
+  settlementType?: string;
 }) {
   return request<import('../types').Message>(`/topics/${topicId}/messages`, {
     method: 'POST',
@@ -159,7 +160,7 @@ export function getMessageStakes(messageId: string) {
 // Settlement API (Phase 3)
 // ============================================================
 
-export function createRound(messageId: string, data?: { note?: string }) {
+export function createRound(messageId: string, data?: { note?: string; settlementType?: 'TRUTH' | 'VALUE' }) {
   return request<import('../types').SettlementRoundItem>(`/messages/${messageId}/rounds`, {
     method: 'POST',
     body: JSON.stringify(data ?? {}),

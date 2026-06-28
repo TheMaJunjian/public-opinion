@@ -146,11 +146,6 @@ export async function validateGroupingTargets(
   if (groupedTargetTextIds.length === 0) return { ok: true };
 
   const selectedTargetTextIdSet = new Set(groupedTargetTextIds);
-  console.log('[CrossLink] Checking', JSON.stringify({
-    relationType,
-    selectedTextIds: groupedTargetTextIds.slice(0, 10),
-    targetRelationIds: targetRelationIds.slice(0, 5),
-  }));
   const relationMessages = await prisma.message.findMany({
     where: { topicId, kind: 'RELATION' },
     select: { id: true, relationType: true, relSourceId: true, targetRefs: true },
@@ -247,31 +242,12 @@ export async function validateGroupingTargets(
     // Block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY
     // AND is NOT part of the same expanded selection.
     if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId) && alreadyClassifiedTextIds.has(sourceTextId)) {
-      console.log('[CrossLink] BLOCKED', JSON.stringify({
-        reason: 'source-endpoint-classified',
-        relationType: relMsg.relationType,
-        relationId: relMsg.id,
-        sourceTextId,
-        selectedSet: [...selectedTargetTextIdSet].slice(0, 10),
-        classifiedSet: [...alreadyClassifiedTextIds].slice(0, 10),
-      }));
       return { ok: false, error: crossLinkError };
     }
     if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id) && alreadyClassifiedTextIds.has(id))) {
-      const offender = targetTextIds.find(id => !selectedTargetTextIdSet.has(id) && alreadyClassifiedTextIds.has(id));
-      console.log('[CrossLink] BLOCKED', JSON.stringify({
-        reason: 'target-endpoint-classified',
-        relationType: relMsg.relationType,
-        relationId: relMsg.id,
-        offenderTargetId: offender,
-        targetTextIds,
-        selectedSet: [...selectedTargetTextIdSet].slice(0, 10),
-        classifiedSet: [...alreadyClassifiedTextIds].slice(0, 10),
-      }));
       return { ok: false, error: crossLinkError };
     }
   }
 
-  console.log('[CrossLink] PASS', JSON.stringify({ classifiedCount: alreadyClassifiedTextIds.size }));
   return { ok: true };
 }

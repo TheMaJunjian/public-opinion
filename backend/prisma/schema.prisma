@@ -83,7 +83,6 @@ model Message {
   createdBy User     @relation(fields: [createdById], references: [id])
 
   stakes         Stake[]
-  betPool        BetPool?
   settlementRounds SettlementRound[]
 }
 
@@ -180,10 +179,12 @@ model Stake {
 }
 
 model BetPool {
-  messageId String @id
-  message   Message @relation(fields: [messageId], references: [id])
-  lockedPro Int    @default(0)
-  lockedCon Int    @default(0)
+  messageId      String
+  settlementType String   @default("TRUTH")
+  lockedPro      Int      @default(0)
+  lockedCon      Int      @default(0)
+
+  @@id([messageId, settlementType])
 }
 
 // ============================================================
@@ -197,6 +198,7 @@ model SettlementRound {
   createdByUserId  String
   createdBy        User     @relation(fields: [createdByUserId], references: [id])
   status           String   @default("OPEN") // OPEN | VOTING | SETTLED | CANCELLED
+  settlementType   String   @default("TRUTH") // TRUTH | VALUE
   result           String?  // TRUE | FALSE | UNKNOWN
   previousRoundId  String?
   previousRound    SettlementRound? @relation("RoundChain", fields: [previousRoundId], references: [id])

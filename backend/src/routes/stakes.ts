@@ -9,11 +9,7 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const messageId = req.params.id as string;
 
-    const [betPool, stakes, proAgg, conAgg] = await Promise.all([
-      prisma.betPool.findUnique({
-        where: { messageId },
-        select: { lockedPro: true, lockedCon: true },
-      }),
+    const [stakes, proAgg, conAgg] = await Promise.all([
       prisma.stake.findMany({
         where: { messageId },
         orderBy: { createdAt: 'desc' },
@@ -31,14 +27,13 @@ router.get('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
       prisma.stake.aggregate({ where: { messageId, side: 'CON' }, _sum: { amount: true } }),
     ]);
 
+    const proCount = proAgg._sum.amount ?? 0;
+    const conCount = conAgg._sum.amount ?? 0;
     res.json({
       messageId,
-      pool: betPool ?? { lockedPro: 0, lockedCon: 0 },
+      pool: { lockedPro: proCount, lockedCon: conCount },
       stakes,
-      counts: {
-        pro: proAgg._sum.amount ?? 0,
-        con: conAgg._sum.amount ?? 0,
-      },
+      counts: { pro: proCount, con: conCount },
     });
   } catch (err) {
     next(err);

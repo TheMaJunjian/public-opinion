@@ -18,6 +18,7 @@ const createMessageSchema = z.object({
   stakeAmount: z.number().int().min(1).optional(),
   targetMessageId: z.string().optional(),  // Phase 6: for ROUND messages
   note: z.string().optional(),              // Phase 6: round note
+  settlementType: z.enum(['TRUTH', 'VALUE']).optional(),
 });
 
 const paginationSchema = z.object({
@@ -95,6 +96,7 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
         stakeAmount: data.stakeAmount,
         targetMessageId: data.targetMessageId,
         note: data.note ?? null,
+        settlementType: data.settlementType,
       },
     });
 

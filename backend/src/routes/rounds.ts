@@ -10,6 +10,7 @@ const router = Router({ mergeParams: true });
 
 const createRoundSchema = z.object({
   note: z.string().max(500).optional(),
+  settlementType: z.enum(['TRUTH', 'VALUE']).optional().default('TRUTH'),
 });
 
 const voteSchema = z.object({
@@ -45,12 +46,13 @@ router.post('/api/messages/:id/rounds', requireAuth, async (req: AuthRequest, re
         kind: 'ROUND',
         targetMessageId: messageId,
         note: data.note ?? null,
+        settlementType: data.settlementType,
       },
     });
 
     // Query the SettlementRound to return familiar data to frontend
     const round = await prisma.settlementRound.findFirst({
-      where: { messageId, status: 'VOTING' },
+      where: { messageId, settlementType: data.settlementType, status: 'VOTING' },
       orderBy: { openedAt: 'desc' },
       include: { createdBy: { select: { id: true, username: true } } },
     });
@@ -102,9 +104,10 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
       return;
     }
 
-    // Compute current weights from BetPool (unified stakes, including AGREE/DISAGREE votes)
+    // Compute current weights from BetPool scoped by settlementType
+    const stype = round.settlementType ?? 'TRUTH';
     const betPool = await prisma.betPool.findUnique({
-      where: { messageId: round.messageId },
+      where: { messageId_settlementType: { messageId: round.messageId, settlementType: stype } },
       select: { lockedPro: true, lockedCon: true },
     });
 
@@ -174,10 +177,10 @@ router.post('/api/rounds/:id/votes', requireAuth, async (req: AuthRequest, res: 
     const roundId = req.params.id as string;
     const { vote, amount } = voteSchema.parse(req.body);
 
-    // Get round info for topicId and messageId
+    // Get round info for topicId, messageId, and settlementType
     const round = await prisma.settlementRound.findUnique({
       where: { id: roundId },
-      select: { messageId: true, status: true },
+      select: { messageId: true, status: true, settlementType: true },
     });
     if (!round) {
       res.status(404).json({ error: '结算轮次不存在' });
@@ -193,8 +196,13 @@ router.post('/api/rounds/:id/votes', requireAuth, async (req: AuthRequest, res: 
       select: { topicId: true },
     });
 
-    // Vote TRUE → AGREE relation, FALSE → DISAGREE relation (pure stance, no source text)
-    const relationType = vote === 'TRUE' ? 'AGREE' : 'DISAGREE';
+    // Map vote to relation type based on settlement type:
+    // TRUTH: TRUE→AGREE(PRO), FALSE→DISAGREE(CON)
+    // VALUE: TRUE→RECOMMEND(PRO), FALSE→ARCHIVE(CON)
+    const isValue = round.settlementType === 'VALUE';
+    const relationType = vote === 'TRUE'
+      ? (isValue ? 'RECOMMEND' : 'AGREE')
+      : (isValue ? 'ARCHIVE' : 'DISAGREE');
 
     const result = await applyEvent({
       type: 'RELATION_CREATED',

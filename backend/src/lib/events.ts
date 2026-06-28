@@ -9,6 +9,7 @@
 import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
 import { logSettlement, logUserSettlement, logLoserSettlement, logClawback, logClawbackLoser, logBetPoolRestore } from './settlementLogger';
+import { log, debugLog } from './logger';
 
 // ============================================================
 // Event Type Definitions
@@ -52,6 +53,7 @@ export interface MessageCreatedEvent {
     stakeAmount?: number;
     targetMessageId?: string;       // Phase 6: for ROUND messages
     note?: string | null;           // Phase 6: round note
+    settlementType?: string;        // Phase 7: 'TRUTH' | 'VALUE' for ROUND messages
     // Governance/Code relation fields (PROPOSAL / CODE_CHANGE)
     relationType?: string | null;
     sourceMessageId?: string | null;
@@ -337,21 +339,21 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     });
     if (bal?.debtFrozen) throw new Error('账户负债冻结，无法发起结算');
 
-    // Check for existing active round — if found, still create ROUND message
-    // but skip SettlementRound (dedup via ensureVotingRound in TEXT/RELATION handlers)
+    // Check for existing active round of same settlement type
+    const stype = payload.settlementType ?? 'TRUTH';
     const existing = await prisma.settlementRound.findFirst({
-      where: { messageId: payload.targetMessageId, status: { in: ['OPEN', 'VOTING'] } },
+      where: { messageId: payload.targetMessageId, settlementType: stype, status: { in: ['OPEN', 'VOTING'] } },
       select: { id: true, status: true },
     });
     if (existing) {
-      console.log(`[ROUND] 轮次已存在，仅创建消息卡 roundId=${existing.id} status=${existing.status}`);
+      log('ROUND', `轮次已存在 type=${stype} roundId=${existing.id.slice(-6)} status=${existing.status}`);
     } else {
-      console.log(`[ROUND] 创建新轮次 targetMessageId=${payload.targetMessageId}`);
+      log('ROUND', `创建新轮次 type=${stype} targetMsg=${payload.targetMessageId.slice(-6)}`);
     }
 
-    // Link to latest settled round
+    // Link to latest settled round of same settlement type
     const latestSettled = await prisma.settlementRound.findFirst({
-      where: { messageId: payload.targetMessageId, status: 'SETTLED' },
+      where: { messageId: payload.targetMessageId, settlementType: stype, status: 'SETTLED' },
       orderBy: { closedAt: 'desc' },
       select: { id: true },
     });
@@ -364,20 +366,24 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
           kind: 'ROUND',
           content: null,
           targetRefs: [{ messageId: payload.targetMessageId }],
-          relationPayload: { note: payload.note ?? null },
+          relationPayload: { note: payload.note ?? null, settlementType: stype },
         },
         include: { createdBy: { select: { id: true, username: true } } },
       }),
-      prisma.settlementRound.create({
+    ];
+    // Only create SettlementRound if no active round exists
+    if (!existing) {
+      ops.push(prisma.settlementRound.create({
         data: {
           messageId: payload.targetMessageId,
           createdByUserId: actorId,
           status: 'VOTING',
+          settlementType: stype,
           previousRoundId: latestSettled?.id ?? null,
           note: payload.note ?? null,
         },
-      }),
-    ];
+      }));
+    }
     ops.push(prisma.auditLog.create({
         data: {
           actorId,
@@ -466,10 +472,102 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
   });
 
   // Auto-self-stake PRO (Phase 2.5) — must run AFTER ensureVotingRound so stake gets roundId
-  const round = await ensureVotingRound(message.id, actorId, topicId);
-  await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount, 'PRO', round?.id);
+  const round = await ensureVotingRound(message.id, actorId, topicId, 'TRUTH');
+  const stakeAmount = await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount, 'PRO', round?.id, 'TRUTH');
+  log('消息', `TEXT msg=${message.id.slice(-6)} round=${round?.id.slice(-6) ?? 'none'} stake=${stakeAmount ?? 0}`);
 
   return message;
+}
+
+/**
+ * Resolve an annotation/ stance target: follow AGREE/DISAGREE/RECOMMEND/ARCHIVE
+ * chain to find the ultimate text message target, with side transformation.
+ *
+ * Rules:
+ *   AGREE on RECOMMEND → RECOMMEND on original text (PRO for VALUE)
+ *   DISAGREE on RECOMMEND → ARCHIVE on original text (CON for VALUE)
+ *   AGREE on ARCHIVE → ARCHIVE on original text (CON for VALUE)
+ *   DISAGREE on ARCHIVE → RECOMMEND on original text (PRO for VALUE)
+ *   AGREE on AGREE → AGREE on original text (PRO for TRUTH)
+ *   DISAGREE on AGREE → DISAGREE on original text (CON for TRUTH)
+ *   AGREE on DISAGREE → DISAGREE on original text (CON for TRUTH)
+ *   DISAGREE on DISAGREE → AGREE on original text (PRO for TRUTH)
+ *
+ * Returns { relationType, targetTextId, settlementType } or null if no resolution.
+ * If targetTextId is same as existing same-type annotation, returns { dedup: true }.
+ */
+interface ResolvedAnnotation {
+  relationType: string;
+  targetTextId: string;
+  settlementType: 'TRUTH' | 'VALUE';
+  dedup?: boolean;
+}
+
+async function resolveAnnotationTarget(
+  relationType: string,
+  targetRelationId: string,
+  topicId: string,
+): Promise<ResolvedAnnotation | null> {
+  const targetRel = await prisma.message.findUnique({
+    where: { id: targetRelationId },
+    select: { kind: true, relationType: true, targetRefs: true },
+  });
+  if (!targetRel || targetRel.kind !== 'RELATION') return null;
+
+  const targetRelType = targetRel.relationType?.toUpperCase();
+  const isAgree = relationType.toUpperCase() === 'AGREE';
+  const isDisagree = relationType.toUpperCase() === 'DISAGREE';
+  if (!isAgree && !isDisagree) return null;
+
+  const refs = targetRel.targetRefs as Array<{ messageId?: string }> | undefined;
+  const origTextId = refs?.[0]?.messageId;
+  if (!origTextId) return null;
+
+  // ── Annotation layer: RECOMMEND / ARCHIVE ──
+  if (targetRelType === 'RECOMMEND' || targetRelType === 'ARCHIVE') {
+    // AGREE on RECOMMEND → RECOMMEND, DISAGREE on RECOMMEND → ARCHIVE
+    // AGREE on ARCHIVE → ARCHIVE, DISAGREE on ARCHIVE → RECOMMEND
+    const promoteRecommend = (targetRelType === 'RECOMMEND' && isAgree) || (targetRelType === 'ARCHIVE' && isDisagree);
+    const newType = promoteRecommend ? 'RECOMMEND' : 'ARCHIVE';
+
+    // Check dedup: does same-type annotation already exist for this text target?
+    const topicRelations = await prisma.message.findMany({
+      where: {
+        topicId,
+        kind: 'RELATION',
+        relationType: newType,
+        supersededBy: null,
+      },
+      select: { id: true, targetRefs: true },
+    });
+    const existingSame = topicRelations.find(r => {
+      const trefs = r.targetRefs as Array<{ messageId?: string }> | undefined;
+      return trefs?.[0]?.messageId === origTextId;
+    });
+
+    return {
+      relationType: newType,
+      targetTextId: origTextId,
+      settlementType: 'VALUE',
+      dedup: !!existingSame,
+    };
+  }
+
+  // ── Stance layer: AGREE / DISAGREE ──
+  if (targetRelType === 'AGREE' || targetRelType === 'DISAGREE') {
+    // AGREE on AGREE → AGREE, DISAGREE on AGREE → DISAGREE
+    // AGREE on DISAGREE → DISAGREE, DISAGREE on DISAGREE → AGREE
+    const opinionFlipped = (targetRelType === 'AGREE' && isDisagree) || (targetRelType === 'DISAGREE' && isAgree);
+    const newType = opinionFlipped ? 'DISAGREE' : 'AGREE';
+
+    return {
+      relationType: newType,
+      targetTextId: origTextId,
+      settlementType: 'TRUTH',
+    };
+  }
+
+  return null;
 }
 
 async function applyRelationCreated(event: RelationCreatedEvent) {
@@ -495,15 +593,140 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     }
   }
 
+  // ── Transformation: AGREE/DISAGREE on annotations/stances ──
+  // When AGREE/DISAGREE targets a RECOMMEND/ARCHIVE/AGREE/DISAGREE relation message,
+  // transform to the corresponding type pointing to the original text message.
+  const relType = payload.relationType?.toUpperCase();
+  let effectiveRelationType = payload.relationType;
+  let effectiveSourceMessageId = payload.sourceMessageId ?? null;
+  let effectiveTargetRefs = payload.targetRefs;
+  let effectiveSettlementType: 'TRUTH' | 'VALUE' = 'TRUTH';
+  let isDedup = false;
+  let dedupExistingId: string | null = null;
+  let transformedFrom: string | null = null;
+
+  if (relType === 'AGREE' || relType === 'DISAGREE') {
+    const targets = payload.targetRefs as Array<{ kind?: string; messageId?: string; relationId?: string }>;
+    if (targets.length > 0) {
+      const firstTarget = targets[0];
+      const targetRelId = firstTarget.relationId;
+      if (targetRelId) {
+        const resolved = await resolveAnnotationTarget(payload.relationType, targetRelId, topicId);
+        if (resolved) {
+          transformedFrom = relType;
+          effectiveRelationType = resolved.relationType;
+          effectiveSourceMessageId = null; // Annotations have no source
+          effectiveTargetRefs = [{ kind: 'message', messageId: resolved.targetTextId }];
+          effectiveSettlementType = resolved.settlementType;
+          if (resolved.dedup) {
+            isDedup = true;
+            // Find the existing relation for audit log
+            const topicRelations = await prisma.message.findMany({
+              where: {
+                topicId,
+                kind: 'RELATION',
+                relationType: resolved.relationType,
+                supersededBy: null,
+              },
+              select: { id: true, targetRefs: true },
+            });
+            const existing = topicRelations.find(r => {
+              const trefs = r.targetRefs as Array<{ messageId?: string }> | undefined;
+              return trefs?.[0]?.messageId === resolved.targetTextId;
+            });
+            dedupExistingId = existing?.id ?? null;
+          }
+        }
+      }
+    }
+  }
+
+  // ── Dedup: RECOMMEND/ARCHIVE same type on same text target ──
+  if (!isDedup && (effectiveRelationType.toUpperCase() === 'RECOMMEND' || effectiveRelationType.toUpperCase() === 'ARCHIVE')) {
+    const targets = effectiveTargetRefs as Array<{ messageId?: string }>;
+    const textTargetId = targets[0]?.messageId;
+    if (textTargetId) {
+      const topicRelations = await prisma.message.findMany({
+        where: {
+          topicId,
+          kind: 'RELATION',
+          relationType: effectiveRelationType.toUpperCase(),
+          supersededBy: null,
+        },
+        select: { id: true, targetRefs: true },
+      });
+      const existingSame = topicRelations.find(r => {
+        const trefs = r.targetRefs as Array<{ messageId?: string }> | undefined;
+        return trefs?.[0]?.messageId === textTargetId;
+      });
+      if (existingSame) {
+        isDedup = true;
+        dedupExistingId = existingSame.id;
+      }
+    }
+    effectiveSettlementType = 'VALUE';
+  }
+
+  // ── Dedup path: no new relation, just stake on existing ──
+  if (isDedup) {
+    const textTargetId = (effectiveTargetRefs as Array<{ messageId?: string }>)[0]?.messageId;
+    if (!textTargetId) throw new Error('无法确定标注目标');
+
+    const side = effectiveRelationType.toUpperCase() === 'RECOMMEND' ? 'PRO' as const : 'CON' as const;
+    const round = await ensureVotingRound(textTargetId, actorId, topicId, effectiveSettlementType);
+    await autoSelfStake(actorId, topicId, textTargetId, payload.stakeAmount, side, round?.id, effectiveSettlementType);
+
+    // Fetch the existing relation with full data, so frontend gets a complete object
+    const existingRel = await prisma.message.findUnique({
+      where: { id: dedupExistingId! },
+      include: { createdBy: { select: { id: true, username: true } } },
+    });
+
+    // Audit log for deduplicated action
+    await prisma.auditLog.create({
+      data: {
+        actorId,
+        action: 'RELATION_CREATED',
+        entityType: 'Relation',
+        entityId: dedupExistingId ?? '',
+        topicId,
+        data: {
+          relationType: effectiveRelationType,
+          originalType: transformedFrom ? payload.relationType : undefined,
+          transformed: !!transformedFrom,
+          deduplicated: true,
+          targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
+          settlementType: effectiveSettlementType,
+        },
+      },
+    });
+
+    if (!existingRel) throw new Error('已存在的标注消息未找到');
+
+    // Return in the same shape as Prisma Message model so route handler maps correctly
+    return {
+      id: existingRel.id,
+      topicId: existingRel.topicId,
+      relationType: existingRel.relationType ?? effectiveRelationType,
+      relSourceId: existingRel.relSourceId ?? null,
+      targetRefs: existingRel.targetRefs,
+      relationPayload: existingRel.relationPayload ?? undefined,
+      createdAt: existingRel.createdAt,
+      createdBy: existingRel.createdBy,
+      deduplicated: true,
+    };
+  }
+
+  // ── Normal path: create new relation message ──
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
         topicId,
         createdById: actorId,
         kind: 'RELATION',
-        relationType: payload.relationType,
-        relSourceId: payload.sourceMessageId ?? null,
-        targetRefs: payload.targetRefs as Prisma.InputJsonValue,
+        relationType: effectiveRelationType,
+        relSourceId: effectiveSourceMessageId,
+        targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
         relationPayload: (payload.relationPayload ?? undefined) as Prisma.InputJsonValue | undefined,
         content: null,
       },
@@ -517,11 +740,14 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         entityId: '',
         topicId,
         data: {
-          relationType: payload.relationType,
+          relationType: effectiveRelationType,
+          originalRelationType: transformedFrom ? payload.relationType : undefined,
+          transformed: !!transformedFrom,
           sourceMessageId: payload.sourceMessageId,
           supersedesRelationId: payload.supersedesRelationId,
-          targetRefs: payload.targetRefs as Prisma.InputJsonValue,
+          targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
           relationPayload: payload.relationPayload as Prisma.InputJsonValue | undefined,
+          settlementType: effectiveSettlementType,
         },
       },
     }),
@@ -542,22 +768,31 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     data: { entityId: message.id },
   });
 
-  // Auto-stake based on relation type (Phase 2.6)
-  const relType = payload.relationType?.toUpperCase();
-  if (relType === 'AGREE' || relType === 'DISAGREE') {
-    let effectiveSide = relType === 'AGREE' ? 'PRO' as const : 'CON' as const;
-    const targets = payload.targetRefs as Array<{ kind?: string; messageId?: string; relationId?: string }>;
+  // Auto-stake based on effective relation type
+  const effRelType = effectiveRelationType.toUpperCase();
+  if (effRelType === 'AGREE' || effRelType === 'DISAGREE') {
+    const side = effRelType === 'AGREE' ? 'PRO' as const : 'CON' as const;
+    const targets = effectiveTargetRefs as Array<{ kind?: string; messageId?: string }>;
     for (const ref of targets) {
-      const directTargetId = ref.messageId || ref.relationId;
-      if (!directTargetId) continue;
-      // Resolve transitive chain: follow AGREE/DISAGREE relations to ultimate target,
-      // flipping effective side on each DISAGREE hop.
-      const resolved = await resolveStanceChain(directTargetId, effectiveSide);
-      const round = await ensureVotingRound(resolved.targetId, actorId, topicId);
-      await autoSelfStake(actorId, topicId, resolved.targetId, payload.stakeAmount, resolved.side, round?.id);
+      const textTargetId = ref.messageId;
+      if (!textTargetId) continue;
+      const round = await ensureVotingRound(textTargetId, actorId, topicId, 'TRUTH');
+      const staked = await autoSelfStake(actorId, topicId, textTargetId, payload.stakeAmount, side, round?.id, 'TRUTH');
+      log('站队', `${effRelType} msg=${message.id.slice(-6)} target=${textTargetId.slice(-6)} round=${round?.id.slice(-6) ?? 'none'} side=${side} stake=${staked ?? 0}${transformedFrom ? ` from=${transformedFrom}` : ''}`);
+    }
+  } else if (effRelType === 'RECOMMEND' || effRelType === 'ARCHIVE') {
+    // Value settlement: RECOMMEND=PRO, ARCHIVE=CON
+    const side = effRelType === 'RECOMMEND' ? 'PRO' as const : 'CON' as const;
+    const targets = effectiveTargetRefs as Array<{ kind?: string; messageId?: string }>;
+    for (const ref of targets) {
+      const textTargetId = ref.messageId;
+      if (!textTargetId) continue;
+      const round = await ensureVotingRound(textTargetId, actorId, topicId, 'VALUE');
+      const staked = await autoSelfStake(actorId, topicId, textTargetId, payload.stakeAmount, side, round?.id, 'VALUE');
+      log('标注', `${effRelType} msg=${message.id.slice(-6)} target=${textTargetId.slice(-6)} round=${round?.id.slice(-6) ?? 'none'} side=${side} stake=${staked ?? 0}${transformedFrom ? ` from=${transformedFrom}` : ''}${isDedup ? '' : ' NEW'}`);
     }
   } else {
-    // Other relations: PRO on the relation message itself, with settlement tracking
+    // Other relations: PRO on the relation message itself
     const round = await ensureVotingRound(message.id, actorId, topicId);
     await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount, 'PRO', round?.id);
   }
@@ -603,7 +838,7 @@ async function resolveStanceChain(
 
 // ── Auto Self-Stake Helper (Phase 2.5-2.6) ───────────────────
 
-async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number, side: 'PRO' | 'CON' = 'PRO', roundId?: string | null): Promise<number | undefined> {
+async function autoSelfStake(userId: string, topicId: string, messageId: string, overrideAmount?: number, side: 'PRO' | 'CON' = 'PRO', roundId?: string | null, settlementType: string = 'TRUTH'): Promise<number | undefined> {
   try {
     const rule = await prisma.ruleVersion.findFirst({
       where: { status: 'ACTIVE' },
@@ -624,6 +859,7 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
       side,
       amount: selfStakeAmount,
       roundId: roundId ?? null,
+      settlementType,
     });
 
     return selfStakeAmount;
@@ -637,18 +873,26 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
 /**
  * Ensure a VOTING settlement round exists for a message.
  * If none exists, creates one. Returns the round or undefined.
+ * @param settlementType 'TRUTH' for AGREE/DISAGREE, 'VALUE' for RECOMMEND/ARCHIVE
  */
-async function ensureVotingRound(messageId: string, actorId: string, topicId: string) {
-  // Check for existing active round
+async function ensureVotingRound(messageId: string, actorId: string, topicId: string, settlementType: string = 'TRUTH') {
+  const msgShort = messageId?.slice(-6) ?? '?';
+  debugLog('ensureVotingRound', `msg=${msgShort} type=${settlementType}`);
+  // Check for existing active round of the same settlement type
   const existing = await prisma.settlementRound.findFirst({
-    where: { messageId, status: { in: ['OPEN', 'VOTING'] } },
+    where: { messageId, settlementType, status: { in: ['OPEN', 'VOTING'] } },
     select: { id: true },
   });
-  if (existing) return existing;
+  if (existing) {
+    debugLog('ensureVotingRound', `复用已有 round=${existing.id.slice(-6)}`);
+    return existing;
+  }
 
-  // Link to latest settled round for overturn chain
+  debugLog('ensureVotingRound', `创建新轮次 type=${settlementType}`);
+
+  // Link to latest settled round of the same settlement type for overturn chain
   const latestSettled = await prisma.settlementRound.findFirst({
-    where: { messageId, status: 'SETTLED' },
+    where: { messageId, settlementType, status: 'SETTLED' },
     orderBy: { closedAt: 'desc' },
     select: { id: true },
   });
@@ -659,6 +903,7 @@ async function ensureVotingRound(messageId: string, actorId: string, topicId: st
         messageId,
         createdByUserId: actorId,
         status: 'VOTING',
+        settlementType,
         previousRoundId: latestSettled?.id ?? null,
         note: null,
       },
@@ -670,7 +915,7 @@ async function ensureVotingRound(messageId: string, actorId: string, topicId: st
         entityType: 'SettlementRound',
         entityId: '',
         topicId,
-        data: { messageId, previousRoundId: latestSettled?.id ?? null, autoCreated: true },
+        data: { messageId, settlementType, previousRoundId: latestSettled?.id ?? null, autoCreated: true },
       },
     }),
   ]);
@@ -826,8 +1071,9 @@ export async function executeStake(params: {
   side: 'PRO' | 'CON';
   amount: number;
   roundId?: string | null;
+  settlementType?: string;
 }) {
-  const { userId, topicId, messageId, side, amount, roundId } = params;
+  const { userId, topicId, messageId, side, amount, roundId, settlementType = 'TRUTH' } = params;
 
   // Validate user state
   const [userBalance, pointAccount] = await Promise.all([
@@ -884,11 +1130,12 @@ export async function executeStake(params: {
         data: { side, messageId, topicId, staked: amount, burned: feeAmount },
       },
     }),
-    // Upsert BetPool (full amount enters the pool)
+    // Upsert BetPool by (messageId, settlementType) — separate pools for TRUTH/VALUE
     prisma.betPool.upsert({
-      where: { messageId },
+      where: { messageId_settlementType: { messageId, settlementType } },
       create: {
         messageId,
+        settlementType,
         lockedPro: side === 'PRO' ? amount : 0,
         lockedCon: side === 'CON' ? amount : 0,
       },
@@ -1204,6 +1451,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
       messageId: true,
       createdByUserId: true,
       previousRoundId: true,
+      settlementType: true,
     },
   });
 
@@ -1244,10 +1492,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     await executeClawback(round.previousRoundId, messageId, topicId);
   }
 
-  // ── Compute total weights from BetPool (all stakes, including auto-stakes from AGREE/DISAGREE votes) ──
-  // PRO stakes = AGREE votes, CON stakes = DISAGREE votes (unified in Phase 5)
+  // ── Compute total weights from BetPool by settlementType ──
+  const stype = round.settlementType ?? 'TRUTH';
   const betPool = await prisma.betPool.findUnique({
-    where: { messageId },
+    where: { messageId_settlementType: { messageId, settlementType: stype } },
     select: { lockedPro: true, lockedCon: true },
   });
   const totalPro = betPool?.lockedPro ?? 0;
@@ -1504,10 +1752,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     }),
   );
 
-  // ── Reset BetPool: funds have been distributed ──
+  // ── Reset BetPool by settlementType: funds have been distributed ──
   ledgerOps.push(
     prisma.betPool.update({
-      where: { messageId },
+      where: { messageId_settlementType: { messageId, settlementType: stype } },
       data: { lockedPro: 0, lockedCon: 0 },
     }),
   );
@@ -1568,7 +1816,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 async function executeClawback(previousRoundId: string, messageId: string, topicId: string) {
   const prevRound = await prisma.settlementRound.findUnique({
     where: { id: previousRoundId },
-    select: { result: true, closedAt: true },
+    select: { result: true, closedAt: true, settlementType: true },
   });
 
   if (!prevRound || !prevRound.result || prevRound.result === 'UNKNOWN') {
@@ -1710,9 +1958,9 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     );
   }
 
-  // ── Restore BetPool from original stakes AND votes ──
-  // After clawback, the BetPool should reflect all contributions again
-  // so that the new round can redistribute them.
+  // ── Restore BetPool from original stakes for the same settlement type ──
+  const restoreType = prevRound?.settlementType ?? 'TRUTH';
+
   const stakes = await prisma.stake.findMany({
     where: { messageId },
     select: { side: true, amount: true },
@@ -1745,8 +1993,8 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
   logBetPoolRestore(restoredPro, restoredCon, creatorRewardClawback);
   clawbackOps.push(
     prisma.betPool.upsert({
-      where: { messageId },
-      create: { messageId, lockedPro: restoredPro, lockedCon: restoredCon },
+      where: { messageId_settlementType: { messageId, settlementType: restoreType } },
+      create: { messageId, settlementType: restoreType, lockedPro: restoredPro, lockedCon: restoredCon },
       update: { lockedPro: restoredPro, lockedCon: restoredCon },
     }),
   );

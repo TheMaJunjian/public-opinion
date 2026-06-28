@@ -427,6 +427,7 @@ export interface SettlementRoundItem {
   createdByUserId: string;
   createdBy: User;
   status: 'OPEN' | 'VOTING' | 'SETTLED' | 'CANCELLED';
+  settlementType: 'TRUTH' | 'VALUE';
   result: 'TRUE' | 'FALSE' | 'UNKNOWN' | null;
   previousRoundId: string | null;
   openedAt: string;

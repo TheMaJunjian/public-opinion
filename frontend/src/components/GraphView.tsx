@@ -1664,10 +1664,14 @@ export interface GraphViewProps {
   hideMessageIds?: Set<string>;
   /** Phase 2: stake counts per message (pro/con) for display on cards */
   stakeCounts?: Record<string, { pro: number; con: number }>;
-  /** Phase 3: callback when ⚖️ settlement toggle is clicked on a message card */
-  onSettlementToggle?: (messageId: string) => void;
+  /** Phase 3: callback when ⚖️ truth settlement toggle is clicked */
+  onSettlementToggleTruth?: (messageId: string) => void;
+  /** Phase 3: callback when 💎 value settlement toggle is clicked */
+  onSettlementToggleValue?: (messageId: string) => void;
   /** Phase 3: currently open settlement message ID (for active state styling) */
   settlementOpenMsgId?: string | null;
+  /** Phase 3: currently open settlement type (TRUTH or VALUE) */
+  settlementOpenType?: 'TRUTH' | 'VALUE' | null;
   onSettlementMessageCreated?: (m: { id: string; content: string; createdAt: string; author: string; kind: string }) => void;
   /** Phase 5: Stance path highlight — { stanceMsgId, evidenceMsgIds } */
   stanceHighlight?: { stanceMsgId: string; evidenceMsgIds: string[] } | null;
@@ -1694,8 +1698,10 @@ export default function GraphView(props: GraphViewProps) {
     onInlineBadgeClick, onInlineBadgeDoubleClick,
     hideMessageIds,
     stakeCounts,
-    onSettlementToggle,
+    onSettlementToggleTruth,
+    onSettlementToggleValue,
     settlementOpenMsgId,
+    settlementOpenType,
     onSettlementMessageCreated,
     stanceHighlight,
     settlementEntryHighlight,
@@ -2917,12 +2923,19 @@ export default function GraphView(props: GraphViewProps) {
                       if (sc && sc.con > 0) return <span style={{color:"#f87171",fontSize:10}}>👎{sc.con}</span>;
                       return null;
                     })()}
-                    {onSettlementToggle && (
+                    {onSettlementToggleTruth && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); onSettlementToggle(msg.id); }}
-                        style={{fontSize:13,cursor:"pointer",background:"none",border:"none",padding:0,color:settlementOpenMsgId===msg.id?"#818cf8":"#6b7280",lineHeight:1}}
-                        title="结算市场"
+                        onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(msg.id); }}
+                        style={{fontSize:13,cursor:"pointer",background:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"rgba(99,102,241,0.2)":"none",border:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"1px solid #6366f1":"1px solid transparent",borderRadius:4,padding:"0 3px",color:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"#a5b4fc":"#6b7280",lineHeight:1}}
+                        title="真假仲裁"
                       >⚖️</button>
+                    )}
+                    {onSettlementToggleValue && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(msg.id); }}
+                        style={{fontSize:13,cursor:"pointer",background:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"rgba(245,158,11,0.2)":"none",border:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"1px solid #f59e0b":"1px solid transparent",borderRadius:4,padding:"0 3px",color:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"#fcd34d":"#6b7280",lineHeight:1}}
+                        title="价值仲裁"
+                      >💎</button>
                     )}
                   </div>
                 </div>
@@ -3060,18 +3073,26 @@ export default function GraphView(props: GraphViewProps) {
                     const sc = stakeCounts?.[msg.id];
                     // Phase 6: always show settlement ⚖️ entry; PRO/CON counts when available
                     const showProCon = sc && (sc.pro > 0 || sc.con > 0);
-                    if (showProCon || onSettlementToggle) {
+                    if (showProCon || onSettlementToggleTruth) {
                       return (
-                        <div style={{ display: "flex", gap: 6, fontSize: 10, marginTop: 2, alignItems: "center" }}>
+                        <div style={{ display: "flex", gap: 4, fontSize: 10, marginTop: 2, alignItems: "center" }}>
                           {showProCon && sc!.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>}
                           {showProCon && sc!.con > 0 && <span style={{ color: "#f87171" }}>👎{sc!.con}</span>}
-                          {onSettlementToggle && (
+                          {onSettlementToggleTruth && (
                             <button
-                              data-settlement-toggle
-                              onClick={(e) => { e.stopPropagation(); onSettlementToggle(msg.id); }}
-                              style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: "0 2px", color: settlementOpenMsgId === msg.id ? "#818cf8" : "#6b7280", lineHeight: 1 }}
-                              title="结算市场"
+                              data-settlement-toggle-truth
+                              onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(msg.id); }}
+                              style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"rgba(99,102,241,0.2)":"none", border: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"1px solid #6366f1":"1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"#a5b4fc":"#6b7280", lineHeight: 1 }}
+                              title="真假仲裁"
                             >⚖️</button>
+                          )}
+                          {onSettlementToggleValue && (
+                            <button
+                              data-settlement-toggle-value
+                              onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(msg.id); }}
+                              style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"rgba(245,158,11,0.2)":"none", border: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"1px solid #f59e0b":"1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"#fcd34d":"#6b7280", lineHeight: 1 }}
+                              title="价值仲裁"
+                            >💎</button>
                           )}
                         </div>
                       );
@@ -3133,7 +3154,7 @@ export default function GraphView(props: GraphViewProps) {
           width: 360,
           zIndex: 100,
         }}>
-          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} />
+          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
           <RoundHistory messageId={settlementOpenMsgId} compact />
         </div>
         );
@@ -3611,11 +3632,11 @@ export default function GraphView(props: GraphViewProps) {
                         </span>
                         {scMerge && scMerge.pro > 0 && <span style={{ color: "#4ade80", fontSize: 10, flexShrink: 0 }}>👍{scMerge.pro}</span>}
                         {scMerge && scMerge.con > 0 && <span style={{ color: "#f87171", fontSize: 10, flexShrink: 0 }}>👎{scMerge.con}</span>}
-                        {onSettlementToggle && (
+                        {onSettlementToggleTruth && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); onSettlementToggle(gf.relMsgId); }}
-                            style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: 0, color: settlementOpenMsgId === gf.relMsgId ? "#818cf8" : "#6b7280", lineHeight: 1 }}
-                            title="结算市场"
+                            onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(gf.relMsgId); }}
+                            style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}
+                            title="真假仲裁"
                           >⚖️</button>
                         )}
                         <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 500, color: "#9ca3af" }}>
@@ -3661,7 +3682,7 @@ export default function GraphView(props: GraphViewProps) {
         let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[];
         // Phase 6: ⚖️ settlement entry at top-right of arrange frame
-        if (onSettlementToggle) {
+        if (onSettlementToggleTruth) {
           const sc = stakeCounts?.[sf.relMsgId];
           const sfPro = sc?.pro ?? 0;
           const sfCon = sc?.con ?? 0;
@@ -3672,9 +3693,9 @@ export default function GraphView(props: GraphViewProps) {
               {sfPro > 0 && <span style={{color:"#4ade80",fontSize:10}}>👍{sfPro}</span>}
               {sfCon > 0 && <span style={{color:"#f87171",fontSize:10}}>👎{sfCon}</span>}
               <button
-                onClick={(e) => { e.stopPropagation(); onSettlementToggle(sf.relMsgId); }}
-                style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: 0, color: settlementOpenMsgId === sf.relMsgId ? "#818cf8" : "#6b7280", lineHeight: 1 }}
-                title="结算市场"
+                onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(sf.relMsgId); }}
+                style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}
+                title="真假仲裁"
               >⚖️</button>
             </div>
           );

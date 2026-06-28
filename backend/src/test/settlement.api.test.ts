@@ -189,7 +189,10 @@ describe('GET /api/rounds/:id', () => {
 
   it('should return round with weights', async () => {
     (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({ ...mockRound });
-    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 100, lockedCon: 50 });
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([
+      { side: 'PRO', amount: 50 }, { side: 'PRO', amount: 50 },
+      { side: 'CON', amount: 30 }, { side: 'CON', amount: 20 },
+    ]);
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
     (prisma.message.findMany as jest.Mock).mockResolvedValue([]);
     const res = await request(app).get('/api/rounds/round-1');

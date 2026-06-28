@@ -19,6 +19,7 @@ import RevenuePanel from '../components/RevenuePanel';
 import { applyContainerExpansion } from '../utils/focusContainer';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
+import { traceLog } from '../utils/debugLog';
 
 // ========================= Helpers =========================
 
@@ -552,6 +553,8 @@ export default function TopicDetailPage() {
   const [topic, setTopic] = useState<Topic | null>(null);
   const [messages, setMessages] = useState<DemoMessage[]>([]);
   const [edges, setEdges] = useState<DemoEdge[]>([]);
+  const edgesRef = useRef<DemoEdge[]>([]);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
   const [relations, setRelations] = useState<Relation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -598,6 +601,18 @@ export default function TopicDetailPage() {
             const map: Record<string, { pro: number; con: number }> = {};
             const aMap: Record<string, number> = {};
             for (const s of stakes) { map[s.id] = { pro: s.pro, con: s.con }; aMap[s.id] = s.authorStake; }
+            // For RECOMMEND/ARCHIVE relations: mirror text target stake counts onto
+            // the annotation relation message so badges show correct stats.
+            for (const rel of relationsData.data) {
+              const rt = rel.relationType?.toUpperCase();
+              if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
+                const trefs = rel.targetRefs as Array<{ messageId?: string }> | undefined;
+                const textTargetId = trefs?.[0]?.messageId;
+                if (textTargetId && map[textTargetId]) {
+                  map[rel.id] = map[textTargetId];
+                }
+              }
+            }
             if (!cancelled) { setStakeCounts(map); setAuthorStakes(aMap); }
           } catch {
             // stake fetch is best-effort; don't block the page
@@ -647,7 +662,7 @@ export default function TopicDetailPage() {
       setDraftUnits([{ messageId: msgId, selection: { kind: "whole" } }]);
       setActiveTextSelectId(null);
       if (settlementMsgId) {
-        setSettlementOpenMsgId(settlementMsgId);
+        openSettlement(settlementMsgId);
         const highlightRoundId = searchParams.get('highlightRound');
         if (highlightRoundId) sessionStorage.setItem('settlementHighlightRound', highlightRoundId);
         searchParams.delete('settlement');
@@ -729,6 +744,17 @@ export default function TopicDetailPage() {
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
+  const [settlementOpenType, setSettlementOpenType] = useState<'TRUTH' | 'VALUE' | null>(null);
+
+  // Helper: open settlement with explicit type (defaults to TRUTH for old code paths)
+  const openSettlement = useCallback((msgId: string, type: 'TRUTH' | 'VALUE' = 'TRUTH') => {
+    setSettlementOpenMsgId(msgId);
+    setSettlementOpenType(type);
+  }, []);
+  const closeSettlement = useCallback(() => {
+    setSettlementOpenMsgId(null);
+    setSettlementOpenType(null);
+  }, []);
   // Phase 6: auto-scroll settlement panel into view
   useEffect(() => {
     if (!settlementOpenMsgId) return;
@@ -838,7 +864,7 @@ export default function TopicDetailPage() {
       const highlightMessageTypes = ['MINT', 'STAKE_LOCK', 'VOTE_LOCK'];
 
       if (settlementTypes.includes(txType)) {
-        setSettlementOpenMsgId(resolvedMessageId);
+        openSettlement(resolvedMessageId);
         if (roundId) sessionStorage.setItem('settlementHighlightRound', roundId);
 
         // Extract settlement entry highlight from txData
@@ -864,7 +890,7 @@ export default function TopicDetailPage() {
         setSettlementEntryHighlight(Object.keys(highlight).length > 0 ? highlight : null);
         setTimeout(() => setSettlementEntryHighlight(null), 1000);
       } else {
-        setSettlementOpenMsgId(null);
+        closeSettlement();
         setSettlementEntryHighlight(null);
       }
 
@@ -907,9 +933,9 @@ export default function TopicDetailPage() {
     if (!settlementOpenMsgId) return;
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      // Keep panel open if clicking inside it or on the ⚖️ toggle button
-      if (target.closest('[data-settlement-panel]') || target.closest('[data-settlement-toggle]')) return;
-      setSettlementOpenMsgId(null);
+      // Keep panel open if clicking inside it or on the settlement toggle buttons
+      if (target.closest('[data-settlement-panel]') || target.closest('[data-settlement-toggle-truth]') || target.closest('[data-settlement-toggle-value]')) return;
+      closeSettlement();
     };
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
@@ -962,8 +988,13 @@ export default function TopicDetailPage() {
   const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
-    setRelations(prev => [...prev, backendRel]);
-    setMessages(prev => [...prev, buildRelationDemoMessage(backendRel)]);
+    traceLog('appendCreatedRelation', `enter relType=${backendRel.relationType} id=${backendRel.id.slice(-6)} topicId=${topicId?.slice(-6) ?? 'null'}`);
+    // Skip adding duplicate relations (deduplicated on backend)
+    const isDedup = !!(backendRel as Record<string, unknown>).deduplicated;
+    if (!isDedup) {
+      setRelations(prev => prev.some(r => r.id === backendRel.id) ? prev : [...prev, backendRel]);
+      setMessages(prev => prev.some(m => m.id === backendRel.id) ? prev : [...prev, buildRelationDemoMessage(backendRel)]);
+    }
     const relType = backendRel.relationType?.toUpperCase();
     const targetMsgIds: string[] = [];
     let stanceSide: 'pro' | 'con' | null = null;
@@ -997,6 +1028,13 @@ export default function TopicDetailPage() {
         setEdges(prev => [...prev, edge]);
       }
     }
+    // For RECOMMEND/ARCHIVE: populate targetMsgIds from text targets
+    if (relType === 'RECOMMEND' || relType === 'ARCHIVE') {
+      targetMsgIds.push(...backendRel.targetRefs
+        .filter((ref) => 
+          (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
+        .map(ref => (ref as { messageId: string }).messageId));
+    }
     // Self-stake amount for the relation message itself
     const rawPayload2 = (backendRel as Record<string, unknown>).relationPayload
       ?? backendRel.payload;
@@ -1010,6 +1048,19 @@ export default function TopicDetailPage() {
         setStakeCounts(prev => ({ ...prev, [mid]: { pro: s.counts.pro, con: s.counts.con } }));
       }).catch(() => {});
     }
+    // For RECOMMEND/ARCHIVE: the stake is on the text target, so also mirror its
+    // stake counts onto the annotation relation message for badge display.
+    if (relType === 'RECOMMEND' || relType === 'ARCHIVE') {
+      const textTarget = targetMsgIds[0];
+      if (textTarget) {
+        api.getMessageStakes(textTarget).then(s => {
+          setStakeCounts(prev => ({
+            ...prev,
+            [backendRel.id]: { pro: s.counts.pro, con: s.counts.con },
+          }));
+        }).catch(() => {});
+      }
+    }
     window.dispatchEvent(new Event('points-refresh'));
     // Notify SettlementPanel to reload stakes for target messages
     for (const mid of targetMsgIds) {
@@ -1019,26 +1070,33 @@ export default function TopicDetailPage() {
     // Skip if an un-settled ROUND card already exists for this target.
     // (Backend ensures SettlementRound via ensureVotingRound; frontend just creates the card.)
     if (topicId) {
-      const settleTargetId = (relType === 'AGREE' || relType === 'DISAGREE') && targetMsgIds.length > 0
+      // For annotations (RECOMMEND/ARCHIVE), the settlement is on the text target, not the relation
+      const isAnnotation = relType === 'RECOMMEND' || relType === 'ARCHIVE';
+      const settleTargetId = (relType === 'AGREE' || relType === 'DISAGREE' || isAnnotation) && targetMsgIds.length > 0
         ? targetMsgIds[0]
         : backendRel.id;
+      // Only count ROUND cards of the SAME settlement type (TRUTH vs VALUE)
+      const roundSt = isAnnotation ? 'VALUE' : 'TRUTH';
       const rounds = messagesRef.current.filter(m =>
         m.kind === 'round' && m.settlementTargetId === settleTargetId
+          && (m as any).roundPayload?.settlementType === roundSt
       );
       const results = messagesRef.current.filter(m =>
         m.kind === 'round_result' && m.settlementTargetId === settleTargetId
       );
       if (rounds.length <= results.length) {
+        traceLog('appendCreatedRelation', `创建ROUND卡 settleTarget=${settleTargetId.slice(-6)} type=${roundSt} relType=${relType}`);
         const relAuthor = backendRel.createdBy?.username ?? '?';
-        api.createMessage(topicId!, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
+        api.createMessage(topicId!, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId, settlementType: roundSt }).then(roundMsg => {
           setMessages((prev: any) => [...prev, {
             id: roundMsg.id,
             author: roundMsg.createdBy?.username || relAuthor,
             createdAt: roundMsg.createdAt,
-            content: kindLabel('ROUND'),
+            content: kindLabel('ROUND', undefined, roundSt),
             kind: 'round',
             backendKind: 'ROUND',
             settlementTargetId: settleTargetId,
+            roundPayload: { settlementType: roundSt },
           }]);
           scrollMsgToCenter(roundMsg.id);
         }).catch(() => {});
@@ -1057,6 +1115,30 @@ export default function TopicDetailPage() {
       const detail = (e as CustomEvent<Relation>).detail;
       if (detail && detail.id && detail.relationType) {
         appendCreatedRelation(detail);
+        // For RECOMMEND/ARCHIVE from voting: create edge for badge display
+        const rt = detail.relationType?.toUpperCase();
+        if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
+          const isDup = !!(detail as Record<string, unknown>).deduplicated;
+          if (!isDup) {
+            const targetIds = detail.targetRefs
+              .filter(ref => (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
+              .map(ref => (ref as { messageId: string }).messageId);
+            const anonSrcId = `anon:${detail.id}`;
+            setEdges(prev => {
+              const newEdges = targetIds.filter(mid =>
+                !prev.some(e => e.relationMessageId === detail.id && e.to.messageId === mid)
+              ).map(mid => ({
+                id: nextId("edge"),
+                relationMessageId: detail.id,
+                relationType: rt.toLowerCase() as RelationType,
+                from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+                to: { messageId: mid, selection: { kind: "whole" as const } },
+                relationLabel: relationTypeName(rt.toLowerCase()),
+              }));
+              return [...prev, ...newEdges];
+            });
+          }
+        }
       }
     };
     window.addEventListener('relation-created', handler);
@@ -1630,15 +1712,16 @@ export default function TopicDetailPage() {
         m.kind === 'round_result' && m.settlementTargetId === msg.id
       );
       if (rounds.length <= results.length) {
-        api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id }).then(roundMsg => {
+        api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id, settlementType: 'TRUTH' }).then(roundMsg => {
           setMessages((prev: any) => [...prev, {
             id: roundMsg.id,
             author: roundMsg.createdBy?.username || msg.author,
             createdAt: roundMsg.createdAt,
-            content: kindLabel('ROUND'),
+            content: kindLabel('ROUND', undefined, 'TRUTH'),
             kind: 'round',
             backendKind: 'ROUND',
             settlementTargetId: msg.id,
+            roundPayload: { settlementType: 'TRUTH' },
           }]);
           scrollMsgToCenter(roundMsg.id);
         }).catch(() => {});
@@ -1746,7 +1829,9 @@ export default function TopicDetailPage() {
         (r.targetRefs as Array<{ messageId?: string }>).some(t => t.messageId === targetId)
       );
       if (classifyRel) enterClassifyTopic(classifyRel.id);
-      setSettlementOpenMsgId(sid => sid === targetId ? null : targetId);
+      // Use round's own settlementType to open the correct panel (TRUTH or VALUE)
+      const stype = (rp?.settlementType as 'TRUTH' | 'VALUE') ?? 'TRUTH';
+      if (settlementOpenMsgId === targetId) { closeSettlement(); } else { openSettlement(targetId, stype); }
       return;
     }
     if (currentlyActive) {
@@ -2289,11 +2374,20 @@ export default function TopicDetailPage() {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
           try {
             const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+            traceLog('TAG', `创建标注 type=${secType} relId=${backendRel.id.slice(-6)} target=${tgtMid.slice(-6)} isDup=${!!(backendRel as Record<string, unknown>).deduplicated}`);
             const relId = backendRel.id;
+            const isDup = !!(backendRel as Record<string, unknown>).deduplicated;
             appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            const anonSrcId = `anon:${backendRel.id}`;
-            newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
+            if (!isDup) {
+              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+            }
+            // Only add edge if not already present for this relation-target pair
+            const alreadyHasEdge = edgesRef.current.some(e =>
+              e.relationMessageId === relId && e.to.messageId === tgtMid);
+            if (!alreadyHasEdge) {
+              const anonSrcId = `anon:${backendRel.id}`;
+              newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
+            }
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
         setEdges(prev => [...prev, ...newEdgesList]);
@@ -2887,15 +2981,16 @@ export default function TopicDetailPage() {
           );
           if (rounds.length <= results.length) {
             const govAuthor = backendRel.createdBy?.username ?? user?.username ?? '?';
-            api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId }).then(roundMsg => {
+            api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId, settlementType: 'TRUTH' }).then(roundMsg => {
               setMessages((prev: any) => [...prev, {
                 id: roundMsg.id,
                 author: roundMsg.createdBy?.username || govAuthor,
                 createdAt: roundMsg.createdAt,
-                content: kindLabel('ROUND'),
+                content: kindLabel('ROUND', undefined, 'TRUTH'),
                 kind: 'round',
                 backendKind: 'ROUND',
                 settlementTargetId: settleTargetId,
+                roundPayload: { settlementType: 'TRUTH' },
               }]);
               scrollMsgToCenter(roundMsg.id);
             }).catch(() => {});
@@ -4174,16 +4269,17 @@ export default function TopicDetailPage() {
                         userSelect: isActiveText ? "text" : "auto"
                       }}>
                       <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
-                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? `⚖️ 发起结算` : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码` : (msg as any).backendKind === "OPERATIONS" ? `📊 运营` : `消息 ${msg.id}`}</span>
+                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? `💎 发起价值仲裁` : `⚖️ 发起真假仲裁`) : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码` : (msg as any).backendKind === "OPERATIONS" ? `📊 运营` : `消息 ${msg.id}`}</span>
                         <span style={{textAlign:"right"}}>
                           <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
                           {(() => {
                             const sc = stakeCounts[msg.id];
                             const showProCon = sc && (sc.pro > 0 || sc.con > 0);
-                            // Phase 6: always show ⚖️ settlement entry; PRO/CON counts when available
+                            const isTruthOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'TRUTH';
+                            const isValueOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'VALUE';
                             return (
-                              <div style={{ display: "flex", gap: 6, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
+                              <div style={{ display: "flex", gap: 4, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
                                 {showProCon && sc!.pro > 0 && (
                                   <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>
                                 )}
@@ -4191,11 +4287,17 @@ export default function TopicDetailPage() {
                                   <span style={{ color: "#f87171" }}>👎{sc!.con}</span>
                                 )}
                                 <button
-                                  data-settlement-toggle
-                                  onClick={(e) => { e.stopPropagation(); setSettlementOpenMsgId(settlementOpenMsgId === msg.id ? null : msg.id); }}
-                                  style={{ fontSize: 13, cursor: "pointer", background: "none", border: "none", padding: "0 2px", color: settlementOpenMsgId === msg.id ? "#818cf8" : "#6b7280" }}
-                                  title="结算市场"
+                                  data-settlement-toggle-truth
+                                  onClick={(e) => { e.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }}
+                                  style={{ fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }}
+                                  title="真假仲裁"
                                 >⚖️</button>
+                                <button
+                                  data-settlement-toggle-value
+                                  onClick={(e) => { e.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }}
+                                  style={{ fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }}
+                                  title="价值仲裁"
+                                >💎</button>
                               </div>
                             );
                           })()}
@@ -4258,7 +4360,7 @@ export default function TopicDetailPage() {
                       {/* Phase 3: Settlement Panel as floating overlay */}
                       {settlementOpenMsgId === msg.id && (
                         <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
-                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={(nm:any) => (window as any).__addSettlementMessage?.({...nm, kind: nm.kind})} />
+                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={(nm:any) => (window as any).__addSettlementMessage?.({...nm, kind: nm.kind})} filterSettlementType={settlementOpenType ?? undefined} />
                           <div style={{ marginTop: 4 }}>
                             <RoundHistory messageId={msg.id} compact />
                           </div>
@@ -4290,8 +4392,10 @@ export default function TopicDetailPage() {
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
                   hideMessageIds={hideMessageIds}
                   stakeCounts={stakeCounts}
-                  onSettlementToggle={(msgId) => setSettlementOpenMsgId(settlementOpenMsgId === msgId ? null : msgId)}
+                  onSettlementToggleTruth={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'TRUTH') { closeSettlement(); } else { openSettlement(msgId, 'TRUTH'); } }}
+                  onSettlementToggleValue={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'VALUE') { closeSettlement(); } else { openSettlement(msgId, 'VALUE'); } }}
                   settlementOpenMsgId={settlementOpenMsgId}
+                  settlementOpenType={settlementOpenType}
                   onSettlementMessageCreated={(m: any) => {
                     setMessages(prev => [...prev, { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' }]);
                     setTimeout(() => scrollMsgToCenter(m.id), 50);

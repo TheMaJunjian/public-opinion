@@ -98,13 +98,16 @@ function mapBackendKind(backendKind: string): MessageKind {
   }
 }
 
-export function kindLabel(backendKind: string, targetRefs?: any): string {
+export function kindLabel(backendKind: string, targetRefs?: any, settlementType?: string): string {
+  const isValue = settlementType === 'VALUE';
   const labels: Record<string, string> = {
     TEXT: '[文本消息]',
     GOVERNANCE: '🏛️ 治理提案\n—— 可投票/讨论/结算',
     CODE: '💻 代码\n—— 结算通过后将自动部署',
     OPERATIONS: '📊 运营\n—— 收入、统计等程序运营信息',
-    ROUND: '⚖️ 发起结算\n—— 目标消息进入投票阶段\n双击卡片查看结算详情',
+    ROUND: isValue
+      ? '💎 发起价值仲裁\n—— 推荐/冷藏标注进入投票\n双击卡片查看结算详情'
+      : '⚖️ 发起真假仲裁\n—— 目标消息进入投票阶段\n双击卡片查看结算详情',
     ROUND_RESULT: '🏁 结算完成\n—— 资金池已按投票结果分配\n双击卡片查看分账明细',
     RELATION: '[关系消息]',
   };
@@ -137,19 +140,22 @@ export function convertMessagesToDemoModel(
     const bk = (m as any).kind ?? 'TEXT';
     // Extract settlement target from ROUND/ROUND_RESULT targetRefs
     let settlementTargetId: string | undefined;
+    let roundPayload: Record<string,unknown> | undefined;
     if (bk === 'ROUND' || bk === 'ROUND_RESULT') {
       const refs = (m as any).targetRefs as Array<{ messageId?: string }> | undefined;
       settlementTargetId = refs?.[0]?.messageId;
+      roundPayload = (m as any).relationPayload as Record<string,unknown> | undefined;
     }
+    const stype = roundPayload?.settlementType as string | undefined;
     return {
     id: m.id,
     author: m.createdBy.username,
     createdAt: m.createdAt,
-    content: m.content ?? kindLabel(bk),
+    content: m.content ?? kindLabel(bk, undefined, stype),
     kind: mapBackendKind(bk),
     backendKind: bk,
     settlementTargetId,
-    roundPayload: (bk === 'ROUND_RESULT') ? ((m as any).relationPayload as Record<string,unknown> | undefined) : undefined,
+    roundPayload,
   }});
 
   const demoEdges: DemoEdge[] = [];

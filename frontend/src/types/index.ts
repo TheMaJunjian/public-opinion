@@ -488,17 +488,33 @@ export interface StanceStake {
   createdAt: string;
 }
 
+export interface StanceTag {
+  kind: 'tag';
+  id: string;
+  topicId: string;
+  topicTitle: string;
+  relationType: string;  // TAG | RECOMMEND | ARCHIVE
+  label: string;
+  subType: string | null;      // SPAM | OFFTOPIC | LOWVALUE | IMPORTANT | CUSTOM
+  customLabel: string | null;
+  targetMessageId: string | null;
+  amount: number;
+  createdAt: string;
+}
+
 export interface StanceHistoryResponse {
   user: { id: string };
   stances: {
     relations: StanceRelation[];
     stakes: StanceStake[];
+    tags: StanceTag[];
   };
   pagination: {
     page: number;
     limit: number;
     totalRelations: number;
     totalStakes: number;
+    totalTags: number;
   };
 }
 

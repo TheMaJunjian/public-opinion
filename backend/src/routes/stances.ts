@@ -32,17 +32,36 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
     };
     if (topicId) stanceFilter.topicId = topicId;
 
-    const stanceRelations = await prisma.message.findMany({
-      where: stanceFilter,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-      select: {
-        id: true, topicId: true, relationType: true,
-        targetRefs: true, createdAt: true,
-        topic: { select: { id: true, title: true } },
-      },
-    });
+    const [stanceRelations, tagRelations] = await Promise.all([
+      prisma.message.findMany({
+        where: stanceFilter,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true, topicId: true, relationType: true,
+          targetRefs: true, createdAt: true,
+          topic: { select: { id: true, title: true } },
+        },
+      }),
+      prisma.message.findMany({
+        where: {
+          createdById: targetUserId,
+          kind: 'RELATION',
+          relationType: { in: ['TAG', 'RECOMMEND', 'ARCHIVE'] },
+          supersededBy: null,
+          ...(topicId ? { topicId } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true, topicId: true, relationType: true,
+          relationPayload: true, targetRefs: true, createdAt: true,
+          topic: { select: { id: true, title: true } },
+        },
+      }),
+    ]);
 
     // AGREE/DISAGEE stakes are on the TARGET message (events.ts line 556)
     const targetMsgIds = new Set(
@@ -82,11 +101,12 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
     });
 
     // ═══════════════════════════════════════════════════════════
-    // 2. 立场 — 所有非 AGREE/DISAGREE 的发送消息（含自押）
+    // 2. 立场 — 所有非 AGREE/DISAGREE/TAG 的发送消息（含自押）
     // ═══════════════════════════════════════════════════════════
+    // Also exclude RECOMMEND/ARCHIVE from positions (they are annotations, shown in "表态")
     const positionFilter: Record<string, unknown> = {
       createdById: targetUserId,
-      NOT: [{ kind: 'RELATION', relationType: { in: ['AGREE', 'DISAGREE'] } }],
+      NOT: [{ kind: 'RELATION', relationType: { in: ['AGREE', 'DISAGREE', 'TAG', 'RECOMMEND', 'ARCHIVE'] } }],
     };
     if (topicId) positionFilter.topicId = topicId;
 
@@ -125,17 +145,72 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
       }));
 
     // ═══════════════════════════════════════════════════════════
+    // 3. 表态 — TAG / RECOMMEND / ARCHIVE 标注记录
+    // ═══════════════════════════════════════════════════════════
+    // TAG stakes are on the relation message itself (PRO); RECOMMEND/ARCHIVE stakes are on the target (PRO/CON)
+    const tagOwnIds = tagRelations.filter(r => r.relationType === 'TAG').map(r => r.id);
+    const tagTargetIds = new Set(
+      tagRelations
+        .filter(r => r.relationType !== 'TAG')
+        .flatMap(r => ((r.targetRefs as Array<{ messageId?: string }> | undefined) ?? []).map(ref => ref.messageId).filter(Boolean) as string[])
+    );
+    const allTagStakeMsgIds = [...tagOwnIds, ...tagTargetIds];
+    const tagStakeMap = allTagStakeMsgIds.length > 0
+      ? new Map((await prisma.stake.findMany({
+          where: { messageId: { in: allTagStakeMsgIds }, userId: targetUserId },
+          select: { messageId: true, amount: true, side: true },
+        })).map(s => [`${s.messageId}:${s.side}`, s.amount]))
+      : new Map<string, number>();
+
+    const tags = tagRelations.map(r => {
+      const payload = r.relationPayload as Record<string, unknown> | null;
+      const label = (payload?.label as string) || '';
+      const subType = (payload?.subType as string) || null;
+      const customLabel = (payload?.customLabel as string) || null;
+      const refs = (r.targetRefs as Array<{ messageId?: string }> | undefined) ?? [];
+      const targetMsgId = refs.find(ref => ref.messageId)?.messageId ?? null;
+      // TAG: stake on self (PRO); RECOMMEND: stake on target (PRO); ARCHIVE: stake on target (CON)
+      let amount = 0;
+      if (r.relationType === 'TAG') {
+        amount = tagStakeMap.get(`${r.id}:PRO`) ?? 0;
+      } else if (targetMsgId) {
+        const side = r.relationType === 'RECOMMEND' ? 'PRO' : 'CON';
+        amount = tagStakeMap.get(`${targetMsgId}:${side}`) ?? 0;
+      }
+      return {
+        kind: 'tag' as const,
+        id: r.id, topicId: r.topicId, topicTitle: r.topic.title,
+        relationType: r.relationType as string,
+        label,
+        subType,
+        customLabel,
+        targetMessageId: targetMsgId,
+        amount,
+        createdAt: r.createdAt,
+      };
+    });
+
+    // ═══════════════════════════════════════════════════════════
     // Response
     // ═══════════════════════════════════════════════════════════
-    const [relationCount, positionCount] = await Promise.all([
+    const [relationCount, positionCount, tagCount] = await Promise.all([
       prisma.message.count({ where: stanceFilter }),
       prisma.message.count({ where: positionFilter }),
+      prisma.message.count({
+        where: {
+          createdById: targetUserId,
+          kind: 'RELATION',
+          relationType: { in: ['TAG', 'RECOMMEND', 'ARCHIVE'] },
+          supersededBy: null,
+          ...(topicId ? { topicId } : {}),
+        },
+      }),
     ]);
 
     res.json({
       user: { id: targetUserId },
-      stances: { relations, stakes },
-      pagination: { page, limit, totalRelations: relationCount, totalStakes: positionCount },
+      stances: { relations, stakes, tags },
+      pagination: { page, limit, totalRelations: relationCount, totalStakes: positionCount, totalTags: tagCount },
     });
   } catch (err) {
     next(err);

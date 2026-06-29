@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getUserStances } from '../api/client';
-import type { StanceRelation, StanceStake } from '../types';
+import type { StanceRelation, StanceStake, StanceTag } from '../types';
 
 interface Props {
   userId: string;
@@ -14,10 +14,18 @@ const TYPE_ICON: Record<string, string> = {
 const TYPE_LABEL: Record<string, string> = {
   AGREE: '赞同', DISAGREE: '反对', SELF_AGREE: '赞同自己',
 };
+const TAG_TYPE_LABEL: Record<string, string> = {
+  TAG: '纯标注', RECOMMEND: '推荐', ARCHIVE: '冷藏',
+};
+const SUB_TYPE_LABEL: Record<string, string> = {
+  SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义',
+};
+
+type TabKey = 'relations' | 'stakes' | 'tags';
 
 /**
  * StanceHistoryPanel — 用户表态历史面板
- * 站队（赞同/反对/赞同自己） + 立场（发消息消耗的贡献点）
+ * 站队（赞同/反对/赞同自己） + 立场（发消息消耗的贡献点） + 表态（标注）
  */
 export default function StanceHistoryPanel({ userId, topicId }: Props) {
   const navigate = useNavigate();
@@ -25,7 +33,8 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [relations, setRelations] = useState<StanceRelation[]>([]);
   const [stakes, setStakes] = useState<StanceStake[]>([]);
-  const [activeTab, setActiveTab] = useState<'relations' | 'stakes'>('relations');
+  const [tags, setTags] = useState<StanceTag[]>([]);
+  const [activeTab, setActiveTab] = useState<TabKey>('relations');
 
   const load = useCallback(async () => {
     try {
@@ -34,6 +43,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
       const data = await getUserStances(userId, { topicId, limit: 30 });
       setRelations(data.stances.relations);
       setStakes(data.stances.stakes);
+      setTags(data.stances.tags ?? []);
     } catch (e: unknown) {
       setError((e as Error)?.message ?? '加载失败');
     } finally {
@@ -46,58 +56,88 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
   if (loading) return <div className="text-sm text-gray-500 p-4">加载中...</div>;
   if (error) return <div className="text-sm text-red-600 p-4">{error}</div>;
 
-  const totalCount = relations.length + stakes.length;
+  const totalCount = relations.length + stakes.length + tags.length;
   if (totalCount === 0) {
     return (
       <div className="text-sm text-gray-500 p-4 space-y-2">
         <div>暂无记录</div>
-        <div className="text-xs text-gray-400">发送消息会消耗贡献点，记录在「立场」中。对他人消息的赞同/反对，记录在「站队」中。赞同自己的消息会在站队中标注。</div>
+        <div className="text-xs text-gray-400">发送消息会消耗贡献点，记录在「立场」中。对他人消息的赞同/反对，记录在「站队」中。标注记录在「表态」中。赞同自己的消息会在站队中标注。</div>
       </div>
     );
   }
 
+  const TABS: { key: TabKey; label: string; count: number }[] = [
+    { key: 'relations', label: '站队', count: relations.length },
+    { key: 'stakes', label: '立场', count: stakes.length },
+    { key: 'tags', label: '表态', count: tags.length },
+  ];
+
   return (
     <div className="space-y-3">
       <div className="flex gap-1 border-b border-gray-200">
-        {(['relations', 'stakes'] as const).map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab)}
+        {TABS.map(tab => (
+          <button key={tab.key} onClick={() => setActiveTab(tab.key)}
             className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
-              activeTab === tab ? 'border-indigo-500 text-indigo-700' : 'border-transparent text-gray-500 hover:text-gray-700'
+              activeTab === tab.key ? 'border-indigo-500 text-indigo-700' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            {tab === 'relations' ? `站队 (${relations.length})` : `立场 (${stakes.length})`}
+            {tab.label} ({tab.count})
           </button>
         ))}
       </div>
 
       <div className="space-y-2 max-h-96 overflow-auto">
-        {activeTab === 'relations' && relations.map(r => (
-          <StanceCard
-            key={`rel-${r.id}`}
-            icon={TYPE_ICON[r.type] ?? '❓'}
-            title={`${TYPE_LABEL[r.type] ?? r.type} · ${r.topicTitle}`}
-            subtitle={`${r.amount} 点`}
-            highlight={r.type === 'SELF_AGREE'}
-            time={r.createdAt}
-            onDoubleClick={() => {
-              const params = new URLSearchParams();
-              params.set('msg', r.id);
-              if (r.targetMessageId) params.set('settlement', r.targetMessageId);
-              navigate(`/topics/${r.topicId}?${params}`);
-            }}
-          />
-        ))}
+        {activeTab === 'relations' && relations.map(r => {
+          const topicSuffix = topicId ? '' : ` · ${r.topicTitle}`;
+          return (
+            <StanceCard
+              key={`rel-${r.id}`}
+              icon={TYPE_ICON[r.type] ?? '❓'}
+              title={`${TYPE_LABEL[r.type] ?? r.type}${topicSuffix}`}
+              subtitle={`${r.amount} 点`}
+              highlight={r.type === 'SELF_AGREE'}
+              time={r.createdAt}
+              onDoubleClick={() => {
+                const params = new URLSearchParams();
+                params.set('msg', r.id);
+                if (r.targetMessageId) params.set('settlement', r.targetMessageId);
+                navigate(`/topics/${r.topicId}?${params}`);
+              }}
+            />
+          );
+        })}
 
-        {activeTab === 'stakes' && stakes.map(s => (
-          <StanceCard
-            key={`stake-${s.id}`}
-            icon="🔒"
-            title={`消耗 ${s.amount} 点 · ${s.topicTitle}`}
-            subtitle={s.content ? (s.content.length > 40 ? s.content.slice(0, 40) + '…' : s.content) : '(无文本)'}
-            time={s.createdAt}
-            onDoubleClick={() => navigate(`/topics/${s.topicId}?msg=${s.messageId}`)}
-          />
-        ))}
+        {activeTab === 'stakes' && stakes.map(s => {
+          const topicSuffix = topicId ? '' : ` · ${s.topicTitle}`;
+          return (
+            <StanceCard
+              key={`stake-${s.id}`}
+              icon="🔒"
+              title={`消耗 ${s.amount} 点${topicSuffix}`}
+              subtitle={s.content ? (s.content.length > 40 ? s.content.slice(0, 40) + '…' : s.content) : '(无文本)'}
+              time={s.createdAt}
+              onDoubleClick={() => navigate(`/topics/${s.topicId}?msg=${s.messageId}`)}
+            />
+          );
+        })}
+
+        {activeTab === 'tags' && tags.map(t => {
+          const typeLabel = TAG_TYPE_LABEL[t.relationType] ?? t.relationType;
+          const reason = t.subType
+            ? (t.subType === 'CUSTOM' && t.customLabel ? t.customLabel : (SUB_TYPE_LABEL[t.subType] ?? t.subType))
+            : null;
+          const topicSuffix = topicId ? '' : ` · ${t.topicTitle}`;
+          return (
+            <StanceCard
+              key={`tag-${t.id}`}
+              icon="🏷️"
+              title={`${typeLabel}${reason ? ` · ${reason}` : ''}${topicSuffix}`}
+              subtitle={`${t.amount} 点${t.targetMessageId ? ` · 目标: ${t.targetMessageId.slice(-8)}` : ''}`}
+              time={t.createdAt}
+              onDoubleClick={() => navigate(`/topics/${t.topicId}?msg=${t.id}`)}
+            />
+          );
+        })}
       </div>
     </div>
   );

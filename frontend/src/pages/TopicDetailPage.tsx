@@ -644,24 +644,44 @@ export default function TopicDetailPage() {
   }, [topicId]);
 
   // Auto-enter classify topic if msg belongs to one
-  const autoClassifyRef = useRef<string | null>(null);
+  const [autoClassifyMsgId, setAutoClassifyMsgId] = useState<string | null>(null);
   useEffect(() => {
     if (loading || relations.length === 0) return;
-    const msgId = autoClassifyRef.current;
+    const msgId = autoClassifyMsgId;
     if (!msgId) return;
-    // Find classify/summary relation that targets this message
+    // Resolve msgId to text message IDs:
+    // - If msgId is a relation message, find its target text message IDs
+    // - Otherwise, treat msgId itself as a text message ID
+    const textIds = new Set<string>();
+    const msgRel = relations.find(r => r.id === msgId);
+    if (msgRel) {
+      const targets = (msgRel.targetRefs ?? []) as TargetRef[];
+      targets.forEach(t => {
+        if ((t.kind === 'message' || t.kind === 'text-fragment') && t.messageId) {
+          textIds.add(t.messageId);
+        }
+      });
+    } else {
+      textIds.add(msgId);
+    }
+    if (textIds.size === 0) { setAutoClassifyMsgId(null); return; }
+    // Find classify/summary relation that targets one of these text messages
     for (const rel of relations) {
       const rt = rel.relationType?.toUpperCase();
       if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
       const targets = (rel.targetRefs ?? []) as TargetRef[];
-      if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId === msgId)) {
+      if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && textIds.has(t.messageId))) {
+        // Exit any current topic focus before entering the target classify
+        setFocusEntries(prev => prev.length > 0 && prev[prev.length - 1]?.mode === 'topic' ? prev.slice(0, -1) : prev);
         enterClassifyTopic(rel.id);
-        autoClassifyRef.current = null;
+        setAutoClassifyMsgId(null);
         return;
       }
     }
-    autoClassifyRef.current = null;
-  }, [loading, relations]);
+    // Message not in any classify: exit topic focus to show it in top-level view
+    setFocusEntries(prev => prev.filter(e => e.mode !== 'topic'));
+    setAutoClassifyMsgId(null);
+  }, [loading, relations, autoClassifyMsgId]);
 
   // Phase 3: auto-open settlement from URL params (triggered by points-navigate)
   const pendingScrollMsgRef = useRef<string | null>(null);
@@ -671,7 +691,7 @@ export default function TopicDetailPage() {
     if (targetMsgId || settlementMsgId) {
       const msgId = targetMsgId || settlementMsgId!;
       pendingScrollMsgRef.current = msgId;
-      autoClassifyRef.current = msgId; // try auto-enter classify
+      setAutoClassifyMsgId(msgId); // try auto-enter classify
       // Clear all selections and select the target message
       setDraftUnits([{ messageId: msgId, selection: { kind: "whole" } }]);
       setActiveTextSelectId(null);

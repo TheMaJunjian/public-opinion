@@ -821,3 +821,157 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
     expect(res.status).toBe(201);
   });
 });
+
+describe('POST /api/topics/:topicId/relations — CORRECT single-target validation', () => {
+  beforeEach(() => {
+    (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
+    (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
+    (prisma.message.create as jest.Mock).mockResolvedValue({
+      ...mockRelationMsg,
+      id: 'rel-correct',
+      createdBy: mockUser,
+    });
+    (prisma.settlementRound.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.settlementRound.create as jest.Mock).mockResolvedValue({ id: 'round-1' });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([
+      {
+        id: 'rel-correct',
+        topicId: 'topic-1',
+        relationType: 'CORRECT',
+        relSourceId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        createdAt: new Date().toISOString(),
+        createdBy: mockUser,
+      },
+      {},
+    ]);
+  });
+
+  it('allows CORRECT with single target', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects CORRECT with multiple targets', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }, { kind: 'message', messageId: 'msg-1' }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.details.some((d: any) => d.message.includes('更正'))).toBe(true);
+  });
+
+  it('allows CORRECT targeting a relation message', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: 'msg-1',
+        targetRefs: [{ kind: 'relation', relationId: 'rel-1' }],
+      });
+    expect(res.status).toBe(201);
+  });
+});
+
+describe('POST /api/topics/:topicId/relations — TAG / RECOMMEND / ARCHIVE', () => {
+  beforeEach(() => {
+    (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
+    (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
+    (prisma.message.create as jest.Mock).mockResolvedValue({
+      ...mockRelationMsg,
+      id: 'tag-new',
+      createdBy: mockUser,
+    });
+    (prisma.settlementRound.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.settlementRound.create as jest.Mock).mockResolvedValue({ id: 'round-1' });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([
+      {
+        id: 'tag-new',
+        topicId: 'topic-1',
+        relationType: 'TAG',
+        relSourceId: null,
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        relationPayload: { label: '垃圾' },
+        createdAt: new Date().toISOString(),
+        createdBy: mockUser,
+      },
+      {},
+    ]);
+  });
+
+  it('creates TAG with label', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'TAG',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { label: '垃圾' },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects TAG without label', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'TAG',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: {},
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.details.some((d: any) => d.message.includes('标签'))).toBe(true);
+  });
+
+  it('creates RECOMMEND with subType', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'RECOMMEND',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { subType: 'SPAM' },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('creates ARCHIVE with subType', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'ARCHIVE',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { subType: 'OFFTOPIC' },
+      });
+    expect(res.status).toBe(201);
+  });
+});

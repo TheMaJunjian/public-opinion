@@ -980,7 +980,11 @@ export default function TopicDetailPage() {
 
   // Total consumption: text stake + relation stakes × count + all burn fees
   const stakeFeeAmountRef = useRef(1); // default burn fee per stake (from rule parameters)
-  const hasTextContentForTotal = newMessageContent.trim().length > 0;
+  // Types where the text input is part of the relation payload (title/label/content),
+  // not a separate text message — no separate text stake should be counted.
+  const isTextInPayload = relationType === 'classify' || relationType === 'summary' || relationType === 'merge'
+    || relationType === 'tag' || relationType === 'proposal' || relationType === 'code_change' || relationType === 'operations';
+  const hasTextContentForTotal = !isTextInPayload && newMessageContent.trim().length > 0;
   const totalConsumption = (() => {
     const burnPerOp = stakeFeeAmountRef.current;
     // Text message: stake + burn (if text is present)
@@ -2744,6 +2748,27 @@ export default function TopicDetailPage() {
     // Targets can be text messages and/or classify relation messages, and can be empty.
     if (relationType === "classify") {
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
+      // Warn if non-grouping relation labels (TAG/RECOMMEND/ARCHIVE etc.) are selected
+      // but their target text message is not among the messages being classified.
+      const orphanLabels: string[] = [];
+      for (const u of effectiveTargets) {
+        const rt = relationTypeByRelMsgId.get(u.messageId);
+        if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
+        const rel = relationById.get(u.messageId);
+        if (!rel) continue;
+        const relTargets = (rel.targetRefs ?? []) as TargetRef[];
+        const hasTargetInSelection = relTargets.some(t =>
+          (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && targetTextIds.includes(t.messageId)
+        );
+        if (!hasTargetInSelection) {
+          const spec = getPresentationSpec(rt);
+          orphanLabels.push(`「${spec.label}」`);
+        }
+      }
+      if (orphanLabels.length > 0) {
+        alert(`选中的${orphanLabels.join('、')}标签对应的消息不在分类目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        return;
+      }
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
         alert("分类目标与其他文本消息存在非引用关联，无法建立分类关系");
         return;
@@ -2853,6 +2878,22 @@ export default function TopicDetailPage() {
         return;
       }
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
+      // Warn if unrelated relation labels are selected
+      const orphanSummaryLabels: string[] = [];
+      for (const u of effectiveTargets) {
+        const rt = relationTypeByRelMsgId.get(u.messageId);
+        if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
+        const rel = relationById.get(u.messageId);
+        if (!rel) continue;
+        const relTargets = (rel.targetRefs ?? []) as TargetRef[];
+        if (!relTargets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && targetTextIds.includes(t.messageId))) {
+          orphanSummaryLabels.push(`「${getPresentationSpec(rt).label}」`);
+        }
+      }
+      if (orphanSummaryLabels.length > 0) {
+        alert(`选中的${orphanSummaryLabels.join('、')}标签对应的消息不在总结目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        return;
+      }
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
         alert("总结目标与其他文本消息存在非引用关联，无法建立总结关系");
         return;
@@ -2907,6 +2948,22 @@ export default function TopicDetailPage() {
       }
 
       const mergeTargetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
+      // Warn if unrelated relation labels are selected
+      const orphanMergeLabels: string[] = [];
+      for (const u of effectiveTargets) {
+        const rt = relationTypeByRelMsgId.get(u.messageId);
+        if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
+        const rel = relationById.get(u.messageId);
+        if (!rel) continue;
+        const relTargets = (rel.targetRefs ?? []) as TargetRef[];
+        if (!relTargets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && mergeTargetTextIds.includes(t.messageId))) {
+          orphanMergeLabels.push(`「${getPresentationSpec(rt).label}」`);
+        }
+      }
+      if (orphanMergeLabels.length > 0) {
+        alert(`选中的${orphanMergeLabels.join('、')}标签对应的消息不在归并目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        return;
+      }
       if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
         alert("归并目标与其他文本消息存在非引用关联，无法建立归并关系");
         return;
@@ -4876,7 +4933,7 @@ export default function TopicDetailPage() {
           {/* Phase 5: Stance History Panel */}
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>📋 站队与立场</div>
+              <div style={{ fontWeight: 600 }}>📋 站队 · 立场 · 表态</div>
               <button
                 onClick={() => setShowStanceHistory(!showStanceHistory)}
                 style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showStanceHistory ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}

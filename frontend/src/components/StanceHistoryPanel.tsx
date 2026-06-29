@@ -61,7 +61,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     return (
       <div className="text-sm text-gray-500 p-4 space-y-2">
         <div>暂无记录</div>
-        <div className="text-xs text-gray-400">发送消息会消耗贡献点，记录在「立场」中。对他人消息的赞同/反对，记录在「站队」中。标注记录在「表态」中。赞同自己的消息会在站队中标注。</div>
+        <div className="text-xs text-gray-400">赞同/反对记录在「站队」中，标注记录在「表态」中，其他消息消耗的贡献点记录在「立场」中。</div>
       </div>
     );
   }

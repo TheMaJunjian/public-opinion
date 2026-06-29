@@ -94,6 +94,13 @@ const createRelationSchema = z.object({
       path: ['payload', 'content'],
     });
   }
+  if (data.relationType === 'CORRECT' && data.targetRefs.length > 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '更正关系只能有一个目标',
+      path: ['targetRefs'],
+    });
+  }
 });
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);

@@ -945,18 +945,59 @@ export default function TopicDetailPage() {
     }
     // Governance/ops: add reference costs
     const isGovOps = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
-    const targetCount = isGovOps ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
+    const govTargetCount = isGovOps ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
     const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
-    if (isGovOps && targetCount > 0) min += targetCount * refMin;
+    if (isGovOps && govTargetCount > 0) min += govTargetCount * refMin;
     return min;
   })();
 
-  // Update relStakeAmount when relation type or subType changes
+  // Effective target count for multi-target relation types
+  const multiTargetCount = (() => {
+    const multiTargetTypes = new Set(['annotation', 'reference', 'reply', 'agree', 'disagree', 'tag']);
+    if (!relationType || !multiTargetTypes.has(relationType.toLowerCase())) return 0;
+    return draftUnits.length > 0 ? draftUnits.length : targetUnits.length;
+  })();
+
+  // Total consumption: text stake + relation stakes × count + all burn fees
+  const stakeFeeAmountRef = useRef(1); // default burn fee per stake (from rule parameters)
+  const hasTextContentForTotal = newMessageContent.trim().length > 0;
+  const totalConsumption = (() => {
+    const burnPerOp = stakeFeeAmountRef.current;
+    // Text message: stake + burn (if text is present)
+    const textStake = hasTextContentForTotal && typeof stakeAmount === 'number' ? stakeAmount : 0;
+    const textBurn = textStake > 0 ? burnPerOp : 0;
+    // Relation messages
+    if (!relationType) {
+      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: textStake, textStake, relCount: 0, hasText: true, hasRel: false };
+      return null;
+    }
+    if (typeof relStakeAmount !== 'number') {
+      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: 0, textStake, relCount: 0, hasText: true, hasRel: false };
+      return null;
+    }
+    const relCount = multiTargetCount > 0 ? multiTargetCount : 1;
+    const relStakeTotal = relStakeAmount * relCount;
+    const relBurnTotal = burnPerOp * relCount;
+    const totalStake = textStake + relStakeTotal;
+    const totalBurn = textBurn + relBurnTotal;
+    return {
+      stakeTotal: totalStake,
+      burnTotal: totalBurn,
+      total: totalStake + totalBurn,
+      perStake: relStakeAmount,
+      textStake,
+      relCount,
+      hasText: textStake > 0,
+      hasRel: true,
+    };
+  })();
+
+  // Update relStakeAmount when relation type, subType, or target count changes
   useEffect(() => {
     if (!stakeDefaultLoaded.current) return;
     setMinSelfStake(effectiveMinStake);
     setRelStakeAmount(effectiveMinStake);
-  }, [relationType, subType]);
+  }, [relationType, subType, draftUnits.length, targetUnits.length]);
   useEffect(() => {
     if (!settlementOpenMsgId) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -984,6 +1025,8 @@ export default function TopicDetailPage() {
           if (map) relationStakeMap.current = map;
           const subMap = (rule?.parameters as Record<string, unknown> | null)?.subTypeMinStake as Record<string, number> | null;
           if (subMap) subTypeStakeMap.current = subMap;
+          const feeAmount = (rule?.parameters as Record<string, unknown> | null)?.stakeFeeAmount as number;
+          if (typeof feeAmount === 'number') stakeFeeAmountRef.current = feeAmount;
           setMinSelfStake(defaultStake);
           setStakeAmount(Math.min(defaultStake, b.points.available));
           stakeDefaultLoaded.current = true;
@@ -2221,12 +2264,13 @@ export default function TopicDetailPage() {
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       if (uniqueSources.length > 0) {
         for (const srcId of uniqueSources) {
-          try {
-            const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
-            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          for (const t of targets) {
+            try {
+              const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs: [unitSelectionToTargetRef(t, msgMap)] });
+              appendCreatedRelation(backendRel);
+              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+            } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          }
         }
       } else {
         // Pure-stance: no source — persist to backend (relation messages are first-class messages)
@@ -2317,7 +2361,12 @@ export default function TopicDetailPage() {
         }
       }
     } else {
-      // Generic types (CORRECT etc.) with source message
+      // Generic types (ARRANGE/CLASSIFY/MERGE/SUMMARY/PROPOSAL/CODE_CHANGE/OPERATIONS etc.) with source message.
+      // CORRECT: single target only.
+      if (relationType === "correct" && targets.length > 1) {
+        alert("更正关系只能有一个目标");
+        return;
+      }
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
         const srcs = sources.filter(s => s.messageId === srcId);
@@ -2362,8 +2411,13 @@ export default function TopicDetailPage() {
           ? `（「${subTypeLabel(subType)}」理由要求最低 ${effectiveMinStake} 点）` : '';
         errors.push(`关系消息最低押注 ${effectiveMinStake} 点（当前 ${relStakeAmount}）${subTypeNote}`);
       }
-      if (typeof relStakeAmount === 'number' && relStakeAmount > availablePoints) {
-        errors.push(`贡献点余额不足（可用 ${availablePoints}，需要 ${relStakeAmount}）`);
+      // Check total consumption (text stake + relation stakes × count + all burn fees) against available balance
+      if (totalConsumption && totalConsumption.total > availablePoints) {
+        const parts: string[] = [];
+        if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
+        if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
+        if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
+        errors.push(`贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`);
       }
     }
     if (errors.length > 0) {
@@ -2540,8 +2594,12 @@ export default function TopicDetailPage() {
         return;
       }
 
-      // CORRECT (no secondary) targeting a relation message: create null-source relation
+      // CORRECT (no secondary) targeting a relation message: create null-source relation, single target only.
       // Generic path also covers REFERENCE/ANNOTATION with secondary labels
+      if (relationType === "correct" && draftUnits.length > 1) {
+        alert("更正关系只能有一个目标");
+        return;
+      }
       const targetRefs = draftUnits.map(u => unitSelectionToTargetRef(u, msgMap));
       const typeName = relationTypeName(relationType);
       const newEdgesList: DemoEdge[] = [];
@@ -3192,7 +3250,7 @@ export default function TopicDetailPage() {
     if (relationType === null) return newMessageContent.trim().length > 0;
     // Check that relation stake meets the effective minimum (type + subType combined)
     if (relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return false;
-    if (relationType && typeof relStakeAmount === 'number' && relStakeAmount > availablePoints) return false;
+    if (totalConsumption && totalConsumption.total > availablePoints) return false;
     // CORRECT targeting a relation message: special mode (no text, no source, use secondary selector)
     if (draftHasRelationTarget && relationType === "correct") {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
@@ -3225,8 +3283,12 @@ export default function TopicDetailPage() {
       const note = st ? `（「${st}」理由要求最低 ${effectiveMinStake} 点）` : `（最低 ${effectiveMinStake} 点）`;
       return `贡献点不足${note}，当前 ${relStakeAmount} 点`;
     }
-    if (typeof relStakeAmount === 'number' && relStakeAmount > availablePoints) {
-      return `贡献点余额不足（可用 ${availablePoints}，需要 ${relStakeAmount}）`;
+    if (totalConsumption && totalConsumption.total > availablePoints) {
+      const parts: string[] = [];
+      if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
+      if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
+      if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
+      return `贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`;
     }
     if (draftHasRelationTarget && relationType === "correct") {
       if (newMessageContent.trim().length > 0) return `请清空文本输入框（更正关系目标为关系消息时不应有文本）`;
@@ -4738,6 +4800,19 @@ export default function TopicDetailPage() {
                   </>
                 )}
                 <span style={{ fontSize: 11, color: "#666" }}>点 / {availablePoints}</span>
+                {/* Total consumption breakdown */}
+                {totalConsumption && (
+                  <span style={{ fontSize: 11, color: totalConsumption.total > availablePoints ? "#f87171" : "#f59e0b" }}>
+                    总计 {totalConsumption.total} 点
+                    <span style={{ color: "#888" }}>
+                      （{[
+                        totalConsumption.hasText ? `文本 ${totalConsumption.textStake}` : null,
+                        totalConsumption.hasRel ? `关系 ${totalConsumption.perStake}×${totalConsumption.relCount}` : null,
+                        totalConsumption.burnTotal > 0 ? `燃烧 ${totalConsumption.burnTotal}` : null,
+                      ].filter(Boolean).join(' + ')}）
+                    </span>
+                  </span>
+                )}
                 <button
                   onClick={handleQuickSendAndRelateFromDraftTargets}
                   disabled={!singleButtonEnabled}

@@ -43,6 +43,13 @@ async function main() {
           ARRANGE:    10,  CORRECT:    10,
           CLASSIFY:   20,  MERGE:      30,  SUMMARY:     50,
         },
+        subTypeMinStake: {          // 不同标注理由（subType）的最低自押点数
+          SPAM:        5,  // 垃圾：需要较多押注以表明诚意
+          OFFTOPIC:    5,  // 跑题
+          LOWVALUE:    5,  // 低质
+          IMPORTANT:  10,  // 重要：更高押注门槛
+          CUSTOM:      5,  // 自定义
+        },
       },
     },
   });

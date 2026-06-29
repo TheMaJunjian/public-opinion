@@ -1659,7 +1659,7 @@ export interface GraphViewProps {
    * Double-click on an inline badge (RECOMMEND / ARCHIVE) — shows operation details
    * (who operated, when, etc.).  Falls back to onMessageDoubleClick if not provided.
    */
-  onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) => void;
   /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
   hideMessageIds?: Set<string>;
   /** Phase 2: stake counts per message (pro/con) for display on cards */
@@ -1805,7 +1805,7 @@ export default function GraphView(props: GraphViewProps) {
   // isBlankCorrected: same semantics as for arrangeFrames above.
   const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
-  const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
+  const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relMsgIds?:string[];relKind:string;relLabel:string;relColor:string;rect:Rect;subDetails?:Array<{subType:string;customLabel?:string;count:number}>}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
   const [relDecByRelMsgState, setRelDecByRelMsgState] = useState<Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>>(new Map());
   // TAG relations targeting relation messages — for rendering next to edge labels / arrange frames
@@ -2418,8 +2418,10 @@ export default function GraphView(props: GraphViewProps) {
 
     // Compute INLINE BADGES — RECOMMEND / ARCHIVE: small badge anchored to target message card.
     // Positioned after frameByRelMsgId / groupFrameByRelMsgId so frame targets resolve correctly.
-    const BADGE_W = 46, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
-    const newInlineBadgesByMsg = new Map<string, Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>();
+    const BADGE_W = 56, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
+    // Aggregate RECOMMEND/ARCHIVE badges by (target message, relationType) —
+    // all subTypes of the same type share one badge with a unified send count.
+    const inlineBadgeGroups = new Map<string, { relMsgIds: string[]; relType: string; subDetails: Array<{subType:string;customLabel?:string;count:number}> }>();
     for (const e of edges) {
       if (getRelKind(e.relationType) !== 'inline-badge') continue;
       if (e.to.selection.kind !== 'whole') continue;
@@ -2437,11 +2439,65 @@ export default function GraphView(props: GraphViewProps) {
       const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
       const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
       if (!box) continue;
-      const spec = getPresentationSpec(e.relationType);
+      const rt = e.relationType === 'recommend' || e.relationType === 'RECOMMEND' ? 'RECOMMEND' : 'ARCHIVE';
+      const groupKey = `${mid}|${rt}`;
+      let group = inlineBadgeGroups.get(groupKey);
+      if (!group) {
+        group = { relMsgIds: [], relType: rt, subDetails: [] };
+        inlineBadgeGroups.set(groupKey, group);
+      }
+      const relMsg = msgMap.get(e.relationMessageId);
+      const rp = (relMsg as any)?.relationPayload as Record<string,unknown> | undefined;
+      const sc = (rp?.sendCount as number) ?? 1;
+      const st = rp?.subType as string | undefined;
+      // Aggregate: add relMsgId and subType detail
+      if (!group.relMsgIds.includes(e.relationMessageId)) {
+        group.relMsgIds.push(e.relationMessageId);
+      }
+      if (st) {
+        const existing = group.subDetails.find(d => d.subType === st);
+        if (existing) {
+          existing.count += sc;
+        } else {
+          group.subDetails.push({ subType: st, customLabel: rp?.customLabel as string | undefined, count: sc });
+        }
+      }
+    }
+    // Build badges from aggregated groups
+    const newInlineBadgesByMsg = new Map<string, Array<{relMsgId:string;relMsgIds?:string[];relKind:string;relLabel:string;relColor:string;rect:Rect;subDetails?:Array<{subType:string;customLabel?:string;count:number}>}>>();
+    for (const [groupKey, group] of inlineBadgeGroups) {
+      const [mid, rt] = groupKey.split('|');
+      const spec = getPresentationSpec(rt);
+      // Sum total sendCount from all subDetails + any non-subType sends
+      let totalCount = 0;
+      let subOnlyCount = 0;
+      for (const d of group.subDetails) { totalCount += d.count; subOnlyCount += d.count; }
+      // Non-subType sends: each relation without subType contributes its sendCount
+      for (const rmId of group.relMsgIds) {
+        const rm = msgMap.get(rmId);
+        const rp = (rm as any)?.relationPayload as Record<string,unknown> | undefined;
+        if (!rp?.subType) {
+          totalCount += (rp?.sendCount as number) ?? 1;
+        }
+      }
+      if (totalCount <= 0) continue;
+      let badgeLabel = spec.label;
+      if (totalCount >= 2) badgeLabel = `${badgeLabel} ×${totalCount}`;
+      const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
+      const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
+      if (!box) continue;
       const arr = newInlineBadgesByMsg.get(mid) ?? [];
       const badgeX = box.x + box.width - BADGE_W + BADGE_RIGHT_GAP;
       const badgeY = box.y + BADGE_TOP_OFFSET - arr.length * (BADGE_H + 2);
-      arr.push({ relMsgId: e.relationMessageId, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H } });
+      arr.push({
+        relMsgId: group.relMsgIds[0],
+        relMsgIds: group.relMsgIds,
+        relKind: spec.kind,
+        relLabel: badgeLabel,
+        relColor: spec.color,
+        rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H },
+        subDetails: group.subDetails.length > 0 ? group.subDetails : undefined,
+      });
       newInlineBadgesByMsg.set(mid, arr);
     }
     setInlineBadgesByMsg(newInlineBadgesByMsg);
@@ -3939,11 +3995,17 @@ export default function GraphView(props: GraphViewProps) {
         badges.map(badge => {
           const isWholeSel = isRelWholeSel(badge.relMsgId);
           const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'rgba(100,100,120,0.9)';
+          const tooltip = badge.subDetails && badge.subDetails.length > 0
+            ? `${badge.relLabel}\n${badge.subDetails.map(d => {
+                const stLabels: Record<string,string> = { SPAM:'垃圾', OFFTOPIC:'跑题', LOWVALUE:'低质', IMPORTANT:'重要', CUSTOM:'自定义' };
+                return `  ${d.customLabel || stLabels[d.subType] || d.subType}: ${d.count}人`;
+              }).join('\n')}\n双击查看详情`
+            : `${badge.relLabel}；双击展开操作详情`;
           return (
             <div key={`badge-${badge.relMsgId}`} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
-              onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId);}}
-              title={`${badge.relLabel}：${badge.relMsgId}；单击选中，双击展开操作详情`}
+              onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId, { relMsgIds: badge.relMsgIds, subDetails: badge.subDetails });}}
+              title={tooltip}
               style={{position:"absolute",left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,
                 zIndex:5,background:bg,color:"#fff",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
                 fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.5)",

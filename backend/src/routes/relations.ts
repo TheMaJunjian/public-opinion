@@ -62,6 +62,8 @@ const createRelationSchema = z.object({
     title: z.string().trim().min(1).max(200).optional(),
     targetLayout: z.enum(['single-column', 'multi-column', 'single-row']).optional(),
     content: z.string().trim().min(1).max(50000).optional(),
+    subType: z.enum(['SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM']).optional(),
+    customLabel: z.string().trim().min(1).max(20).optional(),
   }).strict().optional(),
 }).superRefine((data, ctx) => {
   if (data.relationType === 'TAG' && !(data.payload && data.payload.label)) {

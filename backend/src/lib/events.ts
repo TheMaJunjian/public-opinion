@@ -581,8 +581,19 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   });
   const ruleParams = rule?.parameters as Record<string, unknown> | null;
   const relationTypeMinStake = (ruleParams?.relationTypeMinStake as Record<string, number> | null) ?? {};
-  const typeDefault = relationTypeMinStake[payload.relationType.toUpperCase()]
+  const subTypeMinStake = (ruleParams?.subTypeMinStake as Record<string, number> | null) ?? {};
+  let typeDefault = relationTypeMinStake[payload.relationType.toUpperCase()]
     ?? (ruleParams?.selfStakeOnCreate as number | undefined);
+
+  // If the relation payload has a subType, enforce the higher of type-default and subType-default
+  const payloadObj = payload.relationPayload as Record<string, unknown> | undefined;
+  if (payloadObj?.subType) {
+    const subTypeMin = subTypeMinStake[payloadObj.subType as string];
+    if (subTypeMin && (!typeDefault || subTypeMin > typeDefault)) {
+      typeDefault = subTypeMin;
+    }
+  }
+
   const requiredStake = payload.stakeAmount ?? typeDefault;
   if (requiredStake && requiredStake > 0) {
     const userBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
@@ -618,34 +629,21 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
           effectiveSourceMessageId = null; // Annotations have no source
           effectiveTargetRefs = [{ kind: 'message', messageId: resolved.targetTextId }];
           effectiveSettlementType = resolved.settlementType;
-          if (resolved.dedup) {
-            isDedup = true;
-            // Find the existing relation for audit log
-            const topicRelations = await prisma.message.findMany({
-              where: {
-                topicId,
-                kind: 'RELATION',
-                relationType: resolved.relationType,
-                supersededBy: null,
-              },
-              select: { id: true, targetRefs: true },
-            });
-            const existing = topicRelations.find(r => {
-              const trefs = r.targetRefs as Array<{ messageId?: string }> | undefined;
-              return trefs?.[0]?.messageId === resolved.targetTextId;
-            });
-            dedupExistingId = existing?.id ?? null;
-          }
+          // Don't dedup AGREE/DISAGREE on annotations — create a visible relation message card
         }
       }
     }
   }
 
   // ── Dedup: RECOMMEND/ARCHIVE same type on same text target ──
-  if (!isDedup && (effectiveRelationType.toUpperCase() === 'RECOMMEND' || effectiveRelationType.toUpperCase() === 'ARCHIVE')) {
+  // Only dedup if the subType matches — different subTypes produce distinct annotations.
+  // Skip dedup entirely for transformed relations (AGREE/DISAGREE → RECOMMEND/ARCHIVE):
+  // they should always create a visible independent annotation message.
+  if (!isDedup && !transformedFrom && (effectiveRelationType.toUpperCase() === 'RECOMMEND' || effectiveRelationType.toUpperCase() === 'ARCHIVE')) {
     const targets = effectiveTargetRefs as Array<{ messageId?: string }>;
     const textTargetId = targets[0]?.messageId;
     if (textTargetId) {
+      const newSubType = (payload.relationPayload as Record<string, unknown> | null)?.subType as string | undefined;
       const topicRelations = await prisma.message.findMany({
         where: {
           topicId,
@@ -653,11 +651,14 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
           relationType: effectiveRelationType.toUpperCase(),
           supersededBy: null,
         },
-        select: { id: true, targetRefs: true },
+        select: { id: true, targetRefs: true, relationPayload: true },
       });
       const existingSame = topicRelations.find(r => {
         const trefs = r.targetRefs as Array<{ messageId?: string }> | undefined;
-        return trefs?.[0]?.messageId === textTargetId;
+        if (trefs?.[0]?.messageId !== textTargetId) return false;
+        // Compare subType: different subType → create new relation (not dedup)
+        const existSubType = (r.relationPayload as Record<string, unknown> | null)?.subType as string | undefined;
+        return newSubType === existSubType; // same subType (both undefined or equal) → dedup
       });
       if (existingSame) {
         isDedup = true;
@@ -675,6 +676,18 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     const side = effectiveRelationType.toUpperCase() === 'RECOMMEND' ? 'PRO' as const : 'CON' as const;
     const round = await ensureVotingRound(textTargetId, actorId, topicId, effectiveSettlementType);
     await autoSelfStake(actorId, topicId, textTargetId, payload.stakeAmount, side, round?.id, effectiveSettlementType);
+
+    // Increment sendCount on the existing relation's payload
+    const existingRelRaw = await prisma.message.findUnique({
+      where: { id: dedupExistingId! },
+      select: { relationPayload: true },
+    });
+    const existingRp = (existingRelRaw?.relationPayload as Record<string, unknown>) ?? {};
+    const curCount = (existingRp.sendCount as number) ?? 1;
+    await prisma.message.update({
+      where: { id: dedupExistingId! },
+      data: { relationPayload: { ...existingRp, sendCount: curCount + 1 } as Prisma.InputJsonValue },
+    });
 
     // Fetch the existing relation with full data, so frontend gets a complete object
     const existingRel = await prisma.message.findUnique({
@@ -718,6 +731,14 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   }
 
   // ── Normal path: create new relation message ──
+  // Attach sendCount and transformedFrom to relationPayload for annotation send-count display
+  const rpForCreate: Record<string, unknown> | undefined = (effectiveRelationType.toUpperCase() === 'RECOMMEND' || effectiveRelationType.toUpperCase() === 'ARCHIVE')
+    ? {
+        ...(payload.relationPayload as Record<string, unknown> ?? {}),
+        sendCount: 1,
+        ...(transformedFrom ? { transformedFrom } : {}),
+      }
+    : (payload.relationPayload as Record<string, unknown> | undefined);
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
@@ -727,7 +748,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         relationType: effectiveRelationType,
         relSourceId: effectiveSourceMessageId,
         targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
-        relationPayload: (payload.relationPayload ?? undefined) as Prisma.InputJsonValue | undefined,
+        relationPayload: rpForCreate as Prisma.InputJsonValue | undefined,
         content: null,
       },
       include: { createdBy: { select: { id: true, username: true } } },
@@ -746,7 +767,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
           sourceMessageId: payload.sourceMessageId,
           supersedesRelationId: payload.supersedesRelationId,
           targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
-          relationPayload: payload.relationPayload as Prisma.InputJsonValue | undefined,
+          relationPayload: rpForCreate as Prisma.InputJsonValue | undefined,
           settlementType: effectiveSettlementType,
         },
       },

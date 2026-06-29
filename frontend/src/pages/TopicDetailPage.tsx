@@ -59,6 +59,11 @@ function isValidTagLabel(label: string | undefined): label is string {
   return !!label && label !== 'tag';
 }
 
+// SubType constants for RECOMMEND/ARCHIVE annotations
+const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义' };
+const SUB_TYPE_OPTIONS = ['', 'SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM'];
+function subTypeLabel(st: string) { return SUB_TYPE_LABELS[st] ?? st; }
+
 function selKey(u: UnitSelection): string {
   const s = u.selection;
   if (s.kind === "whole") return `${u.messageId}::whole`;
@@ -152,6 +157,15 @@ function buildRelationDemoMessage(relation: Relation): DemoMessage {
     content = `${typeName}\n${proposalContent}\n目标：${targetSummary}`;
   } else if (relType === 'tag' && label) {
     content = `标签「${label}」\n目标：${targetSummary}`;
+  } else if (relType === 'recommend' || relType === 'archive') {
+    const st = (relation.payload as Record<string,unknown> | null)?.subType as string | undefined;
+    const stLabel = st ? (st === 'CUSTOM' ? ((relation.payload as any)?.customLabel || '自定义') : subTypeLabel(st)) : '';
+    const displayLabel = stLabel ? `${typeName}·${stLabel}` : typeName;
+    const sc = (relation.payload as Record<string,unknown> | null)?.sendCount as number | undefined;
+    const countSuffix = (sc && sc >= 2) ? ` ×${sc}` : '';
+    const tf = (relation.payload as Record<string,unknown> | null)?.transformedFrom as string | undefined;
+    const fromSuffix = tf === 'AGREE' ? '（来自赞同）' : tf === 'DISAGREE' ? '（来自反对）' : '';
+    content = `${displayLabel}${countSuffix}${fromSuffix}\n目标：${targetSummary}`;
   } else if (relation.sourceMessageId) {
     content = `${typeName}  ${relation.sourceMessageId} → ${targetSummary}`;
   } else {
@@ -677,6 +691,8 @@ export default function TopicDetailPage() {
 
   const [relationType, setRelationType] = useState<RelationType | null>(null);
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
+  const [subType, setSubType] = useState<string>(""); // SPAM|OFFTOPIC|LOWVALUE|IMPORTANT|CUSTOM or empty
+  const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
@@ -723,6 +739,7 @@ export default function TopicDetailPage() {
   const [tagPopup, setTagPopup] = useState<{
     messageId: string; tagLabel: string; relMsgIds: string[];
     x: number; y: number;
+    subDetails?: Array<{subType:string;customLabel?:string;count:number}>;
   } | null>(null);
   const [comparisonPopup, setComparisonPopup] = useState<{
     relMsgId: string;
@@ -912,23 +929,34 @@ export default function TopicDetailPage() {
 
   const stakeDefaultLoaded = useRef(false);
   const relationStakeMap = useRef<Record<string, number>>({});
+  const subTypeStakeMap = useRef<Record<string, number>>({});
 
-  // Update relStakeAmount when relation type changes (text stays at 10).
-  // For governance/ops types with targets selected, add reference costs.
-  useEffect(() => {
-    if (!stakeDefaultLoaded.current) return;
+  // Compute the effective minimum stake considering both relationType and subType
+  const SUB_TYPE_MIN_STAKE_FALLBACK: Record<string, number> = { SPAM: 5, OFFTOPIC: 5, LOWVALUE: 5, IMPORTANT: 10, CUSTOM: 5 };
+  const effectiveMinStake = (() => {
     const typeMinBase = relationType
       ? (relationStakeMap.current[relationType.toUpperCase()] ?? 10)
       : 10;
+    let min = typeMinBase;
+    // When subType is set, apply subType minimum (whichever is higher)
+    if (subType) {
+      const subMin = subTypeStakeMap.current[subType] ?? SUB_TYPE_MIN_STAKE_FALLBACK[subType];
+      if (subMin) min = Math.max(min, subMin);
+    }
+    // Governance/ops: add reference costs
     const isGovOps = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
     const targetCount = isGovOps ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
     const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
-    const typeMin = isGovOps && targetCount > 0
-      ? typeMinBase + targetCount * refMin
-      : typeMinBase;
-    setMinSelfStake(typeMin);
-    setRelStakeAmount(typeMin);
-  }, [relationType]);
+    if (isGovOps && targetCount > 0) min += targetCount * refMin;
+    return min;
+  })();
+
+  // Update relStakeAmount when relation type or subType changes
+  useEffect(() => {
+    if (!stakeDefaultLoaded.current) return;
+    setMinSelfStake(effectiveMinStake);
+    setRelStakeAmount(effectiveMinStake);
+  }, [relationType, subType]);
   useEffect(() => {
     if (!settlementOpenMsgId) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -954,6 +982,8 @@ export default function TopicDetailPage() {
           const defaultStake = (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number ?? 10;
           const map = (rule?.parameters as Record<string, unknown> | null)?.relationTypeMinStake as Record<string, number> | null;
           if (map) relationStakeMap.current = map;
+          const subMap = (rule?.parameters as Record<string, unknown> | null)?.subTypeMinStake as Record<string, number> | null;
+          if (subMap) subTypeStakeMap.current = subMap;
           setMinSelfStake(defaultStake);
           setStakeAmount(Math.min(defaultStake, b.points.available));
           stakeDefaultLoaded.current = true;
@@ -990,8 +1020,13 @@ export default function TopicDetailPage() {
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
     traceLog('appendCreatedRelation', `enter relType=${backendRel.relationType} id=${backendRel.id.slice(-6)} topicId=${topicId?.slice(-6) ?? 'null'}`);
     // Skip adding duplicate relations (deduplicated on backend)
+    // When deduplicated, update the existing relation/message in state instead
     const isDedup = !!(backendRel as Record<string, unknown>).deduplicated;
-    if (!isDedup) {
+    if (isDedup) {
+      // Update existing relation and message with fresh data (e.g. incremented sendCount)
+      setRelations(prev => prev.map(r => r.id === backendRel.id ? backendRel : r));
+      setMessages(prev => prev.map(m => m.id === backendRel.id ? buildRelationDemoMessage(backendRel) : m));
+    } else {
       setRelations(prev => prev.some(r => r.id === backendRel.id) ? prev : [...prev, backendRel]);
       setMessages(prev => prev.some(m => m.id === backendRel.id) ? prev : [...prev, buildRelationDemoMessage(backendRel)]);
     }
@@ -2097,15 +2132,17 @@ export default function TopicDetailPage() {
    * new relation message in state, and return a DemoEdge for the caller to append.
    * Returns null if the API call fails (error is shown via alert).
    */
-  async function sendTagRelation(targetMid: string, tagLabel: string): Promise<DemoEdge | null> {
+  async function sendTagRelation(targetMid: string, tagLabel: string, subType?: string, customLabel?: string): Promise<DemoEdge | null> {
     if (!topicId) return null;
     const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
     try {
+      const payload: Record<string, unknown> = { relationType: 'TAG', label: tagLabel };
+      if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = newMessageContent.trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
       const backendRel = await createRel(topicId, {
         relationType: 'TAG',
         sourceMessageId: null,
         targetRefs: [backendTargetRef],
-        payload: buildRelationPayload({ relationType: 'TAG', label: tagLabel }),
+        payload: buildRelationPayload(payload as RelationPayload),
       });
       const relId = backendRel.id;
       appendCreatedRelation(backendRel);
@@ -2207,7 +2244,9 @@ export default function TopicDetailPage() {
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       for (const targetMid of uniqueTargetMids) {
         try {
-          const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
+          const payload: Record<string, unknown> = {};
+          if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = newMessageContent.trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
+          const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)], payload: Object.keys(payload).length > 0 ? payload : undefined });
           const relId = backendRel.id;
           appendCreatedRelation(backendRel);
           addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -2221,7 +2260,7 @@ export default function TopicDetailPage() {
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       const tagLabel = label;
       for (const targetMid of uniqueTargetMids) {
-        const edge = await sendTagRelation(targetMid, tagLabel);
+        const edge = await sendTagRelation(targetMid, tagLabel, subType, subTypeCustomLabel);
         if (edge) newEdgesList.push(edge);
       }
     } else if (relationType === "reference") {
@@ -2318,14 +2357,10 @@ export default function TopicDetailPage() {
       errors.push(`文本消息最低押注 10 点（当前 ${stakeAmount}）`);
     }
     if (relationType) {
-      const isGovOps = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
-      const typeMinBase = relationStakeMap.current[relationType.toUpperCase()] ?? 10;
-      const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
-      const typeMin = isGovOps && targetCount > 0
-        ? typeMinBase + targetCount * refMin
-        : typeMinBase;
-      if (typeof relStakeAmount === 'number' && relStakeAmount < typeMin) {
-        errors.push(`关系消息最低押注 ${typeMin} 点（当前 ${relStakeAmount}）`);
+      if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
+        const subTypeNote = (subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0))
+          ? `（「${subTypeLabel(subType)}」理由要求最低 ${effectiveMinStake} 点）` : '';
+        errors.push(`关系消息最低押注 ${effectiveMinStake} 点（当前 ${relStakeAmount}）${subTypeNote}`);
       }
       if (typeof relStakeAmount === 'number' && relStakeAmount > availablePoints) {
         errors.push(`贡献点余额不足（可用 ${availablePoints}，需要 ${relStakeAmount}）`);
@@ -2352,7 +2387,7 @@ export default function TopicDetailPage() {
       const label = relationLabel.trim() || labelDefault;
       await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setNewMessageContent("");
+      setNewMessageContent(""); setSubType("");
       setRelationType(null); setSecondaryRelationType("none");
       return;
     }
@@ -2373,7 +2408,15 @@ export default function TopicDetailPage() {
         for (const tgtMid of uniqueTargetMids) {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
           try {
-            const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+            const relPayload: any = {};
+            if (subType) {
+              relPayload.subType = subType;
+              if (subType === 'CUSTOM') {
+                const customText = newMessageContent.trim();
+                if (customText) relPayload.customLabel = customText.slice(0, 20);
+              }
+            }
+            const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef], payload: relPayload });
             traceLog('TAG', `创建标注 type=${secType} relId=${backendRel.id.slice(-6)} target=${tgtMid.slice(-6)} isDup=${!!(backendRel as Record<string, unknown>).deduplicated}`);
             const relId = backendRel.id;
             const isDup = !!(backendRel as Record<string, unknown>).deduplicated;
@@ -2403,7 +2446,7 @@ export default function TopicDetailPage() {
         setEdges(prev => [...prev, ...newTagEdges]);
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setRelationType(null); setSecondaryRelationType("none");
+      setNewMessageContent(""); setSubType(""); setRelationType(null); setSecondaryRelationType("none");
       return;
     }
 
@@ -2529,21 +2572,44 @@ export default function TopicDetailPage() {
       } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setRelationType(null); setSecondaryRelationType("none");
+      setNewMessageContent(""); setSubType(""); setRelationType(null); setSecondaryRelationType("none");
       return;
     }
 
     if ((isAgreeDisagree || isInlineBadge) && text.length === 0) {
-      // Agree/disagree: one relation per target. Edge created inside appendCreatedRelation.
+      // Agree/disagree: one relation per target. Edge created inside appendCreatedRelation
+      // for AGREE/DISAGREE; for transformed RECOMMEND/ARCHIVE, create edge here.
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
+      const newEdgesList2: DemoEdge[] = [];
       for (const tgtMid of uniqueTargetMids) {
         const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
         try {
           const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
           appendCreatedRelation(backendRel);
+          // If backend transformed to RECOMMEND/ARCHIVE, create inline-badge edge
+          const effectiveRelType = backendRel.relationType?.toUpperCase();
+          if (effectiveRelType === 'RECOMMEND' || effectiveRelType === 'ARCHIVE') {
+            const textTargets = (backendRel.targetRefs as Array<{ messageId?: string }>)
+              .filter(ref => ref.messageId).map(ref => ref.messageId!);
+            for (const textMid of textTargets) {
+              const already = edgesRef.current.some(ee => ee.relationMessageId === backendRel.id && ee.to.messageId === textMid)
+                || newEdgesList2.some(ee => ee.relationMessageId === backendRel.id && ee.to.messageId === textMid);
+              if (!already) {
+                newEdgesList2.push({
+                  id: nextId("edge"),
+                  relationMessageId: backendRel.id,
+                  relationType: effectiveRelType.toLowerCase() as RelationType,
+                  from: { messageId: `anon:${backendRel.id}`, selection: { kind: "whole" } },
+                  to: { messageId: textMid, selection: { kind: "whole" } },
+                  relationLabel: relationTypeName(effectiveRelType.toLowerCase()),
+                } as DemoEdge);
+              }
+            }
+          }
           addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       }
+      if (newEdgesList2.length > 0) setEdges(prev => [...prev, ...newEdgesList2]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setRelationType(null); setSecondaryRelationType("none");
       return;
@@ -3124,6 +3190,9 @@ export default function TopicDetailPage() {
   const hasTextContent = newMessageContent.trim().length > 0;
   const singleButtonEnabled = (() => {
     if (relationType === null) return newMessageContent.trim().length > 0;
+    // Check that relation stake meets the effective minimum (type + subType combined)
+    if (relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return false;
+    if (relationType && typeof relStakeAmount === 'number' && relStakeAmount > availablePoints) return false;
     // CORRECT targeting a relation message: special mode (no text, no source, use secondary selector)
     if (draftHasRelationTarget && relationType === "correct") {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
@@ -3150,6 +3219,15 @@ export default function TopicDetailPage() {
       return "仅发送这条消息（未选择关系类型）";
     }
     const typeName = relationTypeName(relationType);
+    // Check for subType minimum stake requirement
+    if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
+      const st = subType ? subTypeLabel(subType) : null;
+      const note = st ? `（「${st}」理由要求最低 ${effectiveMinStake} 点）` : `（最低 ${effectiveMinStake} 点）`;
+      return `贡献点不足${note}，当前 ${relStakeAmount} 点`;
+    }
+    if (typeof relStakeAmount === 'number' && relStakeAmount > availablePoints) {
+      return `贡献点余额不足（可用 ${availablePoints}，需要 ${relStakeAmount}）`;
+    }
     if (draftHasRelationTarget && relationType === "correct") {
       if (newMessageContent.trim().length > 0) return `请清空文本输入框（更正关系目标为关系消息时不应有文本）`;
       if (sourceUnits.length > 0) return `请清空来源集合（更正关系目标为关系消息时来源必须为空）`;
@@ -3250,7 +3328,7 @@ export default function TopicDetailPage() {
         }
       }
     }
-    return ['none', 'recommend', 'archive', ...Array.from(existingTagLabels)];
+    return ['recommend', 'archive', ...Array.from(existingTagLabels)];
   }, [relationType, draftUnits, targetUnits, edges]);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
@@ -4000,20 +4078,20 @@ export default function TopicDetailPage() {
     });
   }
 
-  function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string) {
+  function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
     e.stopPropagation();
-    // Recommend/archive: show who recommended/archived (tag-style popup, same as annotation double-click)
+    // Recommend/archive: show aggregated badge detail with subType breakdown
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType;
     if (relType === 'recommend' || relType === 'archive') {
       const targetMid = relEdges[0]?.to.messageId;
       if (!targetMid) return;
       const typeName = relationTypeName(relType);
-      const allRelMsgIds = Array.from(new Set(
+      const allRelMsgIds = detail?.relMsgIds ?? Array.from(new Set(
         edges.filter(ed => ed.relationType === relType && ed.to.messageId === targetMid && ed.to.selection.kind === 'whole')
           .map(ed => ed.relationMessageId)
       ));
-      setTagPopup({ messageId: targetMid, tagLabel: typeName, relMsgIds: allRelMsgIds, x: e.clientX, y: e.clientY });
+      setTagPopup({ messageId: targetMid, tagLabel: typeName, relMsgIds: allRelMsgIds, x: e.clientX, y: e.clientY, subDetails: detail?.subDetails });
     } else {
       // Correction badge and other inline badges: show comparison popup
       setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
@@ -4538,6 +4616,18 @@ export default function TopicDetailPage() {
                   </div>
                 );
               })()}
+              {/* SubType selector: shown when TAG + recommend/archive is selected */}
+              {((relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive")) || relationType === "recommend" || relationType === "archive") && (
+                <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
+                  <span style={{ opacity: 0.85 }}>标注理由：</span>
+                  {SUB_TYPE_OPTIONS.map(st => (
+                    <button key={st || 'none'} onClick={() => { setSubType(st); if (st !== 'CUSTOM') { setSubTypeCustomLabel(''); setNewMessageContent(''); } }}
+                      style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: subType === st ? (secondaryRelationType === "recommend" ? "#f59e0b" : "#64748b") : "#222", color: subType === st ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                      {st ? subTypeLabel(st) : '无'}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* Label input: REPLY (auto-filled, read-only) or REFERENCE+custom (editable) */}
               {relationType === "reply" && (
               <input
@@ -4559,11 +4649,15 @@ export default function TopicDetailPage() {
               )}
               <div key={composerRefreshKey}>
               {(() => {
+                const isCustomSubType = subType === 'CUSTOM' && ((relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive")) || relationType === "recommend" || relationType === "archive");
                 const textAreaDisabled =
-                  (draftHasRelationTarget && relationType === "correct")
-                  || (isTagWithQuickAnnotate && hasTargetsAvailable)
-                  || (isMergeType && hasTargetsAvailable);
-                const placeholderText = textAreaDisabled
+                  (isCustomSubType ? false : (
+                    (draftHasRelationTarget && relationType === "correct")
+                    || (isTagWithQuickAnnotate && hasTargetsAvailable)
+                    || (isMergeType && hasTargetsAvailable)
+                  ));
+                const placeholderText = isCustomSubType ? "输入自定义理由（最长20字）"
+                  : textAreaDisabled
                   ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
                   : isClassifyType ? "输入分类名称（不能为空）"
                   : isSummaryType ? "输入总结内容（不能为空）"
@@ -4606,7 +4700,7 @@ export default function TopicDetailPage() {
                     <span style={{ fontSize: 11, color: "#888" }}>{hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isGovernanceOrOpsType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
                     <input
                       type="number"
-                      min={minSelfStake}
+                      min={effectiveMinStake}
                       max={availablePoints}
                       value={relStakeAmount}
                       onChange={e => {
@@ -4616,8 +4710,11 @@ export default function TopicDetailPage() {
                         if (isNaN(v)) return;
                         setRelStakeAmount(Math.min(v, availablePoints));
                       }}
-                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #666", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
+                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake ? "1px solid #f87171" : "1px solid #666", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
                     />
+                    {subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0) && (
+                      <span style={{ fontSize: 10, color: "#f59e0b" }}>（「{subTypeLabel(subType)}」最低 {subTypeStakeMap.current[subType]} 点）</span>
+                    )}
                   </>
                 )}
                 {/* Default: plain text message */}
@@ -4782,7 +4879,7 @@ export default function TopicDetailPage() {
 
     {/* Tag double-click popup: shows who tagged with the given label */}
     {tagPopup && (() => {
-      const { messageId, tagLabel, relMsgIds, x, y } = tagPopup;
+      const { messageId, tagLabel, relMsgIds, x, y, subDetails } = tagPopup;
       const taggers = relMsgIds.map(id => {
         const relMsg = messages.find(m => m.id === id);
         return relMsg ? { id: relMsg.id, author: relMsg.author, createdAt: relMsg.createdAt } : null;
@@ -4791,11 +4888,26 @@ export default function TopicDetailPage() {
         <div key="tag-popup" onClick={() => setTagPopup(null)}
           style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 200), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
+            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 300), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
             <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
-              🏷 标注「{tagLabel}」（共 {taggers.length} 人）<br />
+              🏷 「{tagLabel}」（共 {taggers.length} 人）<br />
               <span style={{ fontSize: 11, opacity: 0.7 }}>消息：{messageId}</span>
             </div>
+            {/* SubType breakdown */}
+            {subDetails && subDetails.length > 0 && (
+              <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 4, background: "#2a2a2a", fontSize: 11 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4, opacity: 0.8 }}>理由明细：</div>
+                {subDetails.map(d => {
+                  const stLabels: Record<string,string> = { SPAM:'垃圾', OFFTOPIC:'跑题', LOWVALUE:'低质', IMPORTANT:'重要', CUSTOM:'自定义' };
+                  return (
+                    <div key={d.subType} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                      <span>{d.customLabel || stLabels[d.subType] || d.subType}</span>
+                      <span style={{ fontWeight: 600 }}>{d.count}人</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {taggers.length === 0 ? (
               <div style={{ fontSize: 12, opacity: 0.6 }}>暂无记录</div>
             ) : (

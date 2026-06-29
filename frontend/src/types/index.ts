@@ -106,6 +106,8 @@ export interface RelationPayload {
   title?: string;
   targetLayout?: RelationTargetLayout;
   content?: string;
+  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'CUSTOM';
+  customLabel?: string;
 }
 
 export interface Relation {

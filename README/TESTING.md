@@ -72,10 +72,26 @@ cd ..
 
 ## 运行测试
 
+### 当前验证基线
+
+截至 2026-06-30，Phase A 工程收口的必须验证命令如下：
+
+| 目录 | 命令 | 当前状态 | 说明 |
+|---|---|---|---|
+| `backend/` | `npm run build` | 通过 | TypeScript 编译检查 |
+| `backend/` | `npm test` | 通过，8 个测试套件 / 139 个测试 | Jest + Supertest，使用 Prisma mock，不需要真实数据库 |
+| `frontend/` | `npm run build` | 通过 | `tsc -b` + Vite 生产构建 |
+| `frontend/` | `npm test` | 通过，9 个测试文件 / 246 个测试 | Vitest + jsdom；当前仍有一个 RoundHistory 的 React `act(...)` 警告 |
+
+`frontend` 的 `npm run lint` 当前不是 Phase A 的硬门槛，已单独列入 A7 lint 基线任务。若后续决定将 lint 纳入阻塞门槛，需要先处理 coverage 输出目录、`no-explicit-any`、hook dependencies 和未使用变量等历史问题。
+
 ### 前端测试
 
 ```bash
 cd frontend
+
+# 生产构建，提交前必须通过
+npm run build
 
 # 单次运行所有测试（推荐在 CI 或提交前使用）
 npm test
@@ -92,6 +108,9 @@ npm run test:coverage
 
 ```bash
 cd backend
+
+# TypeScript 构建，提交前必须通过
+npm run build
 
 # 单次运行所有测试
 npm test
@@ -110,11 +129,18 @@ npm run test:coverage
 > npm test
 > ```
 
-### 全部测试（一键）
+### 全部验证命令
 
-```bash
-# 在项目根目录
-cd frontend && npm test; cd ../backend && npm test
+```powershell
+# 后端
+cd d:\Projects\public-opinion\backend
+npm run build
+npm test
+
+# 前端
+cd d:\Projects\public-opinion\frontend
+npm run build
+npm test
 ```
 
 ---
@@ -195,9 +221,15 @@ describe('MyComponent', () => {
 
 | 测试文件 | 测试数量 | 覆盖内容 |
 |---------|---------|---------|
-| `graph.test.ts` | 20 | `buildMessageTree`, `computeStanceStats`, `computeTextHops`, `buildFocusSubgraph` |
-| `types.test.ts` | 19 | `getPresentationSpec`, `getTargetMessageIds`, `getTargetRelationIds`, `PRESENTATION_SPECS` 完整性 |
-| `RelationBadge.test.tsx` | 9 | 所有 14 种关系类型的徽标渲染、未知类型降级显示、`className` prop |
+| `focusContainer.test.ts` | 19 | 容器关系在焦点模式中的展开逻辑 |
+| `graph.test.ts` | 23 | 图算法、树构建、站队统计和焦点子图 |
+| `graphView.test.ts` | 9 | GraphView 交互和渲染行为 |
+| `layout.test.ts` | 105 | 非线性布局算法 |
+| `round-history.test.tsx` | 13 | 轮次历史、推翻链和详情展开 |
+| `topic-detail-page.test.tsx` | 18 | TopicDetailPage 页面交互 |
+| `types.test.ts` | 17 | 关系类型、TargetRef 和 PresentationSpec 辅助函数 |
+| `useCleanView.test.ts` | 13 | 清爽视图过滤 hook |
+| `userFilteredEdges.test.ts` | 29 | 用户过滤边和隐藏关系计算 |
 
 ---
 
@@ -278,8 +310,14 @@ describe('GET /api/myRoute', () => {
 
 | 测试文件 | 测试数量 | 覆盖内容 |
 |---------|---------|---------|
-| `validation.test.ts` | 21 | `TargetRef` discriminated union 所有 3 种 kind、`createRelationSchema` 全部验证规则 |
-| `relations.api.test.ts` | 14 | GET/POST 接口、鉴权、分类不存在/归档、来源消息校验、关系目标递归、404 响应 |
+| `validation.test.ts` | 通过 | TargetRef、关系 payload 和请求校验 |
+| `events.test.ts` | 通过 | 事件化写入路径和 AuditLog 行为 |
+| `rules.api.test.ts` | 通过 | RuleVersion 当前规则接口 |
+| `stakes.api.test.ts` | 通过 | 押注和 BetPool 相关接口 |
+| `points.api.test.ts` | 通过 | 贡献点余额和流水接口 |
+| `relations.api.test.ts` | 通过 | 关系消息创建、递归目标、TAG/ARCHIVE 等规则 |
+| `settlement.api.test.ts` | 通过 | 结算轮次、投票、clawback、BetPool 复合键 |
+| `e2e-flow.test.ts` | 通过 | 完整核心流程模拟 |
 
 ---
 
@@ -302,16 +340,19 @@ describe('GET /api/myRoute', () => {
 
 如果你想在本地完整模拟 CI 流程：
 
-```bash
+```powershell
 # 前端
 cd frontend
 npm ci           # 使用 package-lock.json 精确安装，与 CI 一致
+npm run build
 npm test         # 单次运行
 
 # 后端
 cd ../backend
 npm ci
-JWT_SECRET=local-ci-test npm test
+$env:JWT_SECRET="local-ci-test"
+npm run build
+npm test
 ```
 
 ### 手动触发 CI（GitHub 上）

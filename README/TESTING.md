@@ -81,7 +81,7 @@ cd ..
 | `backend/` | `npm run build` | 通过 | TypeScript 编译检查 |
 | `backend/` | `npm test` | 通过，8 个测试套件 / 139 个测试 | Jest + Supertest，使用 Prisma mock，不需要真实数据库 |
 | `frontend/` | `npm run build` | 通过 | `tsc -b` + Vite 生产构建 |
-| `frontend/` | `npm test` | 通过，9 个测试文件 / 246 个测试 | Vitest + jsdom；当前仍有一个 RoundHistory 的 React `act(...)` 警告 |
+| `frontend/` | `npm test` | 通过，10 个测试文件 / 279 个测试 | Vitest + jsdom；当前仍有一个 RoundHistory 的 React `act(...)` 警告 |
 
 `frontend` 的 `npm run lint` 当前不是 Phase A 的硬门槛，已单独列入 A7 lint 基线任务。若后续决定将 lint 纳入阻塞门槛，需要先处理 coverage 输出目录、`no-explicit-any`、hook dependencies 和未使用变量等历史问题。
 
@@ -221,6 +221,7 @@ describe('MyComponent', () => {
 
 | 测试文件 | 测试数量 | 覆盖内容 |
 |---------|---------|---------|
+| `classify-visibility.test.ts` | 33 | 分类/总结/归并/排列关系的可见性规则 |
 | `focusContainer.test.ts` | 19 | 容器关系在焦点模式中的展开逻辑 |
 | `graph.test.ts` | 23 | 图算法、树构建、站队统计和焦点子图 |
 | `graphView.test.ts` | 9 | GraphView 交互和渲染行为 |

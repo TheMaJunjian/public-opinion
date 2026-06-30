@@ -15,7 +15,7 @@ const TYPE_LABEL: Record<string, string> = {
   AGREE: '赞同', DISAGREE: '反对', SELF_AGREE: '赞同自己',
 };
 const TAG_TYPE_LABEL: Record<string, string> = {
-  TAG: '纯标注', RECOMMEND: '推荐', ARCHIVE: '冷藏',
+  RECOMMEND: '推荐', ARCHIVE: '冷藏',
 };
 const SUB_TYPE_LABEL: Record<string, string> = {
   SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义',
@@ -72,6 +72,15 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     { key: 'tags', label: '表态', count: tags.length },
   ];
 
+  function navigateToRecord(topicId: string, msgId: string, options?: { settlementId?: string | null; stakeId?: string | null; settlementType?: 'TRUTH' | 'VALUE' }) {
+    const params = new URLSearchParams();
+    params.set('msg', msgId);
+    if (options?.settlementId) params.set('settlement', options.settlementId);
+    if (options?.stakeId) params.set('stakeId', options.stakeId);
+    if (options?.settlementType) params.set('settlementType', options.settlementType);
+    navigate(`/topics/${topicId}?${params}`);
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex gap-1 border-b border-gray-200">
@@ -97,12 +106,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
               subtitle={`${r.amount} 点`}
               highlight={r.type === 'SELF_AGREE'}
               time={r.createdAt}
-              onDoubleClick={() => {
-                const params = new URLSearchParams();
-                params.set('msg', r.id);
-                if (r.targetMessageId) params.set('settlement', r.targetMessageId);
-                navigate(`/topics/${r.topicId}?${params}`);
-              }}
+              onDoubleClick={() => navigateToRecord(r.topicId, r.relationMessageId, { settlementId: r.targetMessageId, stakeId: r.stakeId })}
             />
           );
         })}
@@ -116,7 +120,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
               title={`消耗 ${s.amount} 点${topicSuffix}`}
               subtitle={s.content ? (s.content.length > 40 ? s.content.slice(0, 40) + '…' : s.content) : '(无文本)'}
               time={s.createdAt}
-              onDoubleClick={() => navigate(`/topics/${s.topicId}?msg=${s.messageId}`)}
+              onDoubleClick={() => navigateToRecord(s.topicId, s.messageId, { settlementId: s.messageId, stakeId: s.id })}
             />
           );
         })}
@@ -134,7 +138,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
               title={`${typeLabel}${reason ? ` · ${reason}` : ''}${topicSuffix}`}
               subtitle={`${t.amount} 点${t.targetMessageId ? ` · 目标: ${t.targetMessageId.slice(-8)}` : ''}`}
               time={t.createdAt}
-              onDoubleClick={() => navigate(`/topics/${t.topicId}?msg=${t.id}`)}
+              onDoubleClick={() => navigateToRecord(t.topicId, t.relationMessageId, { settlementId: t.targetMessageId, stakeId: t.stakeId, settlementType: 'VALUE' })}
             />
           );
         })}

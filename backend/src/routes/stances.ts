@@ -4,15 +4,70 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+type RelationCandidate = {
+  id: string;
+  topicId: string;
+  relationType: string | null;
+  relationPayload: unknown;
+  targetRefs: unknown;
+  createdAt: Date;
+  topic: { id: string; title: string };
+};
+
+type StakeRecord = {
+  id: string;
+  topicId: string;
+  messageId: string;
+  side: string;
+  amount: number;
+  roundId: string | null;
+  createdAt: Date;
+  message: {
+    id: string;
+    content: string | null;
+    kind: string;
+    relationType: string | null;
+    createdById: string;
+    topicId: string;
+    topic: { id: string; title: string };
+  };
+};
+
+function relationTargetsMessage(relation: RelationCandidate, messageId: string) {
+  const refs = (relation.targetRefs as Array<{ messageId?: string; relationId?: string }> | undefined) ?? [];
+  return refs.some(ref => ref.messageId === messageId || ref.relationId === messageId);
+}
+
+function relationPayload(relation: RelationCandidate) {
+  return relation.relationPayload as Record<string, unknown> | null;
+}
+
+function relationSide(relationType: string | null) {
+  if (relationType === 'AGREE' || relationType === 'RECOMMEND') return 'PRO';
+  if (relationType === 'DISAGREE' || relationType === 'ARCHIVE') return 'CON';
+  return null;
+}
+
+function latestMatchingRelation(stake: StakeRecord, candidates: RelationCandidate[], types: string[]) {
+  const exact = candidates.find(r =>
+    r.createdAt <= stake.createdAt &&
+    types.includes(r.relationType ?? '') &&
+    relationSide(r.relationType) === stake.side &&
+    relationTargetsMessage(r, stake.messageId)
+  );
+  if (exact) return exact;
+  return candidates.find(r =>
+    types.includes(r.relationType ?? '') &&
+    relationSide(r.relationType) === stake.side &&
+    relationTargetsMessage(r, stake.messageId)
+  ) ?? null;
+}
+
 /**
- * GET /api/users/:id/stances — 查询用户的表态历史
- * 返回用户在系统中的所有立场表态：AGREE/DISAGREE 关系、投票、押注，
- * 以及每条表态引用的证据。
+ * GET /api/users/:id/stances — 查询用户的贡献点消耗历史
  *
- * Query params:
- *   page  — 分页（默认 1）
- *   limit — 每页条数（默认 20，最大 50）
- *   topicId — 可选，筛选指定话题
+ * 面板记录以 Stake 为准：站队、立场、表态都是贡献点消耗记录，
+ * 再根据 settlementType、side 和关联关系消息还原显示语义。
  */
 router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -22,195 +77,169 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
     const skip = (page - 1) * limit;
     const topicId = req.query.topicId as string | undefined;
 
-    // ═══════════════════════════════════════════════════════════
-    // 1. 站队 — AGREE/DISAGREE 关系表态
-    // ═══════════════════════════════════════════════════════════
-    const stanceFilter: Record<string, unknown> = {
-      createdById: targetUserId,
-      kind: 'RELATION',
-      relationType: { in: ['AGREE', 'DISAGREE'] },
-    };
-    if (topicId) stanceFilter.topicId = topicId;
-
-    const [stanceRelations, tagRelations] = await Promise.all([
-      prisma.message.findMany({
-        where: stanceFilter,
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-        select: {
-          id: true, topicId: true, relationType: true,
-          targetRefs: true, createdAt: true,
-          topic: { select: { id: true, title: true } },
-        },
-      }),
-      prisma.message.findMany({
-        where: {
-          createdById: targetUserId,
-          kind: 'RELATION',
-          relationType: { in: ['TAG', 'RECOMMEND', 'ARCHIVE'] },
-          supersededBy: null,
-          ...(topicId ? { topicId } : {}),
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-        select: {
-          id: true, topicId: true, relationType: true,
-          relationPayload: true, targetRefs: true, createdAt: true,
-          topic: { select: { id: true, title: true } },
-        },
-      }),
-    ]);
-
-    // AGREE/DISAGEE stakes are on the TARGET message (events.ts line 556)
-    const targetMsgIds = new Set(
-      stanceRelations.flatMap(r =>
-        ((r.targetRefs as Array<{ messageId?: string }> | undefined) ?? [])
-          .map(ref => ref.messageId).filter(Boolean) as string[]
-      )
-    );
-    const [targetMsgs, targetStakes] = targetMsgIds.size > 0
-      ? await Promise.all([
-          prisma.message.findMany({
-            where: { id: { in: [...targetMsgIds] } },
-            select: { id: true, createdById: true },
-          }),
-          prisma.stake.findMany({
-            where: { messageId: { in: [...targetMsgIds] }, userId: targetUserId },
-            select: { messageId: true, amount: true },
-          }),
-        ])
-      : [[], []];
-
-    const ownMsgIds = new Set(targetMsgs.filter(m => m.createdById === targetUserId).map(m => m.id));
-    const stakeByTarget = new Map(targetStakes.map(s => [s.messageId, s.amount]));
-
-    const relations = stanceRelations.map(r => {
-      const refs = (r.targetRefs as Array<{ messageId?: string }> | undefined) ?? [];
-      const tid = refs.find(ref => ref.messageId)?.messageId;
-      return {
-        kind: 'relation' as const,
-        id: r.id, topicId: r.topicId, topicTitle: r.topic.title,
-        type: (tid && ownMsgIds.has(tid)) ? 'SELF_AGREE' : r.relationType as string,
-        amount: tid ? (stakeByTarget.get(tid) ?? 0) : 0,
-        targetMessageId: tid ?? null,
-        content: null as string | null,
-        createdAt: r.createdAt,
-      };
-    });
-
-    // ═══════════════════════════════════════════════════════════
-    // 2. 立场 — 所有非 AGREE/DISAGREE/TAG 的发送消息（含自押）
-    // ═══════════════════════════════════════════════════════════
-    // Also exclude RECOMMEND/ARCHIVE from positions (they are annotations, shown in "表态")
-    const positionFilter: Record<string, unknown> = {
-      createdById: targetUserId,
-      NOT: [{ kind: 'RELATION', relationType: { in: ['AGREE', 'DISAGREE', 'TAG', 'RECOMMEND', 'ARCHIVE'] } }],
-    };
-    if (topicId) positionFilter.topicId = topicId;
-
-    const positionMessages = await prisma.message.findMany({
-      where: positionFilter,
+    const allStakes = await prisma.stake.findMany({
+      where: { userId: targetUserId, ...(topicId ? { topicId } : {}) },
       orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
+      include: {
+        message: {
+          select: {
+            id: true,
+            content: true,
+            kind: true,
+            relationType: true,
+            createdById: true,
+            topicId: true,
+            topic: { select: { id: true, title: true } },
+          },
+        },
+      },
+    }) as StakeRecord[];
+
+    const roundIds = [...new Set(allStakes.map(s => s.roundId).filter(Boolean) as string[])];
+    const rounds = roundIds.length > 0
+      ? new Map((await prisma.settlementRound.findMany({
+          where: { id: { in: roundIds } },
+          select: { id: true, settlementType: true },
+        })).map(r => [r.id, r.settlementType]))
+      : new Map<string, string>();
+
+    const relationCandidates = await prisma.message.findMany({
+      where: {
+        createdById: targetUserId,
+        kind: 'RELATION',
+        relationType: { in: ['AGREE', 'DISAGREE', 'RECOMMEND', 'ARCHIVE'] },
+        supersededBy: null,
+        ...(topicId ? { topicId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
       select: {
-        id: true, content: true, kind: true, relationType: true,
-        topicId: true, createdAt: true,
+        id: true,
+        topicId: true,
+        relationType: true,
+        relationPayload: true,
+        targetRefs: true,
+        createdAt: true,
         topic: { select: { id: true, title: true } },
       },
-    });
+    }) as RelationCandidate[];
 
-    // Non-AGREE/DISAGEE stakes are on the message itself
-    const posMsgIds = positionMessages.map(m => m.id);
-    const posStakes = posMsgIds.length > 0
-      ? new Map((await prisma.stake.findMany({
-          where: { messageId: { in: posMsgIds }, userId: targetUserId, side: 'PRO' },
-          orderBy: { createdAt: 'asc' },
-          distinct: ['messageId'],
-          select: { messageId: true, amount: true },
-        })).map(s => [s.messageId, s.amount]))
-      : new Map<string, number>();
+    const relationItems = [] as Array<{
+      kind: 'relation';
+      id: string;
+      relationMessageId: string;
+      topicId: string;
+      topicTitle: string;
+      type: string;
+      amount: number;
+      stakeId: string;
+      targetMessageId: string;
+      content: string | null;
+      createdAt: Date;
+    }>;
 
-    const stakes = positionMessages
-      .filter(m => posStakes.has(m.id))
-      .map(m => ({
-        kind: 'stake' as const,
-        id: m.id, topicId: m.topicId, topicTitle: m.topic.title,
-        messageId: m.id,
-        content: m.content?.slice(0, 80) ?? '',
-        amount: posStakes.get(m.id)!,
-        createdAt: m.createdAt,
-      }));
+    const stakeItems = [] as Array<{
+      kind: 'stake';
+      id: string;
+      topicId: string;
+      topicTitle: string;
+      messageId: string;
+      content: string;
+      amount: number;
+      createdAt: Date;
+    }>;
 
-    // ═══════════════════════════════════════════════════════════
-    // 3. 表态 — TAG / RECOMMEND / ARCHIVE 标注记录
-    // ═══════════════════════════════════════════════════════════
-    // TAG stakes are on the relation message itself (PRO); RECOMMEND/ARCHIVE stakes are on the target (PRO/CON)
-    const tagOwnIds = tagRelations.filter(r => r.relationType === 'TAG').map(r => r.id);
-    const tagTargetIds = new Set(
-      tagRelations
-        .filter(r => r.relationType !== 'TAG')
-        .flatMap(r => ((r.targetRefs as Array<{ messageId?: string }> | undefined) ?? []).map(ref => ref.messageId).filter(Boolean) as string[])
-    );
-    const allTagStakeMsgIds = [...tagOwnIds, ...tagTargetIds];
-    const tagStakeMap = allTagStakeMsgIds.length > 0
-      ? new Map((await prisma.stake.findMany({
-          where: { messageId: { in: allTagStakeMsgIds }, userId: targetUserId },
-          select: { messageId: true, amount: true, side: true },
-        })).map(s => [`${s.messageId}:${s.side}`, s.amount]))
-      : new Map<string, number>();
+    const tagItems = [] as Array<{
+      kind: 'tag';
+      id: string;
+      relationMessageId: string;
+      topicId: string;
+      topicTitle: string;
+      relationType: string;
+      label: string;
+      subType: string | null;
+      customLabel: string | null;
+      targetMessageId: string;
+      stakeId: string;
+      amount: number;
+      createdAt: Date;
+    }>;
 
-    const tags = tagRelations.map(r => {
-      const payload = r.relationPayload as Record<string, unknown> | null;
-      const label = (payload?.label as string) || '';
-      const subType = (payload?.subType as string) || null;
-      const customLabel = (payload?.customLabel as string) || null;
-      const refs = (r.targetRefs as Array<{ messageId?: string }> | undefined) ?? [];
-      const targetMsgId = refs.find(ref => ref.messageId)?.messageId ?? null;
-      // TAG: stake on self (PRO); RECOMMEND: stake on target (PRO); ARCHIVE: stake on target (CON)
-      let amount = 0;
-      if (r.relationType === 'TAG') {
-        amount = tagStakeMap.get(`${r.id}:PRO`) ?? 0;
-      } else if (targetMsgId) {
-        const side = r.relationType === 'RECOMMEND' ? 'PRO' : 'CON';
-        amount = tagStakeMap.get(`${targetMsgId}:${side}`) ?? 0;
+    for (const stake of allStakes) {
+      const settlementType = stake.roundId ? (rounds.get(stake.roundId) ?? 'TRUTH') : 'TRUTH';
+
+      if (settlementType === 'VALUE') {
+        const relation = latestMatchingRelation(stake, relationCandidates, ['RECOMMEND', 'ARCHIVE']);
+        if (relation) {
+          const payload = relationPayload(relation);
+          tagItems.push({
+            kind: 'tag',
+            id: stake.id,
+            relationMessageId: relation.id,
+            topicId: stake.topicId,
+            topicTitle: stake.message.topic.title,
+            relationType: relation.relationType as string,
+            label: (payload?.label as string) || '',
+            subType: (payload?.subType as string) || null,
+            customLabel: (payload?.customLabel as string) || null,
+            targetMessageId: stake.messageId,
+            stakeId: stake.id,
+            amount: stake.amount,
+            createdAt: stake.createdAt,
+          });
+          continue;
+        }
       }
-      return {
-        kind: 'tag' as const,
-        id: r.id, topicId: r.topicId, topicTitle: r.topic.title,
-        relationType: r.relationType as string,
-        label,
-        subType,
-        customLabel,
-        targetMessageId: targetMsgId,
-        amount,
-        createdAt: r.createdAt,
-      };
-    });
 
-    // ═══════════════════════════════════════════════════════════
-    // Response
-    // ═══════════════════════════════════════════════════════════
-    const [relationCount, positionCount, tagCount] = await Promise.all([
-      prisma.message.count({ where: stanceFilter }),
-      prisma.message.count({ where: positionFilter }),
-      prisma.message.count({
-        where: {
-          createdById: targetUserId,
-          kind: 'RELATION',
-          relationType: { in: ['TAG', 'RECOMMEND', 'ARCHIVE'] },
-          supersededBy: null,
-          ...(topicId ? { topicId } : {}),
-        },
-      }),
-    ]);
+      if (settlementType === 'TRUTH') {
+        const relation = latestMatchingRelation(stake, relationCandidates, ['AGREE', 'DISAGREE']);
+        if (relation) {
+          relationItems.push({
+            kind: 'relation',
+            id: stake.id,
+            relationMessageId: relation.id,
+            topicId: stake.topicId,
+            topicTitle: stake.message.topic.title,
+            type: stake.message.createdById === targetUserId ? 'SELF_AGREE' : relation.relationType as string,
+            amount: stake.amount,
+            stakeId: stake.id,
+            targetMessageId: stake.messageId,
+            content: null,
+            createdAt: stake.createdAt,
+          });
+          continue;
+        }
+      }
+
+      const relType = stake.message.relationType;
+      const isStanceRelation = stake.message.kind === 'RELATION' && ['AGREE', 'DISAGREE', 'RECOMMEND', 'ARCHIVE'].includes(relType ?? '');
+      if (stake.message.createdById === targetUserId && !isStanceRelation) {
+        stakeItems.push({
+          kind: 'stake',
+          id: stake.id,
+          topicId: stake.topicId,
+          topicTitle: stake.message.topic.title,
+          messageId: stake.messageId,
+          content: stake.message.content?.slice(0, 80) ?? '',
+          amount: stake.amount,
+          createdAt: stake.createdAt,
+        });
+      }
+    }
+
+    const relations = relationItems.slice(skip, skip + limit);
+    const stakes = stakeItems.slice(skip, skip + limit);
+    const tags = tagItems.slice(skip, skip + limit);
 
     res.json({
       user: { id: targetUserId },
       stances: { relations, stakes, tags },
-      pagination: { page, limit, totalRelations: relationCount, totalStakes: positionCount, totalTags: tagCount },
+      pagination: {
+        page,
+        limit,
+        totalRelations: relationItems.length,
+        totalStakes: stakeItems.length,
+        totalTags: tagItems.length,
+      },
     });
   } catch (err) {
     next(err);

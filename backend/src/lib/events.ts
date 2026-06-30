@@ -401,7 +401,16 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
       }),
     );
 
-    const message = await firstTransactionResult<any>(await prisma.$transaction(ops));
+    const txResults = await prisma.$transaction(ops);
+    let message = txResults[0] as any;
+    const roundId = existing?.id ?? (!existing ? (txResults[1] as { id: string } | undefined)?.id : null);
+    if (roundId) {
+      message = await prisma.message.update({
+        where: { id: message.id },
+        data: { relationPayload: { note: payload.note ?? null, settlementType: stype, roundId } },
+        include: { createdBy: { select: { id: true, username: true } } },
+      });
+    }
 
     await prisma.auditLog.updateMany({
       where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
@@ -648,7 +657,11 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     const targets = effectiveTargetRefs as Array<{ messageId?: string }>;
     const textTargetId = targets[0]?.messageId;
     if (textTargetId) {
-      const newSubType = (payload.relationPayload as Record<string, unknown> | null)?.subType as string | undefined;
+      const newPayload = payload.relationPayload as Record<string, unknown> | null;
+      const newSubType = newPayload?.subType as string | undefined;
+      const newCustomLabel = newPayload?.customLabel as string | undefined;
+      const reasonKey = (subType?: string, customLabel?: string) =>
+        subType === 'CUSTOM' ? `CUSTOM:${(customLabel ?? '').trim()}` : (subType ?? '');
       const topicRelations = await prisma.message.findMany({
         where: {
           topicId,
@@ -661,9 +674,10 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       const existingSame = topicRelations.find(r => {
         const trefs = r.targetRefs as Array<{ messageId?: string }> | undefined;
         if (trefs?.[0]?.messageId !== textTargetId) return false;
-        // Compare subType: different subType → create new relation (not dedup)
-        const existSubType = (r.relationPayload as Record<string, unknown> | null)?.subType as string | undefined;
-        return newSubType === existSubType; // same subType (both undefined or equal) → dedup
+        const existingPayload = r.relationPayload as Record<string, unknown> | null;
+        const existSubType = existingPayload?.subType as string | undefined;
+        const existCustomLabel = existingPayload?.customLabel as string | undefined;
+        return reasonKey(newSubType, newCustomLabel) === reasonKey(existSubType, existCustomLabel);
       });
       if (existingSame) {
         isDedup = true;

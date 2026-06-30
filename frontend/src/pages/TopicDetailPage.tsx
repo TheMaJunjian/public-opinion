@@ -648,28 +648,27 @@ export default function TopicDetailPage() {
     if (loading || relations.length === 0) return;
     const msgId = autoClassifyMsgId;
     if (!msgId) return;
-    // Resolve msgId to text message IDs:
-    // - If msgId is a relation message, find its target text message IDs
-    // - Otherwise, treat msgId itself as a text message ID
-    const textIds = new Set<string>();
+    const targetIds = new Set<string>([msgId]);
     const msgRel = relations.find(r => r.id === msgId);
-    if (msgRel) {
+    const msgRelType = msgRel?.relationType?.toUpperCase();
+    const locateRelationCardOnly = msgRelType === 'CLASSIFY' || msgRelType === 'SUMMARY' || msgRelType === 'MERGE' || msgRelType === 'ARRANGE';
+    if (msgRel && !locateRelationCardOnly) {
       const targets = (msgRel.targetRefs ?? []) as TargetRef[];
       targets.forEach(t => {
         if ((t.kind === 'message' || t.kind === 'text-fragment') && t.messageId) {
-          textIds.add(t.messageId);
+          targetIds.add(t.messageId);
+        } else if (t.kind === 'relation' && t.relationId) {
+          targetIds.add(t.relationId);
         }
       });
-    } else {
-      textIds.add(msgId);
     }
-    if (textIds.size === 0) { setAutoClassifyMsgId(null); return; }
-    // Find classify/summary relation that targets one of these text messages
+    if (targetIds.size === 0) { setAutoClassifyMsgId(null); return; }
+    // Find classify/summary relation that targets this message/relation or its target.
     for (const rel of relations) {
       const rt = rel.relationType?.toUpperCase();
       if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
       const targets = (rel.targetRefs ?? []) as TargetRef[];
-      if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && textIds.has(t.messageId))) {
+      if (targets.some(t => t.kind === 'relation' ? targetIds.has(t.relationId) : targetIds.has(t.messageId))) {
         // Exit any current topic focus before entering the target classify
         setFocusEntries(prev => prev.length > 0 && prev[prev.length - 1]?.mode === 'topic' ? prev.slice(0, -1) : prev);
         enterClassifyTopic(rel.id);
@@ -695,11 +694,32 @@ export default function TopicDetailPage() {
       setDraftUnits([{ messageId: msgId, selection: { kind: "whole" } }]);
       setActiveTextSelectId(null);
       if (settlementMsgId) {
-        openSettlement(settlementMsgId);
+        const settlementTypeParam = searchParams.get('settlementType');
+        const settlementType = settlementTypeParam === 'VALUE' ? 'VALUE' : 'TRUTH';
+        openSettlement(settlementMsgId, settlementType);
         const highlightRoundId = searchParams.get('highlightRound');
         if (highlightRoundId) sessionStorage.setItem('settlementHighlightRound', highlightRoundId);
+        const highlight: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } = {};
+        const stakeId = searchParams.get('stakeId');
+        const voteId = searchParams.get('voteId');
+        const side = searchParams.get('side');
+        const vote = searchParams.get('vote');
+        const username = searchParams.get('username');
+        if (stakeId) highlight.stakeId = stakeId;
+        if (voteId) highlight.voteId = voteId;
+        if (side === 'PRO' || side === 'CON') highlight.side = side;
+        if (vote === 'TRUE' || vote === 'FALSE') highlight.vote = vote;
+        if (username) highlight.username = username;
+        setSettlementEntryHighlight(Object.keys(highlight).length > 0 ? highlight : null);
+        if (Object.keys(highlight).length > 0) setTimeout(() => setSettlementEntryHighlight(null), 1500);
         searchParams.delete('settlement');
+        searchParams.delete('settlementType');
         searchParams.delete('highlightRound');
+        searchParams.delete('stakeId');
+        searchParams.delete('voteId');
+        searchParams.delete('side');
+        searchParams.delete('vote');
+        searchParams.delete('username');
       }
       searchParams.delete('msg');
       setSearchParams(searchParams, { replace: true });
@@ -1187,21 +1207,26 @@ export default function TopicDetailPage() {
       );
       if (rounds.length <= results.length) {
         const relAuthor = backendRel.createdBy?.username ?? '?';
-        api.createMessage(topicId!, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId, settlementType: roundSt }).then(roundMsg => {
-          setMessages((prev: any) => [...prev, {
-            id: roundMsg.id,
-            author: roundMsg.createdBy?.username || relAuthor,
-            createdAt: roundMsg.createdAt,
-            content: kindLabel('ROUND', undefined, roundSt),
-            kind: 'round',
-            backendKind: 'ROUND',
-            settlementTargetId: settleTargetId,
-            roundPayload: { settlementType: roundSt },
-          }]);
-          scrollMsgToCenter(roundMsg.id);
-        }).catch(() => {});
+        const roundPromise = new Promise<string | null>((resolve) => {
+          api.createMessage(topicId!, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId, settlementType: roundSt }).then(roundMsg => {
+            setMessages((prev: any) => [...prev, {
+              id: roundMsg.id,
+              author: roundMsg.createdBy?.username || relAuthor,
+              createdAt: roundMsg.createdAt,
+              content: kindLabel('ROUND', undefined, roundSt),
+              kind: 'round',
+              backendKind: 'ROUND',
+              settlementTargetId: settleTargetId,
+              roundPayload: { settlementType: roundSt, roundId: (roundMsg as any).relationPayload?.roundId },
+            }]);
+            scrollMsgToCenter(roundMsg.id);
+            resolve(roundMsg.id);
+          }).catch(() => resolve(null));
+        });
+        return roundPromise;
       }
     }
+    return Promise.resolve(null);
   }, [topicId]);
 
   const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
@@ -1370,6 +1395,24 @@ export default function TopicDetailPage() {
     }
     return { textIds, relationIds };
   }, [relations, relationById]);
+  const summaryCoverageByMessageId = useMemo(() => {
+    const map = new Map<string, Array<{ summaryId: string; title: string }>>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'SUMMARY') continue;
+      const targetIds = new Set<string>();
+      for (const ref of relation.targetRefs as TargetRef[]) {
+        if (ref.kind === 'relation') targetIds.add(ref.relationId);
+        else targetIds.add(ref.messageId);
+      }
+      const title = getRelationTitle(relation.payload) || `总结（${targetIds.size}）`;
+      for (const targetId of targetIds) {
+        const existing = map.get(targetId) ?? [];
+        existing.push({ summaryId: relation.id, title });
+        map.set(targetId, existing);
+      }
+    }
+    return map;
+  }, [relations]);
 
   // Expand classify/summary ownership text IDs to include text messages that have
   // CORRECT (更正) relations with any already-owned message. This ensures that when
@@ -1660,7 +1703,7 @@ export default function TopicDetailPage() {
     onUpdated?: (newRelId: string) => void,
   ): Promise<void> | void {
     const currentClassifyId = latestClassifyRelMsgIdRef.current;
-    if (!isInsideClassify || !currentClassifyId || !topicId) return;
+    if (!currentClassifyId || !topicId) return;
     const topicRelation = relationsRef.current.find(r => r.id === currentClassifyId);
     if (!topicRelation) return;
     const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
@@ -1677,6 +1720,19 @@ export default function TopicDetailPage() {
         supersedeMapRef.current.set(oldRelId, newRelId);
         // Keep ref in sync so next addTargetToClassifyTopic targets the latest classify
         latestClassifyRelMsgIdRef.current = newRelId;
+        relationsRef.current = relationsRef.current.filter(r => r.id !== oldRelId).map(r => {
+          const refs = (r.targetRefs ?? []) as TargetRef[];
+          const hasOldRef = refs.some(ref => ref.kind === 'relation' && ref.relationId === oldRelId);
+          if (!hasOldRef) return r;
+          return {
+            ...r,
+            targetRefs: refs.map(ref =>
+              ref.kind === 'relation' && ref.relationId === oldRelId
+                ? { ...ref, relationId: newRelId }
+                : ref
+            ),
+          };
+        }).concat(updatedRel);
         // Replace old relation with superseding new one.
         // Also update any parent relation's targetRefs that reference the old ID,
         // so the ownership chain (collectOwnedByRelation) stays intact.
@@ -1741,6 +1797,52 @@ export default function TopicDetailPage() {
       .catch(e => console.warn('更新分类目标失败:', e));
   }
 
+  async function registerCreatedRelationInCurrentClassify(backendRel: Relation): Promise<string | null> {
+    const roundId = await appendCreatedRelation(backendRel);
+    const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
+    if (!isDedup) {
+      await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+    }
+    if (roundId) {
+      await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
+    }
+    return roundId;
+  }
+
+  async function createSettlementRoundForMessage(
+    settleTargetId: string,
+    fallbackAuthor: string,
+    settlementType: 'TRUTH' | 'VALUE' = 'TRUTH',
+  ): Promise<string | null> {
+    if (!topicId) return null;
+    const rounds = messagesRef.current.filter(m =>
+      m.kind === 'round' && m.settlementTargetId === settleTargetId
+        && ((m as any).roundPayload?.settlementType ?? 'TRUTH') === settlementType
+    );
+    const results = messagesRef.current.filter(m =>
+      m.kind === 'round_result' && m.settlementTargetId === settleTargetId
+    );
+    if (rounds.length > results.length) return null;
+    const roundMsg = await api.createMessage(topicId, {
+      kind: 'ROUND',
+      content: undefined,
+      targetMessageId: settleTargetId,
+      settlementType,
+    });
+    setMessages((prev: any) => [...prev, {
+      id: roundMsg.id,
+      author: roundMsg.createdBy?.username || fallbackAuthor,
+      createdAt: roundMsg.createdAt,
+      content: kindLabel('ROUND', undefined, settlementType),
+      kind: 'round',
+      backendKind: 'ROUND',
+      settlementTargetId: settleTargetId,
+      roundPayload: { settlementType, roundId: (roundMsg as any).relationPayload?.roundId },
+    }]);
+    scrollMsgToCenter(roundMsg.id);
+    return roundMsg.id;
+  }
+
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
@@ -1783,7 +1885,7 @@ export default function TopicDetailPage() {
         if (currentClassifyRelMsgId) {
           // Persist the new message as a target of the classify/summary topic
           // so the message remains scoped inside the topic after exit / reload.
-          addTargetToClassifyTopic(
+          await addTargetToClassifyTopic(
             { kind: 'message', messageId: msg.id },
             (newRelId) => {
               // Add a classify/summary edge for the new message so the topic
@@ -1815,7 +1917,8 @@ export default function TopicDetailPage() {
         m.kind === 'round_result' && m.settlementTargetId === msg.id
       );
       if (rounds.length <= results.length) {
-        api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id, settlementType: 'TRUTH' }).then(roundMsg => {
+        try {
+          const roundMsg = await api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id, settlementType: 'TRUTH' });
           setMessages((prev: any) => [...prev, {
             id: roundMsg.id,
             author: roundMsg.createdBy?.username || msg.author,
@@ -1824,10 +1927,11 @@ export default function TopicDetailPage() {
             kind: 'round',
             backendKind: 'ROUND',
             settlementTargetId: msg.id,
-            roundPayload: { settlementType: 'TRUTH' },
+            roundPayload: { settlementType: 'TRUTH', roundId: (roundMsg as any).relationPayload?.roundId },
           }]);
+          await addTargetToClassifyTopic({ kind: 'message', messageId: roundMsg.id });
           scrollMsgToCenter(roundMsg.id);
-        }).catch(() => {});
+        } catch { /* round creation optional */ }
       }
       return msg;
     } catch (e: any) {
@@ -1926,7 +2030,8 @@ export default function TopicDetailPage() {
       setViewMode("list");
       // Highlight specific round in settlement panel
       const rp = (m as any).roundPayload;
-      if (rp?.roundId) sessionStorage.setItem('settlementHighlightRound', rp.roundId as string);
+      const roundIdToHighlight = rp?.roundId ?? (m.kind === 'round_result' ? messageId : null);
+      if (roundIdToHighlight) sessionStorage.setItem('settlementHighlightRound', roundIdToHighlight as string);
       const classifyRel = relations.find(r =>
         r.relationType === 'CLASSIFY' &&
         (r.targetRefs as Array<{ messageId?: string }>).some(t => t.messageId === targetId)
@@ -2213,8 +2318,7 @@ export default function TopicDetailPage() {
         payload: buildRelationPayload(payload as unknown as Parameters<typeof buildRelationPayload>[0]),
       });
       const relId = backendRel.id;
-      appendCreatedRelation(backendRel);
-      addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+      await registerCreatedRelationInCurrentClassify(backendRel);
       const anonSrcId = `anon:${relId}`;
       return { id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge;
     } catch (e: any) {
@@ -2276,8 +2380,7 @@ export default function TopicDetailPage() {
                 payload: replyPayload,
               });
               const relId = backendRel.id;
-              appendCreatedRelation(backendRel);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+              await registerCreatedRelationInCurrentClassify(backendRel);
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reply", replyEdgeLabel, relId));
             } catch (e: any) { alert(`建立回复关系失败: ${e?.message ?? e}`); }
           }
@@ -2292,8 +2395,7 @@ export default function TopicDetailPage() {
           for (const t of targets) {
             try {
               const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs: [unitSelectionToTargetRef(t, msgMap)] });
-              appendCreatedRelation(backendRel);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+              await registerCreatedRelationInCurrentClassify(backendRel);
             } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
           }
         }
@@ -2302,8 +2404,7 @@ export default function TopicDetailPage() {
         for (const targetMid of uniqueTargetMids) {
           try {
             const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+            await registerCreatedRelationInCurrentClassify(backendRel);
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
@@ -2317,8 +2418,7 @@ export default function TopicDetailPage() {
           if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = newMessageContent.trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
           const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)], payload: Object.keys(payload).length > 0 ? payload : undefined });
           const relId = backendRel.id;
-          appendCreatedRelation(backendRel);
-          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+          await registerCreatedRelationInCurrentClassify(backendRel);
           const anonSrcId = `anon:${backendRel.id}`;
           newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
@@ -2357,8 +2457,7 @@ export default function TopicDetailPage() {
                 payload: refPayload,
               });
               const relId = backendRel.id;
-              appendCreatedRelation(backendRel);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+              await registerCreatedRelationInCurrentClassify(backendRel);
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reference", refEdgeLabel, relId));
             } catch (e: any) { alert(`建立引用关系失败: ${e?.message ?? e}`); }
           }
@@ -2378,8 +2477,7 @@ export default function TopicDetailPage() {
                 targetRefs: [unitSelectionToTargetRef(t, msgMap)],
               });
               const relId = backendRel.id;
-              appendCreatedRelation(backendRel);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+              await registerCreatedRelationInCurrentClassify(backendRel);
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "annotation", label, relId));
             } catch (e: any) { alert(`建立注释关系失败: ${e?.message ?? e}`); }
           }
@@ -2400,8 +2498,7 @@ export default function TopicDetailPage() {
           try {
             const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs, payload: undefined });
             const relId = backendRel.id;
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+            await registerCreatedRelationInCurrentClassify(backendRel);
             for (const t of targets) {
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, relationType, label, relId));
             }
@@ -2496,11 +2593,7 @@ export default function TopicDetailPage() {
             }
             const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef], payload: relPayload });
             const relId = backendRel.id;
-            const isDup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
-            appendCreatedRelation(backendRel);
-            if (!isDup) {
-              addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            }
+            await registerCreatedRelationInCurrentClassify(backendRel);
             // Only add edge if not already present for this relation-target pair
             const alreadyHasEdge = edgesRef.current.some(e =>
               e.relationMessageId === relId && e.to.messageId === tgtMid);
@@ -2579,8 +2672,7 @@ export default function TopicDetailPage() {
             // Step 1: Create the new relation of secondary type with the same endpoints
             const newRelBackend = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
             const newRelId = newRelBackend.id;
-            appendCreatedRelation(newRelBackend);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
+            await registerCreatedRelationInCurrentClassify(newRelBackend);
             const newFromId = newSourceId ?? `anon:${newRelId}`;
             for (const e of edgesToCorrect) {
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
@@ -2588,8 +2680,7 @@ export default function TopicDetailPage() {
             // Step 2: Create the CORRECT relation with the new relation as source, old relation as target
             const corrBackendRel = await createRel(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
             const corrRelId = corrBackendRel.id;
-            appendCreatedRelation(corrBackendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
+            await registerCreatedRelationInCurrentClassify(corrBackendRel);
             newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
           } else {
             // Specific fragments selected: one separate correction per selected edge fragment
@@ -2598,15 +2689,13 @@ export default function TopicDetailPage() {
               // Step 1: Create a new relation of secondary type for this fragment only
               const newRelBackend = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
               const newRelId = newRelBackend.id;
-              appendCreatedRelation(newRelBackend);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
+              await registerCreatedRelationInCurrentClassify(newRelBackend);
               const newFromId = newSourceId ?? `anon:${newRelId}`;
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...edge.to }, relationLabel: secTypeName } as DemoEdge);
               // Step 2: Create the CORRECT relation for this fragment
               const corrBackendRel = await createRel(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
               const corrRelId = corrBackendRel.id;
-              appendCreatedRelation(corrBackendRel);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
+              await registerCreatedRelationInCurrentClassify(corrBackendRel);
               newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
             }
           }
@@ -2630,8 +2719,7 @@ export default function TopicDetailPage() {
         const refPayload = undefined;
         const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs, payload: refPayload });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        await registerCreatedRelationInCurrentClassify(backendRel);
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeLabel = typeName;
         for (const t of draftUnits) {
@@ -2659,7 +2747,7 @@ export default function TopicDetailPage() {
         const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
         try {
           const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
-          appendCreatedRelation(backendRel);
+          await registerCreatedRelationInCurrentClassify(backendRel);
           // If backend transformed to RECOMMEND/ARCHIVE, create inline-badge edge
           const effectiveRelType = backendRel.relationType?.toUpperCase();
           if (effectiveRelType === 'RECOMMEND' || effectiveRelType === 'ARCHIVE') {
@@ -2680,7 +2768,6 @@ export default function TopicDetailPage() {
               }
             }
           }
-          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
       }
       if (newEdgesList2.length > 0) setEdges(prev => [...prev, ...newEdgesList2]);
@@ -2717,8 +2804,7 @@ export default function TopicDetailPage() {
         const relId = backendRel.id;
         // Encode layout direction in relationLabel so layout engine can read it directly
         const edgeLabel = secondaryRelationType === 'horizontal' ? 'arrange-h' : 'arrange-v';
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        await registerCreatedRelationInCurrentClassify(backendRel);
         const anonSrcId = `anon:${backendRel.id}`;
         for (const tgtMid of allTargetMids) {
           newEdgesList.push({
@@ -2744,6 +2830,8 @@ export default function TopicDetailPage() {
       // but their target text message is not among the messages being classified.
       const orphanLabels: string[] = [];
       for (const u of effectiveTargets) {
+        const targetMsg = msgMap.get(u.messageId);
+        if (targetMsg && isContentKind(targetMsg.kind)) continue;
         const rt = relationTypeByRelMsgId.get(u.messageId);
         if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
         const rel = relationById.get(u.messageId);
@@ -2797,27 +2885,62 @@ export default function TopicDetailPage() {
           payload: buildRelationPayload({ relationType: 'CLASSIFY', title: classifyTitle }),
         });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
+        const classifyRoundId = await appendCreatedRelation(backendRel);
 
-        // Supersede existing CLASSIFY/SUMMARY that own reclassified text messages.
-        // Current focus: remove text messages and add new classify as target.
-        // Other classifies: just remove text messages.
+        // Remove reclassified targets from parent classifies.
+        // Handle current classify first (awaited), then others (fire-and-forget).
+        const reclassifiedTargetKeys = new Set(targetRefs.map(ref =>
+          ref.kind === 'relation' ? `relation:${ref.relationId}` : `message:${ref.messageId}`
+        ));
         const reclassifiedTextIds = new Set(targetTextIds);
-        const newClassifyRef: TargetRef = { kind: 'relation', relationId: backendRel.id };
+        const isReclassified = (ref: TargetRef) => {
+          if (ref.kind === 'relation') return reclassifiedTargetKeys.has(`relation:${ref.relationId}`);
+          return reclassifiedTargetKeys.has(`message:${ref.messageId}`) || reclassifiedTextIds.has(ref.messageId);
+        };
+        if (isInsideClassify && currentClassifyRelMsgId) {
+          const curRel = relationsRef.current.find(r => r.id === currentClassifyRelMsgId);
+          if (curRel) {
+            const remainingRefs = (curRel.targetRefs as TargetRef[]).filter(ref => !isReclassified(ref));
+            if (remainingRefs.length !== (curRel.targetRefs as TargetRef[]).length) {
+              try {
+                const updatedRel = await supersedeRel(topicId!, currentClassifyRelMsgId, {
+                  relationType: curRel.relationType,
+                  targetRefs: remainingRefs,
+                  payload: curRel.payload,
+                });
+                const newId = updatedRel.id; const oldId = currentClassifyRelMsgId;
+                supersedeMapRef.current.set(oldId, newId);
+                latestClassifyRelMsgIdRef.current = newId;
+                // Update relationsRef immediately so subsequent addTargetToClassifyTopic finds the new version
+                relationsRef.current = relationsRef.current.filter(r => r.id !== oldId).map(r => {
+                  const refs = (r.targetRefs ?? []) as TargetRef[];
+                  return refs.some(ref => ref.kind === 'relation' && ref.relationId === oldId)
+                    ? { ...r, targetRefs: refs.map(ref => ref.kind === 'relation' && ref.relationId === oldId ? { ...ref, relationId: newId } : ref) }
+                    : r;
+                });
+                relationsRef.current.push(updatedRel);
+                setRelations(prev => prev.filter(r => r.id !== oldId).map(r => {
+                  const refs = (r.targetRefs ?? []) as TargetRef[];
+                  return refs.some(ref => ref.kind === 'relation' && ref.relationId === oldId)
+                    ? { ...r, targetRefs: refs.map(ref => ref.kind === 'relation' && ref.relationId === oldId ? { ...ref, relationId: newId } : ref) }
+                    : r;
+                }).concat(updatedRel));
+                setMessages(prev => [...prev.filter(m => m.id !== oldId), buildRelationDemoMessage(updatedRel)]);
+                setFocusEntries(prev => prev.map(e =>
+                  e.mode === 'topic' && e.topicRelMsgId === oldId ? { ...e, topicRelMsgId: newId } : e
+                ));
+              } catch { /* text removal optional */ }
+            }
+          }
+        }
         for (const rel of relations) {
           if (rel.relationType !== 'CLASSIFY' && rel.relationType !== 'SUMMARY') continue;
-          const owned = collectOwnedByRelation(rel.id, relationById);
-          const overlap = [...owned.textIds].filter(id => reclassifiedTextIds.has(id));
-          const isCurrent = isInsideClassify && currentClassifyRelMsgId === rel.id;
-          if (overlap.length === 0 && !isCurrent) continue;
-          const remainingRefs = (rel.targetRefs as TargetRef[]).filter(
-            ref => !((ref.kind === 'message' || ref.kind === 'text-fragment') && reclassifiedTextIds.has(ref.messageId))
-          );
-          const updatedRefs = isCurrent ? [...remainingRefs, newClassifyRef] : remainingRefs;
-          if (updatedRefs.length === 0) continue;
+          if (isInsideClassify && rel.id === currentClassifyRelMsgId) continue; // handled above
+          const remainingRefs = (rel.targetRefs as TargetRef[]).filter(ref => !isReclassified(ref));
+          if (remainingRefs.length === (rel.targetRefs as TargetRef[]).length) continue;
           supersedeRel(topicId!, rel.id, {
             relationType: rel.relationType,
-            targetRefs: updatedRefs,
+            targetRefs: remainingRefs,
             payload: rel.payload,
           }).then(updatedRel => {
             const newId = updatedRel.id; const oldId = rel.id;
@@ -2829,11 +2952,15 @@ export default function TopicDetailPage() {
                 : r;
             }).concat(updatedRel));
             setMessages(prev => [...prev.filter(m => m.id !== oldId), buildRelationDemoMessage(updatedRel)]);
-            if (isCurrent) setFocusEntries(prev => prev.map(e =>
+            setFocusEntries(prev => prev.map(e =>
               e.mode === 'topic' && e.topicRelMsgId === oldId ? { ...e, topicRelMsgId: newId } : e
             ));
           }).catch(() => {});
         }
+
+        // Now add CLASSIFY and its ROUND to the current classify.
+        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        if (classifyRoundId) await addTargetToClassifyTopic({ kind: 'message', messageId: classifyRoundId });
 
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
@@ -2876,6 +3003,8 @@ export default function TopicDetailPage() {
       // Warn if unrelated relation labels are selected
       const orphanSummaryLabels: string[] = [];
       for (const u of effectiveTargets) {
+        const targetMsg = msgMap.get(u.messageId);
+        if (targetMsg && isContentKind(targetMsg.kind)) continue;
         const rt = relationTypeByRelMsgId.get(u.messageId);
         if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
         const rel = relationById.get(u.messageId);
@@ -2906,8 +3035,9 @@ export default function TopicDetailPage() {
           payload: buildRelationPayload({ relationType: 'SUMMARY', title: summaryTitle, targetLayout: 'multi-column' }),
         });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        const roundId = await appendCreatedRelation(backendRel);
+        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        if (roundId) await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
           summaryTargetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
@@ -2949,6 +3079,8 @@ export default function TopicDetailPage() {
       // Warn if unrelated relation labels are selected
       const orphanMergeLabels: string[] = [];
       for (const u of effectiveTargets) {
+        const targetMsg = msgMap.get(u.messageId);
+        if (targetMsg && isContentKind(targetMsg.kind)) continue;
         const rt = relationTypeByRelMsgId.get(u.messageId);
         if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
         const rel = relationById.get(u.messageId);
@@ -2984,8 +3116,9 @@ export default function TopicDetailPage() {
           payload: buildRelationPayload({ relationType: 'MERGE', targetLayout: 'multi-column' }),
         });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        const roundId = await appendCreatedRelation(backendRel);
+        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        if (roundId) await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
         const virtualFrameNodeId = `anon:${backendRel.id}`;
         // Only add merge edges on the main canvas, not inside another classify
         if (!isInsideClassify) {
@@ -3126,12 +3259,16 @@ export default function TopicDetailPage() {
         setMessages(prev => [...prev, govMsg]);
         setRelations(prev => [...prev, backendRel]);
         await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        const govRoundId = await createSettlementRoundForMessage(
+          backendRel.id,
+          backendRel.createdBy?.username ?? user?.username ?? '?',
+          'TRUTH',
+        );
+        if (govRoundId) await addTargetToClassifyTopic({ kind: 'message', messageId: govRoundId });
         // Create REFERENCE relations from governance message to each target.
         if (hasTargetsAvailable) {
           const refMinStake = relationStakeMap.current['REFERENCE'] ?? 10;
           const refStake = Math.max(refMinStake, 1);
-          const totalTargets = effectiveTargets.length;
-          let completedRefs = 0;
           for (const t of effectiveTargets) {
             try {
               const targetRef = unitSelectionToTargetRef(t, msgMap);
@@ -3141,8 +3278,7 @@ export default function TopicDetailPage() {
                 targetRefs: [targetRef],
                 stakeAmount: refStake,
               });
-              appendCreatedRelation(refRel);
-              completedRefs++;
+              await registerCreatedRelationInCurrentClassify(refRel);
               setEdges(prev => [...prev, {
                 id: nextId("edge"),
                 relationMessageId: refRel.id,
@@ -3155,9 +3291,6 @@ export default function TopicDetailPage() {
               console.error(`创建引用关系失败: ${e?.message ?? e}`);
             }
           }
-          if (completedRefs < totalTargets) {
-            console.warn(`[governance] REFERENCE 创建不完整: ${completedRefs}/${totalTargets}`);
-          }
         }
         // Auto-self-stake
         const selfStake = relStakeRef.current;
@@ -3166,34 +3299,6 @@ export default function TopicDetailPage() {
           setStakeCounts(prev => ({ ...prev, [backendRel.id]: { pro: s.counts.pro, con: s.counts.con } }));
         }).catch(() => {});
         window.dispatchEvent(new Event('points-refresh'));
-        // Phase 6: auto-create settlement ROUND message for governance/ops messages.
-        // Phase 6: auto-create settlement ROUND message card for governance/ops.
-        // Skip if an un-settled ROUND card already exists.
-        if (topicId) {
-          const settleTargetId = backendRel.id;
-          const rounds = messagesRef.current.filter(m =>
-            m.kind === 'round' && m.settlementTargetId === settleTargetId
-          );
-          const results = messagesRef.current.filter(m =>
-            m.kind === 'round_result' && m.settlementTargetId === settleTargetId
-          );
-          if (rounds.length <= results.length) {
-            const govAuthor = backendRel.createdBy?.username ?? user?.username ?? '?';
-            api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId, settlementType: 'TRUTH' }).then(roundMsg => {
-              setMessages((prev: any) => [...prev, {
-                id: roundMsg.id,
-                author: roundMsg.createdBy?.username || govAuthor,
-                createdAt: roundMsg.createdAt,
-                content: kindLabel('ROUND', undefined, 'TRUTH'),
-                kind: 'round',
-                backendKind: 'ROUND',
-                settlementTargetId: settleTargetId,
-                roundPayload: { settlementType: 'TRUTH' },
-              }]);
-              scrollMsgToCenter(roundMsg.id);
-            }).catch(() => {});
-          }
-        }
       } catch (e: any) {
         alert(`建立${relationTypeName(relationType)}关系失败: ${e?.message ?? e}`);
         return;
@@ -3948,12 +4053,6 @@ export default function TopicDetailPage() {
         }
       }
       const visibleIds = new Set<string>([...topicTextIds, ...topicRelationIds]);
-      // Also include settlement round/result messages whose target is visible
-      for (const m of baseMessages) {
-        if ((m.kind === 'round' || m.kind === 'round_result') && m.settlementTargetId && visibleIds.has(m.settlementTargetId)) {
-          visibleIds.add(m.id);
-        }
-      }
       const topicMessages = baseMessages.filter(m => visibleIds.has(m.id));
       // Include edges whose relation message is visible.  For CLASSIFY and SUMMARY
       // edges, keep them even when the target text messages are not in visibleIds —
@@ -4107,8 +4206,7 @@ export default function TopicDetailPage() {
         sourceMessageId: null,
         targetRefs: [{ kind: 'message', messageId }],
       });
-      appendCreatedRelation(backendRel);
-      addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+      await registerCreatedRelationInCurrentClassify(backendRel);
     } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
   }
 
@@ -4484,6 +4582,7 @@ export default function TopicDetailPage() {
                     ? collectOwnedByRelation(msg.id, relationById).textIds.size
                     : 0;
                   const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类（${topicMsgTargetCount}）` : isMergeTopicMsg ? `归并（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
+                  const summaryCoverages = summaryCoverageByMessageId.get(msg.id) ?? [];
                   return (
                     <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
                       style={{
@@ -4586,6 +4685,15 @@ export default function TopicDetailPage() {
                         </div>
                       )}
                       {isActiveText && isContentKind(msg.kind) && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
+                      {summaryCoverages.length > 0 && (
+                        <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {summaryCoverages.map(item => (
+                            <span key={item.summaryId} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)" }}>
+                              非线性视图由总结「{item.title}」覆盖
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => isContentKind(msg.kind) && handleTextMouseUp(e, msg.id)}>
                         {isContentKind(msg.kind)
                           ? renderMessageContentWithAnchorsForList(msg)

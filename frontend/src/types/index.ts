@@ -469,10 +469,12 @@ export interface VoteCastResult {
 export interface StanceRelation {
   kind: 'relation';
   id: string;
+  relationMessageId: string;
   topicId: string;
   topicTitle: string;
   type: string;      // AGREE | DISAGREE | SELF_AGREE
   amount: number;
+  stakeId?: string | null;
   targetMessageId: string | null;
   content: string | null;
   createdAt: string;
@@ -492,6 +494,7 @@ export interface StanceStake {
 export interface StanceTag {
   kind: 'tag';
   id: string;
+  relationMessageId: string;
   topicId: string;
   topicTitle: string;
   relationType: string;  // TAG | RECOMMEND | ARCHIVE
@@ -499,6 +502,7 @@ export interface StanceTag {
   subType: string | null;      // SPAM | OFFTOPIC | LOWVALUE | IMPORTANT | CUSTOM
   customLabel: string | null;
   targetMessageId: string | null;
+  stakeId?: string | null;
   amount: number;
   createdAt: string;
 }

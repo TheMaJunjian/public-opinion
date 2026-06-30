@@ -127,7 +127,7 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
           kind: 'round',
           backendKind: 'ROUND',
           settlementTargetId: messageId,
-          roundPayload: { settlementType: round.settlementType ?? 'TRUTH' },
+          roundPayload: { settlementType: round.settlementType ?? 'TRUTH', roundId: round.id },
         });
       }
     } catch (e: unknown) {

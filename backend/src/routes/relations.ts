@@ -258,12 +258,12 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       }
     }
 
-    // Validate target relation messages exist in this topic (kind=RELATION)
+    // Validate target relation messages exist in this topic (kind=RELATION/GOVERNANCE/CODE/OPERATIONS)
     let foundTargetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }> = [];
     if (targetRelationIds.length > 0) {
       const uniqueRelationIds = [...new Set(targetRelationIds)];
       const directTargetRelations = await prisma.message.findMany({
-        where: { id: { in: uniqueRelationIds }, topicId, kind: 'RELATION' },
+        where: { id: { in: uniqueRelationIds }, topicId, kind: { in: ['RELATION', 'GOVERNANCE', 'CODE'] } },
         select: { id: true, relationType: true, targetRefs: true },
       });
       if (directTargetRelations.length !== uniqueRelationIds.length) {

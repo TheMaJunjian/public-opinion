@@ -1002,14 +1002,22 @@ export default function TopicDetailPage() {
     const relCount = multiTargetCount > 0 ? multiTargetCount : 1;
     const relStakeTotal = relStakeAmount * relCount;
     const relBurnTotal = burnPerOp * relCount;
-    const totalStake = textStake + relStakeTotal;
-    const totalBurn = textBurn + relBurnTotal;
+    // Governance/ops: add reference stake costs for each target
+    const isGovOps2 = relationType === 'proposal' || relationType === 'code_change' || relationType === 'operations';
+    const govRefCount = isGovOps2 ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
+    const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
+    const refStakeTotal = govRefCount > 0 ? govRefCount * refMin : 0;
+    const refBurnTotal = govRefCount > 0 ? govRefCount * burnPerOp : 0;
+    const totalStake = textStake + relStakeTotal + refStakeTotal;
+    const totalBurn = textBurn + relBurnTotal + refBurnTotal;
     return {
       stakeTotal: totalStake,
       burnTotal: totalBurn,
       total: totalStake + totalBurn,
       perStake: relStakeAmount,
       textStake,
+      refStakeTotal,
+      refCount: govRefCount,
       relCount,
       hasText: textStake > 0,
       hasRel: true,
@@ -1660,22 +1668,25 @@ export default function TopicDetailPage() {
   function addTargetToClassifyTopic(
     newTargetRef: TargetRef,
     onUpdated?: (newRelId: string) => void,
-  ) {
-    if (!isTopicFocus || !topicFocusRelMsgId || !topicId) return;
-    const topicRelation = relationById.get(topicFocusRelMsgId);
+  ): Promise<void> | void {
+    const currentClassifyId = latestTopicRelMsgIdRef.current;
+    if (!isTopicFocus || !currentClassifyId || !topicId) return;
+    const topicRelation = relationsRef.current.find(r => r.id === currentClassifyId);
     if (!topicRelation) return;
     const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
     const updatedRefs = [...existingRefs, newTargetRef];
-    supersedeRel(topicId, topicFocusRelMsgId, {
+    return supersedeRel(topicId, currentClassifyId, {
       relationType: topicRelation.relationType,
       targetRefs: updatedRefs,
       payload: topicRelation.payload,
     })
       .then(updatedRel => {
         const newRelId = updatedRel.id;
-        const oldRelId = topicFocusRelMsgId;
+        const oldRelId = currentClassifyId;
         // Track supersede chain for point-record message ID resolution
         supersedeMapRef.current.set(oldRelId, newRelId);
+        // Keep ref in sync so next addTargetToClassifyTopic targets the latest classify
+        latestTopicRelMsgIdRef.current = newRelId;
         // Replace old relation with superseding new one.
         // Also update any parent relation's targetRefs that reference the old ID,
         // so the ownership chain (collectOwnedByRelation) stays intact.
@@ -2440,6 +2451,7 @@ export default function TopicDetailPage() {
         const parts: string[] = [];
         if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
         if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
+        if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
         if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
         errors.push(`贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`);
       }
@@ -2847,15 +2859,18 @@ export default function TopicDetailPage() {
         const edgeTargetIds = Array.from(new Set(
           targetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
         ));
-        const newEdges = edgeTargetIds.map(targetMid => ({
-          id: nextId("edge"),
-          relationMessageId: relId,
-          relationType: "classify" as RelationType,
-          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
-          to: { messageId: targetMid, selection: { kind: "whole" as const } },
-          relationLabel: relationTypeName("classify"),
-        }));
-        setEdges(prev => [...prev, ...newEdges]);
+        // Only add classify edges on the main canvas, not inside another classify
+        if (!isTopicFocus) {
+          const newEdges = edgeTargetIds.map(targetMid => ({
+            id: nextId("edge"),
+            relationMessageId: relId,
+            relationType: "classify" as RelationType,
+            from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+            to: { messageId: targetMid, selection: { kind: "whole" as const } },
+            relationLabel: relationTypeName("classify"),
+          }));
+          setEdges(prev => [...prev, ...newEdges]);
+        }
       } catch (e: any) {
         alert(`建立关系失败: ${e?.message ?? e}`);
         return;
@@ -2917,15 +2932,18 @@ export default function TopicDetailPage() {
         const edgeTargetIds = Array.from(new Set(
           summaryTargetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
         ));
-        const newEdges = edgeTargetIds.map(targetMid => ({
-          id: nextId("edge"),
-          relationMessageId: relId,
-          relationType: "summary" as RelationType,
-          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
-          to: { messageId: targetMid, selection: { kind: "whole" as const } },
-          relationLabel: relationTypeName("summary"),
-        }));
-        setEdges(prev => [...prev, ...newEdges]);
+        // Only add summary edges on the main canvas, not inside another classify
+        if (!isTopicFocus) {
+          const newEdges = edgeTargetIds.map(targetMid => ({
+            id: nextId("edge"),
+            relationMessageId: relId,
+            relationType: "summary" as RelationType,
+            from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+            to: { messageId: targetMid, selection: { kind: "whole" as const } },
+            relationLabel: relationTypeName("summary"),
+          }));
+          setEdges(prev => [...prev, ...newEdges]);
+        }
       } catch (e: any) {
         alert(`建立总结关系失败: ${e?.message ?? e}`);
         return;
@@ -2989,17 +3007,20 @@ export default function TopicDetailPage() {
         appendCreatedRelation(backendRel);
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const virtualFrameNodeId = `anon:${backendRel.id}`;
-        const newEdges = mergeTargetRefs.map(targetRef => ({
-          id: nextId("edge"),
-          relationMessageId: relId,
-          relationType: "merge" as RelationType,
-          from: { messageId: virtualFrameNodeId, selection: { kind: "whole" as const } },
-          to: targetRef.kind === "relation"
-            ? { messageId: targetRef.relationId, selection: { kind: "whole" as const } }
-            : { messageId: targetRef.messageId, selection: { kind: "whole" as const } },
-          relationLabel: relationTypeName("merge"),
-        }));
-        setEdges(prev => [...prev, ...newEdges]);
+        // Only add merge edges on the main canvas, not inside another classify
+        if (!isTopicFocus) {
+          const newEdges = mergeTargetRefs.map(targetRef => ({
+            id: nextId("edge"),
+            relationMessageId: relId,
+            relationType: "merge" as RelationType,
+            from: { messageId: virtualFrameNodeId, selection: { kind: "whole" as const } },
+            to: targetRef.kind === "relation"
+              ? { messageId: targetRef.relationId, selection: { kind: "whole" as const } }
+              : { messageId: targetRef.messageId, selection: { kind: "whole" as const } },
+            relationLabel: relationTypeName("merge"),
+          }));
+          setEdges(prev => [...prev, ...newEdges]);
+        }
       } catch (e: any) {
         alert(`建立归并关系失败: ${e?.message ?? e}`);
         return;
@@ -3125,12 +3146,10 @@ export default function TopicDetailPage() {
         setMessages(prev => [...prev, govMsg]);
         setRelations(prev => [...prev, backendRel]);
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-        // Create REFERENCE relations from governance message to each target
+        // Create REFERENCE relations from governance message to each target.
         if (hasTargetsAvailable) {
           const refMinStake = relationStakeMap.current['REFERENCE'] ?? 10;
           const refStake = Math.max(refMinStake, 1);
-          // Phase 1: create all REFERENCE relations (API calls)
-          const refResults: Array<{ refRel: Relation; target: UnitSelection }> = [];
           for (const t of effectiveTargets) {
             try {
               const targetRef = unitSelectionToTargetRef(t, msgMap);
@@ -3140,26 +3159,18 @@ export default function TopicDetailPage() {
                 targetRefs: [targetRef],
                 stakeAmount: refStake,
               });
-              refResults.push({ refRel, target: t });
-            } catch (e: any) {
-              console.error(`创建引用关系失败: ${e?.message ?? e}`);
-            }
-          }
-          // Phase 2: batch all state updates (messages, relations, edges) in one microtask
-          if (refResults.length > 0) {
-            const newEdgesList: DemoEdge[] = [];
-            for (const { refRel, target } of refResults) {
               appendCreatedRelation(refRel);
-              newEdgesList.push({
+              setEdges(prev => [...prev, {
                 id: nextId("edge"),
                 relationMessageId: refRel.id,
                 relationType: "reference",
                 from: { messageId: backendRel.id, selection: { kind: "whole" } },
-                to: { ...target },
+                to: { ...t },
                 relationLabel: "reference",
-              } as DemoEdge);
+              } as DemoEdge]);
+            } catch (e: any) {
+              console.error(`创建引用关系失败: ${e?.message ?? e}`);
             }
-            setEdges(prev => [...prev, ...newEdgesList]);
           }
         }
         // Auto-self-stake
@@ -3364,6 +3375,7 @@ export default function TopicDetailPage() {
       const parts: string[] = [];
       if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
       if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
+      if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
       if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
       return `贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`;
     }
@@ -3722,6 +3734,11 @@ export default function TopicDetailPage() {
   const isTopicFocus = currentFocusEntry?.mode === "topic";
   const topicFocusRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
 
+  // Track latest classify ID across async supersede calls so sequential
+  // addTargetToClassifyTopic calls always target the current classify.
+  const latestTopicRelMsgIdRef = useRef<string | null>(null);
+  useEffect(() => { latestTopicRelMsgIdRef.current = topicFocusRelMsgId; }, [topicFocusRelMsgId]);
+
   // Set of relation-message IDs that are directly in the current focus set.
   // Used to ensure that edges of focused relations are always visible regardless
   // of endpoint checks (fix: REFERENCE edge not showing when relation is focused).
@@ -3765,10 +3782,10 @@ export default function TopicDetailPage() {
     // 主画布：visible = NOT in hiddenTextIds
     const visible = new Set<string>();
     for (const m of messages) {
-      if (isContentKind(m.kind) && !graphHiddenTextIds.has(m.id)) visible.add(m.id);
+      if (isContentKind(m.kind) && !graphHiddenTextIds.has(m.id) && !graphOwnedRelationIds.has(m.id)) visible.add(m.id);
     }
     return visible;
-  }, [isTopicFocus, topicFocusRelMsgId, relationById, messages, graphHiddenTextIds]);
+  }, [isTopicFocus, topicFocusRelMsgId, relationById, messages, graphHiddenTextIds, graphOwnedRelationIds]);
 
   // 跨分类引用标签：按二级标签分组（"证据" / "引用" / 自定义）
   // 消息 A（可见）引用 B（不可见）→ A 上显示 outgoing 标签
@@ -4022,6 +4039,8 @@ export default function TopicDetailPage() {
       : baseMessages.filter(m => {
           if (isContentKind(m.kind) && graphHiddenTextIds.has(m.id)) return false;
           if (m.kind === "relation" && graphHiddenRelationIds.has(m.id)) return false;
+          // Hide content-kind messages owned by a classify (e.g. governance/ops cards)
+          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id)) return false;
           return true;
         });
     const graphVisibleIds = new Set(graphMessages.map(m => m.id));
@@ -4885,6 +4904,7 @@ export default function TopicDetailPage() {
                       （{[
                         totalConsumption.hasText ? `文本 ${totalConsumption.textStake}` : null,
                         totalConsumption.hasRel ? `关系 ${totalConsumption.perStake}×${totalConsumption.relCount}` : null,
+                        (totalConsumption as any).refCount > 0 ? `引用 ${(totalConsumption as any).refStakeTotal}` : null,
                         totalConsumption.burnTotal > 0 ? `燃烧 ${totalConsumption.burnTotal}` : null,
                       ].filter(Boolean).join(' + ')}）
                     </span>

@@ -188,7 +188,7 @@ describe('E2E — 完整用户流程（模拟所有前端操作）', () => {
         .set(auth(alice.token))
         .send({
           relationType: 'ARCHIVE',
-          sourceMessageId: msgId1,
+          sourceMessageId: null,
           targetRefs: [{ kind: 'message', messageId: msgId1 }],
         });
       if (archive.status !== 201) {

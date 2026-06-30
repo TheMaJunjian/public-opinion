@@ -77,6 +77,7 @@ const mockRound = {
   messageId: 'msg-1',
   createdByUserId: 'user-1',
   status: 'VOTING',
+  settlementType: 'TRUTH',
   result: null,
   previousRoundId: null,
   openedAt: new Date(),
@@ -106,25 +107,34 @@ describe('POST /api/messages/:id/rounds', () => {
     expect(res.status).toBe(404);
   });
 
-  it('should return 500 when debt-frozen (Phase 6: checked in applyMessageCreated)', async () => {
+  it('should return 403 when debt-frozen (Phase 6: checked in applyMessageCreated)', async () => {
     (prisma.message.findUnique as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ debtFrozen: true });
     const res = await request(app)
       .post('/api/messages/msg-1/rounds')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({});
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('账户因负债被冻结');
   });
 
-  it('should reject concurrent round (Phase 6: checked in applyMessageCreated)', async () => {
+  it('should reuse existing active round without creating a duplicate SettlementRound', async () => {
     (prisma.message.findUnique as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ debtFrozen: false });
-    (prisma.settlementRound.findFirst as jest.Mock).mockResolvedValue({ id: 'existing-round', status: 'VOTING' });
+    (prisma.message.create as jest.Mock).mockResolvedValue({ id: 'round-msg-1', kind: 'ROUND' });
+    (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'log-1' });
+    (prisma.auditLog.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([{ id: 'round-msg-1', kind: 'ROUND' }]);
+    (prisma.settlementRound.findFirst as jest.Mock)
+      .mockResolvedValueOnce({ id: 'existing-round', status: 'VOTING' })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...mockRound, id: 'existing-round', status: 'VOTING' });
     const res = await request(app)
       .post('/api/messages/msg-1/rounds')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({});
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(201);
+    expect(prisma.settlementRound.create).not.toHaveBeenCalled();
   });
 
   it('should create round successfully (Phase 6: via ROUND message)', async () => {
@@ -189,10 +199,7 @@ describe('GET /api/rounds/:id', () => {
 
   it('should return round with weights', async () => {
     (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({ ...mockRound });
-    (prisma.stake.findMany as jest.Mock).mockResolvedValue([
-      { side: 'PRO', amount: 50 }, { side: 'PRO', amount: 50 },
-      { side: 'CON', amount: 30 }, { side: 'CON', amount: 20 },
-    ]);
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 100, lockedCon: 50 });
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
     (prisma.message.findMany as jest.Mock).mockResolvedValue([]);
     const res = await request(app).get('/api/rounds/round-1');
@@ -272,7 +279,7 @@ describe('POST /api/rounds/:id/votes', () => {
     expect(res.body.message).toBe('投票成功');
   });
 
-  it('should return 402 when debt-frozen user tries to vote (Phase 4)', async () => {
+  it('should return 403 when debt-frozen user tries to vote (Phase 4)', async () => {
     (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({ ...mockRound, messageId: 'msg-1' });
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: -50, debtFrozen: true });
@@ -283,8 +290,8 @@ describe('POST /api/rounds/:id/votes', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ vote: 'TRUE', amount: 5 });
 
-    expect(res.status).toBe(402);
-    expect(res.body.error).toContain('贡献点余额不足');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('账户因负债被冻结');
   });
 });
 
@@ -679,7 +686,7 @@ describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
     // Verify betPool.update was called with zeroed values
     expect(prisma.betPool.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { messageId: 'msg-1' },
+        where: { messageId_settlementType: { messageId: 'msg-1', settlementType: 'TRUTH' } },
         data: { lockedPro: 0, lockedCon: 0 },
       }),
     );
@@ -719,8 +726,8 @@ describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
     // Verify betPool.upsert was called with restored values from stakes + votes
     expect(prisma.betPool.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { messageId: 'msg-1' },
-        create: expect.objectContaining({ lockedPro: 50, lockedCon: 50 }),
+        where: { messageId_settlementType: { messageId: 'msg-1', settlementType: 'TRUTH' } },
+        create: expect.objectContaining({ messageId: 'msg-1', settlementType: 'TRUTH', lockedPro: 50, lockedCon: 50 }),
         update: expect.objectContaining({ lockedPro: 50, lockedCon: 50 }),
       }),
     );

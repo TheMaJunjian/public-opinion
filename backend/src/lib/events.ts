@@ -11,6 +11,11 @@ import { Prisma } from '@prisma/client';
 import { logSettlement, logUserSettlement, logLoserSettlement, logClawback, logClawbackLoser, logBetPoolRestore } from './settlementLogger';
 import { log, debugLog } from './logger';
 
+async function firstTransactionResult<T>(result: unknown): Promise<T> {
+  if (!Array.isArray(result)) throw new Error('Transaction result is not an array');
+  return await result[0] as T;
+}
+
 // ============================================================
 // Event Type Definitions
 // ============================================================
@@ -396,7 +401,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
       }),
     );
 
-    const [message] = await prisma.$transaction(ops) as [any, ...any[]];
+    const message = await firstTransactionResult<any>(await prisma.$transaction(ops));
 
     await prisma.auditLog.updateMany({
       where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
@@ -426,7 +431,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
 
   if (!payload.content) throw new Error('TEXT 消息内容不能为空');
 
-  const [message] = await prisma.$transaction([
+  const message = await firstTransactionResult<any>(await prisma.$transaction([
     prisma.message.create({
       data: {
         topicId,
@@ -464,7 +469,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
         },
       },
     }),
-  ]);
+  ]));
 
   await prisma.auditLog.updateMany({
     where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
@@ -739,7 +744,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         ...(transformedFrom ? { transformedFrom } : {}),
       }
     : (payload.relationPayload as Record<string, unknown> | undefined);
-  const [message] = await prisma.$transaction([
+  const message = await firstTransactionResult<any>(await prisma.$transaction([
     prisma.message.create({
       data: {
         topicId,
@@ -772,7 +777,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         },
       },
     }),
-  ]);
+  ]));
 
   if (payload.supersedesRelationId) {
     await prisma.message.update({
@@ -918,7 +923,7 @@ async function ensureVotingRound(messageId: string, actorId: string, topicId: st
     select: { id: true },
   });
 
-  const [round] = await prisma.$transaction([
+  const round = await firstTransactionResult<any>(await prisma.$transaction([
     prisma.settlementRound.create({
       data: {
         messageId,
@@ -939,7 +944,7 @@ async function ensureVotingRound(messageId: string, actorId: string, topicId: st
         data: { messageId, settlementType, previousRoundId: latestSettled?.id ?? null, autoCreated: true },
       },
     }),
-  ]);
+  ]));
 
   await prisma.auditLog.updateMany({
     where: { action: 'ROUND_CREATED', entityId: '', actorId, topicId },

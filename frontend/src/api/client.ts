@@ -22,10 +22,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error(err.error || err.message || res.statusText);
   }
   const data = await res.json();
-  // Log writes that change state
-  if (method !== 'GET') {
-    debugLog('API', `${method} ${path} → ${res.status}`);
-  }
   return data;
 }
 

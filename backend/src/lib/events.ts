@@ -902,19 +902,16 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
  * @param settlementType 'TRUTH' for AGREE/DISAGREE, 'VALUE' for RECOMMEND/ARCHIVE
  */
 async function ensureVotingRound(messageId: string, actorId: string, topicId: string, settlementType: string = 'TRUTH') {
-  const msgShort = messageId?.slice(-6) ?? '?';
-  debugLog('ensureVotingRound', `msg=${msgShort} type=${settlementType}`);
   // Check for existing active round of the same settlement type
   const existing = await prisma.settlementRound.findFirst({
     where: { messageId, settlementType, status: { in: ['OPEN', 'VOTING'] } },
     select: { id: true },
   });
   if (existing) {
-    debugLog('ensureVotingRound', `复用已有 round=${existing.id.slice(-6)}`);
     return existing;
   }
 
-  debugLog('ensureVotingRound', `创建新轮次 type=${settlementType}`);
+  debugLog('ensureVotingRound', `创建新轮次 msg=${messageId?.slice(-6) ?? '?'} type=${settlementType}`);
 
   // Link to latest settled round of the same settlement type for overturn chain
   const latestSettled = await prisma.settlementRound.findFirst({

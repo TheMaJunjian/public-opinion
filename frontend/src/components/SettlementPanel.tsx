@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../api';
 import type { SettlementRoundItem, MessageStakes } from '../types';
 import { kindLabel } from '../utils/modelBridge';
-import { debugLog, traceLog } from '../utils/debugLog';
+import { debugLog } from '../utils/debugLog';
 
 interface Props {
   messageId: string;
@@ -48,14 +48,12 @@ export default function SettlementPanel({ messageId, topicId: _topicId, highligh
       if (loadId !== loadIdRef.current) return; // cancelled by newer load
       setStakes(stakesData);
       setRounds(roundsData.data);
-      traceLog('SettlementPanel', `rounds: ${JSON.stringify(roundsData.data.map((r: SettlementRoundItem) => ({ id: r.id.slice(-6), type: r.settlementType, status: r.status })))}`);
 
       // Find ALL active (VOTING/OPEN) rounds — filter by settlementType if specified
       let allActive = roundsData.data.filter(r => r.status === 'VOTING' || r.status === 'OPEN');
       if (filterSettlementType) {
         allActive = allActive.filter(r => r.settlementType === filterSettlementType);
       }
-      traceLog('SettlementPanel', `filter=${filterSettlementType ?? 'none'} active=[${allActive.map(r => r.id.slice(-6)).join(',')}]`);
       if (allActive.length > 0) {
         const details = await Promise.all(allActive.map(r => api.getRoundDetail(r.id)));
         if (loadId !== loadIdRef.current) return;

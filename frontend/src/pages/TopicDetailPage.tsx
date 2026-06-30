@@ -19,7 +19,6 @@ import RevenuePanel from '../components/RevenuePanel';
 import { applyContainerExpansion } from '../utils/focusContainer';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
-import { traceLog } from '../utils/debugLog';
 
 // ========================= Helpers =========================
 
@@ -1093,7 +1092,6 @@ export default function TopicDetailPage() {
   const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
-    traceLog('appendCreatedRelation', `enter relType=${backendRel.relationType} id=${backendRel.id.slice(-6)} topicId=${topicId?.slice(-6) ?? 'null'}`);
     // Skip adding duplicate relations (deduplicated on backend)
     // When deduplicated, update the existing relation/message in state instead
     const isDedup = !!(backendRel as Record<string, unknown>).deduplicated;
@@ -1195,7 +1193,6 @@ export default function TopicDetailPage() {
         m.kind === 'round_result' && m.settlementTargetId === settleTargetId
       );
       if (rounds.length <= results.length) {
-        traceLog('appendCreatedRelation', `创建ROUND卡 settleTarget=${settleTargetId.slice(-6)} type=${roundSt} relType=${relType}`);
         const relAuthor = backendRel.createdBy?.username ?? '?';
         api.createMessage(topicId!, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId, settlementType: roundSt }).then(roundMsg => {
           setMessages((prev: any) => [...prev, {
@@ -1447,7 +1444,7 @@ export default function TopicDetailPage() {
           // alongside the source in the linear and graph views.
           const sourceHidden = relEdges.some(e => {
             const fromM = msgMap.get(e.from.messageId);
-            return fromM && isContentKind(fromM.kind) && hiddenTextIds.has(e.from.messageId);
+            return fromM && isContentKind(fromM.kind) && (hiddenTextIds.has(e.from.messageId) || ownedRelationIds.has(e.from.messageId));
           });
           if (sourceHidden) {
             ids.add(relMsgId);
@@ -1669,8 +1666,8 @@ export default function TopicDetailPage() {
     newTargetRef: TargetRef,
     onUpdated?: (newRelId: string) => void,
   ): Promise<void> | void {
-    const currentClassifyId = latestTopicRelMsgIdRef.current;
-    if (!isTopicFocus || !currentClassifyId || !topicId) return;
+    const currentClassifyId = latestClassifyRelMsgIdRef.current;
+    if (!isInsideClassify || !currentClassifyId || !topicId) return;
     const topicRelation = relationsRef.current.find(r => r.id === currentClassifyId);
     if (!topicRelation) return;
     const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
@@ -1686,7 +1683,7 @@ export default function TopicDetailPage() {
         // Track supersede chain for point-record message ID resolution
         supersedeMapRef.current.set(oldRelId, newRelId);
         // Keep ref in sync so next addTargetToClassifyTopic targets the latest classify
-        latestTopicRelMsgIdRef.current = newRelId;
+        latestClassifyRelMsgIdRef.current = newRelId;
         // Replace old relation with superseding new one.
         // Also update any parent relation's targetRefs that reference the old ID,
         // so the ownership chain (collectOwnedByRelation) stays intact.
@@ -1782,7 +1779,7 @@ export default function TopicDetailPage() {
       }).catch(() => {});
       // Reset to rule default
       setStakeAmount(minSelfStake);
-      if (isTopicFocus) {
+      if (isInsideClassify) {
         setFocusEntries(prev => {
           if (prev.length === 0) return prev;
           const last = prev[prev.length - 1];
@@ -1790,7 +1787,7 @@ export default function TopicDetailPage() {
           return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
         });
         setFocusExitKey(k => k + 1); // force StructureView remount
-        if (topicFocusRelMsgId) {
+        if (currentClassifyRelMsgId) {
           // Persist the new message as a target of the classify/summary topic
           // so the message remains scoped inside the topic after exit / reload.
           addTargetToClassifyTopic(
@@ -1798,7 +1795,7 @@ export default function TopicDetailPage() {
             (newRelId) => {
               // Add a classify/summary edge for the new message so the topic
               // card reflects the updated target count in GraphView.
-              const relType = (topicFocusRelType === "summary" ? "summary" : "classify") as RelationType;
+              const relType = (currentClassifyRelType === "summary" ? "summary" : "classify") as RelationType;
               const alreadyLinked = false; // fresh target, no existing edge
               if (!alreadyLinked) {
                 setEdges(prev => [...prev, {
@@ -2507,7 +2504,6 @@ export default function TopicDetailPage() {
               }
             }
             const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef], payload: relPayload });
-            traceLog('TAG', `创建标注 type=${secType} relId=${backendRel.id.slice(-6)} target=${tgtMid.slice(-6)} isDup=${!!(backendRel as Record<string, unknown>).deduplicated}`);
             const relId = backendRel.id;
             const isDup = !!(backendRel as Record<string, unknown>).deduplicated;
             appendCreatedRelation(backendRel);
@@ -2828,7 +2824,7 @@ export default function TopicDetailPage() {
           if (rel.relationType !== 'CLASSIFY' && rel.relationType !== 'SUMMARY') continue;
           const owned = collectOwnedByRelation(rel.id, relationById);
           const overlap = [...owned.textIds].filter(id => reclassifiedTextIds.has(id));
-          const isCurrent = isTopicFocus && topicFocusRelMsgId === rel.id;
+          const isCurrent = isInsideClassify && currentClassifyRelMsgId === rel.id;
           if (overlap.length === 0 && !isCurrent) continue;
           const remainingRefs = (rel.targetRefs as TargetRef[]).filter(
             ref => !((ref.kind === 'message' || ref.kind === 'text-fragment') && reclassifiedTextIds.has(ref.messageId))
@@ -2860,7 +2856,7 @@ export default function TopicDetailPage() {
           targetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
         ));
         // Only add classify edges on the main canvas, not inside another classify
-        if (!isTopicFocus) {
+        if (!isInsideClassify) {
           const newEdges = edgeTargetIds.map(targetMid => ({
             id: nextId("edge"),
             relationMessageId: relId,
@@ -2933,7 +2929,7 @@ export default function TopicDetailPage() {
           summaryTargetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
         ));
         // Only add summary edges on the main canvas, not inside another classify
-        if (!isTopicFocus) {
+        if (!isInsideClassify) {
           const newEdges = edgeTargetIds.map(targetMid => ({
             id: nextId("edge"),
             relationMessageId: relId,
@@ -3008,7 +3004,7 @@ export default function TopicDetailPage() {
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const virtualFrameNodeId = `anon:${backendRel.id}`;
         // Only add merge edges on the main canvas, not inside another classify
-        if (!isTopicFocus) {
+        if (!isInsideClassify) {
           const newEdges = mergeTargetRefs.map(targetRef => ({
             id: nextId("edge"),
             relationMessageId: relId,
@@ -3145,11 +3141,13 @@ export default function TopicDetailPage() {
         };
         setMessages(prev => [...prev, govMsg]);
         setRelations(prev => [...prev, backendRel]);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         // Create REFERENCE relations from governance message to each target.
         if (hasTargetsAvailable) {
           const refMinStake = relationStakeMap.current['REFERENCE'] ?? 10;
           const refStake = Math.max(refMinStake, 1);
+          const totalTargets = effectiveTargets.length;
+          let completedRefs = 0;
           for (const t of effectiveTargets) {
             try {
               const targetRef = unitSelectionToTargetRef(t, msgMap);
@@ -3160,6 +3158,7 @@ export default function TopicDetailPage() {
                 stakeAmount: refStake,
               });
               appendCreatedRelation(refRel);
+              completedRefs++;
               setEdges(prev => [...prev, {
                 id: nextId("edge"),
                 relationMessageId: refRel.id,
@@ -3171,6 +3170,9 @@ export default function TopicDetailPage() {
             } catch (e: any) {
               console.error(`创建引用关系失败: ${e?.message ?? e}`);
             }
+          }
+          if (completedRefs < totalTargets) {
+            console.warn(`[governance] REFERENCE 创建不完整: ${completedRefs}/${totalTargets}`);
           }
         }
         // Auto-self-stake
@@ -3731,13 +3733,13 @@ export default function TopicDetailPage() {
 
   const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitFocus = focusEntries.length > 0;
-  const isTopicFocus = currentFocusEntry?.mode === "topic";
-  const topicFocusRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
+  const isInsideClassify = currentFocusEntry?.mode === "topic";
+  const currentClassifyRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
 
   // Track latest classify ID across async supersede calls so sequential
   // addTargetToClassifyTopic calls always target the current classify.
-  const latestTopicRelMsgIdRef = useRef<string | null>(null);
-  useEffect(() => { latestTopicRelMsgIdRef.current = topicFocusRelMsgId; }, [topicFocusRelMsgId]);
+  const latestClassifyRelMsgIdRef = useRef<string | null>(null);
+  useEffect(() => { latestClassifyRelMsgIdRef.current = currentClassifyRelMsgId; }, [currentClassifyRelMsgId]);
 
   // Set of relation-message IDs that are directly in the current focus set.
   // Used to ensure that edges of focused relations are always visible regardless
@@ -3750,34 +3752,41 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [focusEntries, msgMap]);
-  const topicFocusTargetCount = useMemo(
-    () => topicFocusRelMsgId ? collectOwnedByRelation(topicFocusRelMsgId, relationById).textIds.size : 0,
-    [topicFocusRelMsgId, relationById]
+  const classifyTargetCount = useMemo(
+    () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
+    [currentClassifyRelMsgId, relationById]
   );
-  const topicFocusRelMsg = useMemo(
-    () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,
-    [topicFocusRelMsgId, msgMap]
+  const currentClassifyRelMsg = useMemo(
+    () => currentClassifyRelMsgId ? msgMap.get(currentClassifyRelMsgId) : null,
+    [currentClassifyRelMsgId, msgMap]
   );
-  const topicFocusRelType = useMemo(
+  const currentClassifyRelType = useMemo(
     () => {
-      if (topicFocusRelMsg?.relationType === "summary") return "summary";
-      if (topicFocusRelMsg?.relationType === "classify") return "classify";
+      if (currentClassifyRelMsg?.relationType === "summary") return "summary";
+      if (currentClassifyRelMsg?.relationType === "classify") return "classify";
       return null;
     },
-    [topicFocusRelMsg]
+    [currentClassifyRelMsg]
   );
-  const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : topicFocusRelType === "classify" ? "分类" : "分类";
-  const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : topicFocusRelType === "classify" ? "退出分类" : "退出分类";
-  const topicFocusTitle = topicFocusRelMsg
-    ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`)
+  const classifyKindLabel = currentClassifyRelType === "summary" ? "总结" : currentClassifyRelType === "classify" ? "分类" : "分类";
+  const classifyExitLabel = currentClassifyRelType === "summary" ? "退出总结" : currentClassifyRelType === "classify" ? "退出分类" : "退出分类";
+  const topicFocusTitle = currentClassifyRelMsg
+    ? (getRelationTitle(currentClassifyRelMsg.relationPayload) || `${classifyKindLabel}（${classifyTargetCount}）`)
     : "";
 
-  // 当前视图实际可见的文本消息ID集（考虑焦点/分类上下文）
+  // 当前视图实际可见的内容消息ID集（考虑焦点/分类上下文）
   const graphVisibleTextIds = useMemo(() => {
-    if (isTopicFocus && topicFocusRelMsgId) {
-      const topicRelation = relationById.get(topicFocusRelMsgId);
+    if (isInsideClassify && currentClassifyRelMsgId) {
+      const topicRelation = relationById.get(currentClassifyRelMsgId);
       if (!topicRelation) return new Set<string>();
-      return new Set<string>(getTextTargetIds(topicRelation.targetRefs));
+      const ids = new Set<string>(getTextTargetIds(topicRelation.targetRefs));
+      // Also include content-kind relation targets (governance/code/ops)
+      // so REFERENCE edges from them are not treated as cross-classify.
+      for (const relId of getRelationTargetIds(topicRelation.targetRefs)) {
+        const m = msgMap.get(relId);
+        if (m && isContentKind(m.kind)) ids.add(relId);
+      }
+      return ids;
     }
     // 主画布：visible = NOT in hiddenTextIds
     const visible = new Set<string>();
@@ -3785,7 +3794,7 @@ export default function TopicDetailPage() {
       if (isContentKind(m.kind) && !graphHiddenTextIds.has(m.id) && !graphOwnedRelationIds.has(m.id)) visible.add(m.id);
     }
     return visible;
-  }, [isTopicFocus, topicFocusRelMsgId, relationById, messages, graphHiddenTextIds, graphOwnedRelationIds]);
+  }, [isInsideClassify, currentClassifyRelMsgId, relationById, messages, graphHiddenTextIds, graphOwnedRelationIds]);
 
   // 跨分类引用标签：按二级标签分组（"证据" / "引用" / 自定义）
   // 消息 A（可见）引用 B（不可见）→ A 上显示 outgoing 标签
@@ -3830,11 +3839,11 @@ export default function TopicDetailPage() {
   }, [edges, msgMap, graphVisibleTextIds]);
 
   const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender, hideMessageIds } = useMemo(() => {
-    const useFocusWindow = focusEntries.length > 0 && !isTopicFocus;
+    const useFocusWindow = focusEntries.length > 0 && !isInsideClassify;
     const baseMessages = useFocusWindow ? messagesToShow : messages;
     const baseEdges = useFocusWindow ? edgesToShow : edges;
-    if (isTopicFocus && topicFocusRelMsgId) {
-      const topicRelation = relationById.get(topicFocusRelMsgId);
+    if (isInsideClassify && currentClassifyRelMsgId) {
+      const topicRelation = relationById.get(currentClassifyRelMsgId);
       const topicTextIds = new Set<string>();
       const topicRelationIds = new Set<string>();
       if (topicRelation) {
@@ -3921,12 +3930,16 @@ export default function TopicDetailPage() {
         edgesByRel.set(e.relationMessageId, arr);
       }
       for (const [relMsgId, relEdges] of edgesByRel) {
-        if (relMsgId === topicFocusRelMsgId || topicRelationIds.has(relMsgId)) continue;
+        if (relMsgId === currentClassifyRelMsgId || topicRelationIds.has(relMsgId)) continue;
         const textEndpoints = relEdges
           .flatMap(e => [e.from.messageId, e.to.messageId])
           .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
         if (textEndpoints.length > 0) {
-          if (textEndpoints.every(mid => topicTextIds.has(mid))) {
+          // A content-kind endpoint is "in topic" if it's in topicTextIds
+          // OR in topicRelationIds (governance/code/ops are relation targets).
+          const endpointInTopic = (mid: string) =>
+            topicTextIds.has(mid) || topicRelationIds.has(mid);
+          if (textEndpoints.every(mid => endpointInTopic(mid))) {
             topicRelationIds.add(relMsgId);
           } else if (relEdges[0]?.relationType === 'reference') {
             // Cross-topic REFERENCE: include the relation message when its source
@@ -3934,7 +3947,7 @@ export default function TopicDetailPage() {
             // a different classify topic.
             const sourceInTopic = relEdges.some(e => {
               const fromM = msgMap.get(e.from.messageId);
-              return fromM && isContentKind(fromM.kind) && topicTextIds.has(e.from.messageId);
+              return fromM && isContentKind(fromM.kind) && endpointInTopic(e.from.messageId);
             });
             if (sourceInTopic) {
               topicRelationIds.add(relMsgId);
@@ -3951,6 +3964,12 @@ export default function TopicDetailPage() {
         }
       }
       const visibleIds = new Set<string>([...topicTextIds, ...topicRelationIds]);
+      // Also include settlement round/result messages whose target is visible
+      for (const m of baseMessages) {
+        if ((m.kind === 'round' || m.kind === 'round_result') && m.settlementTargetId && visibleIds.has(m.settlementTargetId)) {
+          visibleIds.add(m.id);
+        }
+      }
       const topicMessages = baseMessages.filter(m => visibleIds.has(m.id));
       // Include edges whose relation message is visible.  For CLASSIFY and SUMMARY
       // edges, keep them even when the target text messages are not in visibleIds —
@@ -3989,17 +4008,20 @@ export default function TopicDetailPage() {
     // In focus mode (useFocusWindow), baseMessages is already correctly filtered by
     // the BFS + container expansion logic.  The classified-message hiding below is
     // only for the main (non-focus) view.
+    const skipClassifyHiding = useFocusWindow || isInsideClassify;
     const listHiddenRelationIds = new Set<string>([
       ...classifyOwnership.relationIds,
       ...classifiedTargetSummaryRelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
-    const listMessages = useFocusWindow
+    const listMessages = skipClassifyHiding
       ? baseMessages
       : baseMessages.filter(m => {
           if (isContentKind(m.kind) && classifiedTargetTextIds.has(m.id)) return false;
           if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
+          // Hide content-kind messages owned by a classify (e.g. governance/ops cards)
+          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id)) return false;
           return true;
         });
     const listVisibleIds = new Set(listMessages.map(m => m.id));
@@ -4034,7 +4056,7 @@ export default function TopicDetailPage() {
       ...graphExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
-    const graphMessages = useFocusWindow
+    const graphMessages = skipClassifyHiding
       ? baseMessages
       : baseMessages.filter(m => {
           if (isContentKind(m.kind) && graphHiddenTextIds.has(m.id)) return false;
@@ -4085,7 +4107,7 @@ export default function TopicDetailPage() {
       listEdgesToRender: listEdges,
       hideMessageIds,
     };
-  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
+  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -4417,26 +4439,26 @@ export default function TopicDetailPage() {
               {viewMode === "list" ? "线性视图：支持自由换行内容；双击 normal 进入文本选择模式；可点击高亮片段切换选中。" : "结构图：注释/引用 source 自动推到 target 右侧列（规则1）；label避让文字；高亮片段可点击。"}
             </div>
           </div>
-          {isTopicFocus && (
+          {isInsideClassify && (
             <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
               <div style={{ border: "1px solid #334155", borderRadius: 10, padding: "8px 10px", background: "linear-gradient(180deg, #162036 0%, #0f172a 100%)", color: "#e2e8f0", boxShadow: "0 6px 16px rgba(0,0,0,0.25)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {topicFocusTitle || topicFocusKindLabel}
+                      {topicFocusTitle || classifyKindLabel}
                     </div>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
                       进行中
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{topicFocusRelMsg?.author ?? "系统"}</span> 发起</span>
-                    <span>💬 {topicFocusTargetCount} 条观点</span>
-                    <span>{topicFocusRelMsg ? new Date(topicFocusRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                    <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{currentClassifyRelMsg?.author ?? "系统"}</span> 发起</span>
+                    <span>💬 {classifyTargetCount} 条观点</span>
+                    <span>{currentClassifyRelMsg ? new Date(currentClassifyRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
                   </div>
                 </div>
                 <button onClick={exitFocus} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
-                  {topicFocusExitLabel}
+                  {classifyExitLabel}
                 </button>
               </div>
             </div>
@@ -4452,13 +4474,13 @@ export default function TopicDetailPage() {
             {messagesToRenderClean.length === 0 ? (
               <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
-                <div>{isTopicFocus ? `当前${topicFocusKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
+                <div>{isInsideClassify ? `当前${classifyKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
                 <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 360, lineHeight: 1.6 }}>
-                  {isTopicFocus ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : focusEntries.length > 0 ? "当前焦点范围内没有匹配的消息。尝试退出焦点或调整过滤规则。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他用户可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
+                  {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : focusEntries.length > 0 ? "当前焦点范围内没有匹配的消息。尝试退出焦点或调整过滤规则。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他用户可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
                 </div>
                 {canExitFocus && (
                   <button onClick={exitFocus} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
-                    {isTopicFocus ? topicFocusExitLabel : "退出焦点"}
+                    {isInsideClassify ? classifyExitLabel : "退出焦点"}
                   </button>
                 )}
               </div>
@@ -4669,7 +4691,7 @@ export default function TopicDetailPage() {
                     设为焦点消息
                   </button>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isTopicFocus ? `退出当前${topicFocusKindLabel}并恢复进入前现场` : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>退出焦点</button>
+                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isInsideClassify ? `退出当前${classifyKindLabel}并恢复进入前现场` : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>退出焦点</button>
                     <button onClick={exitAllFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#333" : "#222", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
                   </div>
                 </div>
@@ -4930,7 +4952,7 @@ export default function TopicDetailPage() {
 
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ fontWeight: 600 }}>焦点</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>{isTopicFocus ? "当前模式：分类" : "当前模式：焦点"}</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>{isInsideClassify ? "当前模式：分类" : "当前模式：焦点"}</div>
             <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
           </div>
 

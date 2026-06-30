@@ -26,7 +26,6 @@ export default function PointsBadge() {
     if (!user) return;
     try {
       const data = await getPointsBalance();
-      debugLog('贡献点', `avail=${data.points.available} lock=${data.points.locked} lost=${data.breakdown.totalLost} burn=${data.breakdown.totalBurned} earn=${data.breakdown.totalEarned} | ${data.points.available}+${data.points.locked}+${data.breakdown.totalLost}+${data.breakdown.totalBurned}=${data.points.available+data.points.locked+data.breakdown.totalLost+data.breakdown.totalBurned} vs init+earn=${data.breakdown.initialMinted+data.breakdown.totalEarned}`);
       setBalance(data);
       setError(false);
     } catch {

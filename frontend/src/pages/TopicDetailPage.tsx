@@ -1094,7 +1094,7 @@ export default function TopicDetailPage() {
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
     // Skip adding duplicate relations (deduplicated on backend)
     // When deduplicated, update the existing relation/message in state instead
-    const isDedup = !!(backendRel as Record<string, unknown>).deduplicated;
+    const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
     if (isDedup) {
       // Update existing relation and message with fresh data (e.g. incremented sendCount)
       setRelations(prev => prev.map(r => r.id === backendRel.id ? backendRel : r));
@@ -1105,14 +1105,7 @@ export default function TopicDetailPage() {
     }
     const relType = backendRel.relationType?.toUpperCase();
     const targetMsgIds: string[] = [];
-    let stanceSide: 'pro' | 'con' | null = null;
-    let stanceStakePts = 0;
     if (relType === 'AGREE' || relType === 'DISAGREE') {
-      stanceSide = relType === 'AGREE' ? 'pro' : 'con';
-      const rawPayload = (backendRel as Record<string, unknown>).relationPayload
-        ?? backendRel.payload;
-      const relPayload = rawPayload as Record<string, unknown> | null;
-      stanceStakePts = (relPayload?.amount as number) ?? relStakeRef.current;
       targetMsgIds.push(...backendRel.targetRefs
         .filter((ref) => 
           (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
@@ -1144,7 +1137,7 @@ export default function TopicDetailPage() {
         .map(ref => (ref as { messageId: string }).messageId));
     }
     // Self-stake amount for the relation message itself
-    const rawPayload2 = (backendRel as Record<string, unknown>).relationPayload
+    const rawPayload2 = (backendRel as unknown as Record<string, unknown>).relationPayload
       ?? backendRel.payload;
     const relPayload2 = rawPayload2 as Record<string, unknown> | null;
     const selfStake = (relPayload2?.amount as number) ?? relStakeRef.current;
@@ -1225,7 +1218,7 @@ export default function TopicDetailPage() {
         // For RECOMMEND/ARCHIVE from voting: create edge for badge display
         const rt = detail.relationType?.toUpperCase();
         if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
-          const isDup = !!(detail as Record<string, unknown>).deduplicated;
+          const isDup = !!(detail as unknown as Record<string, unknown>).deduplicated;
           if (!isDup) {
             const targetIds = detail.targetRefs
               .filter(ref => (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
@@ -2212,12 +2205,12 @@ export default function TopicDetailPage() {
     const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
     try {
       const payload: Record<string, unknown> = { relationType: 'TAG', label: tagLabel };
-      if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = newMessageContent.trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
+      if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = (customLabel || newMessageContent).trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
       const backendRel = await createRel(topicId, {
         relationType: 'TAG',
         sourceMessageId: null,
         targetRefs: [backendTargetRef],
-        payload: buildRelationPayload(payload as RelationPayload),
+        payload: buildRelationPayload(payload as unknown as Parameters<typeof buildRelationPayload>[0]),
       });
       const relId = backendRel.id;
       appendCreatedRelation(backendRel);
@@ -2430,8 +2423,6 @@ export default function TopicDetailPage() {
 
     // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
     const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
-    const targetCount = hasTargetsAvailable ? effectiveTargets.length : 0;
-
     // Validate both stakes — collect all errors
     const errors: string[] = [];
     if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) {
@@ -2505,7 +2496,7 @@ export default function TopicDetailPage() {
             }
             const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef], payload: relPayload });
             const relId = backendRel.id;
-            const isDup = !!(backendRel as Record<string, unknown>).deduplicated;
+            const isDup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
             appendCreatedRelation(backendRel);
             if (!isDup) {
               addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
@@ -2636,24 +2627,17 @@ export default function TopicDetailPage() {
       const typeName = relationTypeName(relationType);
       const newEdgesList: DemoEdge[] = [];
       try {
-        const refPayload = relationType === "reference" && secondaryRelationType !== "none"
-          ? buildRelationPayload({
-              relationType: "reference",
-              label: secondaryRelationType === "custom" ? (relationLabel || "自定义") : secondaryRelationType,
-            })
-          : undefined;
+        const refPayload = undefined;
         const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs, payload: refPayload });
         const relId = backendRel.id;
         appendCreatedRelation(backendRel);
         addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         const anonSrcId = `anon:${backendRel.id}`;
-        const edgeLabel = relationType === "reference" && secondaryRelationType !== "none"
-          ? (secondaryRelationType === "custom" ? (relationLabel || "自定义") : secondaryRelationLabel(secondaryRelationType))
-          : typeName;
+        const edgeLabel = typeName;
         for (const t of draftUnits) {
           newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: edgeLabel } as DemoEdge);
         }
-        if (secondaryRelationType !== "none" && relationType !== "reference") {
+        if (secondaryRelationType !== "none") {
           const secType = secondaryRelationType as RelationType;
           for (const t of draftUnits) {
             newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: relationTypeName(secType) } as DemoEdge);
@@ -4812,7 +4796,7 @@ export default function TopicDetailPage() {
               {relationType === "reply" && (
               <input
                 style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: relationType === "reply" ? "#1a1a1a" : "#222", color: relationType === "reply" ? "#999" : "#eee", fontSize: 12 }}
-                placeholder={relationType === "annotation" ? "注释标签" : relationType === "reply" ? "回复标签由附加关系决定" : "关系标签"}
+                placeholder="回复标签由附加关系决定"
                 value={relationType === "reply" ? replyAdditionalLabel(secondaryRelationType) : relationLabel}
                 readOnly={relationType === "reply"}
                 onChange={e => relationType !== "reply" && setRelationLabel(e.target.value)}

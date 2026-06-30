@@ -3,7 +3,6 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getPointsBalance, getPointsTransactions } from '../api/client';
 import type { PointsBalance, PointTransaction } from '../types';
-import { debugLog } from '../utils/debugLog';
 
 /**
  * PointsBadge — 导航栏贡献点显示组件。

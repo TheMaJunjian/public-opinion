@@ -425,6 +425,7 @@ export interface VoteStakeItem {
 
 export interface SettlementRoundItem {
   id: string;
+  roundMessageId?: string;
   messageId: string;
   createdByUserId: string;
   createdBy: User;

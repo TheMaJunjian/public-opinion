@@ -55,7 +55,6 @@ export default function CleanFilterPanel({
   totalCount,
   onAdd,
   onRemove,
-  onUpdate,
   onClear,
 }: CleanFilterPanelProps) {
   const [open, setOpen] = useState(false);

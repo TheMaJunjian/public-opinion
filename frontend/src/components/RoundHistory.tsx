@@ -118,7 +118,6 @@ export default function RoundHistory({ messageId, compact = false }: Props) {
 /** Build chain from linked list of rounds */
 function buildChain(rounds: SettlementRoundItem[]): SettlementRoundItem[] {
   const byId = new Map(rounds.map(r => [r.id, r]));
-  const hasPrev = new Set(rounds.filter(r => r.previousRoundId).map(r => r.id));
 
   // Find the head (round that no other round points to via previousRoundId)
   let head = rounds.find(r => !r.previousRoundId || !byId.has(r.previousRoundId));

@@ -3,7 +3,6 @@ import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useCleanView } from '../hooks/useCleanView';
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
-import type { CleanFilterRule } from '../types';
 
 // ── 测试数据工厂 ──
 

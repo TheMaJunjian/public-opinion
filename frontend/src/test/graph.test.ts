@@ -19,6 +19,7 @@ function makeMsg(id: string, username = 'user'): Message {
   return {
     id,
     topicId: 'topic1',
+    kind: 'TEXT',
     contentType: 'TEXT',
     content: `Content of message ${id}`,
     createdAt: new Date().toISOString(),

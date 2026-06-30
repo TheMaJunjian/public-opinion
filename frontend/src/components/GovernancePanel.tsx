@@ -35,9 +35,7 @@ export default function GovernancePanel({ topicId }: { topicId: string }) {
       setContent('');
       // Refresh
       const r = await api.getMessages(topicId, { limit: 50 });
-      const govMsgs = (r.data as Array<Record<string, unknown>>).filter(
-        m => (m as { kind?: string }).kind === 'GOVERNANCE'
-      ) as unknown as Message[];
+      const govMsgs = r.data.filter(m => m.kind === 'GOVERNANCE');
       setProposals(govMsgs);
     } catch (e: unknown) {
       setError((e as Error)?.message ?? '提交失败');

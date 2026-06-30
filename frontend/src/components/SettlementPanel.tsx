@@ -15,7 +15,16 @@ interface Props {
     stakeId?: string;
     voteId?: string;
   } | null;
-  onMessageCreated?: (msg: { id: string; content: string; createdAt: string; author: string; kind: string }) => void;
+  onMessageCreated?: (msg: {
+    id: string;
+    content: string;
+    createdAt: string;
+    author: string;
+    kind: string;
+    backendKind?: string;
+    settlementTargetId?: string;
+    roundPayload?: Record<string, unknown>;
+  }) => void;
   /** If set, only show rounds of this settlement type */
   filterSettlementType?: 'TRUTH' | 'VALUE';
 }
@@ -261,7 +270,16 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   stakes: MessageStakes | null;
   rounds: SettlementRoundItem[];
   entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
-  onMessageCreated?: (msg: { id: string; content: string; createdAt: string; author: string; kind: string }) => void;
+  onMessageCreated?: (msg: {
+    id: string;
+    content: string;
+    createdAt: string;
+    author: string;
+    kind: string;
+    backendKind?: string;
+    settlementTargetId?: string;
+    roundPayload?: Record<string, unknown>;
+  }) => void;
   onSettled: (settledId: string) => void;
 }) {
   const [voteDirection, setVoteDirection] = useState<'TRUE' | 'FALSE'>('TRUE');
@@ -407,7 +425,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
                     (e.kind === 'stake' && entryHighlight.side && e.label === entryHighlight.side && (!entryHighlight.username || entryHighlight.username === e.username))
                   ))
                 : false;
-              const colorClass = e.label === 'TRUE' || e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
+              const colorClass = e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
               return (
                 <li key={e.id} className={`py-1 flex justify-between px-1.5 rounded text-xs ${isHighlighted ? 'bg-yellow-100 border border-yellow-300' : ''}`}>
                   <span className="text-gray-700">{e.username}</span>
@@ -471,13 +489,11 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
             {entries.map(e => {
               const isHighlighted = entryHighlight
                 ? (entryHighlight.stakeId && e.kind === 'stake' && e.entryId === entryHighlight.stakeId) ||
-                  (entryHighlight.voteId && e.kind === 'vote' && e.entryId === entryHighlight.voteId) ||
                   ((!entryHighlight.stakeId && !entryHighlight.voteId) && (
-                    (e.kind === 'vote' && entryHighlight.vote && e.label === entryHighlight.vote && (!entryHighlight.username || entryHighlight.username === e.username)) ||
                     (e.kind === 'stake' && entryHighlight.side && e.label === entryHighlight.side && (!entryHighlight.username || entryHighlight.username === e.username))
                   ))
                 : false;
-              const colorClass = e.label === 'TRUE' || e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
+              const colorClass = e.label === 'PRO' ? 'text-green-700' : 'text-red-700';
               return (
                 <li key={e.id} className={`py-1 flex justify-between px-1 rounded ${isHighlighted ? 'bg-yellow-100 border border-yellow-300' : ''}`}>
                   <span className="text-gray-700">{e.username}</span>

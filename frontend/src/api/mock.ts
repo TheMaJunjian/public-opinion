@@ -11,7 +11,20 @@
  * and focus-mode-relevant hop structures.
  */
 
-import type { User, Topic, Message, Relation, PaginatedResponse, TargetRef, RelationPayload } from '../types';
+import type {
+  User,
+  Topic,
+  Message,
+  Relation,
+  PaginatedResponse,
+  TargetRef,
+  RelationPayload,
+  SettlementRoundItem,
+  SettlementResult,
+  AuditLogEntry,
+  RevenuePoolData,
+  RevenueDistributionItem,
+} from '../types';
 
 const delay = (ms = 150) => new Promise(res => setTimeout(res, ms));
 
@@ -72,7 +85,7 @@ const topics: Topic[] = [
  *   r10: bob ARRANGE → m6 (排列)
  *   r11: charlie REFERENCE → m5 (引用)
  */
-const messages: Message[] = [
+const messages: Message[] = ([
   {
     id: 'm1', topicId: 't1', contentType: 'TEXT',
     content: 'AI确实在很多领域取代了重复性劳动，比如流水线工人、数据录入员等。这是不可避免的趋势，历史上没有任何技术浪潮能被阻止。',
@@ -140,7 +153,7 @@ const messages: Message[] = [
     content: '不能把"先产业后文化"当作对立命题，传统手工艺、民俗旅游本身就是高附加值产业，文化保护就是产业振兴。',
     createdAt: '2024-01-22T09:00:00Z', createdBy: users[0],
   },
-];
+] satisfies Array<Omit<Message, 'kind'>>).map(message => ({ kind: 'TEXT', ...message }));
 
 /**
  * Relations — using new TargetRef format with discriminated unions.
@@ -360,14 +373,19 @@ export async function getMessages(topicId: string, params?: { page?: number; lim
 }
 
 export async function createMessage(topicId: string, data: {
+  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND';
   contentType?: 'TEXT' | 'MARKDOWN';
-  content: string;
+  content?: string;
+  stakeAmount?: number;
+  targetMessageId?: string;
+  note?: string;
+  settlementType?: string;
 }) {
   await delay();
   if (!mockUser) throw new Error('请先登录');
   const msg: Message = {
-    id: genId(), topicId, contentType: data.contentType || 'TEXT',
-    content: data.content, createdAt: new Date().toISOString(), createdBy: mockUser,
+    id: genId(), topicId, kind: data.kind ?? 'TEXT', contentType: data.contentType || 'TEXT',
+    content: data.content ?? '', createdAt: new Date().toISOString(), createdBy: mockUser,
   };
   messages.push(msg);
   const topic = topics.find(t => t.id === topicId);
@@ -502,4 +520,97 @@ export async function getMessageStakes(messageId: string) {
     stakes: [],
     counts: { pro: 0, con: 0 },
   };
+}
+
+// ============================================================
+// Settlement Mock API (Phase 3)
+// ============================================================
+
+const mockRounds: SettlementRoundItem[] = [];
+
+export async function createRound(messageId: string, data?: { note?: string; settlementType?: 'TRUTH' | 'VALUE' }) {
+  await delay(100);
+  if (!mockUser) throw new Error('请先登录');
+  const round: SettlementRoundItem & { roundMessageId: string } = {
+    id: genId(),
+    roundMessageId: genId(),
+    messageId,
+    createdByUserId: mockUser.id,
+    createdBy: mockUser,
+    status: 'VOTING',
+    settlementType: data?.settlementType ?? 'TRUTH',
+    result: null,
+    previousRoundId: null,
+    openedAt: new Date().toISOString(),
+    closedAt: null,
+    note: data?.note ?? null,
+    votes: [],
+    _count: { votes: 0 },
+    weights: { TRUE: 0, FALSE: 0, UNKNOWN: 0 },
+  };
+  mockRounds.unshift(round);
+  return round;
+}
+
+export async function getMessageRounds(messageId: string) {
+  await delay(50);
+  return { data: mockRounds.filter(round => round.messageId === messageId) };
+}
+
+export async function getRoundDetail(roundId: string) {
+  await delay(50);
+  const round = mockRounds.find(r => r.id === roundId);
+  if (!round) throw new Error('结算轮次不存在');
+  return round;
+}
+
+export async function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; amount: number }) {
+  await delay(100);
+  if (!mockUser) throw new Error('请先登录');
+  const round = mockRounds.find(r => r.id === roundId);
+  if (!round) throw new Error('结算轮次不存在');
+  round.votes = [
+    ...(round.votes ?? []),
+    { id: genId(), vote: data.vote, amount: data.amount, createdAt: new Date().toISOString(), user: mockUser },
+  ];
+  round._count = { votes: round.votes.length };
+  round.weights = {
+    TRUE: (round.weights?.TRUE ?? 0) + (data.vote === 'TRUE' ? data.amount : 0),
+    FALSE: (round.weights?.FALSE ?? 0) + (data.vote === 'FALSE' ? data.amount : 0),
+    UNKNOWN: round.weights?.UNKNOWN ?? 0,
+  };
+  return { message: '投票成功', id: genId(), topicId: '', relationType: data.vote === 'TRUE' ? 'AGREE' : 'DISAGREE', sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: round.messageId }], createdAt: new Date().toISOString(), createdBy: mockUser } as Relation & { message: string };
+}
+
+export async function closeAndSettle(roundId: string): Promise<SettlementResult> {
+  await delay(100);
+  const round = mockRounds.find(r => r.id === roundId);
+  if (!round) throw new Error('结算轮次不存在');
+  const weights = round.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
+  const result = weights.TRUE > weights.FALSE ? 'TRUE' : weights.FALSE > weights.TRUE ? 'FALSE' : 'UNKNOWN';
+  round.status = 'SETTLED';
+  round.result = result;
+  round.closedAt = new Date().toISOString();
+  return { message: '结算完成', roundId, messageId: round.messageId, result, weights, totalPro: weights.TRUE, totalCon: weights.FALSE, affectedUsers: round._count?.votes ?? 0 };
+}
+
+// ============================================================
+// Audit Log & Revenue Mock API (Phase 6)
+// ============================================================
+
+export async function getAuditLogs(params?: { topicId?: string; page?: number; limit?: number }) {
+  await delay(50);
+  const entries: AuditLogEntry[] = [];
+  return paginate(entries.filter(entry => !params?.topicId || entry.topicId === params.topicId), params?.page, params?.limit);
+}
+
+export async function getRevenuePool(): Promise<RevenuePoolData> {
+  await delay(50);
+  return { id: 'revenue-pool-1', totalReceived: 0, totalDistributed: 0, balance: 0, updatedAt: new Date().toISOString() };
+}
+
+export async function getRevenueDistributions(params?: { page?: number; limit?: number }) {
+  await delay(50);
+  const entries: RevenueDistributionItem[] = [];
+  return paginate(entries, params?.page, params?.limit);
 }

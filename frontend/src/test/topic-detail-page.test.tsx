@@ -56,6 +56,7 @@ function makeMessage(id: string, content: string): Message {
   return {
     id,
     topicId: 'topic-1',
+    kind: 'TEXT',
     contentType: 'TEXT',
     content,
     createdAt: '2024-01-01T00:00:00.000Z',

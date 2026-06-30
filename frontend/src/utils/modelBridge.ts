@@ -98,7 +98,7 @@ function mapBackendKind(backendKind: string): MessageKind {
   }
 }
 
-export function kindLabel(backendKind: string, targetRefs?: any, settlementType?: string): string {
+export function kindLabel(backendKind: string, _targetRefs?: any, settlementType?: string): string {
   const isValue = settlementType === 'VALUE';
   const labels: Record<string, string> = {
     TEXT: '[文本消息]',

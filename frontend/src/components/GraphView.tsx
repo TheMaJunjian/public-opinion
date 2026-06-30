@@ -2439,7 +2439,7 @@ export default function GraphView(props: GraphViewProps) {
       const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
       const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
       if (!box) continue;
-      const rt = e.relationType === 'recommend' || e.relationType === 'RECOMMEND' ? 'RECOMMEND' : 'ARCHIVE';
+      const rt = e.relationType === 'recommend' ? 'RECOMMEND' : 'ARCHIVE';
       const groupKey = `${mid}|${rt}`;
       let group = inlineBadgeGroups.get(groupKey);
       if (!group) {
@@ -2951,7 +2951,6 @@ export default function GraphView(props: GraphViewProps) {
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             const isActive = lastClickedMessageId === msg.id;
             const isTopicStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
-            const isTopicStanceEvidence = stanceHighlight?.evidenceMsgIds.includes(msg.id) ?? false;
             return (
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}

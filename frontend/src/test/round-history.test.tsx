@@ -35,6 +35,7 @@ function makeRound(overrides: Partial<SettlementRoundItem> = {}): SettlementRoun
     createdByUserId: 'user-1',
     createdBy: { id: 'user-1', username: 'alice', createdAt: '2024-01-01T00:00:00Z' },
     status: 'SETTLED',
+    settlementType: 'TRUTH',
     result: 'TRUE',
     previousRoundId: null,
     openedAt: '2024-06-01T00:00:00Z',

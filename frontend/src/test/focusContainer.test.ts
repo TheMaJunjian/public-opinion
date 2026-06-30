@@ -17,7 +17,6 @@
 
 import { describe, it, expect } from 'vitest';
 import { resolveOneContainer, applyContainerExpansion } from '../utils/focusContainer';
-import type { ContainerExpansionResult } from '../utils/focusContainer';
 import type { DemoEdge, UnitSelection } from '../utils/modelBridge';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────

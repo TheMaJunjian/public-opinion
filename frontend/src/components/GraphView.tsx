@@ -1599,7 +1599,7 @@ function computeLabelPlacementsAlongCurve(params: { seeds: LabelSeed[]; forbidde
       if (ok) { chosen={x:p.x,y:p.y}; placed.push(r); break; }
     }
     if (!chosen) {
-      const p=quadAt(s.p0,s.p1,s.p2,0.5); let x=p.x,y=p.y, r=labelRectApprox(x,y,s.text);
+      const p=quadAt(s.p0,s.p1,s.p2,0.5); const x=p.x; let y=p.y, r=labelRectApprox(x,y,s.text);
       for (let iter=0;iter<200;iter++) {
         let collision=false;
         for (const tr of [...forbiddenRects,...placed]) if (rectsIntersect(r,tr)) { collision=true; break; }
@@ -2091,9 +2091,6 @@ export default function GraphView(props: GraphViewProps) {
     });
     for (const m of normals) { const el=cardRefs.current[m.id]; if (el) ro.observe(el); }
     return () => ro.disconnect();
-  // layout is added so that when cards first appear in the DOM (after layout is computed),
-  // we re-run and observe them — this fixes the initial-load overlap bug.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [normals, layout]);
 
   useEffect(() => {
@@ -2470,8 +2467,7 @@ export default function GraphView(props: GraphViewProps) {
       const spec = getPresentationSpec(rt);
       // Sum total sendCount from all subDetails + any non-subType sends
       let totalCount = 0;
-      let subOnlyCount = 0;
-      for (const d of group.subDetails) { totalCount += d.count; subOnlyCount += d.count; }
+      for (const d of group.subDetails) { totalCount += d.count; }
       // Non-subType sends: each relation without subType contributes its sendCount
       for (const rmId of group.relMsgIds) {
         const rm = msgMap.get(rmId);
@@ -4001,7 +3997,7 @@ export default function GraphView(props: GraphViewProps) {
       })}
 
       {/* INLINE BADGES (RECOMMEND/ARCHIVE) — small badge anchored to target message card */}
-      {Array.from(inlineBadgesByMsg.entries()).map(([_mid, badges]) =>
+      {Array.from(inlineBadgesByMsg.entries()).map(([, badges]) =>
         badges.map(badge => {
           const isWholeSel = isRelWholeSel(badge.relMsgId);
           const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'rgba(100,100,120,0.9)';

@@ -33,7 +33,7 @@ interface Props {
  * SettlementPanel — 消息结算面板
  * 显示押注池状态、结算轮次、投票和结算操作
  */
-export default function SettlementPanel({ messageId, topicId: _topicId, highlightRoundId, entryHighlight, onMessageCreated, filterSettlementType }: Props) {
+export default function SettlementPanel({ messageId, highlightRoundId, entryHighlight, onMessageCreated, filterSettlementType }: Props) {
   const [loading, setLoading] = useState(true);
   const [stakes, setStakes] = useState<MessageStakes | null>(null);
   const [rounds, setRounds] = useState<SettlementRoundItem[]>([]);
@@ -306,7 +306,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       window.dispatchEvent(new CustomEvent('relation-created', { detail: result }));
       const updated = await api.getRoundDetail(localRound.id);
       setLocalRound(updated);
-    } catch (e: unknown) {
+    } catch {
       // error displayed in parent
     } finally {
       setVoting(false);
@@ -331,7 +331,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         });
       }
       onSettled(localRound.id);
-    } catch (e: unknown) {
+    } catch {
       // error displayed in parent
     }
   }

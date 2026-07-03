@@ -1877,7 +1877,7 @@ export default function TopicDetailPage() {
         .filter(t => msgMap.get(t.messageId)?.kind === "relation" && t.selection.kind === 'whole')
         .map(t => t.messageId)
     );
-    let targets = params.targets.filter(t =>
+    const targets = params.targets.filter(t =>
       !(msgMap.get(t.messageId)?.kind === "relation" && t.selection.kind === 'edge' && wholeRelIds.has(t.messageId))
     );
     const newEdgesList: DemoEdge[] = [];

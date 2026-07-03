@@ -867,13 +867,11 @@ export function compactAnnoRefClusters(params: {
       }
 
       // Compute total cluster height: sum of card heights + ROW_GAP between them
-      let totalH = 0;
       const cardHeights: number[] = [];
       for (const id of clusterIds) {
         const box = nextLayout[id];
         const h = box ? box.height : MIN_CARD_H;
         cardHeights.push(h);
-        totalH += h;
       }
 
       // Position the middle card's top at targetY.

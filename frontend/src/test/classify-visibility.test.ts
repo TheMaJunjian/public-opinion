@@ -180,11 +180,15 @@ describe('原画布隐藏规则', () => {
 
 describe('skipClassifyHiding = useFocusWindow || isInsideClassify', () => {
   it('原画布：false → 应用隐藏过滤', () => {
-    expect(false || false).toBe(false);
+    const useFocusWindow = false;
+    const isInsideClassify = false;
+    expect(useFocusWindow || isInsideClassify).toBe(false);
   });
 
   it('分类内：true → 跳过隐藏过滤', () => {
-    expect(false || true).toBe(true);
+    const useFocusWindow = false;
+    const isInsideClassify = true;
+    expect(useFocusWindow || isInsideClassify).toBe(true);
   });
 });
 

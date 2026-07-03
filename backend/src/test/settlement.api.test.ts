@@ -122,6 +122,7 @@ describe('POST /api/messages/:id/rounds', () => {
     (prisma.message.findUnique as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ debtFrozen: false });
     (prisma.message.create as jest.Mock).mockResolvedValue({ id: 'round-msg-1', kind: 'ROUND' });
+    (prisma.message.update as jest.Mock).mockResolvedValue({ id: 'round-msg-1', kind: 'ROUND', relationPayload: { settlementType: 'DISMANTLE', roundId: 'existing-round' } });
     (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'log-1' });
     (prisma.auditLog.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
     (prisma.$transaction as jest.Mock).mockResolvedValue([{ id: 'round-msg-1', kind: 'ROUND' }]);

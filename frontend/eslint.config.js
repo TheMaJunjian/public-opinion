@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'coverage'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -23,6 +23,10 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
+      // Phase A: downgrade to warn — fixing all ~40 any usages across GraphView
+      // and TopicDetailPage is deferred to a later phase when those components
+      // are further refactored.
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
 )

@@ -3174,19 +3174,30 @@ export default function GraphView(props: GraphViewProps) {
                 if (tags.length === 0) return null;
                 return (
                   <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                    {tags.map(({ label, relMsgIds, direction }) => (
+                    {tags.map(({ label, relMsgIds, direction }) => {
+                      const anySelected = relMsgIds.some(id =>
+                        draftUnits.some(u => u.messageId === id && u.selection.kind === "whole")
+                      );
+                      return (
                       <span key={`${direction}-${label}`}
                         onClick={ev => { ev.stopPropagation(); onCrossRefTagClick?.(ev, relMsgIds); }}
-                        title={`${direction === "out" ? "引用" : "被引用"}：${label}（${relMsgIds.length}条）\n单击选中关系消息`}
+                        title={`${direction === "out" ? "引用" : "被引用"}：${label}（${relMsgIds.length}条）\n单击${anySelected ? "取消" : ""}选中关系消息`}
                         style={{
-                          background: direction === "out" ? "rgba(99,102,241,0.15)" : "rgba(99,102,241,0.08)",
-                          color: direction === "out" ? "#a5b4fc" : "#c7d2fe", borderRadius: 4,
+                          background: anySelected
+                            ? "rgba(99,102,241,0.35)"
+                            : direction === "out" ? "rgba(99,102,241,0.15)" : "rgba(99,102,241,0.08)",
+                          color: anySelected ? "#e0e7ff" : direction === "out" ? "#a5b4fc" : "#c7d2fe",
+                          borderRadius: 4,
                           fontSize: 10, padding: "1px 6px", cursor: "pointer", userSelect: "none",
-                          border: direction === "out" ? "1px solid rgba(99,102,241,0.3)" : "1px solid rgba(99,102,241,0.15)",
+                          border: anySelected
+                            ? "1px solid rgba(99,102,241,0.7)"
+                            : direction === "out" ? "1px solid rgba(99,102,241,0.3)" : "1px solid rgba(99,102,241,0.15)",
                           fontWeight: 600,
+                          boxShadow: anySelected ? "0 0 6px rgba(99,102,241,0.4)" : undefined,
                         }}
                       >{direction === "out" ? "📤→" : "📥←"} {label} {relMsgIds.length}</span>
-                    ))}
+                      );
+                    })}
                   </div>
                 );
               })()}

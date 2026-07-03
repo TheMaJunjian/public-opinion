@@ -154,44 +154,113 @@ export default function TopicDetailPage() {
     return () => { cancelled = true; };
   }, [topicId]);
 
+  // Messages that have no DOM element in the non-linear graph view.
+  // Mirror of GraphView's hiddenTargetIds logic — used to decide whether
+  // to auto-switch to linear view when navigating to such a message.
+  const hiddenInGraphView = useMemo(() => {
+    const ids = new Set<string>();
+    // 1) CORRECT relation messages are not rendered as independent cards
+    for (const m of messages) {
+      if (m.kind === 'relation' && m.relationType === 'correct') ids.add(m.id);
+    }
+    // 2) Corrected text targets that are not themselves correction sources
+    //    (GraphView.hiddenCorrectedTargetIds)
+    const correctedTargets = new Set<string>();
+    const correctionSources = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === 'correct' && !e.from.messageId.startsWith('anon:')) {
+        correctedTargets.add(e.to.messageId);
+        correctionSources.add(e.from.messageId);
+      }
+    }
+    for (const id of correctedTargets) {
+      if (!correctionSources.has(id)) ids.add(id);
+    }
+    // 3) Summary text targets that are not themselves summary sources
+    //    (GraphView.hiddenSummaryTargetIds)
+    const summaryRelMsgIds = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === 'summary') summaryRelMsgIds.add(e.relationMessageId);
+    }
+    for (const e of edges) {
+      if (e.relationType === 'summary' && !summaryRelMsgIds.has(e.to.messageId)) {
+        ids.add(e.to.messageId);
+      }
+    }
+    return ids;
+  }, [edges, messages]);
+
   // Auto-enter classify topic if msg belongs to one
   const [autoClassifyMsgId, setAutoClassifyMsgId] = useState<string | null>(null);
   useEffect(() => {
     if (loading || relations.length === 0) return;
     const msgId = autoClassifyMsgId;
     if (!msgId) return;
-    const targetIds = new Set<string>([msgId]);
+
     const msgRel = relations.find(r => r.id === msgId);
     const msgRelType = msgRel?.relationType?.toUpperCase();
-    const locateRelationCardOnly = msgRelType === 'CLASSIFY' || msgRelType === 'SUMMARY' || msgRelType === 'MERGE' || msgRelType === 'ARRANGE';
-    if (msgRel && !locateRelationCardOnly) {
-      const targets = (msgRel.targetRefs ?? []) as TargetRef[];
-      targets.forEach(t => {
-        if ((t.kind === 'message' || t.kind === 'text-fragment') && t.messageId) {
-          targetIds.add(t.messageId);
-        } else if (t.kind === 'relation' && t.relationId) {
-          targetIds.add(t.relationId);
-        }
-      });
+    // Determine the "anchor" — the message whose classify determines where
+    // this message is displayed on the canvas.
+    // - ANNOTATION / REFERENCE / REPLY / CORRECT → displayed alongside source
+    // - AGREE / DISAGREE / TAG → displayed alongside target (as decorations)
+    // - Other types / text messages → the message itself is the anchor
+    let anchorId = msgId;
+    if (msgRel) {
+      const srcId = msgRel.sourceMessageId ?? null;
+      const firstTextTarget = ((msgRel.targetRefs ?? []) as TargetRef[])
+        .find(t => t.kind === 'message' || t.kind === 'text-fragment');
+      const tgtId = firstTextTarget ? firstTextTarget.messageId : null;
+      if (msgRelType === 'ANNOTATION' || msgRelType === 'REFERENCE'
+       || msgRelType === 'REPLY'   || msgRelType === 'CORRECT') {
+        anchorId = srcId || msgId;
+      } else if (msgRelType === 'AGREE' || msgRelType === 'DISAGREE'
+              || msgRelType === 'TAG') {
+        anchorId = tgtId || msgId;
+      }
     }
-    if (targetIds.size === 0) { setAutoClassifyMsgId(null); return; }
-    // Find classify/summary relation that targets this message/relation or its target.
+    // Build lookup for ownership expansion
+    const relById = new Map(relations.map(r => [r.id, r]));
+    const msgMapLocal = new Map(messages.map(m => [m.id, m]));
+
+    const tryEnter = (relId: string) => {
+      if (classifyRelMsgId === relId) {
+        // Already in this classify — just ensure correct view mode
+        if (hiddenInGraphView.has(msgId)) setViewMode("list");
+        setAutoClassifyMsgId(null);
+        return;
+      }
+      if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+      enterClassifyTopic(relId);
+      if (hiddenInGraphView.has(msgId)) setViewMode("list");
+      setAutoClassifyMsgId(null);
+    };
+
+    // ── Find the classify that owns the anchor ──
+    // First pass: direct targetRefs match.
     for (const rel of relations) {
       const rt = rel.relationType?.toUpperCase();
       if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
       const targets = (rel.targetRefs ?? []) as TargetRef[];
-      if (targets.some(t => t.kind === 'relation' ? targetIds.has(t.relationId) : targetIds.has(t.messageId))) {
-        // Exit any current topic focus before entering the target classify
-        setFocusEntries(prev => prev.length > 0 && prev[prev.length - 1]?.mode === 'topic' ? prev.slice(0, -1) : prev);
-        enterClassifyTopic(rel.id);
-        setAutoClassifyMsgId(null);
-        return;
+      if (targets.some(t =>
+        (t.kind === 'relation' && t.relationId === anchorId) ||
+        (t.kind !== 'relation' && t.messageId === anchorId)
+      )) { tryEnter(rel.id); return; }
+    }
+    // Second pass: transitive ownership + CORRECT expansion.
+    for (const rel of relations) {
+      const rt = rel.relationType?.toUpperCase();
+      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      const owned = collectOwnedByRelation(rel.id, relById);
+      const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
+      if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
+        tryEnter(rel.id); return;
       }
     }
-    // Message not in any classify: exit topic focus to show it in top-level view
-    setFocusEntries(prev => prev.filter(e => e.mode !== 'topic'));
+    // Anchor not in any classify → main view.
+    if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false }); else setClassifyRelMsgId(null);
+    if (hiddenInGraphView.has(msgId)) setViewMode("list");
     setAutoClassifyMsgId(null);
-  }, [loading, relations, autoClassifyMsgId]);
+  }, [loading, relations, autoClassifyMsgId, hiddenInGraphView, edges, messages]);
 
   // Phase 3: auto-open settlement from URL params (triggered by points-navigate)
   const pendingScrollMsgRef = useRef<string | null>(null);
@@ -255,6 +324,12 @@ export default function TopicDetailPage() {
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
   const [focusExitKey, setFocusExitKey] = useState(0);
+  // Classify state — independent from the focus system.
+  // When non-null, the view is scoped to the CLASSIFY/SUMMARY relation's owned messages.
+  const [classifyRelMsgId, setClassifyRelMsgId] = useState<string | null>(null);
+  // Stack-based snapshot store for nested classify enter/exit.
+  // Each entry holds the classify id and the snapshot captured before entering it.
+  const classifyStackRef = useRef<Array<{ relMsgId: string; snapshot: FocusSnapshot | null }>>([]);
   // Phase 6: Clean view — multi-dimensional filter rules (replaces simple boolean)
   const {
     cleanMode, cleanFilters, cleanVisibleIds,
@@ -270,16 +345,18 @@ export default function TopicDetailPage() {
   // Phase 6: expose for SettlementPanel direct access
   useEffect(() => { (window as any).__addSettlementMessage = (m: any) => { setMessagesRef.current((prev: any) => [...prev, {...m, author: m.author || user?.username || ''}]); setTimeout(() => scrollMsgToCenter(m.id), 50); }; return () => { delete (window as any).__addSettlementMessage; }; }, [user]);
 
-  // Scroll to message after data loads and renders (also triggers on focus changes for in-place nav)
+  const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("graph");
+
+  // Scroll to message after data loads and renders (also triggers on focus changes for in-place nav).
+  // View-switch decisions (graph→list for hidden messages) are made in the auto-classify
+  // effect above; this effect only handles the actual scrolling.
   useEffect(() => {
     if (!loading && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
       scrollMsgToCenter(pendingScrollMsgRef.current);
       pendingScrollMsgRef.current = null;
     }
-  }, [loading, messages, focusExitKey]);
-
-  const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  }, [loading, messages, focusExitKey, viewMode]);
   const [focusHop, setFocusHop] = useState<number>(1);
   // Popup state for decoration double-click (shows sender info)
   const [decorationPopup, setDecorationPopup] = useState<{
@@ -343,6 +420,7 @@ export default function TopicDetailPage() {
   // Phase 5: Refs to avoid stale closure in points-navigate handler
   // (initialized empty; values synced via useEffect below after all useMemos run)
   const focusEntriesRef = useRef<FocusEntry[]>([]);
+  const classifyRelMsgIdRef = useRef<string | null>(null);
   const relationsRef = useRef<Relation[]>([]);
   const relationByIdRef = useRef<Map<string, Relation>>(new Map());
   const relationTypeByRelMsgIdRef = useRef<Map<string, string>>(new Map());
@@ -359,10 +437,8 @@ export default function TopicDetailPage() {
       const { messageId, roundId, txType, txData, username } = detail;
 
       // Read latest state from refs (avoids stale closure)
-      const currentFocusEntries = focusEntriesRef.current;
       const currentRelations = relationsRef.current;
       const currentRelationById = relationByIdRef.current;
-      const currentRelationTypeByRelMsgId = relationTypeByRelMsgIdRef.current;
 
       // Phase 5: Resolve message ID through supersede chain
       // When a classify is updated (e.g. via agree inside it), the old relation
@@ -380,43 +456,23 @@ export default function TopicDetailPage() {
       }
 
       // ── Smart classify enter/exit ──
-      const currentFocus = currentFocusEntries.length > 0 ? currentFocusEntries[currentFocusEntries.length - 1] : null;
-      if (currentFocus?.mode === 'topic' && currentFocus.topicRelMsgId) {
-        const owned = collectOwnedByRelation(currentFocus.topicRelMsgId, currentRelationById);
+      const currentClassifyId = classifyRelMsgIdRef.current;
+      if (currentClassifyId) {
+        const owned = collectOwnedByRelation(currentClassifyId, currentRelationById);
         const allOwnedIds = new Set([...owned.textIds, ...owned.relationIds]);
         if (!allOwnedIds.has(resolvedMessageId)) {
-          setFocusEntries([]);
-          setFocusExitKey(k => k + 1);
+          exitClassifyTopic({ restoreSnapshot: false });
         }
       }
 
       // Auto-enter classify if target belongs to one (and not already in one)
-      const isInClassify = currentFocusEntries.length > 0 && currentFocusEntries[currentFocusEntries.length - 1]?.mode === 'topic';
-      if (!isInClassify) {
+      if (!classifyRelMsgIdRef.current) {
         for (const rel of currentRelations) {
           const rt = rel.relationType?.toUpperCase();
           if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
           const targets = (rel.targetRefs ?? []) as TargetRef[];
           if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId === resolvedMessageId)) {
-            const targetTextIds = getTextTargetIds(rel.targetRefs as TargetRef[]);
-            const targetRelationIds = getRelationTargetIds(rel.targetRefs as TargetRef[]).filter(mid => {
-              const rtm = currentRelationTypeByRelMsgId.get(mid);
-              return rtm === 'classify' || rtm === 'merge' || rtm === 'arrange' || rtm === 'summary';
-            });
-            const targetIds = new Set<string>(targetTextIds);
-            for (const trid of targetRelationIds) {
-              if (currentRelationTypeByRelMsgId.get(trid) === 'classify' || currentRelationTypeByRelMsgId.get(trid) === 'summary') {
-                targetIds.add(trid); continue;
-              }
-              const childOwned = collectOwnedByRelation(trid, currentRelationById);
-              childOwned.textIds.forEach(id => targetIds.add(id));
-              childOwned.relationIds.forEach(id => targetIds.add(id));
-            }
-            if (targetIds.size > 0) {
-              setFocusEntries([{ ids: Array.from(targetIds), snapshot: null, mode: 'topic', topicRelMsgId: rel.id }]);
-              setFocusHop(0);
-              setFocusExitKey(k => k + 1);
-            }
+            enterClassifyTopic(rel.id);
             break;
           }
         }
@@ -860,6 +916,7 @@ export default function TopicDetailPage() {
 
   // Phase 5: Keep refs in sync with derived state for points-navigate handler
   focusEntriesRef.current = focusEntries;
+  classifyRelMsgIdRef.current = classifyRelMsgId;
   relationsRef.current = relations;
   relationByIdRef.current = relationById;
   relationTypeByRelMsgIdRef.current = relationTypeByRelMsgId as unknown as Map<string, string>;
@@ -1160,17 +1217,14 @@ export default function TopicDetailPage() {
   function exitFocus() {
     // Pop the focus stack and bump the exit key to force GraphView remount,
     // avoiding React 18 concurrent reconciliation bugs (removeChild errors).
-    // The ErrorBoundary provides a safety net with automatic retry.
     const entry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
     const snapshot = entry?.snapshot ?? null;
-    const isTopic = entry?.mode === "topic";
     setFocusEntries(prev => {
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
     setFocusExitKey(k => k + 1);
-    // 焦点模式：恢复进入前的候选区；分类模式：保留当前选择
-    if (snapshot) restoreSnapshot(snapshot, { restoreSelection: !isTopic });
+    if (snapshot) restoreSnapshot(snapshot, { restoreSelection: true });
   }
 
   function exitAllFocus() {
@@ -1230,8 +1284,9 @@ export default function TopicDetailPage() {
         const oldRelId = currentClassifyId;
         // Track supersede chain for point-record message ID resolution
         supersedeMapRef.current.set(oldRelId, newRelId);
-        // Keep ref in sync so next addTargetToClassifyTopic targets the latest classify
+        // Keep ref and state in sync so the classify view uses the new ID
         latestClassifyRelMsgIdRef.current = newRelId;
+        if (classifyRelMsgIdRef.current === oldRelId) setClassifyRelMsgId(newRelId);
         relationsRef.current = relationsRef.current.filter(r => r.id !== oldRelId).map(r => {
           const refs = (r.targetRefs ?? []) as TargetRef[];
           const hasOldRef = refs.some(ref => ref.kind === 'relation' && ref.relationId === oldRelId);
@@ -1268,12 +1323,6 @@ export default function TopicDetailPage() {
         setMessages(prev => {
           const filtered = prev.filter(m => m.id !== oldRelId);
           return [...filtered, buildRelationDemoMessage(updatedRel)];
-        });
-        setFocusEntries(prev => {
-          if (prev.length === 0) return prev;
-          const last = prev[prev.length - 1];
-          if (last.mode !== "topic" || last.topicRelMsgId !== oldRelId) return prev;
-          return [...prev.slice(0, -1), { ...last, topicRelMsgId: newRelId }];
         });
         setEdges(prev => {
           let next = prev.map(e => {
@@ -1387,13 +1436,6 @@ export default function TopicDetailPage() {
       // Reset to rule default
       setStakeAmount(minSelfStake);
       if (isInsideClassify) {
-        setFocusEntries(prev => {
-          if (prev.length === 0) return prev;
-          const last = prev[prev.length - 1];
-          if (last.mode !== "topic") return prev;
-          return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
-        });
-        setFocusExitKey(k => k + 1); // force StructureView remount
         if (currentClassifyRelMsgId) {
           // Persist the new message as a target of the classify/summary topic
           // so the message remains scoped inside the topic after exit / reload.
@@ -1417,6 +1459,7 @@ export default function TopicDetailPage() {
             },
           );
         }
+        setFocusExitKey(k => k + 1); // force StructureView remount AFTER classify updated
       }
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
@@ -1718,48 +1761,29 @@ export default function TopicDetailPage() {
     return false;
   }
 
-  function getClassifyTargetTextIdsByRelMsgId(relMsgId: string): string[] {
-    const relation = relationById.get(relMsgId);
-    return relation ? getTextTargetIds(relation.targetRefs) : [];
-  }
-
-  function getClassifyTargetRelationIdsByRelMsgId(relMsgId: string): string[] {
-    const relation = relationById.get(relMsgId);
-    return relation
-      ? getRelationTargetIds(relation.targetRefs).filter(mid =>
-          msgMap.get(mid)?.kind === "relation" &&
-          (
-            relationTypeByRelMsgId.get(mid) === "classify" ||
-            relationTypeByRelMsgId.get(mid) === "merge" ||
-            relationTypeByRelMsgId.get(mid) === "arrange" ||
-            relationTypeByRelMsgId.get(mid) === "summary"
-          )
-        )
-      : [];
-  }
-
   function enterClassifyTopic(relMsgId: string) {
-    const targetTextIds = getClassifyTargetTextIdsByRelMsgId(relMsgId);
-    const targetRelationIds = getClassifyTargetRelationIdsByRelMsgId(relMsgId);
-    const targetIds = new Set<string>(targetTextIds);
-    for (const targetRelationId of targetRelationIds) {
-      if (relationTypeByRelMsgId.get(targetRelationId) === "classify" ||
-          relationTypeByRelMsgId.get(targetRelationId) === "summary") {
-        targetIds.add(targetRelationId);
-        continue;
-      }
-      const owned = collectOwnedByRelation(targetRelationId, relationById);
-      owned.textIds.forEach(id => targetIds.add(id));
-      owned.relationIds.forEach(id => targetIds.add(id));
+    // Save snapshot so we can restore on exit
+    classifyStackRef.current.push({ relMsgId, snapshot: captureSnapshot() });
+    setClassifyRelMsgId(relMsgId);
+    setFocusExitKey(k => k + 1);
+  }
+
+  function exitClassifyTopic(options?: { restoreSnapshot?: boolean }) {
+    const entry = classifyStackRef.current.pop();
+    const prev = classifyStackRef.current.length > 0
+      ? classifyStackRef.current[classifyStackRef.current.length - 1]
+      : null;
+    if (prev) {
+      // Return to parent classify
+      setClassifyRelMsgId(prev.relMsgId);
+    } else {
+      // Exit to main view
+      setClassifyRelMsgId(null);
     }
-    if (targetIds.size === 0) {
-      if (!msgMap.has(relMsgId)) return;
-      enterFocusMultiple([relMsgId], { mode: "topic", topicRelMsgId: relMsgId });
-      setFocusHop(0);
-      return;
+    setFocusExitKey(k => k + 1);
+    if (options?.restoreSnapshot !== false && entry?.snapshot) {
+      restoreSnapshot(entry.snapshot);
     }
-    enterFocusMultiple(Array.from(targetIds), { mode: "topic", topicRelMsgId: relMsgId });
-    setFocusHop(0);
   }
 
   function getEdgeIdsForRelation(relationMessageId: string) {
@@ -2438,9 +2462,8 @@ export default function TopicDetailPage() {
                     : r;
                 }).concat(updatedRel));
                 setMessages(prev => [...prev.filter(m => m.id !== oldId), buildRelationDemoMessage(updatedRel)]);
-                setFocusEntries(prev => prev.map(e =>
-                  e.mode === 'topic' && e.topicRelMsgId === oldId ? { ...e, topicRelMsgId: newId } : e
-                ));
+                // Update classify state if the superseded relation is the current classify
+                if (classifyRelMsgIdRef.current === oldId) setClassifyRelMsgId(newId);
               } catch { /* text removal optional */ }
             }
           }
@@ -2464,9 +2487,8 @@ export default function TopicDetailPage() {
                 : r;
             }).concat(updatedRel));
             setMessages(prev => [...prev.filter(m => m.id !== oldId), buildRelationDemoMessage(updatedRel)]);
-            setFocusEntries(prev => prev.map(e =>
-              e.mode === 'topic' && e.topicRelMsgId === oldId ? { ...e, topicRelMsgId: newId } : e
-            ));
+            // Update classify state if the superseded relation is the current classify
+            if (classifyRelMsgIdRef.current === oldId) setClassifyRelMsgId(newId);
           }).catch(() => {});
         }
 
@@ -3334,8 +3356,8 @@ export default function TopicDetailPage() {
 
   const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitFocus = focusEntries.length > 0;
-  const isInsideClassify = currentFocusEntry?.mode === "topic";
-  const currentClassifyRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
+  const isInsideClassify = classifyRelMsgId !== null;
+  const currentClassifyRelMsgId = classifyRelMsgId;
 
   // Track latest classify ID across async supersede calls so sequential
   // addTargetToClassifyTopic calls always target the current classify.
@@ -4051,7 +4073,7 @@ export default function TopicDetailPage() {
                     <span>{currentClassifyRelMsg ? new Date(currentClassifyRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
                   </div>
                 </div>
-                <button onClick={exitFocus} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
+                <button onClick={() => exitClassifyTopic()} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
                   {classifyExitLabel}
                 </button>
               </div>
@@ -4072,9 +4094,14 @@ export default function TopicDetailPage() {
                 <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 360, lineHeight: 1.6 }}>
                   {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : focusEntries.length > 0 ? "当前焦点范围内没有匹配的消息。尝试退出焦点或调整过滤规则。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他用户可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
                 </div>
-                {canExitFocus && (
+                {isInsideClassify && (
+                  <button onClick={() => exitClassifyTopic()} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
+                    {classifyExitLabel}
+                  </button>
+                )}
+                {!isInsideClassify && canExitFocus && (
                   <button onClick={exitFocus} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
-                    {isInsideClassify ? classifyExitLabel : "退出焦点"}
+                    退出焦点
                   </button>
                 )}
               </div>
@@ -4295,7 +4322,7 @@ export default function TopicDetailPage() {
                     设为焦点消息
                   </button>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isInsideClassify ? `退出当前${classifyKindLabel}并恢复进入前现场` : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>退出焦点</button>
+                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出最近一次进入的焦点并恢复进入该焦点前的现场">退出焦点</button>
                     <button onClick={exitAllFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#333" : "#222", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
                   </div>
                 </div>

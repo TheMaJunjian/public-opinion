@@ -441,6 +441,15 @@ export async function updateRelation(topicId: string, relationId: string, data: 
   return newRel;
 }
 
+export async function patchRelationTargets(topicId: string, relationId: string, targetRefs: TargetRef[]) {
+  await delay();
+  if (!mockUser) throw new Error('请先登录');
+  const idx = relations.findIndex(r => r.id === relationId && r.topicId === topicId);
+  if (idx === -1) throw new Error('关系消息不存在');
+  relations[idx] = { ...relations[idx], targetRefs };
+  return relations[idx];
+}
+
 // ============================================================
 // Points & Rules Mock API (Phase 1)
 // ============================================================

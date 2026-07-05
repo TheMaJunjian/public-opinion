@@ -170,6 +170,90 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
   }
 });
 
+// PATCH /api/topics/:topicId/relations/:id — update targetRefs in-place
+// Unlike the POST / supersede flow, this does NOT create a new message record.
+// Used for operations like adding/removing targets from a CLASSIFY without
+// changing the relation's ID, so external references (stance records, etc.)
+// remain valid.
+relationsRouter.patch('/:id', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const topicId = req.params.topicId as string;
+    const relationId = req.params.id as string;
+    const { targetRefs } = req.body as { targetRefs?: Array<{ kind?: string; messageId?: string; relationId?: string }> };
+
+    const existing = await prisma.message.findFirst({
+      where: { id: relationId, topicId, kind: { in: ['RELATION', 'GOVERNANCE', 'CODE'] }, supersededBy: null },
+    });
+    if (!existing) {
+      res.status(404).json({ error: '关系不存在、不属于该分类或已被取代' });
+      return;
+    }
+
+    if (!targetRefs || !Array.isArray(targetRefs)) {
+      res.status(400).json({ error: 'targetRefs 是必需的数组字段' });
+      return;
+    }
+
+    // Validate new target refs exist in this topic
+    const targetMessageIds = targetRefs
+      .filter((r: any) => r.kind === 'message' || r.kind === 'text-fragment')
+      .map((r: any) => r.messageId);
+    const targetRelationIds = targetRefs
+      .filter((r: any) => r.kind === 'relation')
+      .map((r: any) => r.relationId);
+
+    if (targetMessageIds.length > 0) {
+      const found = await prisma.message.count({
+        where: { id: { in: [...new Set(targetMessageIds)] }, topicId },
+      });
+      if (found !== new Set(targetMessageIds).size) {
+        res.status(404).json({ error: '部分目标消息不存在或不属于该分类' });
+        return;
+      }
+    }
+    if (targetRelationIds.length > 0) {
+      const found = await prisma.message.count({
+        where: { id: { in: [...new Set(targetRelationIds)] }, topicId, kind: { in: ['RELATION', 'GOVERNANCE', 'CODE'] } },
+      });
+      if (found !== new Set(targetRelationIds).size) {
+        res.status(404).json({ error: '部分目标关系消息不存在或不属于该分类' });
+        return;
+      }
+    }
+
+    const updated = await prisma.message.update({
+      where: { id: relationId },
+      data: { targetRefs: targetRefs as any },
+      include: { createdBy: { select: { id: true, username: true } } },
+    });
+
+    // Audit log
+    await prisma.auditLog.create({
+      data: {
+        actorId: req.user!.id,
+        action: 'RELATION_TARGETS_UPDATED',
+        entityType: 'Relation',
+        entityId: relationId,
+        topicId,
+        data: { targetRefs: targetRefs as any, previousTargetRefs: existing.targetRefs as any },
+      },
+    });
+
+    res.json({
+      id: updated.id,
+      topicId: updated.topicId,
+      relationType: updated.relationType!,
+      sourceMessageId: updated.relSourceId ?? null,
+      targetRefs: updated.targetRefs,
+      payload: updated.relationPayload ?? undefined,
+      createdAt: updated.createdAt,
+      createdBy: updated.createdBy,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/topics/:topicId/relations
 relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {

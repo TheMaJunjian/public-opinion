@@ -486,6 +486,7 @@ export interface StanceStake {
   topicId: string;
   topicTitle: string;
   messageId: string;
+  messageKind: string;  // TEXT | RELATION | ROUND | ROUND_RESULT | GOVERNANCE | CODE
   content: string;
   amount: number;
   createdAt: string;

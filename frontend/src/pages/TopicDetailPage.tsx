@@ -268,7 +268,20 @@ export default function TopicDetailPage() {
     const targetMsgId = searchParams.get('msg');
     const settlementMsgId = searchParams.get('settlement');
     if (targetMsgId || settlementMsgId) {
-      const msgId = targetMsgId || settlementMsgId!;
+      let msgId = targetMsgId || settlementMsgId!;
+      // Resolve through supersede chain (same as points-navigate handler).
+      // Classify relations get new IDs when modified; URL params from stance
+      // records may carry the old ID.  Resolve to the current canvas ID.
+      const chain = supersedeMapRef.current;
+      if (chain.has(msgId)) {
+        let cur = msgId;
+        const visited = new Set<string>();
+        while (cur && chain.has(cur) && !visited.has(cur)) {
+          visited.add(cur);
+          cur = chain.get(cur)!;
+        }
+        if (cur !== msgId) msgId = cur;
+      }
       pendingScrollMsgRef.current = msgId;
       setAutoClassifyMsgId(msgId); // try auto-enter classify
       // Clear all selections and select the target message
@@ -304,6 +317,7 @@ export default function TopicDetailPage() {
       }
       searchParams.delete('msg');
       setSearchParams(searchParams, { replace: true });
+      setScrollKey(k => k + 1);
       // Trigger scroll directly (also needed for same-topic nav where messages don't change)
       setTimeout(() => scrollMsgToCenter(msgId), 150);
     }
@@ -323,7 +337,9 @@ export default function TopicDetailPage() {
   // Counter incremented on every exitFocus/exitAllFocus to force GraphView
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
-  const [focusExitKey, setFocusExitKey] = useState(0);
+  const [classifyKey, setClassifyKey] = useState(0);
+  const [focusKey, setFocusKey] = useState(0);
+  const [scrollKey, setScrollKey] = useState(0);
   // Classify state — independent from the focus system.
   // When non-null, the view is scoped to the CLASSIFY/SUMMARY relation's owned messages.
   const [classifyRelMsgId, setClassifyRelMsgId] = useState<string | null>(null);
@@ -356,7 +372,7 @@ export default function TopicDetailPage() {
       scrollMsgToCenter(pendingScrollMsgRef.current);
       pendingScrollMsgRef.current = null;
     }
-  }, [loading, messages, focusExitKey, viewMode]);
+  }, [loading, messages, classifyKey, focusKey, scrollKey, viewMode]);
   const [focusHop, setFocusHop] = useState<number>(1);
   // Popup state for decoration double-click (shows sender info)
   const [decorationPopup, setDecorationPopup] = useState<{
@@ -838,21 +854,6 @@ export default function TopicDetailPage() {
     return () => window.removeEventListener('relation-created', handler);
   }, [appendCreatedRelation]);
 
-  // Helper: supersede a relation (no new stake — just update targets)
-  const supersedeRel = useCallback((topicId: string, relationId: string, data: {
-    relationType: string;
-    targetRefs: import('../types').TargetRef[];
-    payload?: import('../types').RelationPayload;
-  }) => {
-    return api.createRelation(topicId, {
-      relationType: data.relationType,
-      targetRefs: data.targetRefs,
-      payload: data.payload,
-      supersedesRelationId: relationId,
-      stakeAmount: 0, // no new stake for administrative update
-    });
-  }, []);
-
   // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
   // Used to skip corrected fragments when double-clicking to select all fragments.
   const correctedEdgeMap = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
@@ -1211,7 +1212,7 @@ export default function TopicDetailPage() {
     setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
     // Bump exit key to force GraphView clean remount when entering focus,
     // avoiding React 18 concurrent reconciliation removeChild errors.
-    setFocusExitKey(k => k + 1);
+    setFocusKey(k => k + 1);
   }
 
   function exitFocus() {
@@ -1223,7 +1224,7 @@ export default function TopicDetailPage() {
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
-    setFocusExitKey(k => k + 1);
+    setFocusKey(k => k + 1);
     if (snapshot) restoreSnapshot(snapshot, { restoreSelection: true });
   }
 
@@ -1233,7 +1234,7 @@ export default function TopicDetailPage() {
       if (prev.length === 0) return prev;
       return [];
     });
-    setFocusExitKey(k => k + 1);
+    setFocusKey(k => k + 1);
     if (snapshot) restoreSnapshot(snapshot);
   }
 
@@ -1274,86 +1275,46 @@ export default function TopicDetailPage() {
     if (!topicRelation) return;
     const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
     const updatedRefs = [...existingRefs, newTargetRef];
-    return supersedeRel(topicId, currentClassifyId, {
-      relationType: topicRelation.relationType,
-      targetRefs: updatedRefs,
-      payload: topicRelation.payload,
-    })
+
+    // Update targetRefs in-place via PATCH — preserves the relation's ID
+    // so stance records, classify stack, and other references stay valid.
+    return api.patchRelationTargets(topicId, currentClassifyId, updatedRefs)
       .then(updatedRel => {
-        const newRelId = updatedRel.id;
-        const oldRelId = currentClassifyId;
-        // Track supersede chain for point-record message ID resolution
-        supersedeMapRef.current.set(oldRelId, newRelId);
-        // Keep ref and state in sync so the classify view uses the new ID
-        latestClassifyRelMsgIdRef.current = newRelId;
-        if (classifyRelMsgIdRef.current === oldRelId) setClassifyRelMsgId(newRelId);
-        relationsRef.current = relationsRef.current.filter(r => r.id !== oldRelId).map(r => {
-          const refs = (r.targetRefs ?? []) as TargetRef[];
-          const hasOldRef = refs.some(ref => ref.kind === 'relation' && ref.relationId === oldRelId);
-          if (!hasOldRef) return r;
-          return {
-            ...r,
-            targetRefs: refs.map(ref =>
-              ref.kind === 'relation' && ref.relationId === oldRelId
-                ? { ...ref, relationId: newRelId }
-                : ref
-            ),
+        // Update relations in local state (ID unchanged)
+        const updated = { ...topicRelation, targetRefs: updatedRefs };
+        relationsRef.current = relationsRef.current.map(r =>
+          r.id === currentClassifyId ? updated : r
+        );
+        setRelations(prev => prev.map(r =>
+          r.id === currentClassifyId ? updated : r
+        ));
+        // Update the DemoMessage display content
+        setMessages(prev => prev.map(m =>
+          m.id === currentClassifyId ? buildRelationDemoMessage(updatedRel) : m
+        ));
+        // Add CLASSIFY edge from the classify to the new target, but only
+        // on the main canvas (not inside another classify sub-canvas).
+        if (!isInsideClassify) {
+          const edgeTargetId = newTargetRef.kind === 'relation'
+            ? newTargetRef.relationId
+            : newTargetRef.messageId;
+          const anonSrcId = `anon:${currentClassifyId}`;
+          const newEdge: DemoEdge = {
+            id: nextId("edge"),
+            relationMessageId: currentClassifyId,
+            relationType: "classify" as RelationType,
+            from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+            to: { messageId: edgeTargetId, selection: { kind: "whole" as const } },
+            relationLabel: relationTypeName("classify"),
           };
-        }).concat(updatedRel);
-        // Replace old relation with superseding new one.
-        // Also update any parent relation's targetRefs that reference the old ID,
-        // so the ownership chain (collectOwnedByRelation) stays intact.
-        setRelations(prev => {
-          const filtered = prev.filter(r => r.id !== oldRelId);
-          // Rewrite targetRefs in any relation that points to the superseded relation
-          return filtered.map(r => {
-            const refs = (r.targetRefs ?? []) as TargetRef[];
-            const hasOldRef = refs.some(ref => ref.kind === 'relation' && ref.relationId === oldRelId);
-            if (!hasOldRef) return r;
-            return {
-              ...r,
-              targetRefs: refs.map(ref =>
-                ref.kind === 'relation' && ref.relationId === oldRelId
-                  ? { ...ref, relationId: newRelId }
-                  : ref
-              ),
-            };
-          }).concat(updatedRel);
-        });
-        setMessages(prev => {
-          const filtered = prev.filter(m => m.id !== oldRelId);
-          return [...filtered, buildRelationDemoMessage(updatedRel)];
-        });
-        setEdges(prev => {
-          let next = prev.map(e => {
-            if (e.relationMessageId === oldRelId) {
-              return {
-                ...e,
-                relationMessageId: newRelId,
-                from: e.from.messageId === `anon:${oldRelId}`
-                  ? { ...e.from, messageId: `anon:${newRelId}` }
-                  : e.from,
-              };
-            }
-            if (e.to.messageId === oldRelId && e.to.selection.kind === 'whole') {
-              return {
-                ...e,
-                to: { ...e.to, messageId: newRelId },
-              };
-            }
-            return e;
+          setEdges(prev => {
+            // Avoid duplicate
+            const key = `${newEdge.relationMessageId}::${newEdge.to.messageId}`;
+            if (prev.some(e => `${e.relationMessageId}::${e.to.messageId}` === key)) return prev;
+            return [...prev, newEdge];
           });
-          // Deduplicate by relationMessageId + to.messageId
-          const seen = new Set<string>();
-          next = next.filter(e => {
-            const key = `${e.relationMessageId}::${e.to.messageId}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-          onUpdated?.(newRelId);
-          return next;
-        });
+        }
+        onUpdated?.(currentClassifyId);
       })
       .catch(e => console.warn('更新分类目标失败:', e));
   }
@@ -1459,7 +1420,7 @@ export default function TopicDetailPage() {
             },
           );
         }
-        setFocusExitKey(k => k + 1); // force StructureView remount AFTER classify updated
+        setClassifyKey(k => k + 1); // force StructureView remount AFTER classify updated
       }
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
@@ -1680,7 +1641,18 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(mid);
-      if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") continue;
+      if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") {
+        // Non-container relation types (proposal, code_change, operations etc.)
+        // are treated as relation-kind targets — they become opaque cards when classified.
+        if (relType !== undefined) {
+          const key = "relation:" + mid;
+          if (!seen.has(key)) {
+            seen.add(key);
+            res.push({ kind: "relation", relationId: mid });
+          }
+        }
+        continue;
+      }
       // ARRANGE / MERGE: expand to their contained text messages (layout containers),
       // AND also keep the container itself as a relation-kind target so it gets
       // hidden from the parent view (list + graph) when classified.
@@ -1765,7 +1737,7 @@ export default function TopicDetailPage() {
     // Save snapshot so we can restore on exit
     classifyStackRef.current.push({ relMsgId, snapshot: captureSnapshot() });
     setClassifyRelMsgId(relMsgId);
-    setFocusExitKey(k => k + 1);
+    setClassifyKey(k => k + 1);
   }
 
   function exitClassifyTopic(options?: { restoreSnapshot?: boolean }) {
@@ -1780,7 +1752,7 @@ export default function TopicDetailPage() {
       // Exit to main view
       setClassifyRelMsgId(null);
     }
-    setFocusExitKey(k => k + 1);
+    setClassifyKey(k => k + 1);
     if (options?.restoreSnapshot !== false && entry?.snapshot) {
       restoreSnapshot(entry.snapshot);
     }
@@ -2430,8 +2402,13 @@ export default function TopicDetailPage() {
         ));
         const reclassifiedTextIds = new Set(targetTextIds);
         const isReclassified = (ref: TargetRef) => {
-          if (ref.kind === 'relation') return reclassifiedTargetKeys.has(`relation:${ref.relationId}`);
-          return reclassifiedTargetKeys.has(`message:${ref.messageId}`) || reclassifiedTextIds.has(ref.messageId);
+          if (ref.kind === 'relation') {
+            return reclassifiedTargetKeys.has(`relation:${ref.relationId}`)
+              || reclassifiedTextIds.has(ref.relationId);
+          }
+          return reclassifiedTargetKeys.has(`message:${ref.messageId}`)
+            || reclassifiedTextIds.has(ref.messageId)
+            || reclassifiedTargetKeys.has(`relation:${ref.messageId}`);
         };
         if (isInsideClassify && currentClassifyRelMsgId) {
           const curRel = relationsRef.current.find(r => r.id === currentClassifyRelMsgId);
@@ -2439,31 +2416,19 @@ export default function TopicDetailPage() {
             const remainingRefs = (curRel.targetRefs as TargetRef[]).filter(ref => !isReclassified(ref));
             if (remainingRefs.length !== (curRel.targetRefs as TargetRef[]).length) {
               try {
-                const updatedRel = await supersedeRel(topicId!, currentClassifyRelMsgId, {
-                  relationType: curRel.relationType,
-                  targetRefs: remainingRefs,
-                  payload: curRel.payload,
-                });
-                const newId = updatedRel.id; const oldId = currentClassifyRelMsgId;
-                supersedeMapRef.current.set(oldId, newId);
-                latestClassifyRelMsgIdRef.current = newId;
-                // Update relationsRef immediately so subsequent addTargetToClassifyTopic finds the new version
-                relationsRef.current = relationsRef.current.filter(r => r.id !== oldId).map(r => {
-                  const refs = (r.targetRefs ?? []) as TargetRef[];
-                  return refs.some(ref => ref.kind === 'relation' && ref.relationId === oldId)
-                    ? { ...r, targetRefs: refs.map(ref => ref.kind === 'relation' && ref.relationId === oldId ? { ...ref, relationId: newId } : ref) }
-                    : r;
-                });
-                relationsRef.current.push(updatedRel);
-                setRelations(prev => prev.filter(r => r.id !== oldId).map(r => {
-                  const refs = (r.targetRefs ?? []) as TargetRef[];
-                  return refs.some(ref => ref.kind === 'relation' && ref.relationId === oldId)
-                    ? { ...r, targetRefs: refs.map(ref => ref.kind === 'relation' && ref.relationId === oldId ? { ...ref, relationId: newId } : ref) }
-                    : r;
-                }).concat(updatedRel));
-                setMessages(prev => [...prev.filter(m => m.id !== oldId), buildRelationDemoMessage(updatedRel)]);
-                // Update classify state if the superseded relation is the current classify
-                if (classifyRelMsgIdRef.current === oldId) setClassifyRelMsgId(newId);
+                // Update targetRefs in-place — preserves the classify ID
+                const updatedRel = await api.patchRelationTargets(topicId!, currentClassifyRelMsgId, remainingRefs);
+                // Update relations in local state (ID unchanged)
+                const updated = { ...curRel, targetRefs: remainingRefs };
+                relationsRef.current = relationsRef.current.map(r =>
+                  r.id === currentClassifyRelMsgId ? updated : r
+                );
+                setRelations(prev => prev.map(r =>
+                  r.id === currentClassifyRelMsgId ? updated : r
+                ));
+                setMessages(prev => prev.map(m =>
+                  m.id === currentClassifyRelMsgId ? buildRelationDemoMessage(updatedRel) : m
+                ));
               } catch { /* text removal optional */ }
             }
           }
@@ -2473,23 +2438,16 @@ export default function TopicDetailPage() {
           if (isInsideClassify && rel.id === currentClassifyRelMsgId) continue; // handled above
           const remainingRefs = (rel.targetRefs as TargetRef[]).filter(ref => !isReclassified(ref));
           if (remainingRefs.length === (rel.targetRefs as TargetRef[]).length) continue;
-          supersedeRel(topicId!, rel.id, {
-            relationType: rel.relationType,
-            targetRefs: remainingRefs,
-            payload: rel.payload,
-          }).then(updatedRel => {
-            const newId = updatedRel.id; const oldId = rel.id;
-            supersedeMapRef.current.set(oldId, newId);
-            setRelations(prev => prev.filter(r => r.id !== oldId).map(r => {
-              const refs = (r.targetRefs ?? []) as TargetRef[];
-              return refs.some(ref => ref.kind === 'relation' && ref.relationId === oldId)
-                ? { ...r, targetRefs: refs.map(ref => ref.kind === 'relation' && ref.relationId === oldId ? { ...ref, relationId: newId } : ref) }
-                : r;
-            }).concat(updatedRel));
-            setMessages(prev => [...prev.filter(m => m.id !== oldId), buildRelationDemoMessage(updatedRel)]);
-            // Update classify state if the superseded relation is the current classify
-            if (classifyRelMsgIdRef.current === oldId) setClassifyRelMsgId(newId);
-          }).catch(() => {});
+          api.patchRelationTargets(topicId!, rel.id, remainingRefs)
+            .then(updatedRel => {
+              const updated = { ...rel, targetRefs: remainingRefs };
+              setRelations(prev => prev.map(r =>
+                r.id === rel.id ? updated : r
+              ));
+              setMessages(prev => prev.map(m =>
+                m.id === rel.id ? buildRelationDemoMessage(updatedRel) : m
+              ));
+            }).catch(() => {});
         }
 
         // Now add CLASSIFY and its ROUND to the current classify.
@@ -2521,7 +2479,7 @@ export default function TopicDetailPage() {
       setRelationType(null); setSecondaryRelationType("none");
       // Bump key to force GraphView clean remount after adding classify edges,
       // avoiding React 18 concurrent reconciliation removeChild errors.
-      setFocusExitKey(k => k + 1);
+      setFocusKey(k => k + 1);
       return;
     }
 
@@ -3594,6 +3552,10 @@ export default function TopicDetailPage() {
       // its hiddenTargetIds for covered messages.
       const topicEdges = baseEdges.filter(e => {
         if (!visibleIds.has(e.relationMessageId)) return false;
+        // Inside a classify sub-canvas, exclude nested CLASSIFY/SUMMARY edges
+        // to prevent duplicate group frames.  The sub-canvas already renders
+        // nested classify relations as topic cards via topicRelationIds.
+        if (isInsideClassify && (e.relationType === 'classify' || e.relationType === 'summary')) return false;
         if (e.relationType === 'classify' || e.relationType === 'summary') return true;
         // Cross-topic REFERENCE: include the edge when the source endpoint is
         // visible, even if the target is in a different classify topic.
@@ -4261,7 +4223,7 @@ export default function TopicDetailPage() {
               </div>
             ) : (
               <GraphView
-                  key={`gv-${focusExitKey}`}
+                  key={`gv-${classifyKey}-${focusKey}`}
                   messages={graphMessagesFinal} edges={edgesToRender} draftUnits={draftUnits}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
@@ -4587,7 +4549,7 @@ export default function TopicDetailPage() {
             <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
           </div>
 
-          <TopicStructureView key={`sv-${focusExitKey}`} focusIds={currentFocusIds ?? []} messages={messages} edges={edges} />
+          <TopicStructureView key={`sv-${classifyKey}-${focusKey}`} focusIds={currentFocusIds ?? []} messages={messages} edges={edges} />
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>

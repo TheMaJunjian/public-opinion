@@ -1,0 +1,10 @@
+  console.log
+    1. 娉ㄥ唽鐧诲綍 OK
+
+      at Object.<anonymous> (src/test/classify-nesting.test.ts:124:13)
+
+  console.log
+    2. 鏂囨湰1=kb17tvhm 鏂囨湰2=tt99hlog
+
+      at Object.<anonymous> (src/test/classify-nesting.test.ts:133:13)
+

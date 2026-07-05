@@ -20,6 +20,10 @@ const TAG_TYPE_LABEL: Record<string, string> = {
 const SUB_TYPE_LABEL: Record<string, string> = {
   SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义',
 };
+const MESSAGE_KIND_LABEL: Record<string, string> = {
+  TEXT: '文本消息', RELATION: '关系消息', ROUND: '结算轮次',
+  ROUND_RESULT: '结算结果', GOVERNANCE: '治理提案', CODE: '代码变更',
+};
 
 type TabKey = 'relations' | 'stakes' | 'tags';
 
@@ -72,13 +76,13 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     { key: 'tags', label: '表态', count: tags.length },
   ];
 
-  function navigateToRecord(topicId: string, msgId: string, options?: { settlementId?: string | null; stakeId?: string | null; settlementType?: 'TRUTH' | 'VALUE' }) {
+  function navigateToRecord(rTopicId: string, msgId: string, options?: { settlementId?: string | null; stakeId?: string | null; settlementType?: 'TRUTH' | 'VALUE' }) {
     const params = new URLSearchParams();
     params.set('msg', msgId);
     if (options?.settlementId) params.set('settlement', options.settlementId);
     if (options?.stakeId) params.set('stakeId', options.stakeId);
     if (options?.settlementType) params.set('settlementType', options.settlementType);
-    navigate(`/topics/${topicId}?${params}`);
+    navigate(`/topics/${rTopicId}?${params}`);
   }
 
   return (
@@ -113,12 +117,16 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
 
         {activeTab === 'stakes' && stakes.map(s => {
           const topicSuffix = topicId ? '' : ` · ${s.topicTitle}`;
+          const kindLabel = MESSAGE_KIND_LABEL[s.messageKind] ?? s.messageKind;
+          const detail = s.content
+            ? (s.content.length > 40 ? s.content.slice(0, 40) + '…' : s.content)
+            : `[${kindLabel}]`;
           return (
             <StanceCard
               key={`stake-${s.id}`}
               icon="🔒"
               title={`消耗 ${s.amount} 点${topicSuffix}`}
-              subtitle={s.content ? (s.content.length > 40 ? s.content.slice(0, 40) + '…' : s.content) : '(无文本)'}
+              subtitle={detail}
               time={s.createdAt}
               onDoubleClick={() => navigateToRecord(s.topicId, s.messageId, { settlementId: s.messageId, stakeId: s.id })}
             />

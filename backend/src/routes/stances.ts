@@ -27,6 +27,8 @@ type StakeRecord = {
     content: string | null;
     kind: string;
     relationType: string | null;
+    relationPayload: unknown;
+    supersededBy: string | null;
     createdById: string;
     topicId: string;
     topic: { id: string; title: string };
@@ -87,6 +89,8 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
             content: true,
             kind: true,
             relationType: true,
+            relationPayload: true,
+            supersededBy: true,
             createdById: true,
             topicId: true,
             topic: { select: { id: true, title: true } },
@@ -94,6 +98,45 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
         },
       },
     }) as StakeRecord[];
+
+    // Resolve stake.messageId through supersededBy chain to the latest non-superseded ID.
+    // When a message (e.g. CLASSIFY relation) is modified, the old record gets
+    // supersededBy pointing to the new ID.  Stake records still reference the old
+    // message ID.  We must resolve to the current ID so the frontend can locate
+    // the message card on the canvas.
+    const supersedeChain = new Map<string, string>();
+    {
+      const toResolve = allStakes
+        .map(s => s.message.supersededBy)
+        .filter((id): id is string => id !== null);
+      let queue = [...toResolve];
+      const seen = new Set<string>();
+      while (queue.length > 0) {
+        const batch = queue.splice(0, 100);
+        const msgs = await prisma.message.findMany({
+          where: { id: { in: batch } },
+          select: { id: true, supersededBy: true },
+        });
+        for (const m of msgs) {
+          seen.add(m.id);
+          if (m.supersededBy) {
+            supersedeChain.set(m.id, m.supersededBy);
+            if (!seen.has(m.supersededBy)) queue.push(m.supersededBy);
+          }
+        }
+      }
+    }
+
+    // Walk chain to terminal ID
+    function resolveSupersede(msgId: string): string {
+      let cur = msgId;
+      const visited = new Set<string>();
+      while (supersedeChain.has(cur) && !visited.has(cur)) {
+        visited.add(cur);
+        cur = supersedeChain.get(cur)!;
+      }
+      return cur;
+    }
 
     const roundIds = [...new Set(allStakes.map(s => s.roundId).filter(Boolean) as string[])];
     const rounds = roundIds.length > 0
@@ -143,6 +186,7 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
       topicId: string;
       topicTitle: string;
       messageId: string;
+      messageKind: string;
       content: string;
       amount: number;
       createdAt: Date;
@@ -213,13 +257,36 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
       const relType = stake.message.relationType;
       const isStanceRelation = stake.message.kind === 'RELATION' && ['AGREE', 'DISAGREE', 'RECOMMEND', 'ARCHIVE'].includes(relType ?? '');
       if (stake.message.createdById === targetUserId && !isStanceRelation) {
+        // Build display text: prefer message content; for relation messages
+        // without content, derive a label from relationType + payload.
+        let displayContent = stake.message.content?.slice(0, 80) ?? '';
+        if (!displayContent && stake.message.kind === 'RELATION') {
+          const rp = stake.message.relationPayload as Record<string, unknown> | null;
+          const rt = (relType ?? '').toUpperCase();
+          if (rt === 'CLASSIFY' || rt === 'SUMMARY') {
+            displayContent = (rp?.title as string) || `[${rt === 'CLASSIFY' ? '分类' : '汇总'}]`;
+          } else if (rt === 'TAG') {
+            displayContent = (rp?.label as string) || '[标签]';
+          } else if (rt === 'CORRECT') {
+            displayContent = '[更正]';
+          } else if (rt === 'REPLY') {
+            displayContent = '[回复]';
+          } else if (rt === 'REFERENCE') {
+            displayContent = '[引用]';
+          } else if (rt === 'ANNOTATION') {
+            displayContent = '[批注]';
+          } else {
+            displayContent = `[${rt || '关系'}]`;
+          }
+        }
         stakeItems.push({
           kind: 'stake',
           id: stake.id,
           topicId: stake.topicId,
           topicTitle: stake.message.topic.title,
-          messageId: stake.messageId,
-          content: stake.message.content?.slice(0, 80) ?? '',
+          messageId: resolveSupersede(stake.messageId),
+          messageKind: stake.message.kind,
+          content: displayContent,
           amount: stake.amount,
           createdAt: stake.createdAt,
         });

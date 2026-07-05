@@ -122,6 +122,16 @@ export function updateRelation(topicId: string, relationId: string, data: {
   });
 }
 
+// Update a relation's targetRefs in-place without creating a new message version.
+// Unlike updateRelation (which supersedes), this preserves the relation's ID
+// so that external references (stance records, URLs) remain valid.
+export function patchRelationTargets(topicId: string, relationId: string, targetRefs: import('../types').TargetRef[]) {
+  return request<import('../types').Relation>(`/topics/${topicId}/relations/${relationId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ targetRefs }),
+  });
+}
+
 // ============================================================
 // Points & Rules API (Phase 1)
 // ============================================================

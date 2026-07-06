@@ -231,6 +231,10 @@ export default function TopicDetailPage() {
       }
       if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
       enterClassifyTopic(relId);
+      // If the classify is rejected, enter preview (read-only) mode
+      if (rejectedClassifyRelIds.has(relId)) {
+        setPreviewClassifyId(relId);
+      }
       if (hiddenInGraphView.has(msgId)) setViewMode("list");
       setAutoClassifyMsgId(null);
     };
@@ -240,6 +244,10 @@ export default function TopicDetailPage() {
     for (const rel of relations) {
       const rt = rel.relationType?.toUpperCase();
       if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      // Don't auto-enter rejected classifies from navigation jumps —
+      // their messages are back on the main canvas.  User can still
+      // enter preview mode by double-clicking the card directly.
+      if (rejectedClassifyRelIds.has(rel.id)) continue;
       const targets = (rel.targetRefs ?? []) as TargetRef[];
       if (targets.some(t =>
         (t.kind === 'relation' && t.relationId === anchorId) ||
@@ -250,6 +258,7 @@ export default function TopicDetailPage() {
     for (const rel of relations) {
       const rt = rel.relationType?.toUpperCase();
       if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      if (rejectedClassifyRelIds.has(rel.id)) continue;
       const owned = collectOwnedByRelation(rel.id, relById);
       const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
       if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
@@ -269,19 +278,6 @@ export default function TopicDetailPage() {
     const settlementMsgId = searchParams.get('settlement');
     if (targetMsgId || settlementMsgId) {
       let msgId = targetMsgId || settlementMsgId!;
-      // Resolve through supersede chain (same as points-navigate handler).
-      // Classify relations get new IDs when modified; URL params from stance
-      // records may carry the old ID.  Resolve to the current canvas ID.
-      const chain = supersedeMapRef.current;
-      if (chain.has(msgId)) {
-        let cur = msgId;
-        const visited = new Set<string>();
-        while (cur && chain.has(cur) && !visited.has(cur)) {
-          visited.add(cur);
-          cur = chain.get(cur)!;
-        }
-        if (cur !== msgId) msgId = cur;
-      }
       pendingScrollMsgRef.current = msgId;
       setAutoClassifyMsgId(msgId); // try auto-enter classify
       // Clear all selections and select the target message
@@ -346,6 +342,10 @@ export default function TopicDetailPage() {
   // Stack-based snapshot store for nested classify enter/exit.
   // Each entry holds the classify id and the snapshot captured before entering it.
   const classifyStackRef = useRef<Array<{ relMsgId: string; snapshot: FocusSnapshot | null }>>([]);
+  // Preview mode: when entering a rejected classify, the view is read-only
+  // with a grey filter.  null = normal mode, string = classify ID being previewed.
+  const [previewClassifyId, setPreviewClassifyId] = useState<string | null>(null);
+  const isPreviewMode = previewClassifyId !== null;
   // Phase 6: Clean view — multi-dimensional filter rules (replaces simple boolean)
   const {
     cleanMode, cleanFilters, cleanVisibleIds,
@@ -440,8 +440,6 @@ export default function TopicDetailPage() {
   const relationsRef = useRef<Relation[]>([]);
   const relationByIdRef = useRef<Map<string, Relation>>(new Map());
   const relationTypeByRelMsgIdRef = useRef<Map<string, string>>(new Map());
-  // Phase 5: Track supersede chain (oldId → newId) for point-record message ID resolution
-  const supersedeMapRef = useRef<Map<string, string>>(new Map());
 
   // Phase 5: Listen for points-navigate custom event (in-place navigation from PointsBadge)
   useEffect(() => {
@@ -456,27 +454,12 @@ export default function TopicDetailPage() {
       const currentRelations = relationsRef.current;
       const currentRelationById = relationByIdRef.current;
 
-      // Phase 5: Resolve message ID through supersede chain
-      // When a classify is updated (e.g. via agree inside it), the old relation
-      // is superseded. Point records still reference the old ID — resolve to current.
-      let resolvedMessageId = messageId;
-      const chain = supersedeMapRef.current;
-      if (chain.has(messageId)) {
-        let cur = messageId;
-        const visited = new Set<string>();
-        while (cur && chain.has(cur) && !visited.has(cur)) {
-          visited.add(cur);
-          cur = chain.get(cur)!;
-        }
-        if (cur !== messageId) resolvedMessageId = cur;
-      }
-
       // ── Smart classify enter/exit ──
       const currentClassifyId = classifyRelMsgIdRef.current;
       if (currentClassifyId) {
         const owned = collectOwnedByRelation(currentClassifyId, currentRelationById);
         const allOwnedIds = new Set([...owned.textIds, ...owned.relationIds]);
-        if (!allOwnedIds.has(resolvedMessageId)) {
+        if (!allOwnedIds.has(messageId)) {
           exitClassifyTopic({ restoreSnapshot: false });
         }
       }
@@ -487,7 +470,7 @@ export default function TopicDetailPage() {
           const rt = rel.relationType?.toUpperCase();
           if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
           const targets = (rel.targetRefs ?? []) as TargetRef[];
-          if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId === resolvedMessageId)) {
+          if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId === messageId)) {
             enterClassifyTopic(rel.id);
             break;
           }
@@ -495,16 +478,16 @@ export default function TopicDetailPage() {
       }
 
       // Clear existing draft and select target message
-      setDraftUnits([{ messageId: resolvedMessageId, selection: { kind: "whole" } }]);
+      setDraftUnits([{ messageId: messageId, selection: { kind: "whole" } }]);
       setActiveTextSelectId(null);
-      pendingScrollMsgRef.current = resolvedMessageId;
+      pendingScrollMsgRef.current = messageId;
 
       // Phase 5: Open settlement panel for all stake/vote/settlement transactions
       const settlementTypes = ['STAKE_LOCK', 'VOTE_LOCK', 'SETTLEMENT_GAIN', 'SETTLEMENT_LOSS', 'CLAWBACK'];
       const highlightMessageTypes = ['MINT', 'STAKE_LOCK', 'VOTE_LOCK'];
 
       if (settlementTypes.includes(txType)) {
-        openSettlement(resolvedMessageId);
+        openSettlement(messageId);
         if (roundId) sessionStorage.setItem('settlementHighlightRound', roundId);
 
         // Extract settlement entry highlight from txData
@@ -536,7 +519,7 @@ export default function TopicDetailPage() {
 
       // Phase 5: Message card highlight — any tx linked to a message gets a golden flash
       if (highlightMessageTypes.includes(txType) && txData?.messageId) {
-        setStanceHighlight({ stanceMsgId: resolvedMessageId, evidenceMsgIds: [] });
+        setStanceHighlight({ stanceMsgId: messageId, evidenceMsgIds: [] });
         if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
         stanceHighlightTimerRef.current = setTimeout(() => {
           setStanceHighlight(null);
@@ -907,6 +890,31 @@ export default function TopicDetailPage() {
     () => computeTransitiveVoteStats(edges, messages),
     [edges, messages]
   );
+
+  // CLASSIFY / SUMMARY relations where disagreeCount > agreeCount are considered
+  // "rejected" — their container card is hidden but their owned messages return
+  // to the parent canvas.  Uses simple majority from voteStats; settlement results
+  // can be layered in later with higher priority.
+  const rejectedClassifyRelIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'CLASSIFY' && relation.relationType !== 'SUMMARY') continue;
+      const stats = voteStats[relation.id];
+      if (stats && stats.disagreeCount > stats.agreeCount) {
+        ids.add(relation.id);
+      }
+    }
+    return ids;
+  }, [relations, voteStats]);
+
+  // Real-time: if the previewed classify becomes active (no longer rejected),
+  // exit preview mode so the user gets full interaction capabilities.
+  useEffect(() => {
+    if (previewClassifyId && !rejectedClassifyRelIds.has(previewClassifyId)) {
+      setPreviewClassifyId(null);
+    }
+  }, [rejectedClassifyRelIds, previewClassifyId]);
+
   const relationTypeByRelMsgId = useMemo(() => {
     const map = new Map<string, RelationType>();
     for (const relation of relations) {
@@ -932,6 +940,8 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [edges, msgMap]);
+  // Full ownership: all CLASSIFY relations regardless of approval status.
+  // Used by preview mode and auto-classify to find targets even in rejected classifies.
   const classifyOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
@@ -943,6 +953,21 @@ export default function TopicDetailPage() {
     }
     return { textIds, relationIds };
   }, [relations, relationById]);
+
+  // Active ownership: only non-rejected CLASSIFY relations.
+  // Used by visibility logic — rejected classifies don't hide their messages.
+  const activeClassifyOwnership = useMemo(() => {
+    const textIds = new Set<string>();
+    const relationIds = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'CLASSIFY') continue;
+      if (rejectedClassifyRelIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(relation.id, relationById);
+      owned.textIds.forEach(id => textIds.add(id));
+      owned.relationIds.forEach(id => relationIds.add(id));
+    }
+    return { textIds, relationIds };
+  }, [relations, relationById, rejectedClassifyRelIds]);
   const mergeOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
@@ -954,6 +979,7 @@ export default function TopicDetailPage() {
     }
     return { textIds, relationIds };
   }, [relations, relationById]);
+  // Full ownership: all SUMMARY relations regardless of approval status.
   const summaryOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
@@ -965,6 +991,20 @@ export default function TopicDetailPage() {
     }
     return { textIds, relationIds };
   }, [relations, relationById]);
+
+  // Active ownership: only non-rejected SUMMARY relations.
+  const activeSummaryOwnership = useMemo(() => {
+    const textIds = new Set<string>();
+    const relationIds = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'SUMMARY') continue;
+      if (rejectedClassifyRelIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(relation.id, relationById);
+      owned.textIds.forEach(id => textIds.add(id));
+      owned.relationIds.forEach(id => relationIds.add(id));
+    }
+    return { textIds, relationIds };
+  }, [relations, relationById, rejectedClassifyRelIds]);
   const summaryCoverageByMessageId = useMemo(() => {
     const map = new Map<string, Array<{ summaryId: string; title: string }>>();
     for (const relation of relations) {
@@ -988,44 +1028,44 @@ export default function TopicDetailPage() {
   // CORRECT (更正) relations with any already-owned message. This ensures that when
   // T1 is classified/summarized, the correcting message T2 (and the CORRECT relation
   // message) are automatically treated as part of the same group.
-  const classifyOwnershipTextIdsExpanded = useMemo(
-    () => expandTextIdsWithCorrections(classifyOwnership.textIds, edges, msgMap),
-    [classifyOwnership, edges, msgMap]
+  const activeClassifyOwnershipTextIdsExpanded = useMemo(
+    () => expandTextIdsWithCorrections(activeClassifyOwnership.textIds, edges, msgMap),
+    [activeClassifyOwnership, edges, msgMap]
   );
-  const summaryOwnershipTextIdsExpanded = useMemo(
-    () => expandTextIdsWithCorrections(summaryOwnership.textIds, edges, msgMap),
-    [summaryOwnership, edges, msgMap]
+  const activeSummaryOwnershipTextIdsExpanded = useMemo(
+    () => expandTextIdsWithCorrections(activeSummaryOwnership.textIds, edges, msgMap),
+    [activeSummaryOwnership, edges, msgMap]
   );
 
-  const classifiedTargetTextIds = classifyOwnershipTextIdsExpanded;
+  const classifiedTargetTextIds = activeClassifyOwnershipTextIdsExpanded;
   const classifiedTargetClassifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'CLASSIFY') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
   const classifiedTargetMergeRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'MERGE') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
   const classifiedTargetARRANGERelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'ARRANGE') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
   const classifiedTargetSummaryRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'SUMMARY') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
 
   function collectExclusiveRelationMsgIds(hiddenTextIds: Set<string>, ownedRelationIds: Set<string>) {
     const ids = new Set<string>();
@@ -1073,23 +1113,23 @@ export default function TopicDetailPage() {
   }
 
   const listExclusiveRelMsgIds = useMemo(
-    () => collectExclusiveRelationMsgIds(classifyOwnershipTextIdsExpanded, classifyOwnership.relationIds),
-    [edges, msgMap, classifyOwnershipTextIdsExpanded, classifyOwnership.relationIds]
+    () => collectExclusiveRelationMsgIds(activeClassifyOwnershipTextIdsExpanded, activeClassifyOwnership.relationIds),
+    [edges, msgMap, activeClassifyOwnershipTextIdsExpanded, activeClassifyOwnership.relationIds]
   );
   const graphHiddenTextIds = useMemo(() => {
-    const ids = new Set<string>(classifyOwnershipTextIdsExpanded);
-    summaryOwnershipTextIdsExpanded.forEach(id => ids.add(id));
+    const ids = new Set<string>(activeClassifyOwnershipTextIdsExpanded);
+    activeSummaryOwnershipTextIdsExpanded.forEach(id => ids.add(id));
     // MERGE displays as a group frame whose targets remain visible as cards on the canvas,
     // so mergeOwnership.textIds is intentionally excluded here.
     return ids;
-  }, [classifyOwnershipTextIdsExpanded, summaryOwnershipTextIdsExpanded]);
+  }, [activeClassifyOwnershipTextIdsExpanded, activeSummaryOwnershipTextIdsExpanded]);
 
   const graphOwnedRelationIds = useMemo(() => {
-    const ids = new Set<string>(classifyOwnership.relationIds);
+    const ids = new Set<string>(activeClassifyOwnership.relationIds);
     mergeOwnership.relationIds.forEach(id => ids.add(id));
-    summaryOwnership.relationIds.forEach(id => ids.add(id));
+    activeSummaryOwnership.relationIds.forEach(id => ids.add(id));
     return ids;
-  }, [classifyOwnership, mergeOwnership, summaryOwnership]);
+  }, [activeClassifyOwnership, mergeOwnership, activeSummaryOwnership]);
   const graphExclusiveRelMsgIds = useMemo(
     () => collectExclusiveRelationMsgIds(graphHiddenTextIds, graphOwnedRelationIds),
     [edges, msgMap, graphHiddenTextIds, graphOwnedRelationIds]
@@ -1323,7 +1363,15 @@ export default function TopicDetailPage() {
     const roundId = await appendCreatedRelation(backendRel);
     const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
     if (!isDedup) {
-      await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+      // Governance/ops messages are content-kind, not relation-kind.
+      // Add as 'message' target so the sub-canvas finds them in topicTextIds.
+      const rt = backendRel.relationType?.toUpperCase();
+      const isGovOps = rt === 'PROPOSAL' || rt === 'CODE_CHANGE' || rt === 'OPERATIONS';
+      await addTargetToClassifyTopic(
+        isGovOps
+          ? { kind: 'message', messageId: backendRel.id }
+          : { kind: 'relation', relationId: backendRel.id }
+      );
     }
     if (roundId) {
       await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
@@ -1529,6 +1577,15 @@ export default function TopicDetailPage() {
         setActiveTextSelectId(null);
         clearBrowserSelection();
         enterClassifyTopic(messageId);
+        // If entering a rejected classify, enter preview mode
+        if (rejectedClassifyRelIds.has(messageId)) {
+          setPreviewClassifyId(messageId);
+        }
+        return;
+      }
+      if (relType === "merge") {
+        // Rejected MERGE: just toggle active state, no special action needed
+        if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
         return;
       }
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
@@ -1753,6 +1810,7 @@ export default function TopicDetailPage() {
       setClassifyRelMsgId(null);
     }
     setClassifyKey(k => k + 1);
+    setPreviewClassifyId(null); // exit preview mode when leaving classify
     if (options?.restoreSnapshot !== false && entry?.snapshot) {
       restoreSnapshot(entry.snapshot);
     }
@@ -2385,6 +2443,25 @@ export default function TopicDetailPage() {
         return;
       }
       const targetRefs = getClassifyTargetRefs(effectiveTargets);
+
+      // Prevent circular nesting: a classify created from within the
+      // classify hierarchy must not target any ancestor (including the
+      // current classify and all its parents).
+      if (isInsideClassify) {
+        const ancestorIds = new Set<string>();
+        if (currentClassifyRelMsgId) ancestorIds.add(currentClassifyRelMsgId);
+        for (const entry of classifyStackRef.current) {
+          ancestorIds.add(entry.relMsgId);
+        }
+        const targetsAncestor = targetRefs.some(ref =>
+          ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+        );
+        if (targetsAncestor) {
+          alert('不能将当前分类或其上级分类作为新分类的目标');
+          return;
+        }
+      }
+
       try {
         const backendRel = await createRel(topicId!, {
           relationType: 'CLASSIFY',
@@ -2519,6 +2596,20 @@ export default function TopicDetailPage() {
         alert("总结关系至少需要一个目标消息");
         return;
       }
+      // Prevent circular nesting (same as CLASSIFY above)
+      if (isInsideClassify) {
+        const ancestorIds = new Set<string>();
+        if (currentClassifyRelMsgId) ancestorIds.add(currentClassifyRelMsgId);
+        for (const entry of classifyStackRef.current) {
+          ancestorIds.add(entry.relMsgId);
+        }
+        if (summaryTargetRefs.some(ref =>
+          ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+        )) {
+          alert('不能将当前分类或其上级分类作为新总结的目标');
+          return;
+        }
+      }
       try {
         const backendRel = await createRel(topicId!, {
           relationType: 'SUMMARY',
@@ -2612,20 +2703,17 @@ export default function TopicDetailPage() {
         await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
         if (roundId) await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
         const virtualFrameNodeId = `anon:${backendRel.id}`;
-        // Only add merge edges on the main canvas, not inside another classify
-        if (!isInsideClassify) {
-          const newEdges = mergeTargetRefs.map(targetRef => ({
-            id: nextId("edge"),
-            relationMessageId: relId,
-            relationType: "merge" as RelationType,
-            from: { messageId: virtualFrameNodeId, selection: { kind: "whole" as const } },
-            to: targetRef.kind === "relation"
-              ? { messageId: targetRef.relationId, selection: { kind: "whole" as const } }
-              : { messageId: targetRef.messageId, selection: { kind: "whole" as const } },
-            relationLabel: relationTypeName("merge"),
-          }));
-          setEdges(prev => [...prev, ...newEdges]);
-        }
+        const newEdges = mergeTargetRefs.map(targetRef => ({
+          id: nextId("edge"),
+          relationMessageId: relId,
+          relationType: "merge" as RelationType,
+          from: { messageId: virtualFrameNodeId, selection: { kind: "whole" as const } },
+          to: targetRef.kind === "relation"
+            ? { messageId: targetRef.relationId, selection: { kind: "whole" as const } }
+            : { messageId: targetRef.messageId, selection: { kind: "whole" as const } },
+          relationLabel: relationTypeName("merge"),
+        }));
+        setEdges(prev => [...prev, ...newEdges]);
       } catch (e: any) {
         alert(`建立归并关系失败: ${e?.message ?? e}`);
         return;
@@ -2750,7 +2838,8 @@ export default function TopicDetailPage() {
         };
         setMessages(prev => [...prev, govMsg]);
         setRelations(prev => [...prev, backendRel]);
-        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        // Governance/ops messages are content-kind — add as message target
+        await addTargetToClassifyTopic({ kind: 'message', messageId: backendRel.id });
         const govRoundId = await createSettlementRoundForMessage(
           backendRel.id,
           backendRel.createdBy?.username ?? user?.username ?? '?',
@@ -3474,8 +3563,17 @@ export default function TopicDetailPage() {
             // topicRelationIds (added when first encountered as targets), and GraphView
             // will render them as cards.  Their internal targets are NOT expanded into
             // the current view; the user must double-click to enter them.
-            // (SUMMARY targets are hidden by GraphView's hiddenTargetIds in non-linear
-            // view; in linear view, double-click the summary card to see its targets.)
+            // Exception: rejected classifies release their messages into the parent view.
+            if (rejectedClassifyRelIds.has(relId)) {
+              getTextTargetIds(rel.targetRefs).forEach(id => topicTextIds.add(id));
+              getRelationTargetIds(rel.targetRefs).forEach(id => {
+                topicRelationIds.add(id);
+                const childRelType = relationById.get(id)?.relationType?.toUpperCase();
+                if ((childRelType === 'ARRANGE' || childRelType === 'MERGE') && !visited.has(id)) {
+                  queue.push(id);
+                }
+              });
+            }
           }
         }
       }
@@ -3589,7 +3687,7 @@ export default function TopicDetailPage() {
     // only for the main (non-focus) view.
     const skipClassifyHiding = useFocusWindow || isInsideClassify;
     const listHiddenRelationIds = new Set<string>([
-      ...classifyOwnership.relationIds,
+      ...activeClassifyOwnership.relationIds,
       ...classifiedTargetSummaryRelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
@@ -3631,7 +3729,7 @@ export default function TopicDetailPage() {
       ...classifiedTargetMergeRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
       ...classifiedTargetARRANGERelMsgIds,
-      ...summaryOwnership.relationIds,
+      ...activeSummaryOwnership.relationIds,
       ...graphExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
@@ -3921,36 +4019,20 @@ export default function TopicDetailPage() {
   // When the user disagrees with a relation message, all edges produced by that
   // relation are suppressed from this user's view (per-user branch semantics).
   const edgesToRender = computeUserFilteredEdges(rawEdgesToRenderClean, messages, user?.username ?? null);
-  // Also compute which relation messages are suppressed, for visual indicators in the list view.
+  // Suppressed relation IDs: used only for "你已反对" visual label in list view.
+  // No longer hides messages from graph view — opposed content is shown
+  // with visual indicators (empty frame, preview mode, etc.) instead.
   const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
-  // In graph view, hide suppressed relation messages (classify/merge cards/frames).
-  // List view keeps them visible with "你已反对" label so the user can undo.
-  const graphMessagesFiltered = viewMode === "graph"
-    ? messagesToRenderClean.filter(m => m.kind !== "relation" || !suppressedRelIds.has(m.id))
-    : messagesToRenderClean;
-  // When a classify is suppressed, release its owned text messages back to the canvas.
-  const suppressedClassifyTextIds = (() => {
-    if (suppressedRelIds.size === 0) return new Set<string>();
-    const ids = new Set<string>();
-    for (const relId of suppressedRelIds) {
-      const rel = relationById.get(relId);
-      if (rel?.relationType !== 'CLASSIFY') continue;
-      const owned = collectOwnedByRelation(relId, relationById);
-      owned.textIds.forEach(id => ids.add(id));
-    }
-    return ids;
-  })();
-  // Final graph messages: include released text messages from suppressed classifies
-  const graphMessagesFinal = viewMode === "graph"
-    ? [...graphMessagesFiltered, ...messagesToRenderClean.filter(m => 
-        isContentKind(m.kind) && suppressedClassifyTextIds.has(m.id) && !graphMessagesFiltered.some(gm => gm.id === m.id)
-      )]
-    : graphMessagesFiltered;
+  // Graph messages: no suppression hiding needed — all messages visible.
+  const graphMessagesFinal = messagesToRenderClean;
+
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
   const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
   // Precomputed set of relation message IDs that are active stances.
   const activeStanceRelIds = new Set([...activeStanceMap.values()].map(v => v.relMsgId));
+  // Set of target message IDs that have an active stance against them.
+  const activeStanceTargetIds = new Set(activeStanceMap.keys());
   // Reverse map: stance relation message ID → { target, type } for quick lookup.
   const activeStanceByRelMsgId = (() => {
     const m = new Map<string, { targetRelId: string; type: 'agree' | 'disagree' }>();
@@ -4042,7 +4124,9 @@ export default function TopicDetailPage() {
             </div>
           )}
 
-          <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}
+          <div ref={leftPanelRef}
+            className={isPreviewMode ? "preview-mode" : ""}
+            style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay
@@ -4079,6 +4163,9 @@ export default function TopicDetailPage() {
                   const isSummaryTopicMsg = relType === "summary";
                   const isMergeTopicMsg = relType === "merge";
                   const isTopicMsg = isClassifyTopicMsg || isSummaryTopicMsg || isMergeTopicMsg;
+                  const govKind = (msg as any).backendKind as string | undefined;
+                  const isGovernanceMsg = !isTopicMsg && msg.kind !== "relation" && (govKind === "GOVERNANCE" || govKind === "CODE" || govKind === "OPERATIONS");
+                  const governanceColor = govKind === "GOVERNANCE" ? "#f59e0b" : govKind === "CODE" ? "#3b82f6" : "#10b981";
                   const topicMsgTargetCount = isTopicMsg
                     ? collectOwnedByRelation(msg.id, relationById).textIds.size
                     : 0;
@@ -4093,13 +4180,15 @@ export default function TopicDetailPage() {
                           ? "2px solid #0b84ff"
                           : isTopicMsg
                             ? "1px solid #334155"
-                            : isActiveText ? "2px dashed #0b84ff" : "1px solid #444",
+                            : isGovernanceMsg ? `1px solid ${governanceColor}44` : isActiveText ? "2px dashed #0b84ff" : "1px solid #444",
                         borderLeft: isWholeSelected
                           ? "3px solid #0b84ff"
-                          : isTopicMsg ? "3px solid #6366f1" : undefined,
+                          : isTopicMsg ? "3px solid #6366f1"
+                          : isGovernanceMsg ? `3px solid ${governanceColor}` : undefined,
                         background: isWholeSelected
                           ? "#1e3a5f"
-                          : isTopicMsg ? "#1e293b" : "#1f1f1f",
+                          : isTopicMsg ? "#1e293b"
+                          : isGovernanceMsg ? "#1a1f2e" : "#1f1f1f",
                         color: undefined,
                         padding: isTopicMsg ? "10px 12px" : "10px 14px",
                         cursor: "pointer",
@@ -4113,7 +4202,7 @@ export default function TopicDetailPage() {
                       <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
                         <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? `💎 发起价值仲裁` : `⚖️ 发起真假仲裁`) : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码` : (msg as any).backendKind === "OPERATIONS" ? `📊 运营` : `消息 ${msg.id}`}</span>
                         <span style={{textAlign:"right"}}>
-                          <div>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</div>
+                          <div>{isClassifyTopicMsg ? "双击进入分类" : isSummaryTopicMsg ? "双击进入总结" : isMergeTopicMsg ? "归并" : `作者：${msg.author}`}</div>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
                           {(() => {
                             const sc = stakeCounts[msg.id];
@@ -4165,6 +4254,11 @@ export default function TopicDetailPage() {
                               你已反对 · 点赞同恢复
                             </span>
                           )}
+                          {rejectedClassifyRelIds.has(msg.id) && (
+                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">
+                              社区已反对 · 双击预览
+                            </span>
+                          )}
                           {activeStanceRelIds.has(msg.id) && (() => {
                             const info = activeStanceByRelMsgId.get(msg.id);
                             if (!info) return null;
@@ -4185,6 +4279,17 @@ export default function TopicDetailPage() {
                           )}
                         </div>
                       )}
+                      {activeStanceTargetIds.has(msg.id) && (() => {
+                        const info = activeStanceMap.get(msg.id);
+                        if (!info) return null;
+                        return (
+                          <div style={{ marginBottom: 4, display: "flex", gap: 6 }}>
+                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: info.type === 'disagree' ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)", color: info.type === 'disagree' ? "#fca5a5" : "#86efac", border: info.type === 'disagree' ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(34,197,94,0.3)" }}>
+                              {info.type === 'disagree' ? '被反对 · 你的反对生效中' : '被赞同 · 你的赞同生效中'}
+                            </span>
+                          </div>
+                        );
+                      })()}
                       {isActiveText && isContentKind(msg.kind) && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
                       {summaryCoverages.length > 0 && (
                         <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -4270,6 +4375,11 @@ export default function TopicDetailPage() {
         />
 
         <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
+          {isPreviewMode && (
+            <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
+              ⚠ 预览模式 — 该分类已被反对，无法发送消息或修改
+            </div>
+          )}
           <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
               <div style={{ fontWeight: 600 }}>候选区（Draft）</div>
@@ -4527,8 +4637,8 @@ export default function TopicDetailPage() {
                 )}
                 <button
                   onClick={handleQuickSendAndRelateFromDraftTargets}
-                  disabled={!singleButtonEnabled}
-                  style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: singleButtonEnabled ? "#0b84ff" : "#333", color: singleButtonEnabled ? "#fff" : "#777", cursor: singleButtonEnabled ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}
+                  disabled={isPreviewMode || !singleButtonEnabled}
+                  style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: (singleButtonEnabled && !isPreviewMode) ? "#0b84ff" : "#333", color: (singleButtonEnabled && !isPreviewMode) ? "#fff" : "#777", cursor: (singleButtonEnabled && !isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}
                 >
                   发送
                 </button>
@@ -4554,14 +4664,14 @@ export default function TopicDetailPage() {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>最近普通消息</div>
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 100, overflow: "auto" }}>
-                {recentNormals.map(m => <li key={m.id}>{m.id}：{m.content.slice(0, 40)}{m.content.length > 40 ? "…" : ""}</li>)}
+              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
+                {recentNormals.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
               </ul>
             </div>
             <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 100, overflow: "auto" }}>
-                {recentRelations.map(m => <li key={m.id}>{m.id}：{m.content.slice(0, 60)}{m.content.length > 60 ? "…" : ""}</li>)}
+              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
+                {recentRelations.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
               </ul>
             </div>
           </div>

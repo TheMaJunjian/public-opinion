@@ -47,7 +47,7 @@ export interface MessageCreatedEvent {
   actorId: string;
   topicId: string;
   payload: {
-    kind?: 'TEXT' | 'ROUND' | 'GOVERNANCE' | 'CODE';
+    kind?: 'TEXT' | 'ROUND' | 'GOVERNANCE' | 'CODE' | 'OPERATIONS';
     contentType?: 'TEXT' | 'MARKDOWN';
     content?: string;
     quoteSourceId?: string | null;
@@ -445,7 +445,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
       data: {
         topicId,
         createdById: actorId,
-        kind: kind as 'TEXT' | 'GOVERNANCE' | 'CODE',
+        kind: kind as 'TEXT' | 'GOVERNANCE' | 'CODE' | 'OPERATIONS',
         contentType: payload.contentType ?? 'TEXT',
         content: payload.content,
         quoteSourceId: payload.quoteSourceId ?? null,
@@ -812,9 +812,9 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   const effRelType = effectiveRelationType.toUpperCase();
   if (effRelType === 'AGREE' || effRelType === 'DISAGREE') {
     const side = effRelType === 'AGREE' ? 'PRO' as const : 'CON' as const;
-    const targets = effectiveTargetRefs as Array<{ kind?: string; messageId?: string }>;
+    const targets = effectiveTargetRefs as Array<{ kind?: string; messageId?: string; relationId?: string }>;
     for (const ref of targets) {
-      const textTargetId = ref.messageId;
+      const textTargetId = ref.messageId || ref.relationId;
       if (!textTargetId) continue;
       const round = await ensureVotingRound(textTargetId, actorId, topicId, 'TRUTH');
       const staked = await autoSelfStake(actorId, topicId, textTargetId, payload.stakeAmount, side, round?.id, 'TRUTH');
@@ -823,9 +823,9 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   } else if (effRelType === 'RECOMMEND' || effRelType === 'ARCHIVE') {
     // Value settlement: RECOMMEND=PRO, ARCHIVE=CON
     const side = effRelType === 'RECOMMEND' ? 'PRO' as const : 'CON' as const;
-    const targets = effectiveTargetRefs as Array<{ kind?: string; messageId?: string }>;
+    const targets = effectiveTargetRefs as Array<{ kind?: string; messageId?: string; relationId?: string }>;
     for (const ref of targets) {
-      const textTargetId = ref.messageId;
+      const textTargetId = ref.messageId || ref.relationId;
       if (!textTargetId) continue;
       const round = await ensureVotingRound(textTargetId, actorId, topicId, 'VALUE');
       const staked = await autoSelfStake(actorId, topicId, textTargetId, payload.stakeAmount, side, round?.id, 'VALUE');

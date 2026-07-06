@@ -432,14 +432,16 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
     }
 
     // Apply the event — state write + audit log on critical path.
-    // PROPOSAL / CODE_CHANGE: create a GOVERNANCE / CODE message (with relation fields)
-    // instead of a RELATION message, so they participate in the governance lifecycle.
-    const isGovernanceRelation = data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE';
+    // PROPOSAL / CODE_CHANGE / OPERATIONS: create a GOVERNANCE / CODE / OPERATIONS
+    // message (with relation fields) instead of a RELATION message.
+    const isGovernanceRelation = data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE' || data.relationType === 'OPERATIONS';
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let message: any;
     if (isGovernanceRelation) {
-      const messageKind = data.relationType === 'PROPOSAL' ? 'GOVERNANCE' as const : 'CODE' as const;
+      const messageKind = data.relationType === 'PROPOSAL' ? 'GOVERNANCE' as const
+        : data.relationType === 'CODE_CHANGE' ? 'CODE' as const
+        : 'OPERATIONS' as const;
       message = await applyEvent({
         type: 'MESSAGE_CREATED',
         actorId: req.user!.id,

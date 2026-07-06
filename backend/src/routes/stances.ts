@@ -51,14 +51,11 @@ function relationSide(relationType: string | null) {
 }
 
 function latestMatchingRelation(stake: StakeRecord, candidates: RelationCandidate[], types: string[]) {
-  const exact = candidates.find(r =>
-    r.createdAt <= stake.createdAt &&
-    types.includes(r.relationType ?? '') &&
-    relationSide(r.relationType) === stake.side &&
-    relationTargetsMessage(r, stake.messageId)
-  );
-  if (exact) return exact;
+  // Only match relations that existed at or before the stake time.
+  // Without the createdAt check, a later-created AGREE on a CLASSIFY
+  // would incorrectly match the CLASSIFY's own creation stake.
   return candidates.find(r =>
+    r.createdAt <= stake.createdAt &&
     types.includes(r.relationType ?? '') &&
     relationSide(r.relationType) === stake.side &&
     relationTargetsMessage(r, stake.messageId)
@@ -176,7 +173,9 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
       amount: number;
       stakeId: string;
       targetMessageId: string;
-      content: string | null;
+      messageKind: string;
+      targetRelationType: string | null;
+      content: string;
       createdAt: Date;
     }>;
 
@@ -237,17 +236,32 @@ router.get('/api/users/:id/stances', requireAuth, async (req: AuthRequest, res: 
       if (settlementType === 'TRUTH') {
         const relation = latestMatchingRelation(stake, relationCandidates, ['AGREE', 'DISAGREE']);
         if (relation) {
+          // Derive display content from the target message
+          let displayContent = stake.message.content?.slice(0, 80) ?? '';
+          if (!displayContent && stake.message.kind === 'RELATION') {
+            const rp = stake.message.relationPayload as Record<string, unknown> | null;
+            const rt = (stake.message.relationType ?? '').toUpperCase();
+            if (rt === 'CLASSIFY' || rt === 'SUMMARY') {
+              displayContent = (rp?.title as string) || `[${rt === 'CLASSIFY' ? '分类' : '汇总'}]`;
+            } else if (rt === 'PROPOSAL' || rt === 'CODE_CHANGE' || rt === 'OPERATIONS') {
+              displayContent = (rp?.title as string) || `[${rt}]`;
+            } else {
+              displayContent = `[${rt || '关系'}]`;
+            }
+          }
           relationItems.push({
             kind: 'relation',
             id: stake.id,
             relationMessageId: relation.id,
             topicId: stake.topicId,
             topicTitle: stake.message.topic.title,
-            type: stake.message.createdById === targetUserId ? 'SELF_AGREE' : relation.relationType as string,
+            type: relation.relationType as string,
             amount: stake.amount,
             stakeId: stake.id,
             targetMessageId: stake.messageId,
-            content: null,
+            messageKind: stake.message.kind,
+            targetRelationType: stake.message.relationType,
+            content: displayContent || `[${stake.message.kind}]`,
             createdAt: stake.createdAt,
           });
           continue;

@@ -24,6 +24,12 @@ const MESSAGE_KIND_LABEL: Record<string, string> = {
   TEXT: '文本消息', RELATION: '关系消息', ROUND: '结算轮次',
   ROUND_RESULT: '结算结果', GOVERNANCE: '治理提案', CODE: '代码变更',
 };
+const RELATION_TYPE_LABEL: Record<string, string> = {
+  CLASSIFY: '分类', SUMMARY: '总结', MERGE: '归并', ARRANGE: '排列',
+  PROPOSAL: '提案', CODE_CHANGE: '代码变更', OPERATIONS: '运营',
+  AGREE: '赞同', DISAGREE: '反对', TAG: '标签',
+  REFERENCE: '引用', REPLY: '回复', CORRECT: '更正', ANNOTATION: '批注',
+};
 
 type TabKey = 'relations' | 'stakes' | 'tags';
 
@@ -102,13 +108,18 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
       <div className="space-y-2 max-h-96 overflow-auto">
         {activeTab === 'relations' && relations.map(r => {
           const topicSuffix = topicId ? '' : ` · ${r.topicTitle}`;
+          const targetLabel = r.targetRelationType
+            ? (RELATION_TYPE_LABEL[r.targetRelationType] ?? r.targetRelationType)
+            : (MESSAGE_KIND_LABEL[r.messageKind] ?? r.messageKind);
+          const detail = r.content
+            ? (r.content.length > 60 ? r.content.slice(0, 60) + '…' : r.content)
+            : `[${targetLabel}]`;
           return (
             <StanceCard
               key={`rel-${r.id}`}
               icon={TYPE_ICON[r.type] ?? '❓'}
-              title={`${TYPE_LABEL[r.type] ?? r.type}${topicSuffix}`}
-              subtitle={`${r.amount} 点`}
-              highlight={r.type === 'SELF_AGREE'}
+              title={`${TYPE_LABEL[r.type] ?? r.type} · ${targetLabel}${topicSuffix}`}
+              subtitle={`${r.amount} 点 · ${detail} · ${r.targetMessageId?.slice(-8) ?? r.relationMessageId.slice(-8)}`}
               time={r.createdAt}
               onDoubleClick={() => navigateToRecord(r.topicId, r.relationMessageId, { settlementId: r.targetMessageId, stakeId: r.stakeId })}
             />
@@ -119,14 +130,14 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
           const topicSuffix = topicId ? '' : ` · ${s.topicTitle}`;
           const kindLabel = MESSAGE_KIND_LABEL[s.messageKind] ?? s.messageKind;
           const detail = s.content
-            ? (s.content.length > 40 ? s.content.slice(0, 40) + '…' : s.content)
+            ? (s.content.length > 60 ? s.content.slice(0, 60) + '…' : s.content)
             : `[${kindLabel}]`;
           return (
             <StanceCard
               key={`stake-${s.id}`}
               icon="🔒"
-              title={`消耗 ${s.amount} 点${topicSuffix}`}
-              subtitle={detail}
+              title={`${kindLabel} · 消耗 ${s.amount} 点${topicSuffix}`}
+              subtitle={`${detail} · ${s.messageId.slice(-8)}`}
               time={s.createdAt}
               onDoubleClick={() => navigateToRecord(s.topicId, s.messageId, { settlementId: s.messageId, stakeId: s.id })}
             />
@@ -139,12 +150,13 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
             ? (t.subType === 'CUSTOM' && t.customLabel ? t.customLabel : (SUB_TYPE_LABEL[t.subType] ?? t.subType))
             : null;
           const topicSuffix = topicId ? '' : ` · ${t.topicTitle}`;
+          const targetIdShort = t.targetMessageId?.slice(-8) ?? t.relationMessageId.slice(-8);
           return (
             <StanceCard
               key={`tag-${t.id}`}
               icon="🏷️"
               title={`${typeLabel}${reason ? ` · ${reason}` : ''}${topicSuffix}`}
-              subtitle={`${t.amount} 点${t.targetMessageId ? ` · 目标: ${t.targetMessageId.slice(-8)}` : ''}`}
+              subtitle={`${t.amount} 点 · ${targetIdShort}`}
               time={t.createdAt}
               onDoubleClick={() => navigateToRecord(t.topicId, t.relationMessageId, { settlementId: t.targetMessageId, stakeId: t.stakeId, settlementType: 'VALUE' })}
             />

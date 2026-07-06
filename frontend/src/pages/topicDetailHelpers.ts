@@ -153,7 +153,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     id: relation.id,
     author: relation.createdBy.username,
     createdAt: relation.createdAt,
-    kind: 'relation',
+    kind: relType === 'proposal' ? 'governance' : relType === 'code_change' ? 'code' : relType === 'operations' ? 'operations' : 'relation',
     relationType: relType,
     relationPayload: relation.payload,
     content,

@@ -472,11 +472,13 @@ export interface StanceRelation {
   relationMessageId: string;
   topicId: string;
   topicTitle: string;
-  type: string;      // AGREE | DISAGREE | SELF_AGREE
+  type: string;      // AGREE | DISAGREE
   amount: number;
   stakeId?: string | null;
   targetMessageId: string | null;
-  content: string | null;
+  messageKind: string;           // kind of the target message
+  targetRelationType: string | null;  // relationType if target is RELATION
+  content: string;               // display text derived from target
   createdAt: string;
 }
 

@@ -277,7 +277,7 @@ export default function TopicDetailPage() {
     const targetMsgId = searchParams.get('msg');
     const settlementMsgId = searchParams.get('settlement');
     if (targetMsgId || settlementMsgId) {
-      let msgId = targetMsgId || settlementMsgId!;
+      const msgId = targetMsgId || settlementMsgId!;
       pendingScrollMsgRef.current = msgId;
       setAutoClassifyMsgId(msgId); // try auto-enter classify
       // Clear all selections and select the target message

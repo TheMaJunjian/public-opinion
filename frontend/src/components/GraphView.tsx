@@ -1681,6 +1681,8 @@ export interface GraphViewProps {
   crossClassifyRefs?: Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>;
   /** 点击跨分类引用标签：选中关系消息 */
   onCrossRefTagClick?: (e: React.MouseEvent, relMsgIds: string[]) => void;
+  /** 点击加入消息卡片上的 ID 标签跳转到对应消息 */
+  onNavigateToMessage?: (messageId: string) => void;
   /** DEBUG: callback to report frame/card rectangles */
   onDebugRects?: (text: string) => void;
 }
@@ -1707,6 +1709,7 @@ export default function GraphView(props: GraphViewProps) {
     settlementEntryHighlight,
     crossClassifyRefs,
     onCrossRefTagClick,
+    onNavigateToMessage,
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
@@ -3036,6 +3039,7 @@ export default function GraphView(props: GraphViewProps) {
             if (msg.kind === 'operations')  return { color: '#06b6d4', label: '📊 运营', bg: 'rgba(6,182,212,0.08)' };
             if (msg.kind === 'round')       return { color: '#818cf8', label: '⚖️ 结算中', bg: 'rgba(129,140,248,0.08)' };
             if (msg.kind === 'round_result')return { color: '#34d399', label: '✅ 已结算', bg: 'rgba(52,211,153,0.08)' };
+            if (msg.kind === 'relation' && msg.relationType === 'summary') return { color: '#2dd4bf', label: '总结', bg: 'rgba(45,212,191,0.08)' };
             return null;
           })();
           const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
@@ -3156,6 +3160,45 @@ export default function GraphView(props: GraphViewProps) {
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
               </div>
+              {/* 加入容器消息：显示容器和目标消息 ID 标签（可点击跳转） */}
+              {msg.joinInfo && (() => {
+                const { containerId, containerType, targetIds } = msg.joinInfo;
+                const containerTypeLabel = containerType === 'CLASSIFY' ? '分类' : containerType === 'SUMMARY' ? '总结' : containerType === 'ARRANGE' ? '排列' : '归并';
+                return (
+                  <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>容器:</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: "#a78bfa", padding: "1px 4px", borderRadius: 3, background: "rgba(167,139,250,0.15)", flexShrink: 0 }}>{containerTypeLabel}</span>
+                      {onNavigateToMessage ? (
+                        <span
+                          onClick={(e) => { e.stopPropagation(); onNavigateToMessage(containerId); }}
+                          style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
+                          title={`跳转到 ${containerTypeLabel}消息 ${containerId}`}
+                        >{containerId}</span>
+                      ) : (
+                        <span style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{containerId}</span>
+                      )}
+                    </div>
+                    {targetIds.length > 0 && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>目标:</span>
+                        {targetIds.map(tid => (
+                          onNavigateToMessage ? (
+                            <span
+                              key={tid}
+                              onClick={(e) => { e.stopPropagation(); onNavigateToMessage(tid); }}
+                              style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
+                              title={`跳转到消息 ${tid}`}
+                            >{tid}</span>
+                          ) : (
+                            <span key={tid} style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{tid}</span>
+                          )
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {/* 跨分类引用标签（按二级标签分组） */}
               {isContentKind(msg.kind) && crossClassifyRefs && (() => {
                 const ref = crossClassifyRefs.get(msg.id);
@@ -3546,16 +3589,16 @@ export default function GraphView(props: GraphViewProps) {
             {/* Border strips — omitted when blank-corrected (no visible frame border) */}
             {!sf.isBlankCorrected&&<>
               {/* Top strip — full width including corners */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
               {/* Bottom strip — full width including corners */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
               {/* Left strip — between top and bottom strips */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
               {/* Right strip — between top and bottom strips */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             </>}
             {/* Correction badge — embedded in frame top border when this arrange is a CORRECT target */}
@@ -3598,13 +3641,13 @@ export default function GraphView(props: GraphViewProps) {
           <React.Fragment key={`gf-hit-${gf.relMsgId}`}>
             {/* Border strips — omitted when blank-corrected (no visible frame border) */}
             {!gf.isBlankCorrected&&<>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             </>}
             {/* Correction badge — embedded in frame top border when this group frame is a CORRECT target */}
@@ -3701,6 +3744,13 @@ export default function GraphView(props: GraphViewProps) {
                             title="真假仲裁"
                           >⚖️</button>
                         )}
+                        {onSettlementToggleValue && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(gf.relMsgId); }}
+                            style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "rgba(245,158,11,0.2)" : "none", border: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "#fcd34d" : "#6b7280", lineHeight: 1 }}
+                            title="价值仲裁"
+                          >💎</button>
+                        )}
                         <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 500, color: "#9ca3af" }}>
                           💬{targetIds.length}
                         </span>
@@ -3759,6 +3809,13 @@ export default function GraphView(props: GraphViewProps) {
                 style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}
                 title="真假仲裁"
               >⚖️</button>
+              {onSettlementToggleValue && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(sf.relMsgId); }}
+                  style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "rgba(245,158,11,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "#fcd34d" : "#6b7280", lineHeight: 1 }}
+                  title="价值仲裁"
+                >💎</button>
+              )}
             </div>
           );
           sfDecTop += DEC_H + DEC_GAP;

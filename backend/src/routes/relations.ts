@@ -73,14 +73,14 @@ const createRelationSchema = z.object({
       path: ['payload', 'label'],
     });
   }
-  if (data.relationType === 'CLASSIFY' && !data.payload?.title) {
+  if (data.relationType === 'CLASSIFY' && !data.sourceMessageId && !data.payload?.title) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: '分类关系需要提供分类名称',
       path: ['payload', 'title'],
     });
   }
-  if (data.relationType === 'SUMMARY' && !data.payload?.title) {
+  if (data.relationType === 'SUMMARY' && !data.sourceMessageId && !data.payload?.title) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: '总结关系需要提供总结内容标题',
@@ -108,7 +108,6 @@ const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'CODE_CH
 
 // Types that forbid sourceMessageId entirely (must be null)
 const SOURCE_FORBIDDEN_RELATION_TYPES: Record<string, string> = {
-  CLASSIFY: '分类', MERGE: '归并', SUMMARY: '总结', ARRANGE: '排列',
   RECOMMEND: '推荐', ARCHIVE: '冷藏',
   PROPOSAL: '提案', CODE_CHANGE: '代码变更', OPERATIONS: '运营',
 };

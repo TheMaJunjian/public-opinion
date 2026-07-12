@@ -125,8 +125,25 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
   const title = getRelationTitle(relation.payload);
   const typeName = relationTypeName(relType);
   const targetSummary = relationTargetRefsSummary(relation.targetRefs);
+
+  // Container/frame types (CLASSIFY/SUMMARY/MERGE/ARRANGE) with a sourceMessageId
+  // are "add-to-container" records, not containers themselves. Render them as
+  // text-like normal cards so they are visually distinct from container/frame cards.
+  const isContainerAddRecord = (relType === 'classify' || relType === 'summary' || relType === 'merge' || relType === 'arrange') && !!relation.sourceMessageId;
+
   let content: string;
-  if (relType === 'classify') {
+  let joinInfo: DemoMessage['joinInfo'] | undefined;
+  if (isContainerAddRecord) {
+    const actionLabel = relType === 'classify' ? '加入分类' : relType === 'summary' ? '加入总结' : relType === 'merge' ? '加入归并' : '加入排列';
+    content = `${actionLabel}`;
+    joinInfo = {
+      containerId: relation.sourceMessageId!,
+      containerType: relation.relationType.toUpperCase(),
+      targetIds: getRelationTargetIds(relation.targetRefs).length > 0
+        ? getRelationTargetIds(relation.targetRefs)
+        : getTextTargetIds(relation.targetRefs),
+    };
+  } else if (relType === 'classify') {
     content = `分类：${title ?? `分类（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'summary') {
     content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
@@ -153,10 +170,13 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     id: relation.id,
     author: relation.createdBy.username,
     createdAt: relation.createdAt,
-    kind: relType === 'proposal' ? 'governance' : relType === 'code_change' ? 'code' : relType === 'operations' ? 'operations' : 'relation',
+    kind: isContainerAddRecord
+      ? 'normal'
+      : relType === 'proposal' ? 'governance' : relType === 'code_change' ? 'code' : relType === 'operations' ? 'operations' : 'relation',
     relationType: relType,
     relationPayload: relation.payload,
     content,
+    joinInfo,
   };
 }
 
@@ -181,7 +201,8 @@ export function getRelationTargetIds(targetRefs: TargetRef[]): string[] {
 export function collectOwnedByRelation(
   relationId: string,
   relationById: Map<string, Relation>,
-  visited = new Set<string>()
+  visited = new Set<string>(),
+  rejectedContainerIds?: Set<string>,
 ): { textIds: Set<string>; relationIds: Set<string> } {
   const textIds = new Set<string>();
   const relationIds = new Set<string>();
@@ -201,12 +222,180 @@ export function collectOwnedByRelation(
     if (!child) continue;
     const childType = child.relationType.toUpperCase();
     if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'ARRANGE' && childType !== 'SUMMARY') continue;
-    const nested = collectOwnedByRelation(childRelationId, relationById, visited);
+
+    // Skip "加入" relations whose parent container is rejected —
+    // their targets return to the parent canvas instead of being owned here.
+    if (rejectedContainerIds && rejectedContainerIds.size > 0) {
+      // A child with sourceMessageId is a "加入" relation (any container type).
+      // If its parent container is rejected, the membership is dissolved.
+      if (child.sourceMessageId && rejectedContainerIds.has(child.sourceMessageId)) {
+        continue;
+      }
+      // Skip child containers that are themselves rejected.
+      if (rejectedContainerIds.has(childRelationId)) {
+        continue;
+      }
+    }
+
+    const nested = collectOwnedByRelation(childRelationId, relationById, visited, rejectedContainerIds);
     nested.textIds.forEach(id => textIds.add(id));
     nested.relationIds.forEach(id => relationIds.add(id));
   }
 
   return { textIds, relationIds };
+}
+
+/**
+ * Walk up the container chain: find all ancestor containers of a given container
+ * by following "加入" relations (CLASSIFY with sourceMessageId) that target it.
+ * Returns a Set of container IDs ordered from innermost to outermost.
+ */
+export function getContainerAncestorChain(
+  containerId: string,
+  relations: Relation[],
+): string[] {
+  const chain: string[] = [];
+  const visited = new Set<string>();
+  let current = containerId;
+
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    // Find a "加入" relation (any container type) whose targetRefs contain `current`
+    const joinRel = relations.find(r =>
+      JOIN_RELATION_TYPES.has(r.relationType) &&
+      !!r.sourceMessageId &&
+      (r.targetRefs as TargetRef[]).some(ref =>
+        (ref.kind === 'relation' && ref.relationId === current) ||
+        (ref.kind === 'message' && ref.messageId === current)
+      )
+    );
+    if (!joinRel || !joinRel.sourceMessageId) break;
+    chain.push(joinRel.sourceMessageId);
+    current = joinRel.sourceMessageId;
+  }
+
+  return chain;
+}
+
+/**
+ * Check whether two containers are on the same ancestor chain.
+ */
+export function areContainersOnSameChain(
+  a: string,
+  b: string,
+  relations: Relation[],
+): boolean {
+  if (a === b) return true;
+  const chainA = new Set(getContainerAncestorChain(a, relations));
+  const chainB = getContainerAncestorChain(b, relations);
+  // If b is in a's ancestor chain, or a is in b's ancestor chain
+  if (chainA.has(b)) return true;
+  if (chainB.includes(a)) return true;
+  return false;
+}
+
+/**
+ * Get all active (non-rejected) "加入" relations for a message.
+ * Covers all four container types: CLASSIFY, SUMMARY, ARRANGE, MERGE.
+ * A "加入" relation is identified by having a sourceMessageId (the container
+ * being joined) and targeting this message.
+ * Returns sorted by createdAt descending (latest first).
+ */
+const JOIN_RELATION_TYPES = new Set(['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE']);
+
+export function getActiveJoinRelationsForMessage(
+  messageId: string,
+  relations: Relation[],
+  rejectedContainerIds: Set<string>,
+): Relation[] {
+  return relations
+    .filter(r =>
+      JOIN_RELATION_TYPES.has(r.relationType) &&
+      !!r.sourceMessageId &&
+      !rejectedContainerIds.has(r.id) &&
+      !rejectedContainerIds.has(r.sourceMessageId) &&
+      (r.targetRefs as TargetRef[]).some(ref =>
+        (ref.kind === 'message' || ref.kind === 'text-fragment') &&
+        ref.messageId === messageId
+      )
+    )
+    .sort((a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+}
+
+/**
+ * Resolve which container (if any) a message currently belongs to.
+ *
+ * Walks the "加入" relation chain bottom-up: finds the latest active CLASSIFY
+ * relation targeting this message, returns its sourceMessageId (the container).
+ * If the container itself is in another container, we still return the IMMEDIATE
+ * container — nesting is handled by the caller via recursive expansion.
+ *
+ * Returns the container relation ID, or null if the message is on the main canvas.
+ */
+export function resolveMessageCanvas(
+  messageId: string,
+  relations: Relation[],
+  rejectedContainerIds: Set<string>,
+): string | null {
+  const active = getActiveJoinRelationsForMessage(messageId, relations, rejectedContainerIds);
+  if (active.length === 0) return null;
+  return active[0].sourceMessageId!;
+}
+
+/**
+ * Build a map from content-kind message ID → immediate container ID (or null).
+ * Used as a drop-in replacement for the activeClassifyOwnership.textIds pattern.
+ */
+export function buildMessageCanvasMap(
+  messages: Array<{ id: string; kind: string }>,
+  relations: Relation[],
+  rejectedContainerIds: Set<string>,
+): Map<string, string | null> {
+  const map = new Map<string, string | null>();
+  for (const m of messages) {
+    map.set(m.id, resolveMessageCanvas(m.id, relations, rejectedContainerIds));
+  }
+  return map;
+}
+
+/**
+ * Check if a message can be added to (or agreed into) a container without conflict.
+ * Uses resolveMessageCanvas to find the message's current container —
+ * it must be null (main canvas) or on the same chain as the target.
+ */
+export function checkJoinConflict(
+  messageId: string,
+  targetContainerId: string,
+  relations: Relation[],
+  rejectedContainerIds: Set<string>,
+): { ok: boolean; conflictContainerId?: string } {
+  const current = resolveMessageCanvas(messageId, relations, rejectedContainerIds);
+  if (current === null) return { ok: true };
+  if (current === targetContainerId) return { ok: true };
+  if (areContainersOnSameChain(current, targetContainerId, relations)) return { ok: true };
+  return { ok: false, conflictContainerId: current };
+}
+
+/**
+ * Check whether disagreeing on a "加入" relation would leave a message
+ * in two unrelated canvases.
+ */
+export function checkJoinConflictAfterRemoval(
+  textMessageId: string,
+  containerBeingLeft: string,
+  relations: Relation[],
+  rejectedContainerIds: Set<string>,
+): { ok: boolean } {
+  const current = resolveMessageCanvas(textMessageId, relations, rejectedContainerIds);
+  if (current === null) return { ok: true };
+  // If the message's effective container IS the one being left, it leaves together.
+  if (current === containerBeingLeft) return { ok: true };
+  // If on the same chain, the message is inside a child container that also leaves.
+  if (areContainersOnSameChain(current, containerBeingLeft, relations)) return { ok: true };
+  // Unrelated container — no conflict from this removal.
+  return { ok: true };
 }
 
 export function expandTextIdsWithCorrections(

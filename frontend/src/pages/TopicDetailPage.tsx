@@ -19,6 +19,7 @@ import RevenuePanel from '../components/RevenuePanel';
 import TopicStructureView from '../components/TopicStructureView';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
+import { debugWarn } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
 import {
@@ -232,7 +233,7 @@ export default function TopicDetailPage() {
       if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
       enterClassifyTopic(relId);
       // If the classify is rejected, enter preview (read-only) mode
-      if (rejectedClassifyRelIds.has(relId)) {
+      if (rejectedContainerIds.has(relId)) {
         setPreviewClassifyId(relId);
       }
       if (hiddenInGraphView.has(msgId)) setViewMode("list");
@@ -247,7 +248,7 @@ export default function TopicDetailPage() {
       // Don't auto-enter rejected classifies from navigation jumps —
       // their messages are back on the main canvas.  User can still
       // enter preview mode by double-clicking the card directly.
-      if (rejectedClassifyRelIds.has(rel.id)) continue;
+      if (rejectedContainerIds.has(rel.id)) continue;
       const targets = (rel.targetRefs ?? []) as TargetRef[];
       if (targets.some(t =>
         (t.kind === 'relation' && t.relationId === anchorId) ||
@@ -258,7 +259,7 @@ export default function TopicDetailPage() {
     for (const rel of relations) {
       const rt = rel.relationType?.toUpperCase();
       if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
-      if (rejectedClassifyRelIds.has(rel.id)) continue;
+      if (rejectedContainerIds.has(rel.id)) continue;
       const owned = collectOwnedByRelation(rel.id, relById);
       const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
       if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
@@ -321,6 +322,7 @@ export default function TopicDetailPage() {
 
   const [relationType, setRelationType] = useState<RelationType | null>(null);
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
+  const [isArrangeLayoutLocked, setIsArrangeLayoutLocked] = useState(false);
   const [subType, setSubType] = useState<string>(""); // SPAM|OFFTOPIC|LOWVALUE|IMPORTANT|CUSTOM or empty
   const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
   const [relationLabel, setRelationLabel] = useState("");
@@ -578,11 +580,11 @@ export default function TopicDetailPage() {
     const textBurn = textStake > 0 ? burnPerOp : 0;
     // Relation messages
     if (!relationType) {
-      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: textStake, textStake, relCount: 0, hasText: true, hasRel: false };
+      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: textStake, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
       return null;
     }
     if (typeof relStakeAmount !== 'number') {
-      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: 0, textStake, relCount: 0, hasText: true, hasRel: false };
+      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: 0, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
       return null;
     }
     const relCount = multiTargetCount > 0 ? multiTargetCount : 1;
@@ -594,8 +596,21 @@ export default function TopicDetailPage() {
     const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
     const refStakeTotal = govRefCount > 0 ? govRefCount * refMin : 0;
     const refBurnTotal = govRefCount > 0 ? govRefCount * burnPerOp : 0;
-    const totalStake = textStake + relStakeTotal + refStakeTotal;
-    const totalBurn = textBurn + relBurnTotal + refBurnTotal;
+    // Container types (classify/summary/arrange/merge): each target gets a "join" relation
+    // created by createJoinRelationsForContainer with stakeAmount=1 + burn per op.
+    const isContainerType = relationType === 'classify' || relationType === 'summary' || relationType === 'arrange' || relationType === 'merge';
+    const JOIN_STAKE_PER_TARGET = 1;
+    const containerJoinCount = isContainerType ? (() => {
+      const baseTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+      const uniqueCount = new Set(baseTargets.map(u => u.messageId)).size;
+      // arrange with text: the text message itself also gets a join relation
+      if (relationType === 'arrange' && hasTextContentForTotal) return uniqueCount + 1;
+      return uniqueCount;
+    })() : 0;
+    const joinStakeTotal = containerJoinCount * JOIN_STAKE_PER_TARGET;
+    const joinBurnTotal = containerJoinCount * burnPerOp;
+    const totalStake = textStake + relStakeTotal + refStakeTotal + joinStakeTotal;
+    const totalBurn = textBurn + relBurnTotal + refBurnTotal + joinBurnTotal;
     return {
       stakeTotal: totalStake,
       burnTotal: totalBurn,
@@ -605,6 +620,9 @@ export default function TopicDetailPage() {
       refStakeTotal,
       refCount: govRefCount,
       relCount,
+      joinCount: containerJoinCount,
+      joinStakeTotal,
+      joinBurnTotal,
       hasText: textStake > 0,
       hasRel: true,
     };
@@ -895,10 +913,10 @@ export default function TopicDetailPage() {
   // "rejected" — their container card is hidden but their owned messages return
   // to the parent canvas.  Uses simple majority from voteStats; settlement results
   // can be layered in later with higher priority.
-  const rejectedClassifyRelIds = useMemo(() => {
+  const rejectedContainerIds = useMemo(() => {
     const ids = new Set<string>();
     for (const relation of relations) {
-      if (relation.relationType !== 'CLASSIFY' && relation.relationType !== 'SUMMARY') continue;
+      if (relation.relationType !== 'CLASSIFY' && relation.relationType !== 'SUMMARY' && relation.relationType !== 'ARRANGE' && relation.relationType !== 'MERGE') continue;
       const stats = voteStats[relation.id];
       if (stats && stats.disagreeCount > stats.agreeCount) {
         ids.add(relation.id);
@@ -910,10 +928,10 @@ export default function TopicDetailPage() {
   // Real-time: if the previewed classify becomes active (no longer rejected),
   // exit preview mode so the user gets full interaction capabilities.
   useEffect(() => {
-    if (previewClassifyId && !rejectedClassifyRelIds.has(previewClassifyId)) {
+    if (previewClassifyId && !rejectedContainerIds.has(previewClassifyId)) {
       setPreviewClassifyId(null);
     }
-  }, [rejectedClassifyRelIds, previewClassifyId]);
+  }, [rejectedContainerIds, previewClassifyId]);
 
   const relationTypeByRelMsgId = useMemo(() => {
     const map = new Map<string, RelationType>();
@@ -961,13 +979,13 @@ export default function TopicDetailPage() {
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'CLASSIFY') continue;
-      if (rejectedClassifyRelIds.has(relation.id)) continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      if (rejectedContainerIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
     return { textIds, relationIds };
-  }, [relations, relationById, rejectedClassifyRelIds]);
+  }, [relations, relationById, rejectedContainerIds]);
   const mergeOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
@@ -998,13 +1016,13 @@ export default function TopicDetailPage() {
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'SUMMARY') continue;
-      if (rejectedClassifyRelIds.has(relation.id)) continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      if (rejectedContainerIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
     return { textIds, relationIds };
-  }, [relations, relationById, rejectedClassifyRelIds]);
+  }, [relations, relationById, rejectedContainerIds]);
   const summaryCoverageByMessageId = useMemo(() => {
     const map = new Map<string, Array<{ summaryId: string; title: string }>>();
     for (const relation of relations) {
@@ -1422,8 +1440,11 @@ export default function TopicDetailPage() {
       setSendError('文本消息最低押注为 10 点');
       return null;
     }
-    if (pts > availablePoints) {
-      setSendError(`贡献点余额不足（可用 ${availablePoints}，需要 ${pts + 1} 含燃烧）`);
+    const totalNeeded = pts + stakeFeeAmountRef.current + (isInsideClassify ? 1 + stakeFeeAmountRef.current : 0);
+    if (totalNeeded > availablePoints) {
+      const parts = [`文本 ${pts}`, `燃烧 ${stakeFeeAmountRef.current}`];
+      if (isInsideClassify) parts.push(`加入容器 ${1 + stakeFeeAmountRef.current}`);
+      setSendError(`贡献点余额不足（可用 ${availablePoints}，需要 ${totalNeeded} 点 = ${parts.join(' + ')}）`);
       return null;
     }
     setSendError(null);
@@ -1446,27 +1467,33 @@ export default function TopicDetailPage() {
       setStakeAmount(minSelfStake);
       if (isInsideClassify) {
         if (currentClassifyRelMsgId) {
-          // Persist the new message as a target of the classify/summary topic
-          // so the message remains scoped inside the topic after exit / reload.
-          await addTargetToClassifyTopic(
-            { kind: 'message', messageId: msg.id },
-            (newRelId) => {
-              // Add a classify/summary edge for the new message so the topic
-              // card reflects the updated target count in GraphView.
-              const relType = (currentClassifyRelType === "summary" ? "summary" : "classify") as RelationType;
-              const alreadyLinked = false; // fresh target, no existing edge
-              if (!alreadyLinked) {
-                setEdges(prev => [...prev, {
-                  id: nextId("edge"),
-                  relationMessageId: newRelId,
-                  relationType: relType,
-                  from: { messageId: `anon:${newRelId}`, selection: { kind: "whole" } },
-                  to: { messageId: msg.id, selection: { kind: "whole" } },
-                  relationLabel: relationTypeName(relType),
-                }]);
-              }
-            },
-          );
+          try {
+            // Create a "join" relation: sourceMessageId = container, targetRefs = the new message.
+            const joinType = (currentClassifyRelType === "summary" ? "SUMMARY" : "CLASSIFY") as string;
+            await createJoinRelationsForContainer(currentClassifyRelMsgId, joinType, [msg.id]);
+          } catch (e: any) {
+            setSendError(`加入容器记录创建失败: ${e?.message ?? e}`);
+            setTimeout(() => setSendError(null), 4000);
+          }
+          // Add the message to the container's targetRefs
+          await addTargetToClassifyTopic({ kind: 'message', messageId: msg.id });
+          // Create the classify→message edge for GraphView display.
+          // addTargetToClassifyTopic skips edge creation when isInsideClassify,
+          // so we create it manually here.
+          const edgeRelType = (currentClassifyRelType === "summary" ? "summary" : "classify") as RelationType;
+          const containerAnonSrc = `anon:${currentClassifyRelMsgId}`;
+          setEdges(prev => {
+            const dupKey = `${currentClassifyRelMsgId}::${msg.id}`;
+            if (prev.some(e => `${e.relationMessageId}::${e.to.messageId}` === dupKey)) return prev;
+            return [...prev, {
+              id: nextId("edge"),
+              relationMessageId: currentClassifyRelMsgId,
+              relationType: edgeRelType,
+              from: { messageId: containerAnonSrc, selection: { kind: "whole" as const } },
+              to: { messageId: msg.id, selection: { kind: "whole" as const } },
+              relationLabel: relationTypeName(edgeRelType),
+            }];
+          });
         }
         setClassifyKey(k => k + 1); // force StructureView remount AFTER classify updated
       }
@@ -1578,7 +1605,7 @@ export default function TopicDetailPage() {
         clearBrowserSelection();
         enterClassifyTopic(messageId);
         // If entering a rejected classify, enter preview mode
-        if (rejectedClassifyRelIds.has(messageId)) {
+        if (rejectedContainerIds.has(messageId)) {
           setPreviewClassifyId(messageId);
         }
         return;
@@ -1710,28 +1737,13 @@ export default function TopicDetailPage() {
         }
         continue;
       }
-      // ARRANGE / MERGE: expand to their contained text messages (layout containers),
-      // AND also keep the container itself as a relation-kind target so it gets
-      // hidden from the parent view (list + graph) when classified.
-      if (relType === "arrange" || relType === "merge") {
-        const relKey = `relation:${mid}`;
-        if (!seen.has(relKey)) {
-          seen.add(relKey);
-          res.push({ kind: "relation", relationId: mid });
-        }
-        const owned = collectOwnedByRelation(mid, relationById);
-        for (const textId of owned.textIds) {
-          const key = `message:${textId}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          res.push({ kind: "message", messageId: textId });
-        }
-      } else {
-        const key = `relation:${mid}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        res.push({ kind: "relation", relationId: mid });
-      }
+      // All container types (classify/summary/arrange/merge): add as a single
+      // relation-kind target.  The container itself joins the parent — its
+      // children do NOT get individual join relations to the parent.
+      const key = `relation:${mid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      res.push({ kind: "relation", relationId: mid });
     }
     return res;
   }
@@ -2081,6 +2093,31 @@ export default function TopicDetailPage() {
     setEdges(prev => [...prev, ...newEdgesList]);
   }
 
+  /**
+   * Create "join" relations for each target of a container.
+   * A join relation is: sourceMessageId=container, targetRefs=[target].
+   * This enables resolveMessageCanvas / getActiveJoinRelationsForMessage
+   * to find which container a message belongs to (bottom-up lookup).
+   */
+  async function createJoinRelationsForContainer(
+    containerId: string,
+    containerType: string,
+    targetMids: string[],
+  ) {
+    for (const tgtMid of targetMids) {
+      try {
+        const joinRel = await api.createRelation(topicId!, {
+          relationType: containerType,
+          sourceMessageId: containerId,
+          targetRefs: [{ kind: 'message', messageId: tgtMid }],
+          payload: {},
+          stakeAmount: 1,
+        });
+        await appendCreatedRelation(joinRel);
+      } catch (e) { debugWarn('join', `FAILED containerId=${containerId.slice(-6)} type=${containerType} tgt=${tgtMid.slice(-6)} error=${String(e)}`); }
+    }
+  }
+
   async function handleQuickSendAndRelateFromDraftTargets() {
     const text = newMessageContent.trim();
 
@@ -2103,6 +2140,7 @@ export default function TopicDetailPage() {
         if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
         if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
         if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
+        if ((totalConsumption as any).joinCount > 0) parts.push(`加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinBurnTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）`);
         if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
         errors.push(`贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`);
       }
@@ -2123,7 +2161,7 @@ export default function TopicDetailPage() {
 
     // Scenario: source collection + target collection explicitly committed (no draft candidates).
     // Build the relation directly without creating a new text message.
-    if (relationType !== "classify" && relationType !== "merge" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
+    if (relationType !== "classify" && relationType !== "merge" && relationType !== "arrange" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
       const labelDefault = relationTypeName(relationType);
       const label = relationLabel.trim() || labelDefault;
       await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
@@ -2342,12 +2380,72 @@ export default function TopicDetailPage() {
       return;
     }
 
-    // ARRANGE relation: user-to-message relation (like CLASSIFY/MERGE/SUMMARY), no source message.
-    // If text is present, create a text message first and include it as a target of the frame.
-    // This avoids creating normal→normal edges that could falsely trigger cross-link checks.
-    // Targets are collected as-is; the layout engine handles nested ARRANGE frames via
-    // buildFrameBlocks subset detection (treating arrange messages as whole units).
+    // ARRANGE relation: create new, or append targets to an existing ARRANGE.
+    // When sourceUnits contains an existing ARRANGE relation, append targets
+    // to its frame instead of creating a new ARRANGE.
     if (isArrange) {
+      // Check if sourceUnits has an existing ARRANGE relation (append mode)
+      const existingArrangeSource = sourceUnits.find(u => {
+        const rel = relationById.get(u.messageId);
+        return rel && rel.relationType === 'ARRANGE';
+      });
+      if (existingArrangeSource && targetUnits.length > 0) {
+        // Append targets to existing ARRANGE
+        const existingRel = relationById.get(existingArrangeSource.messageId)!;
+        const existingTargetRefs = (existingRel.targetRefs ?? []) as TargetRef[];
+        const existingTargetKeys = new Set(existingTargetRefs.map(r => `${r.kind}:${r.kind === 'relation' ? r.relationId : r.messageId}`));
+        const newTargetRefs: TargetRef[] = [];
+        const newTargetMids: string[] = [];
+        for (const u of targetUnits) {
+          const tr = unitSelectionToTargetRef(u, msgMap);
+          const key = `${tr.kind}:${tr.kind === 'relation' ? tr.relationId : tr.messageId}`;
+          if (!existingTargetKeys.has(key)) {
+            newTargetRefs.push(tr);
+            // For edges: use the message/relation ID for the to endpoint
+            const mid = tr.kind === 'relation' ? tr.relationId : tr.messageId;
+            newTargetMids.push(mid);
+            existingTargetKeys.add(key);
+          }
+        }
+        if (newTargetRefs.length > 0) {
+          try {
+            const updatedRefs = [...existingTargetRefs, ...newTargetRefs];
+            const updatedRel = await api.patchRelationTargets(topicId!, existingRel.id, updatedRefs);
+            // Update local state
+            const updated = { ...existingRel, targetRefs: updatedRefs };
+            relationsRef.current = relationsRef.current.map(r => r.id === existingRel.id ? updated : r);
+            setRelations(prev => prev.map(r => r.id === existingRel.id ? updated : r));
+            setMessages(prev => prev.map(m => m.id === existingRel.id ? buildRelationDemoMessage(updatedRel) : m));
+            // Add edges from the existing ARRANGE to new targets
+            const layout = (existingRel.payload as any)?.targetLayout;
+            const edgeLabel = layout === 'single-row' ? 'arrange-h' : 'arrange-v';
+            const anonSrcId = `anon:${existingRel.id}`;
+            const newEdges: DemoEdge[] = newTargetMids.map(tgtMid => ({
+              id: nextId("edge"),
+              relationMessageId: existingRel.id,
+              relationType: "arrange" as RelationType,
+              from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+              to: { messageId: tgtMid, selection: { kind: "whole" as const } },
+              relationLabel: edgeLabel,
+            }));
+            setEdges(prev => {
+              const existingKeys = new Set(prev.map(e => `${e.relationMessageId}::${e.to.messageId}`));
+              const filtered = newEdges.filter(e => !existingKeys.has(`${e.relationMessageId}::${e.to.messageId}`));
+              return [...prev, ...filtered];
+            });
+            // Create join relations for each new target
+            await createJoinRelationsForContainer(existingRel.id, 'ARRANGE', newTargetMids);
+          } catch (e: any) {
+            alert(`追加到排列框架失败: ${e?.message ?? e}`);
+          }
+        }
+        setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+        setNewMessageContent("");
+        setRelationType(null); setSecondaryRelationType("none");
+        return;
+      }
+
+      // Create new ARRANGE (no existing arrange source)
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       let extraTargetMid: string | null = null;
@@ -2380,6 +2478,8 @@ export default function TopicDetailPage() {
             relationLabel: edgeLabel,
           } as DemoEdge);
         }
+        // Create join relations for each target
+        await createJoinRelationsForContainer(backendRel.id, 'ARRANGE', allTargetMids);
       } catch (e: any) { alert(`建立排列关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2547,6 +2647,8 @@ export default function TopicDetailPage() {
           }));
           setEdges(prev => [...prev, ...newEdges]);
         }
+        // Create join relations for each target
+        await createJoinRelationsForContainer(backendRel.id, 'CLASSIFY', edgeTargetIds);
       } catch (e: any) {
         alert(`建立关系失败: ${e?.message ?? e}`);
         return;
@@ -2637,6 +2739,8 @@ export default function TopicDetailPage() {
           }));
           setEdges(prev => [...prev, ...newEdges]);
         }
+        // Create join relations for each target
+        await createJoinRelationsForContainer(backendRel.id, 'SUMMARY', edgeTargetIds);
       } catch (e: any) {
         alert(`建立总结关系失败: ${e?.message ?? e}`);
         return;
@@ -2714,6 +2818,9 @@ export default function TopicDetailPage() {
           relationLabel: relationTypeName("merge"),
         }));
         setEdges(prev => [...prev, ...newEdges]);
+        // Create join relations for each target
+        const mergeTargetMids = mergeTargetRefs.map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId);
+        await createJoinRelationsForContainer(backendRel.id, 'MERGE', mergeTargetMids);
       } catch (e: any) {
         alert(`建立归并关系失败: ${e?.message ?? e}`);
         return;
@@ -2972,6 +3079,33 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isArrangeType = relationType === "arrange";
+
+  // Lock arrange layout when appending to an existing ARRANGE frame.
+  // When the user selects an existing arrange relation as a source or target,
+  // lock secondaryRelationType to match the parent frame's layout.
+  useEffect(() => {
+    if (!isArrangeType) {
+      setIsArrangeLayoutLocked(false);
+      return;
+    }
+    // Check sourceUnits first (append to existing arrange), then draft/target
+    const unitsToCheck = sourceUnits.length > 0 ? sourceUnits
+      : draftUnits.length > 0 ? draftUnits : targetUnits;
+    for (const u of unitsToCheck) {
+      const msg = msgMap.get(u.messageId);
+      if (msg?.kind === 'relation') {
+        const rel = relationById.get(u.messageId);
+        if (rel && rel.relationType === 'ARRANGE') {
+          const layout = (rel.payload as any)?.targetLayout;
+          const lockedDir = layout === 'single-row' ? 'horizontal' : 'vertical';
+          setSecondaryRelationType(lockedDir);
+          setIsArrangeLayoutLocked(true);
+          return;
+        }
+      }
+    }
+    setIsArrangeLayoutLocked(false);
+  }, [isArrangeType, draftUnits, targetUnits, msgMap, relationById]);
   const isClassifyType = relationType === "classify";
   const isMergeType = relationType === "merge";
   const isSummaryType = relationType === "summary";
@@ -3048,6 +3182,7 @@ export default function TopicDetailPage() {
       if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
       if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
       if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
+      if ((totalConsumption as any).joinCount > 0) parts.push(`加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinBurnTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）`);
       if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
       return `贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`;
     }
@@ -3564,7 +3699,7 @@ export default function TopicDetailPage() {
             // will render them as cards.  Their internal targets are NOT expanded into
             // the current view; the user must double-click to enter them.
             // Exception: rejected classifies release their messages into the parent view.
-            if (rejectedClassifyRelIds.has(relId)) {
+            if (rejectedContainerIds.has(relId)) {
               getTextTargetIds(rel.targetRefs).forEach(id => topicTextIds.add(id));
               getRelationTargetIds(rel.targetRefs).forEach(id => {
                 topicRelationIds.add(id);
@@ -3934,6 +4069,21 @@ export default function TopicDetailPage() {
     });
   }
 
+  /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
+  const handleNavigateToMessage = useCallback((messageId: string) => {
+    // Clear candidates and select the target message as whole
+    setDraftUnits([{ messageId, selection: { kind: 'whole' as const } }]);
+    setSourceUnits([]);
+    setTargetUnits([]);
+    setLastClickedMessageId(messageId);
+    // Delegate canvas switching to the same auto-classify mechanism used by URL param navigation
+    setAutoClassifyMsgId(messageId);
+    // Scroll after canvas switch; bump scrollKey so the scroll effect re-triggers even
+    // when the target is already on the current canvas (no classifyKey change).
+    pendingScrollMsgRef.current = messageId;
+    setScrollKey(k => k + 1);
+  }, []);
+
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
     e.stopPropagation();
     // Recommend/archive: show aggregated badge detail with subType breakdown
@@ -4254,7 +4404,7 @@ export default function TopicDetailPage() {
                               你已反对 · 点赞同恢复
                             </span>
                           )}
-                          {rejectedClassifyRelIds.has(msg.id) && (
+                          {rejectedContainerIds.has(msg.id) && (
                             <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">
                               社区已反对 · 双击预览
                             </span>
@@ -4360,6 +4510,7 @@ export default function TopicDetailPage() {
                   settlementEntryHighlight={settlementEntryHighlight}
                   crossClassifyRefs={crossClassifyRefs}
                   onCrossRefTagClick={handleCrossRefTagClick}
+                  onNavigateToMessage={handleNavigateToMessage}
                   onDebugRects={setDebugRects}
                 />
             )}
@@ -4491,8 +4642,9 @@ export default function TopicDetailPage() {
                   <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
                     <span style={{ opacity: 0.85 }}>附加关系：</span>
                     {opts.map(t => (
-                      <button key={t} onClick={() => setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t)}
-                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
+                      <button key={t} onClick={() => { if (!(isArrangeType && isArrangeLayoutLocked)) setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t); }}
+                        disabled={isArrangeType && isArrangeLayoutLocked}
+                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: (isArrangeType && isArrangeLayoutLocked) ? "not-allowed" : "pointer", opacity: (isArrangeType && isArrangeLayoutLocked) ? 0.5 : 1 }}>
                         {secondaryRelationLabel(t)}
                       </button>
                     ))}
@@ -4544,6 +4696,7 @@ export default function TopicDetailPage() {
                   ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
                   : isClassifyType ? "输入分类名称（不能为空）"
                   : isSummaryType ? "输入总结内容（不能为空）"
+                  : isArrangeType ? "可选：输入文本消息加入排列框架"
                   : isGovernanceOrOpsType ? (relationType === "proposal" ? "输入提案内容（不能为空，支持 Markdown）" : relationType === "code_change" ? "输入代码内容（不能为空，支持 Markdown）" : "输入运营公告内容（不能为空，支持 Markdown）")
                   : "输入一条新普通消息（支持自由换行）";
                 return (
@@ -4558,7 +4711,7 @@ export default function TopicDetailPage() {
               })()}
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 {/* Text stake: only when text creates a separate message */}
-                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isGovernanceOrOpsType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
+                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isArrangeType && !isGovernanceOrOpsType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
                   <>
                     <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
                     <input
@@ -4630,6 +4783,7 @@ export default function TopicDetailPage() {
                         totalConsumption.hasText ? `文本 ${totalConsumption.textStake}` : null,
                         totalConsumption.hasRel ? `关系 ${totalConsumption.perStake}×${totalConsumption.relCount}` : null,
                         (totalConsumption as any).refCount > 0 ? `引用 ${(totalConsumption as any).refStakeTotal}` : null,
+                        (totalConsumption as any).joinCount > 0 ? `加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinBurnTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）` : null,
                         totalConsumption.burnTotal > 0 ? `燃烧 ${totalConsumption.burnTotal}` : null,
                       ].filter(Boolean).join(' + ')}）
                     </span>

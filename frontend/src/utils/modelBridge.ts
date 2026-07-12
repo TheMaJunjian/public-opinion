@@ -49,6 +49,12 @@ export type DemoMessage = {
   roundPayload?: Record<string,unknown>;  // Phase 6: roundId/result for settlement highlight
   relationType?: RelationType;
   relationPayload?: RelationPayload;
+  /** Join info for container-add records (加入容器消息) */
+  joinInfo?: {
+    containerId: string;
+    containerType: string;  // CLASSIFY | SUMMARY | ARRANGE | MERGE
+    targetIds: string[];
+  };
 };
 
 export type DemoEdge = {

@@ -198,7 +198,7 @@ export async function applyEvent(event: AppEvent): Promise<unknown> {
 
 async function applyUserRegistered(event: UserRegisteredEvent) {
   const { actorId, payload } = event;
-  const REGISTRATION_BONUS = 200;
+  const REGISTRATION_BONUS = 2000;
 
   const [user] = await prisma.$transaction([
     prisma.user.create({

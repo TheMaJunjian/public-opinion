@@ -221,13 +221,12 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
-  it('rejects CLASSIFY with sourceMessageId', async () => {
+  it('allows CLASSIFY with sourceMessageId (join relations use it)', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('分类关系');
+    expect(res.status).toBe(201);
   });
 
   it('allows CLASSIFY with relation message targets', async () => {
@@ -255,22 +254,20 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
-  it('rejects ARRANGE with sourceMessageId', async () => {
+  it('allows ARRANGE with sourceMessageId (join relations use it)', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'ARRANGE', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('排列关系');
+    expect(res.status).toBe(201);
   });
 
-  it('rejects MERGE with sourceMessageId', async () => {
+  it('allows MERGE with sourceMessageId (join relations use it)', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'MERGE', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('归并关系');
+    expect(res.status).toBe(201);
   });
 
   it('allows MERGE with relation targets', async () => {
@@ -705,13 +702,13 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
     (prisma.$transaction as jest.Mock).mockResolvedValue([{}, {}]);
   });
 
-  it('rejects SUMMARY with sourceMessageId', async () => {
+  it('allows SUMMARY with sourceMessageId (join relations use it)', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'SUMMARY', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }], payload: { title: '总结' } });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('总结关系');
+    expect(res.status).toBe(201);
   });
 
   it('rejects SUMMARY without payload.title', async () => {

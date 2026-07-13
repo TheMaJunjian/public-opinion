@@ -3957,7 +3957,7 @@ export default function TopicDetailPage() {
       const backendRel = await createRel(topicId, {
         relationType: kind.toUpperCase(),
         sourceMessageId: null,
-        targetRefs: [{ kind: 'message', messageId }],
+        targetRefs: [unitSelectionToTargetRef({ messageId, selection: { kind: "whole" } }, msgMap)],
       });
       await registerCreatedRelationInCurrentClassify(backendRel);
     } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }

@@ -325,6 +325,8 @@ export default function TopicDetailPage() {
   const [isArrangeLayoutLocked, setIsArrangeLayoutLocked] = useState(false);
   const [subType, setSubType] = useState<string>(""); // SPAM|OFFTOPIC|LOWVALUE|IMPORTANT|CUSTOM or empty
   const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
+  const subTypeCustomBufferRef = useRef(""); // cache textarea content when switching away from CUSTOM subType
+  const lastTagSecondaryRef = useRef<string>("recommend"); // remember last TAG secondary selection
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
@@ -2221,6 +2223,7 @@ export default function TopicDetailPage() {
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent(""); setSubType(""); setRelationType(null); setSecondaryRelationType("none");
+      subTypeCustomBufferRef.current = ""; setSubTypeCustomLabel("");
       return;
     }
 
@@ -2339,6 +2342,7 @@ export default function TopicDetailPage() {
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent(""); setSubType(""); setRelationType(null); setSecondaryRelationType("none");
+      subTypeCustomBufferRef.current = ""; setSubTypeCustomLabel("");
       return;
     }
 
@@ -3157,8 +3161,17 @@ export default function TopicDetailPage() {
       if (sourceUnits.length > 0) return false;
       return newMessageContent.trim().length > 0 || hasTargetsAvailable;
     }
-    // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
-    if (isAgreeDisagreeType || isArrangeType || isTagWithQuickAnnotate) return hasTargetsAvailable;
+    // TAG with recommend/archive (inline badge): needs targets; if CUSTOM subType, also needs text
+    if (isTagWithInlineBadge) {
+      if (!hasTargetsAvailable) return false;
+      if (subType === 'CUSTOM') return newMessageContent.trim().length > 0;
+      return true;
+    }
+    // TAG with existing tag label (non-recommend/archive): needs only targets, no text
+    if (isTagWithQuickAnnotate) return hasTargetsAvailable;
+    // TAG with secondary=none: invalid state, cannot send
+    if (relationType === "tag") return false;
+    if (isAgreeDisagreeType || isArrangeType) return hasTargetsAvailable;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
     return hasTargetsAvailable && newMessageContent.trim().length > 0;
@@ -3241,7 +3254,15 @@ export default function TopicDetailPage() {
     if (isTagWithInlineBadge) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       const secName = relationTypeName(secondaryRelationType as RelationType);
+      if (subType === 'CUSTOM') {
+        if (newMessageContent.trim().length === 0) return "请输入自定义理由";
+        return `建立「${secName}」关系（自定义理由，用${usingDraft ? "候选" : "目标集合"}作目标）`;
+      }
       return `建立「${secName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    }
+    // TAG + secondary = none: invalid state prompt
+    if (relationType === "tag" && secondaryRelationType === "none") {
+      return "请先选择推荐或冷藏";
     }
     // TAG + secondary = existing tag label: quick re-annotation shortcut
     if (isTagWithQuickAnnotate) {
@@ -4208,7 +4229,7 @@ export default function TopicDetailPage() {
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
-            <button key={rt} onClick={() => { setRelationType(prev => prev === rt ? null : rt); setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); }}
+            <button key={rt} onClick={() => { if (relationType === "tag") { lastTagSecondaryRef.current = secondaryRelationType !== "none" ? secondaryRelationType : "recommend"; } setRelationType(prev => prev === rt ? null : rt); if (rt === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); } else { setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); } }}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
             </button>
@@ -4642,7 +4663,10 @@ export default function TopicDetailPage() {
                   <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
                     <span style={{ opacity: 0.85 }}>附加关系：</span>
                     {opts.map(t => (
-                      <button key={t} onClick={() => { if (!(isArrangeType && isArrangeLayoutLocked)) setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t); }}
+                      <button key={t} onClick={() => {
+                        if (isArrangeType && isArrangeLayoutLocked) return;
+                        setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t);
+                      }}
                         disabled={isArrangeType && isArrangeLayoutLocked}
                         style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: (isArrangeType && isArrangeLayoutLocked) ? "not-allowed" : "pointer", opacity: (isArrangeType && isArrangeLayoutLocked) ? 0.5 : 1 }}>
                         {secondaryRelationLabel(t)}
@@ -4656,7 +4680,23 @@ export default function TopicDetailPage() {
                 <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
                   <span style={{ opacity: 0.85 }}>标注理由：</span>
                   {SUB_TYPE_OPTIONS.map(st => (
-                    <button key={st || 'none'} onClick={() => { setSubType(st); if (st !== 'CUSTOM') { setSubTypeCustomLabel(''); setNewMessageContent(''); } }}
+                    <button key={st || 'none'} onClick={() => {
+                      if (st === 'CUSTOM') {
+                        // Switching TO custom: restore buffer
+                        setNewMessageContent(subTypeCustomBufferRef.current);
+                        setSubType(st);
+                      } else if (subType === 'CUSTOM') {
+                        // Switching FROM custom: save to buffer then clear
+                        subTypeCustomBufferRef.current = newMessageContent;
+                        setNewMessageContent('');
+                        setSubType(st);
+                        setSubTypeCustomLabel('');
+                      } else {
+                        setSubType(st);
+                        setNewMessageContent('');
+                        if (st !== 'CUSTOM') setSubTypeCustomLabel('');
+                      }
+                    }}
                       style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: subType === st ? (secondaryRelationType === "recommend" ? "#f59e0b" : "#64748b") : "#222", color: subType === st ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
                       {st ? subTypeLabel(st) : '无'}
                     </button>
@@ -4685,13 +4725,17 @@ export default function TopicDetailPage() {
               <div key={composerRefreshKey}>
               {(() => {
                 const isCustomSubType = subType === 'CUSTOM' && ((relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive")) || relationType === "recommend" || relationType === "archive");
+                // TAG + secondary=none is an invalid state — disable textarea (user must pick recommend/archive first)
+                const isTagWithoutSecondary = relationType === "tag" && secondaryRelationType === "none";
                 const textAreaDisabled =
-                  (isCustomSubType ? false : (
+                  isTagWithoutSecondary
+                  || (isCustomSubType ? false : (
                     (draftHasRelationTarget && relationType === "correct")
                     || (isTagWithQuickAnnotate && hasTargetsAvailable)
                     || (isMergeType && hasTargetsAvailable)
                   ));
                 const placeholderText = isCustomSubType ? "输入自定义理由（最长20字）"
+                  : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
                   : textAreaDisabled
                   ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
                   : isClassifyType ? "输入分类名称（不能为空）"
@@ -4775,7 +4819,7 @@ export default function TopicDetailPage() {
                 )}
                 <span style={{ fontSize: 11, color: "#666" }}>点 / {availablePoints}</span>
                 {/* Total consumption breakdown */}
-                {totalConsumption && (
+                {singleButtonEnabled && totalConsumption && (
                   <span style={{ fontSize: 11, color: totalConsumption.total > availablePoints ? "#f87171" : "#f59e0b" }}>
                     总计 {totalConsumption.total} 点
                     <span style={{ color: "#888" }}>

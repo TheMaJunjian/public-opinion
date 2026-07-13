@@ -1,10 +1,10 @@
 import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 
-export type MessageKind = "normal" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
+export type MessageKind = "normal" | "join" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
 
 /** All content-like kinds (display as cards, participate in graph layout) */
-export const CONTENT_KINDS: MessageKind[] = ["normal", "round", "round_result", "governance", "code", "operations"];
+export const CONTENT_KINDS: MessageKind[] = ["normal", "join", "round", "round_result", "governance", "code", "operations"];
 
 export function isContentKind(k: MessageKind): boolean {
   return CONTENT_KINDS.includes(k as MessageKind);
@@ -172,6 +172,9 @@ export function convertMessagesToDemoModel(
     const relMsgId = rel.id;
     const relType = rel.relationType.toLowerCase() as RelationType;
 
+    // JOIN relations: internal membership records — skip edge creation.
+    const isJoin = relType === 'join';
+
     const tagLabel = relType === 'tag'
       ? getRelationLabel(rel.payload)
       : undefined;
@@ -183,7 +186,19 @@ export function convertMessagesToDemoModel(
       seenRelMsgIds.add(relMsgId);
       const typeName = relationTypeName(rel.relationType);
       let content: string;
-      if (relType === 'classify') {
+      let msgKind: DemoMessage['kind'] = 'relation';
+      let joinInfo: DemoMessage['joinInfo'] | undefined;
+      if (relType === 'join') {
+        content = '加入容器';
+        msgKind = 'join';
+        joinInfo = {
+          containerId: rel.sourceMessageId!,
+          containerType: 'JOIN',
+          targetIds: rel.targetRefs
+            .filter(r => r.kind === 'message' || r.kind === 'text-fragment')
+            .map(r => (r as { messageId: string }).messageId),
+        };
+      } else if (relType === 'classify') {
         content = `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'tag' && tagLabel) {
         content = `标签「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
@@ -197,9 +212,10 @@ export function convertMessagesToDemoModel(
         author: rel.createdBy.username,
         createdAt: rel.createdAt,
         content,
-        kind: "relation",
+        kind: msgKind,
         relationType: relType,
         relationPayload: rel.payload,
+        joinInfo,
       });
     }
 
@@ -226,6 +242,7 @@ export function convertMessagesToDemoModel(
     // Deduplicate relation-type targetRefs by relationId to prevent duplicate arrows.
     const seenRelationTargetIds = new Set<string>();
 
+    if (!isJoin) {
     rel.targetRefs.forEach((ref, index) => {
       const edgeId = `${rel.id}::${index}`;
       let toUnit: UnitSelection;
@@ -255,6 +272,7 @@ export function convertMessagesToDemoModel(
         relationLabel,
       });
     });
+    } // !isJoin
   }
 
   // Create edges from GOVERNANCE/CODE messages that have relationType and targetRefs

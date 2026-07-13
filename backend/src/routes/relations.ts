@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { RELATION_TYPES } from '../lib/relationTypes';
 import { applyEvent } from '../lib/events';
+import { log } from '../lib/logger';
 import {
   extractTextTargetIds,
   extractNestedRelationIds,
@@ -160,6 +161,7 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
       createdBy: m.createdBy,
     }));
 
+    log('rel-query', `GET topic=${topicId.slice(-6)} total=${total} msgs=[${messages.map(m=>`${m.id.slice(-6)}:${m.relationType}`).join(',')}]`);
     res.json({
       data: relations,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
@@ -472,6 +474,7 @@ relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, n
       });
     }
 
+    log('rel-create', `POST type=${data.relationType} msg=${message.id.slice(-6)} kind=${message.kind}`);
     // Return in the Relation API shape expected by the frontend.
     res.status(201).json({
       id: message.id,

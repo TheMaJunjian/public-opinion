@@ -793,6 +793,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     }),
   ]));
 
+  log('rel-persist', `CREATED msg=${message.id.slice(-6)} kind=${message.kind} type=${effectiveRelationType} topic=${topicId.slice(-6)}`);
   if (payload.supersedesRelationId) {
     await prisma.message.update({
       where: { id: payload.supersedesRelationId },
@@ -832,7 +833,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       log('标注', `${effRelType} msg=${message.id.slice(-6)} target=${textTargetId.slice(-6)} round=${round?.id.slice(-6) ?? 'none'} side=${side} stake=${staked ?? 0}${transformedFrom ? ` from=${transformedFrom}` : ''}${isDedup ? '' : ' NEW'}`);
     }
   } else {
-    // Other relations: PRO on the relation message itself
+    // Other relations (including JOIN): PRO on the relation message itself
     const round = await ensureVotingRound(message.id, actorId, topicId);
     await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount, 'PRO', round?.id);
   }

@@ -69,6 +69,7 @@ export type RelationType =
   | 'RECOMMEND'    // 推荐
   | 'ARCHIVE'      // 冷藏
   | 'OPERATIONS'   // 运营（收入、统计等程序运营信息）
+  | 'JOIN'         // 加入（内部成员关系记录）
   | string;        // future extensibility
 
 /**
@@ -213,6 +214,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   PROPOSAL:    { kind: 'edge-label',        label: '🏛️ 提案', color: 'amber',  formsTrees: false },
   CODE_CHANGE: { kind: 'edge-label',        label: '💻 代码', color: 'teal',  formsTrees: false },
   OPERATIONS:  { kind: 'edge-label',        label: '📊 运营', color: 'cyan',   formsTrees: false },
+  JOIN:        { kind: 'edge-label',        label: '加入', color: 'slate',  formsTrees: false, isContainer: false },
 };
 
 /** Get the presentation spec for a relation type, with a sensible default.

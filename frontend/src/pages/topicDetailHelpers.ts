@@ -126,19 +126,17 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
   const typeName = relationTypeName(relType);
   const targetSummary = relationTargetRefsSummary(relation.targetRefs);
 
-  // Container/frame types (CLASSIFY/SUMMARY/MERGE/ARRANGE) with a sourceMessageId
-  // are "add-to-container" records, not containers themselves. Render them as
-  // text-like normal cards so they are visually distinct from container/frame cards.
-  const isContainerAddRecord = (relType === 'classify' || relType === 'summary' || relType === 'merge' || relType === 'arrange') && !!relation.sourceMessageId;
+  // JOIN type records are "add-to-container" records, not containers themselves.
+  // Render them as text-like normal cards so they are visually distinct from container cards.
+  const isContainerAddRecord = relType === 'join';
 
   let content: string;
   let joinInfo: DemoMessage['joinInfo'] | undefined;
   if (isContainerAddRecord) {
-    const actionLabel = relType === 'classify' ? '加入分类' : relType === 'summary' ? '加入总结' : relType === 'merge' ? '加入归并' : '加入排列';
-    content = `${actionLabel}`;
+    content = '加入容器';
     joinInfo = {
       containerId: relation.sourceMessageId!,
-      containerType: relation.relationType.toUpperCase(),
+      containerType: 'JOIN',
       targetIds: getRelationTargetIds(relation.targetRefs).length > 0
         ? getRelationTargetIds(relation.targetRefs)
         : getTextTargetIds(relation.targetRefs),
@@ -171,7 +169,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     author: relation.createdBy.username,
     createdAt: relation.createdAt,
     kind: isContainerAddRecord
-      ? 'normal'
+      ? 'join'
       : relType === 'proposal' ? 'governance' : relType === 'code_change' ? 'code' : relType === 'operations' ? 'operations' : 'relation',
     relationType: relType,
     relationPayload: relation.payload,
@@ -301,7 +299,7 @@ export function areContainersOnSameChain(
  * being joined) and targeting this message.
  * Returns sorted by createdAt descending (latest first).
  */
-const JOIN_RELATION_TYPES = new Set(['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE']);
+const JOIN_RELATION_TYPES = new Set(['JOIN']);
 
 export function getActiveJoinRelationsForMessage(
   messageId: string,

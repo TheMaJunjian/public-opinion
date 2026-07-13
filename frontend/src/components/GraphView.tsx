@@ -3,6 +3,7 @@ import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } fr
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
+import { debugWarn } from '../utils/debugLog';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
 import {
@@ -2344,6 +2345,7 @@ export default function GraphView(props: GraphViewProps) {
     setRelDecByRelMsgState(relDecByRelMsgId);
     setTagDecorationsByMsg(newTagDecorationsByMsg);
     setArrangeFrames(newArrangeFrames);
+    debugWarn('diag-gv', `groupFrames count=${newGroupFrames.length} ${newGroupFrames.map(f=>`${f.relMsgId.slice(-6)}:${f.relType} card=${f.relMsgId.slice(-6)} rect=${f.rect.x},${f.rect.y} ${f.rect.width}x${f.rect.height}`).join(' | ')}`);
     setGroupFrames(newGroupFrames);
 
     // DEBUG: send rects + cardIds to parent
@@ -3163,7 +3165,7 @@ export default function GraphView(props: GraphViewProps) {
               {/* 加入容器消息：显示容器和目标消息 ID 标签（可点击跳转） */}
               {msg.joinInfo && (() => {
                 const { containerId, containerType, targetIds } = msg.joinInfo;
-                const containerTypeLabel = containerType === 'CLASSIFY' ? '分类' : containerType === 'SUMMARY' ? '总结' : containerType === 'ARRANGE' ? '排列' : '归并';
+                const containerTypeLabel = containerType === 'CLASSIFY' ? '分类' : containerType === 'SUMMARY' ? '总结' : containerType === 'ARRANGE' ? '排列' : containerType === 'MERGE' ? '归并' : '容器';
                 return (
                   <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>

@@ -104,6 +104,7 @@ export default function TopicDetailPage() {
           messagesData.data, relationsData.data
         );
         setRelations(relationsData.data);
+        debugWarn('diag', `LOAD relations=${relationsData.data.length} types=[${relationsData.data.map(r=>r.relationType).join(',')}] ids=[${relationsData.data.map(r=>r.id.slice(-6)).join(',')}]`);
         setMessages(demoMsgs);
         setEdges(demoEdges);
 
@@ -1023,6 +1024,7 @@ export default function TopicDetailPage() {
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
+    if (textIds.size > 0 || relationIds.size > 0) debugWarn('diag', `summaryOwn textIds=[${[...textIds].map(id=>id.slice(-6)).join(',')}] relIds=[${[...relationIds].map(id=>id.slice(-6)).join(',')}]`);
     return { textIds, relationIds };
   }, [relations, relationById, rejectedContainerIds]);
   const summaryCoverageByMessageId = useMemo(() => {
@@ -1141,6 +1143,7 @@ export default function TopicDetailPage() {
     activeSummaryOwnershipTextIdsExpanded.forEach(id => ids.add(id));
     // MERGE displays as a group frame whose targets remain visible as cards on the canvas,
     // so mergeOwnership.textIds is intentionally excluded here.
+    debugWarn('diag', `hiddenTextIds total=${ids.size} classify=${activeClassifyOwnershipTextIdsExpanded.size} summary=${activeSummaryOwnershipTextIdsExpanded.size} ids=[${[...ids].map(id=>id.slice(-6)).join(',')}]`);
     return ids;
   }, [activeClassifyOwnershipTextIdsExpanded, activeSummaryOwnershipTextIdsExpanded]);
 
@@ -2103,20 +2106,20 @@ export default function TopicDetailPage() {
    */
   async function createJoinRelationsForContainer(
     containerId: string,
-    containerType: string,
+    _containerType: string,
     targetMids: string[],
   ) {
     for (const tgtMid of targetMids) {
       try {
         const joinRel = await api.createRelation(topicId!, {
-          relationType: containerType,
+          relationType: 'JOIN',
           sourceMessageId: containerId,
           targetRefs: [{ kind: 'message', messageId: tgtMid }],
           payload: {},
           stakeAmount: 1,
         });
         await appendCreatedRelation(joinRel);
-      } catch (e) { debugWarn('join', `FAILED containerId=${containerId.slice(-6)} type=${containerType} tgt=${tgtMid.slice(-6)} error=${String(e)}`); }
+      } catch (e) { debugWarn('join', `FAILED containerId=${containerId.slice(-6)} tgt=${tgtMid.slice(-6)} error=${String(e)}`); }
     }
   }
 

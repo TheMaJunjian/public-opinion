@@ -3159,9 +3159,54 @@ export default function GraphView(props: GraphViewProps) {
                 </div>
               </div>
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
+              {/* Settlement: content with inline target tag on first line */}
+              {(msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
+                const settleTargetId = (msg as any).settlementTargetId as string | undefined;
+                const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
+                const targetContent = targetMsg?.content ?? '';
+                const targetPreview = targetContent.length > 40
+                  ? targetContent.slice(0, 40) + '…'
+                  : targetContent;
+                const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
+                const tagColor = isValue ? '#f59e0b' : '#818cf8';
+                const lines = (msg.content ?? '').split('\n');
+                const firstLine = lines[0];
+                const restLines = lines.slice(1).join('\n');
+                return (
+                  <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexWrap: "wrap" }}>
+                      <span style={{ whiteSpace: "pre-wrap", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{firstLine}</span>
+                      {settleTargetId && (
+                        onNavigateToMessage ? (
+                          <span
+                            onClick={(e) => { e.stopPropagation(); onNavigateToMessage(settleTargetId); }}
+                            style={{
+                              fontSize: 10, fontWeight: 500, padding: "1px 6px", borderRadius: 4,
+                              background: `${tagColor}15`, color: tagColor, border: `1px solid ${tagColor}40`,
+                              cursor: "pointer", maxWidth: 240, overflow: "hidden",
+                              textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            }}
+                            title={`点击跳转到目标消息 ${settleTargetId.slice(-6)}${targetContent ? '：' + targetContent : ''}`}
+                          >
+                            → {settleTargetId.slice(-6)}{targetPreview ? `「${targetPreview}」` : ''}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10, color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>
+                            {settleTargetId.slice(-6)}
+                          </span>
+                        )
+                      )}
+                    </div>
+                    {restLines && (
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{restLines}</pre>
+                    )}
+                  </div>
+                );
+              })() : (
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
               </div>
+              )}
               {/* 加入容器消息：显示容器和目标消息 ID 标签（可点击跳转） */}
               {msg.joinInfo && (() => {
                 const { containerId, containerType, targetIds } = msg.joinInfo;

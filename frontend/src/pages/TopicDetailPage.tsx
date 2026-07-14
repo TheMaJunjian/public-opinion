@@ -3152,6 +3152,8 @@ export default function TopicDetailPage() {
     // Check that relation stake meets the effective minimum (type + subType combined)
     if (relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return false;
     if (totalConsumption && totalConsumption.total > availablePoints) return false;
+    // Ambiguous: both draft and target non-empty — force user to clear one
+    if (draftUnits.length > 0 && targetUnits.length > 0) return false;
     // CORRECT targeting a relation message: special mode (no text, no source, use secondary selector)
     if (draftHasRelationTarget && relationType === "correct") {
       return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
@@ -3187,6 +3189,10 @@ export default function TopicDetailPage() {
       return "仅发送这条消息（未选择关系类型）";
     }
     const typeName = relationTypeName(relationType);
+    // Ambiguous: both draft and target non-empty
+    if (draftUnits.length > 0 && targetUnits.length > 0) {
+      return "候选区和目标集合不可同时非空，请清空一边";
+    }
     // Check for subType minimum stake requirement
     if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
       const st = subType ? subTypeLabel(subType) : null;
@@ -3211,14 +3217,14 @@ export default function TopicDetailPage() {
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
-      if (targetCount === 0) return "建立分类（无目标）";
-      return `建立分类（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
+      if (targetCount === 0) return "文本将作为分类名称，建立分类（无目标）";
+      return `文本将作为分类名称，建立分类（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
     }
     if (isSummaryType) {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
       if (!hasTargetsAvailable) return "请在画布中选择要总结的目标消息";
       if (newMessageContent.trim().length === 0) return "请输入总结内容（不能为空）";
-      return `建立总结关系（${targetCount} 个目标）`;
+      return `文本将作为总结内容，建立总结关系（${targetCount} 个目标）`;
     }
     if (isMergeType) {
       if (sourceUnits.length > 0) return "归并关系不需要来源消息，请清空来源集合";
@@ -3235,10 +3241,10 @@ export default function TopicDetailPage() {
       if (!hasTargetsAvailable && newMessageContent.trim().length === 0)
         return `请输入${govTypeLabel}内容或选择目标消息`;
       if (targetCount > 0 && newMessageContent.trim().length > 0)
-        return `发送${govTypeLabel}消息（引用 ${targetCount} 个目标）`;
+        return `文本将作为${govTypeLabel}正文，发送${govTypeLabel}消息（引用 ${targetCount} 个目标）`;
       if (targetCount > 0)
         return `发送${govTypeLabel}消息（引用 ${targetCount} 个目标，无正文）`;
-      return `发送${govTypeLabel}消息`;
+      return `文本将作为${govTypeLabel}正文，发送${govTypeLabel}消息`;
     }
     if (isAgreeDisagreeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
@@ -4476,7 +4482,52 @@ export default function TopicDetailPage() {
                       )}
                       <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => isContentKind(msg.kind) && handleTextMouseUp(e, msg.id)}>
                         {isContentKind(msg.kind)
-                          ? renderMessageContentWithAnchorsForList(msg)
+                          ? ((msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
+                              const settleTargetId = (msg as any).settlementTargetId as string | undefined;
+                              const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
+                              const targetContent = targetMsg?.content ?? '';
+                              const targetPreview = targetContent.length > 40
+                                ? targetContent.slice(0, 40) + '…'
+                                : targetContent;
+                              const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
+                              const tagColor = isValue ? '#f59e0b' : '#818cf8';
+                              const lines = (msg.content ?? '').split('\n');
+                              const firstLine = lines[0];
+                              const restLines = lines.slice(1).join('\n');
+                              return (
+                                <div>
+                                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+                                    <span style={{ whiteSpace: "pre-wrap" }}>{firstLine}</span>
+                                    {settleTargetId && (
+                                      <span
+                                        onClick={(e) => { e.stopPropagation(); handleNavigateToMessage(settleTargetId); }}
+                                        style={{
+                                          fontSize: 11,
+                                          fontWeight: 500,
+                                          padding: "1px 6px",
+                                          borderRadius: 4,
+                                          background: `${tagColor}12`,
+                                          color: tagColor,
+                                          border: `1px solid ${tagColor}35`,
+                                          cursor: "pointer",
+                                          maxWidth: 280,
+                                          overflow: "hidden",
+                                          textOverflow: "ellipsis",
+                                          whiteSpace: "nowrap",
+                                        }}
+                                        title={`点击跳转到目标消息 ${settleTargetId.slice(-6)}${targetContent ? '：' + targetContent : ''}`}
+                                      >
+                                        → {settleTargetId.slice(-6)}{targetPreview ? `「${targetPreview}」` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {restLines && (
+                                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{restLines}</pre>
+                                  )}
+                                </div>
+                              );
+                            })()
+                            : renderMessageContentWithAnchorsForList(msg))
                           : isTopicMsg
                             ? (
                               <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>

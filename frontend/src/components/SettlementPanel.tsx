@@ -354,6 +354,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         });
       }
       onSettled(localRound.id);
+      window.dispatchEvent(new CustomEvent('points-flash'));
     } catch {
       // error displayed in parent
     }

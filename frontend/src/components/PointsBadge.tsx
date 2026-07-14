@@ -19,6 +19,7 @@ export default function PointsBadge() {
   const [open, setOpen] = useState(false);
   const [transactions, setTransactions] = useState<PointTransaction[]>([]);
   const [txLoading, setTxLoading] = useState(false);
+  const [flash, setFlash] = useState<'gain' | 'loss' | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
   const fetchBalance = useCallback(async () => {
@@ -50,6 +51,25 @@ export default function PointsBadge() {
     window.addEventListener('points-refresh', onRefresh);
     return () => window.removeEventListener('points-refresh', onRefresh);
   }, [fetchBalance]);
+
+  // Flash animation on settlement — detect gain/loss from latest transaction
+  useEffect(() => {
+    const onFlash = async () => {
+      if (!user) return;
+      try {
+        const res = await getPointsTransactions({ limit: 1 });
+        const latest = res.data[0];
+        if (latest) {
+          setFlash(latest.type === 'SETTLEMENT_GAIN' ? 'gain' : latest.type === 'SETTLEMENT_LOSS' ? 'loss' : null);
+        }
+      } catch {
+        // ignore
+      }
+      setTimeout(() => setFlash(null), 2000);
+    };
+    window.addEventListener('points-flash', onFlash);
+    return () => window.removeEventListener('points-flash', onFlash);
+  }, [user]);
 
   // Close popover on outside click
   useEffect(() => {
@@ -96,7 +116,7 @@ export default function PointsBadge() {
     <div className="relative" ref={popRef}>
       <button
         onClick={handleClick}
-        className="flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer"
+        className={`flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer ${flash ? `animate-pulse ring-2 rounded px-1 ${flash === 'gain' ? 'ring-red-400' : 'ring-green-400'}` : ''}`}
         title={`可用${points.available} · 锁定${points.locked} · 损失${breakdown.totalLost} · 燃烧${breakdown.totalBurned} · 收益${breakdown.totalEarned}`}
       >
         <span className="text-indigo-200">

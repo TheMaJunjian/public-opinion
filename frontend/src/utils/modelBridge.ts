@@ -114,7 +114,9 @@ export function kindLabel(backendKind: string, _targetRefs?: any, settlementType
     ROUND: isValue
       ? '💎 发起价值仲裁\n—— 推荐/冷藏标注进入投票\n双击卡片查看结算详情'
       : '⚖️ 发起真假仲裁\n—— 目标消息进入投票阶段\n双击卡片查看结算详情',
-    ROUND_RESULT: '🏁 结算完成\n—— 资金池已按投票结果分配\n双击卡片查看分账明细',
+    ROUND_RESULT: isValue
+      ? '💎 价值仲裁结算完成\n—— 资金池已按投票结果分配\n双击卡片查看分账明细'
+      : '⚖️ 真假仲裁结算完成\n—— 资金池已按投票结果分配\n双击卡片查看分账明细',
     RELATION: '[关系消息]',
   };
   return labels[backendKind] ?? `[${backendKind}]`;

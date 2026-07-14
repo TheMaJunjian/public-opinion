@@ -309,6 +309,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   const [voteAmount, setVoteAmount] = useState(1);
   const [voting, setVoting] = useState(false);
   const [localRound, setLocalRound] = useState(round);
+  const [settleError, setSettleError] = useState<string | null>(null);
 
   const isValue = round.settlementType === 'VALUE';
   const weights = localRound.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
@@ -339,12 +340,13 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   async function handleSettle() {
     if (!confirm('确定要结算此轮次吗？结算后将根据投票权重分配押注池资金，且不可撤销。')) return;
     try {
+      setSettleError(null);
       const result = await api.closeAndSettle(localRound.id);
       debugLog('结算', `结算完成 round=${localRound.id.slice(-6)} result=${result.result}`);
       if (onMessageCreated) {
         onMessageCreated({
           id: `settle-${localRound.id}`,
-          content: kindLabel('ROUND_RESULT'),
+          content: kindLabel('ROUND_RESULT', undefined, localRound.settlementType),
           createdAt: new Date().toISOString(),
           author: '',
           kind: 'round_result',
@@ -355,8 +357,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       }
       onSettled(localRound.id);
       window.dispatchEvent(new CustomEvent('points-flash'));
-    } catch {
-      // error displayed in parent
+    } catch (e: unknown) {
+      setSettleError((e as Error)?.message ?? '结算失败');
     }
   }
 
@@ -386,11 +388,20 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         </div>
         <button
           onClick={handleSettle}
-          className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium rounded transition-colors"
+          disabled={totalWeight === 0}
+          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
+          title={totalWeight === 0 ? '暂无押注，无法结算' : '结算'}
         >
           结算
         </button>
       </div>
+
+      {/* Settlement error */}
+      {settleError && (
+        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+          {settleError}
+        </div>
+      )}
 
       {/* Weights summary */}
       {totalWeight > 0 && (
@@ -498,13 +509,10 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
     })),
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  // Compute total weights from all stakes (round result is based on total pool, not just this round)
-  const totalPro = stakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
-  const totalCon = stakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
-  const uniqueUsers = new Set(stakes.map(s => s.user.username)).size;
-  // Current round stats
+  // Compute summary from round-specific stakes (panel-level total already shows overall)
   const roundPro = roundStakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
   const roundCon = roundStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
+  const uniqueUsers = new Set(roundStakes.map(s => s.user.username)).size;
 
   return (
     <div className="p-2 space-y-2 text-xs bg-gray-50 text-gray-700">
@@ -514,35 +522,23 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
       </div>
 
       {/* Settlement summary — total + current round */}
-      {(totalPro > 0 || totalCon > 0 || detail.result) && (
+      {(roundPro > 0 || roundCon > 0 || detail.result) && (
         <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1">
           {detail.result && (
             <div className="text-gray-500">
               结果: <span className={`font-semibold ${detail.result === 'TRUE' ? 'text-green-700' : detail.result === 'FALSE' ? 'text-red-700' : 'text-amber-700'}`}>{detail.result}</span>
             </div>
           )}
-          {(totalPro > 0 || totalCon > 0) && (
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-gray-500">总计</span>
-                <span className="text-green-700 font-semibold">{totalPro}</span>
-                <span className="text-gray-400">PRO</span>
-                <span className="font-bold text-gray-600">
-                  {totalPro > totalCon ? '>' : totalCon > totalPro ? '<' : '='}
-                </span>
-                <span className="text-gray-400">CON</span>
-                <span className="text-red-700 font-semibold">{totalCon}</span>
-                <span className="text-gray-400">· {uniqueUsers} 人</span>
-              </div>
-              {entries.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-gray-400">本轮</span>
-                  <span className="text-green-600">{roundPro}</span>
-                  <span className="text-gray-400">PRO</span>
-                  <span className="text-red-600">{roundCon}</span>
-                  <span className="text-gray-400">CON · {entries.length} 条</span>
-                </div>
-              )}
+          {(roundPro > 0 || roundCon > 0) && (
+            <div className="flex items-center gap-2">
+              <span className="text-green-700 font-semibold">{roundPro}</span>
+              <span className="text-gray-400">PRO</span>
+              <span className="font-bold text-gray-600">
+                {roundPro > roundCon ? '>' : roundCon > roundPro ? '<' : '='}
+              </span>
+              <span className="text-gray-400">CON</span>
+              <span className="text-red-700 font-semibold">{roundCon}</span>
+              <span className="text-gray-400">· {uniqueUsers} 人 · {entries.length} 条</span>
             </div>
           )}
         </div>

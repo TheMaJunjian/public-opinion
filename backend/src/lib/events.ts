@@ -1792,9 +1792,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 
   // ── Reset BetPool by settlementType: funds have been distributed ──
   ledgerOps.push(
-    prisma.betPool.update({
+    prisma.betPool.upsert({
       where: { messageId_settlementType: { messageId, settlementType: stype } },
-      data: { lockedPro: 0, lockedCon: 0 },
+      create: { messageId, settlementType: stype, lockedPro: 0, lockedCon: 0 },
+      update: { lockedPro: 0, lockedCon: 0 },
     }),
   );
 
@@ -1830,7 +1831,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
       kind: 'ROUND_RESULT',
       content: null,
       targetRefs: [{ messageId }],
-      relationPayload: { roundId: payload.roundId, result, weights, totalPro, totalCon },
+      relationPayload: { roundId: payload.roundId, result, weights, totalPro, totalCon, settlementType: stype },
     },
   });
 

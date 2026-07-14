@@ -684,11 +684,11 @@ describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
       .send();
 
     expect(res.status).toBe(200);
-    // Verify betPool.update was called with zeroed values
-    expect(prisma.betPool.update).toHaveBeenCalledWith(
+    // Verify betPool.upsert was called with zeroed values
+    expect(prisma.betPool.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { messageId_settlementType: { messageId: 'msg-1', settlementType: 'TRUTH' } },
-        data: { lockedPro: 0, lockedCon: 0 },
+        update: { lockedPro: 0, lockedCon: 0 },
       }),
     );
   });

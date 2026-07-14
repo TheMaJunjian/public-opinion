@@ -190,6 +190,29 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
         </div>
       )}
 
+      {/* Pool Summary — cumulative stakes */}
+      {totalStaked > 0 && (
+        <div>
+          <div className="text-xs text-gray-500 mb-1.5">
+            📊 历史累计押注
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="bg-green-50 border border-green-200 rounded px-3 py-2 text-center">
+              <div className="text-green-700 font-semibold text-lg">
+                {filteredPro}
+              </div>
+              <div className="text-green-800">PRO 押注</div>
+            </div>
+            <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-center">
+              <div className="text-red-700 font-semibold text-lg">
+                {filteredCon}
+              </div>
+              <div className="text-red-800">CON 押注</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Active Rounds — each TRUTH/VALUE round in its own card */}
       {activeRounds.map(round => (
         <ActiveRoundCard
@@ -480,6 +503,19 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
         <span className="text-gray-600">发起者: {detail.createdBy?.username}</span>
         <span>{new Date(detail.openedAt).toLocaleString('zh-CN')}</span>
       </div>
+
+      {/* Round weights summary */}
+      {detail.weights && (detail.weights.TRUE > 0 || detail.weights.FALSE > 0) && (
+        <div className="flex items-center gap-2 bg-white rounded border border-gray-200 px-3 py-2">
+          <span className="text-green-700 font-semibold">{detail.weights.TRUE}</span>
+          <span className="text-gray-400">TRUE</span>
+          <span className={`font-bold ${detail.weights.TRUE > detail.weights.FALSE ? 'text-green-600' : detail.weights.FALSE > detail.weights.TRUE ? 'text-red-600' : 'text-amber-600'}`}>
+            {detail.weights.TRUE > detail.weights.FALSE ? '>' : detail.weights.FALSE > detail.weights.TRUE ? '<' : '='}
+          </span>
+          <span className="text-gray-400">FALSE</span>
+          <span className="text-red-700 font-semibold">{detail.weights.FALSE}</span>
+        </div>
+      )}
 
       {/* Merged chronological entries */}
       <div>

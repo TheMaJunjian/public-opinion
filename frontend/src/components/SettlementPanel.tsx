@@ -497,6 +497,14 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
     })),
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  // Compute total weights from all stakes (round result is based on total pool, not just this round)
+  const totalPro = stakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
+  const totalCon = stakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
+  const uniqueUsers = new Set(stakes.map(s => s.user.username)).size;
+  // Current round stats
+  const roundPro = roundStakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
+  const roundCon = roundStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
+
   return (
     <div className="p-2 space-y-2 text-xs bg-gray-50 text-gray-700">
       <div className="flex justify-between text-gray-500">
@@ -504,16 +512,38 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
         <span>{new Date(detail.openedAt).toLocaleString('zh-CN')}</span>
       </div>
 
-      {/* Round weights summary */}
-      {detail.weights && (detail.weights.TRUE > 0 || detail.weights.FALSE > 0) && (
-        <div className="flex items-center gap-2 bg-white rounded border border-gray-200 px-3 py-2">
-          <span className="text-green-700 font-semibold">{detail.weights.TRUE}</span>
-          <span className="text-gray-400">TRUE</span>
-          <span className={`font-bold ${detail.weights.TRUE > detail.weights.FALSE ? 'text-green-600' : detail.weights.FALSE > detail.weights.TRUE ? 'text-red-600' : 'text-amber-600'}`}>
-            {detail.weights.TRUE > detail.weights.FALSE ? '>' : detail.weights.FALSE > detail.weights.TRUE ? '<' : '='}
-          </span>
-          <span className="text-gray-400">FALSE</span>
-          <span className="text-red-700 font-semibold">{detail.weights.FALSE}</span>
+      {/* Settlement summary — total + current round */}
+      {(totalPro > 0 || totalCon > 0 || detail.result) && (
+        <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1">
+          {detail.result && (
+            <div className="text-gray-500">
+              结果: <span className={`font-semibold ${detail.result === 'TRUE' ? 'text-green-700' : detail.result === 'FALSE' ? 'text-red-700' : 'text-amber-700'}`}>{detail.result}</span>
+            </div>
+          )}
+          {(totalPro > 0 || totalCon > 0) && (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500">总计</span>
+                <span className="text-green-700 font-semibold">{totalPro}</span>
+                <span className="text-gray-400">PRO</span>
+                <span className="font-bold text-gray-600">
+                  {totalPro > totalCon ? '>' : totalCon > totalPro ? '<' : '='}
+                </span>
+                <span className="text-gray-400">CON</span>
+                <span className="text-red-700 font-semibold">{totalCon}</span>
+                <span className="text-gray-400">· {uniqueUsers} 人</span>
+              </div>
+              {entries.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-400">本轮</span>
+                  <span className="text-green-600">{roundPro}</span>
+                  <span className="text-gray-400">PRO</span>
+                  <span className="text-red-600">{roundCon}</span>
+                  <span className="text-gray-400">CON · {entries.length} 条</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

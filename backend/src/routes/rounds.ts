@@ -148,6 +148,10 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
 
     const totalWeight = weightMap.TRUE + weightMap.FALSE;
 
+    // For settled rounds, use stored settlement weights; for active rounds, use BetPool
+    const settledPro = round.status === 'SETTLED' ? (round.settlementPro ?? 0) : undefined;
+    const settledCon = round.status === 'SETTLED' ? (round.settlementCon ?? 0) : undefined;
+
     res.json({
       ...round,
       _count: { votes: filteredVotes.length },
@@ -161,8 +165,12 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
           user: v.createdBy,
         };
       }),
-      weights: weightMap,
-      totalWeight,
+      weights: round.status === 'SETTLED'
+        ? { TRUE: settledPro ?? 0, FALSE: settledCon ?? 0, UNKNOWN: 0 }
+        : weightMap,
+      totalWeight: round.status === 'SETTLED'
+        ? ((settledPro ?? 0) + (settledCon ?? 0))
+        : totalWeight,
     });
   } catch (err) {
     next(err);

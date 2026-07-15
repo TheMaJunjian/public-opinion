@@ -147,6 +147,7 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
   const [loading, setLoading] = useState(!round);
   const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; user: { username: string } }>>([]);
   const [stakesLoading, setStakesLoading] = useState(false);
+  const [prevRoundWeights, setPrevRoundWeights] = useState<{ TRUE: number; FALSE: number } | null>(null);
 
   useEffect(() => {
     if (detail?.votes) return;
@@ -163,6 +164,15 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
       .then(s => { setStakes(s.stakes); setStakesLoading(false); })
       .catch(() => setStakesLoading(false));
   }, [messageId]);
+
+  // Fetch previous round's settlement weights for clawback display
+  useEffect(() => {
+    if (detail?.previousRoundId) {
+      api.getRoundDetail(detail.previousRoundId)
+        .then(d => setPrevRoundWeights(d.weights ?? null))
+        .catch(() => setPrevRoundWeights(null));
+    }
+  }, [detail?.previousRoundId]);
 
   if (!detail) {
     return (
@@ -271,10 +281,15 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
         )}
       </div>
 
-      {/* Previous round link */}
+      {/* Previous round link — with clawback amount */}
       {detail.previousRoundId && (
-        <div className="text-xs text-gray-400">
-          ↩ 推翻自轮次: {detail.previousRoundId.slice(-8)}
+        <div className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          ↩ 推翻自 {detail.previousRoundId.slice(-8)}
+          {prevRoundWeights && (prevRoundWeights.TRUE > 0 || prevRoundWeights.FALSE > 0) && (
+            <span className="ml-1">
+              · 扣回押注池 {prevRoundWeights.TRUE + prevRoundWeights.FALSE} 点
+            </span>
+          )}
         </div>
       )}
     </div>

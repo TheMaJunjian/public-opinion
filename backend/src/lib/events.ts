@@ -1786,7 +1786,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   ledgerOps.push(
     prisma.settlementRound.update({
       where: { id: payload.roundId },
-      data: { status: 'SETTLED', result, closedAt: now },
+      data: { status: 'SETTLED', result, closedAt: now, settlementPro: totalPro, settlementCon: totalCon },
     }),
   );
 

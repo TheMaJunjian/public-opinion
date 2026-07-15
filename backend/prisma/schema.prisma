@@ -207,6 +207,8 @@ model SettlementRound {
   openedAt         DateTime @default(now())
   closedAt         DateTime?
   note             String?
+  settlementPro    Int?
+  settlementCon    Int?
 
   votes VoteStake[]
 }

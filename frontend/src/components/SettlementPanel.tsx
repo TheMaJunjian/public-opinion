@@ -500,19 +500,23 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   if (loading) return <div className="text-xs text-gray-400 p-2">加载中...</div>;
   if (!detail) return <div className="text-xs text-gray-400 p-2">加载失败</div>;
 
-  // Merge stakes into chronological list (votes unified into stakes in Phase 5)
+  // Current round stakes for entry list
   const roundStakes = stakes.filter(s => s.roundId === roundId);
-  const entries = [
-    ...roundStakes.map(s => ({
-      id: s.id, entryId: s.id, kind: 'stake' as const, username: s.user.username,
-      label: s.side, amount: s.amount, createdAt: s.createdAt,
-    })),
-  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const entries = roundStakes.map(s => ({
+    id: s.id, entryId: s.id, kind: 'stake' as const, username: s.user.username,
+    label: s.side, amount: s.amount, createdAt: s.createdAt,
+  })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  // Compute summary from round-specific stakes (panel-level total already shows overall)
-  const roundPro = roundStakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
-  const roundCon = roundStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
-  const uniqueUsers = new Set(roundStakes.map(s => s.user.username)).size;
+  // Clawback from previous round (if overturned)
+  const prevStakes = detail.previousRoundId ? stakes.filter(s => s.roundId === detail.previousRoundId) : [];
+  const clawbackPro = prevStakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
+  const clawbackCon = prevStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
+
+  // Summary from detail.weights (BetPool totals, corrected for settled rounds via backend)
+  const weights = detail.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
+  const totalPro = weights.TRUE;
+  const totalCon = weights.FALSE;
+  const uniqueUsers = new Set(stakes.map(s => s.user.username)).size;
 
   return (
     <div className="p-2 space-y-2 text-xs bg-gray-50 text-gray-700">
@@ -522,25 +526,37 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
       </div>
 
       {/* Settlement summary — total + current round */}
-      {(roundPro > 0 || roundCon > 0 || detail.result) && (
+      {(totalPro > 0 || totalCon > 0 || detail.result) && (
         <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1">
           {detail.result && (
             <div className="text-gray-500">
               结果: <span className={`font-semibold ${detail.result === 'TRUE' ? 'text-green-700' : detail.result === 'FALSE' ? 'text-red-700' : 'text-amber-700'}`}>{detail.result}</span>
             </div>
           )}
-          {(roundPro > 0 || roundCon > 0) && (
-            <div className="flex items-center gap-2">
-              <span className="text-green-700 font-semibold">{roundPro}</span>
-              <span className="text-gray-400">PRO</span>
-              <span className="font-bold text-gray-600">
-                {roundPro > roundCon ? '>' : roundCon > roundPro ? '<' : '='}
-              </span>
-              <span className="text-gray-400">CON</span>
-              <span className="text-red-700 font-semibold">{roundCon}</span>
-              <span className="text-gray-400">· {uniqueUsers} 人 · {entries.length} 条</span>
+          {(totalPro > 0 || totalCon > 0) && (
+            <div className="text-gray-500">
+              押注池 {totalPro + totalCon} 点
+              {detail.result && detail.result !== 'UNKNOWN' && (
+                <span>
+                  {' · '}胜方 <span className="text-green-700 font-semibold">{detail.result === 'TRUE' ? 'PRO' : 'CON'}</span>
+                  {' '}{detail.result === 'TRUE' ? totalPro : totalCon}
+                  {' · '}败方 <span className="text-red-700 font-semibold">{detail.result === 'TRUE' ? 'CON' : 'PRO'}</span>
+                  {' '}{detail.result === 'TRUE' ? totalCon : totalPro}
+                </span>
+              )}
+              <span> · {uniqueUsers} 人 · {entries.length} 条</span>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Clawback from previous round */}
+      {(clawbackPro > 0 || clawbackCon > 0) && (
+        <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1.5 text-xs">
+          <span className="text-amber-700 font-medium">↩ 推翻扣回</span>
+          <span className="text-gray-500 ml-2">
+            PRO {clawbackPro} · CON {clawbackCon} · 合计 {clawbackPro + clawbackCon} 点
+          </span>
         </div>
       )}
 

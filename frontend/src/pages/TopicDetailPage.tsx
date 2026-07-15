@@ -4252,6 +4252,11 @@ export default function TopicDetailPage() {
               // Save and clear when switching TO a text-less type
               if (!wasTextLess && willBeTextLess && newMessageContent.trim()) {
                 savedTextOnTypeSwitchRef.current = newMessageContent;
+                // Also seed the subType buffer so that selecting CUSTOM
+                // after entering TAG will restore this text.
+                if (!subTypeCustomBufferRef.current) {
+                  subTypeCustomBufferRef.current = newMessageContent;
+                }
                 setNewMessageContent("");
               }
               // When switching FROM a text-less type (e.g. TAG), save CUSTOM

@@ -327,6 +327,7 @@ export default function TopicDetailPage() {
   const [subType, setSubType] = useState<string>(""); // SPAM|OFFTOPIC|LOWVALUE|IMPORTANT|CUSTOM or empty
   const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
   const subTypeCustomBufferRef = useRef(""); // cache textarea content when switching away from CUSTOM subType
+  const savedTextOnTypeSwitchRef = useRef(""); // cache textarea content when switching to a text-less relation type
   const lastTagSecondaryRef = useRef<string>("recommend"); // remember last TAG secondary selection
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
@@ -2125,6 +2126,8 @@ export default function TopicDetailPage() {
 
   async function handleQuickSendAndRelateFromDraftTargets() {
     const text = newMessageContent.trim();
+    // Clear saved text on type switch since user is sending/committing
+    savedTextOnTypeSwitchRef.current = "";
 
     // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
     const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
@@ -4238,7 +4241,33 @@ export default function TopicDetailPage() {
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
-            <button key={rt} onClick={() => { if (relationType === "tag") { lastTagSecondaryRef.current = secondaryRelationType !== "none" ? secondaryRelationType : "recommend"; } setRelationType(prev => prev === rt ? null : rt); if (rt === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); } else { setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); } }}
+            <button key={rt} onClick={() => {
+              if (relationType === "tag") { lastTagSecondaryRef.current = secondaryRelationType !== "none" ? secondaryRelationType : "recommend"; }
+              const isDeselecting = relationType === rt;
+              const newType = isDeselecting ? null : rt;
+              // Types that generally don't use the text input (user-to-message relations)
+              const isTextLessType = (t: string | null) => t === "tag" || t === "merge" || (t === "correct" && draftHasRelationTarget);
+              const wasTextLess = isTextLessType(relationType);
+              const willBeTextLess = isTextLessType(newType);
+              // Save and clear when switching TO a text-less type
+              if (!wasTextLess && willBeTextLess && newMessageContent.trim()) {
+                savedTextOnTypeSwitchRef.current = newMessageContent;
+                setNewMessageContent("");
+              }
+              // When switching FROM a text-less type (e.g. TAG), save CUSTOM
+              // reason text to subType buffer so it can be restored when the
+              // user switches back to TAG and selects CUSTOM again.
+              if (wasTextLess && !willBeTextLess && subType === 'CUSTOM' && newMessageContent.trim()) {
+                subTypeCustomBufferRef.current = newMessageContent;
+              }
+              // Restore when switching FROM a text-less type
+              if (wasTextLess && !willBeTextLess && savedTextOnTypeSwitchRef.current) {
+                setNewMessageContent(savedTextOnTypeSwitchRef.current);
+              }
+              setRelationType(prev => prev === rt ? null : rt);
+              if (rt === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); }
+              else { setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); }
+            }}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
             </button>

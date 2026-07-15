@@ -80,26 +80,36 @@ export default function RoundHistory({ messageId, compact = false }: Props) {
   return (
     <div className="space-y-2">
       {/* Chain visualization */}
-      <div className="flex items-center gap-1 text-xs flex-wrap">
-        {chain.map((round, idx) => (
-          <span key={round.id} className="inline-flex items-center gap-1">
-            {idx > 0 && <span className="text-gray-300">→</span>}
-            <button
-              onDoubleClick={(e) => { e.stopPropagation(); setExpandedRound(expandedRound === round.id ? null : round.id); }}
-              className={`px-2 py-0.5 rounded-full border text-xs font-mono transition-colors cursor-pointer select-none ${
-                round.status === 'SETTLED'
-                  ? `border-gray-300 ${resultColor(round.result)} bg-white hover:bg-gray-50`
-                  : round.status === 'VOTING'
-                    ? 'border-indigo-300 text-indigo-600 bg-indigo-50'
-                    : 'border-gray-200 text-gray-500 bg-gray-50'
-              }`}
-              title={`${statusLabel(round.status)} · ${resultLabel(round.result)}`}
-            >
-              {round.status === 'CANCELLED' && '⊘'}
-              {resultLabel(round.result)}
-            </button>
-          </span>
-        ))}
+      <div className="flex flex-col gap-1 text-xs">
+        <div className="flex items-center gap-1 flex-wrap">
+          {chain.map((round, idx) => (
+            <span key={round.id} className="inline-flex items-center gap-1">
+              {idx > 0 && <ChainArrow rounds={rounds} currentRound={round} />}
+              <button
+                onDoubleClick={(e) => { e.stopPropagation(); setExpandedRound(expandedRound === round.id ? null : round.id); }}
+                className={`px-2 py-0.5 rounded-full border text-xs font-mono transition-colors cursor-pointer select-none ${
+                  round.status === 'SETTLED'
+                    ? `border-gray-300 ${resultColor(round.result)} bg-white hover:bg-gray-50`
+                    : round.status === 'VOTING'
+                      ? 'border-indigo-300 text-indigo-600 bg-indigo-50'
+                      : 'border-gray-200 text-gray-500 bg-gray-50'
+                }`}
+                title={`${statusLabel(round.status)} · ${resultLabel(round.result)}`}
+              >
+                {round.status === 'CANCELLED' && '⊘'}
+                {resultLabel(round.result)}
+              </button>
+            </span>
+          ))}
+        </div>
+        {/* Per-round settlement summaries */}
+        {chain.some(r => r.status === 'SETTLED' && r.result && r.result !== 'UNKNOWN') && (
+          <div className="space-y-0.5">
+            {chain.filter(r => r.status === 'SETTLED' && r.result && r.result !== 'UNKNOWN').map(r => (
+              <RoundFlowSummary key={r.id} round={r} />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Expanded round detail */}
@@ -292,6 +302,39 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Arrow between rounds in chain — shows clawback amount */
+function ChainArrow({ rounds, currentRound }: { rounds: SettlementRoundItem[]; currentRound: SettlementRoundItem }) {
+  const prevRoundId = currentRound.previousRoundId;
+  if (!prevRoundId) return <span className="text-gray-300">→</span>;
+  const prevRound = rounds.find(r => r.id === prevRoundId);
+  if (!prevRound || prevRound.status !== 'SETTLED') return <span className="text-gray-300">→</span>;
+  const prevWeights = prevRound.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
+  const clawbackTotal = prevWeights.TRUE + prevWeights.FALSE;
+  if (clawbackTotal === 0) return <span className="text-gray-300">→</span>;
+  return (
+    <span className="text-amber-600" title={`推翻扣回 ${clawbackTotal} 点`}>
+      ↻ {clawbackTotal}点 →
+    </span>
+  );
+}
+
+/** Per-round fund flow summary — public */
+function RoundFlowSummary({ round }: { round: SettlementRoundItem }) {
+  const weights = round.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
+  const result = round.result;
+  if (!result || result === 'UNKNOWN' || (weights.TRUE === 0 && weights.FALSE === 0)) return null;
+  const winnerSide = result === 'TRUE' ? 'PRO' : 'CON';
+  const loserSide = result === 'TRUE' ? 'CON' : 'PRO';
+  const winnerTotal = result === 'TRUE' ? weights.TRUE : weights.FALSE;
+  const loserTotal = result === 'TRUE' ? weights.FALSE : weights.TRUE;
+  const rate = winnerTotal > 0 ? Math.round((loserTotal / winnerTotal) * 100) / 100 : 0;
+  return (
+    <div className="text-xs text-gray-500 pl-1">
+      {loserSide} 共计 {loserTotal} 点按 {winnerSide} 共计 {winnerTotal} 点分配，胜方每点收益 {rate} 点
     </div>
   );
 }

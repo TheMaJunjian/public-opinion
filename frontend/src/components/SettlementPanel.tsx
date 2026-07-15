@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { api } from '../api';
+import { useAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
 import { kindLabel } from '../utils/modelBridge';
 import { debugLog } from '../utils/debugLog';
@@ -305,6 +306,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   }) => void;
   onSettled: (settledId: string) => void;
 }) {
+  const { user: currentUser } = useAuth();
   const [voteDirection, setVoteDirection] = useState<'TRUE' | 'FALSE'>('TRUE');
   const [voteAmount, setVoteAmount] = useState(1);
   const [voting, setVoting] = useState(false);
@@ -422,6 +424,11 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         </div>
       )}
 
+      {/* 我的押注 */}
+      {currentUser && (
+        <MyStakesInRound votes={localRound.votes ?? []} currentUsername={currentUser.username} />
+      )}
+
       {/* Vote Form */}
       <div className="flex items-center gap-2">
         <select
@@ -481,6 +488,7 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   messageId: string;
   entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
 }) {
+  const { user: currentUser } = useAuth();
   const [detail, setDetail] = useState<import('../types').SettlementRoundItem | null>(null);
   const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; roundId?: string | null; user: { username: string } }>>([]);
   const [loading, setLoading] = useState(true);
@@ -512,11 +520,18 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   const clawbackPro = prevStakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
   const clawbackCon = prevStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
 
-  // Summary from detail.weights (BetPool totals, corrected for settled rounds via backend)
-  const weights = detail.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
-  const totalPro = weights.TRUE;
-  const totalCon = weights.FALSE;
-  const uniqueUsers = new Set(stakes.map(s => s.user.username)).size;
+  // Merge votes from detail.votes + roundStakes for current user
+  const myVotes = useMemo(() => {
+    const fromVotes = (detail.votes ?? [])
+      .filter(v => currentUser && v.user.username === currentUser.username)
+      .map(v => ({ vote: v.vote, amount: v.amount }));
+    const fromStakes = roundStakes
+      .filter(s => currentUser && s.user.username === currentUser.username)
+      .map(s => ({ vote: (s.side === 'PRO' ? 'TRUE' : 'FALSE') as 'TRUE' | 'FALSE', amount: s.amount }));
+    // Dedupe: prefer detail.votes entries (they have IDs), add stake-only entries
+    const voteKeys = new Set(fromVotes.map(v => `${v.vote}_${v.amount}`));
+    return [...fromVotes, ...fromStakes.filter(s => !voteKeys.has(`${s.vote}_${s.amount}`))];
+  }, [detail.votes, roundStakes, currentUser]);
 
   return (
     <div className="p-2 space-y-2 text-xs bg-gray-50 text-gray-700">
@@ -525,29 +540,14 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
         <span>{new Date(detail.openedAt).toLocaleString('zh-CN')}</span>
       </div>
 
-      {/* Settlement summary — total + current round */}
-      {(totalPro > 0 || totalCon > 0 || detail.result) && (
-        <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1">
-          {detail.result && (
-            <div className="text-gray-500">
-              结果: <span className={`font-semibold ${detail.result === 'TRUE' ? 'text-green-700' : detail.result === 'FALSE' ? 'text-red-700' : 'text-amber-700'}`}>{detail.result}</span>
-            </div>
-          )}
-          {(totalPro > 0 || totalCon > 0) && (
-            <div className="text-gray-500">
-              押注池 {totalPro + totalCon} 点
-              {detail.result && detail.result !== 'UNKNOWN' && (
-                <span>
-                  {' · '}胜方 <span className="text-green-700 font-semibold">{detail.result === 'TRUE' ? 'PRO' : 'CON'}</span>
-                  {' '}{detail.result === 'TRUE' ? totalPro : totalCon}
-                  {' · '}败方 <span className="text-red-700 font-semibold">{detail.result === 'TRUE' ? 'CON' : 'PRO'}</span>
-                  {' '}{detail.result === 'TRUE' ? totalCon : totalPro}
-                </span>
-              )}
-              <span> · {uniqueUsers} 人 · {entries.length} 条</span>
-            </div>
-          )}
-        </div>
+      {/* Settlement summary — public + personal */}
+      {detail.result && detail.result !== 'UNKNOWN' && (
+        <SettlementSummary
+          weights={detail.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 }}
+          result={detail.result}
+          myVotes={myVotes}
+          showPersonal={!!currentUser && myVotes.length > 0}
+        />
       )}
 
       {/* Clawback from previous round */}
@@ -583,6 +583,66 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
           </ul>
         ) : <div className="text-gray-400">无记录</div>}
       </div>
+    </div>
+  );
+}
+
+/** 我的押注 — 当前用户在活跃轮次中的投票 */
+function MyStakesInRound({ votes, currentUsername }: { votes: SettlementRoundItem['votes']; currentUsername: string }) {
+  if (!votes) return null;
+  const myVotes = votes.filter(v => v.user.username === currentUsername);
+  if (myVotes.length === 0) {
+    return <div className="text-xs text-gray-400">我的押注：尚未投票</div>;
+  }
+  const trueVotes = myVotes.filter(v => v.vote === 'TRUE');
+  const falseVotes = myVotes.filter(v => v.vote === 'FALSE');
+  const parts: string[] = [];
+  if (trueVotes.length > 0) {
+    parts.push(`TRUE ${trueVotes.reduce((s, v) => s + v.amount, 0)} 点`);
+  }
+  if (falseVotes.length > 0) {
+    parts.push(`FALSE ${falseVotes.reduce((s, v) => s + v.amount, 0)} 点`);
+  }
+  return <div className="text-xs text-indigo-700">我的押注：{parts.join('  ')}</div>;
+}
+
+/** 结算结果摘要 — 纯展示：公开资金流向 + 个人收益 */
+function SettlementSummary({ weights, result, myVotes, showPersonal }: {
+  weights: { TRUE: number; FALSE: number };
+  result: 'TRUE' | 'FALSE';
+  myVotes: Array<{ vote: 'TRUE' | 'FALSE'; amount: number }>;
+  showPersonal: boolean;
+}) {
+  if (weights.TRUE === 0 && weights.FALSE === 0) return null;
+
+  const winnerSide = result === 'TRUE' ? 'PRO' : 'CON';
+  const loserSide = result === 'TRUE' ? 'CON' : 'PRO';
+  const winnerTotal = result === 'TRUE' ? weights.TRUE : weights.FALSE;
+  const loserTotal = result === 'TRUE' ? weights.FALSE : weights.TRUE;
+  const rate = winnerTotal > 0 ? Math.round((loserTotal / winnerTotal) * 100) / 100 : 0;
+
+  const myWinnerTotal = myVotes.filter(v => v.vote === result).reduce((s, v) => s + v.amount, 0);
+  const myLoserTotal = myVotes.filter(v => v.vote !== result).reduce((s, v) => s + v.amount, 0);
+  const myGain = Math.round(myWinnerTotal * rate);
+  const myNet = myGain - myLoserTotal;
+
+  return (
+    <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1 text-xs">
+      {/* Public */}
+      <div className="text-gray-600">
+        {loserSide} 共计 {loserTotal} 点按 {winnerSide} 共计 {winnerTotal} 点分配，胜方每点收益 {rate} 点
+      </div>
+      {/* Personal */}
+      {showPersonal && (
+        <div className="text-gray-500 border-t border-gray-100 pt-1 mt-1">
+          {myWinnerTotal > 0 && <span>你投了 {result} {myWinnerTotal} 点 → 收益 {myGain} 点</span>}
+          {myWinnerTotal > 0 && myLoserTotal > 0 && <span className="mx-2">│</span>}
+          {myLoserTotal > 0 && <span>你投了 {result === 'TRUE' ? 'FALSE' : 'TRUE'} {myLoserTotal} 点 → 损失 {myLoserTotal} 点</span>}
+          <span className={`ml-2 font-semibold ${myNet >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+            → 净{myNet >= 0 ? '收益' : '损失'} {Math.abs(myNet)} 点
+          </span>
+        </div>
+      )}
     </div>
   );
 }

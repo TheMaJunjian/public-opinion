@@ -4919,6 +4919,10 @@ export default function TopicDetailPage() {
                         totalConsumption.burnTotal > 0 ? `燃烧 ${totalConsumption.burnTotal}` : null,
                       ].filter(Boolean).join(' + ')}）
                     </span>
+                    {' '}
+                    <span style={{ color: availablePoints - totalConsumption.total < 0 ? "#f87171" : "#4ade80" }}>
+                      剩余 {availablePoints - totalConsumption.total} 点
+                    </span>
                   </span>
                 )}
                 <button

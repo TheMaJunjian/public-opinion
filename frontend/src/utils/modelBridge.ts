@@ -172,7 +172,7 @@ export function convertMessagesToDemoModel(
   for (const rel of relations) {
     // Relation messages use their plain backend ID — no synthetic prefix needed.
     const relMsgId = rel.id;
-    const relType = rel.relationType.toLowerCase() as RelationType;
+    const relType: string = rel.relationType.toLowerCase();
 
     // JOIN relations: internal membership records — skip edge creation.
     const isJoin = relType === 'join';
@@ -215,7 +215,7 @@ export function convertMessagesToDemoModel(
         createdAt: rel.createdAt,
         content,
         kind: msgKind,
-        relationType: relType,
+        relationType: relType as RelationType,
         relationPayload: rel.payload,
         joinInfo,
       });
@@ -268,7 +268,7 @@ export function convertMessagesToDemoModel(
       demoEdges.push({
         id: edgeId,
         relationMessageId: relMsgId,
-        relationType: relType,
+        relationType: relType as RelationType,
         from: { messageId: fromMessageId, selection: { kind: "whole" } },
         to: toUnit,
         relationLabel,

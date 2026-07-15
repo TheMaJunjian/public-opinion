@@ -120,7 +120,7 @@ function relationTargetRefsSummary(targetRefs: TargetRef[]): string {
 }
 
 export function buildRelationDemoMessage(relation: Relation): DemoMessage {
-  const relType = relation.relationType.toLowerCase() as RelationType;
+  const relType: string = relation.relationType.toLowerCase();
   const label = getRelationLabel(relation.payload);
   const title = getRelationTitle(relation.payload);
   const typeName = relationTypeName(relType);
@@ -171,7 +171,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     kind: isContainerAddRecord
       ? 'join'
       : relType === 'proposal' ? 'governance' : relType === 'code_change' ? 'code' : relType === 'operations' ? 'operations' : 'relation',
-    relationType: relType,
+    relationType: relType as RelationType,
     relationPayload: relation.payload,
     content,
     joinInfo,

@@ -13,10 +13,8 @@ import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relatio
 import ErrorBoundary from '../components/ErrorBoundary';
 import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
-import StanceHistoryPanel from '../components/StanceHistoryPanel';
-import AuditLogView from '../components/AuditLogView';
-import RevenuePanel from '../components/RevenuePanel';
-import TopicStructureView from '../components/TopicStructureView';
+import TopicRightPanel from '../components/TopicRightPanel';
+import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
 import { debugWarn } from '../utils/debugLog';
@@ -543,101 +541,13 @@ export default function TopicDetailPage() {
   const relationStakeMap = useRef<Record<string, number>>({});
   const subTypeStakeMap = useRef<Record<string, number>>({});
 
-  // Compute the effective minimum stake considering both relationType and subType
-  const SUB_TYPE_MIN_STAKE_FALLBACK: Record<string, number> = { SPAM: 5, OFFTOPIC: 5, LOWVALUE: 5, IMPORTANT: 10, CUSTOM: 5 };
-  const effectiveMinStake = (() => {
-    const typeMinBase = relationType
-      ? (relationStakeMap.current[relationType.toUpperCase()] ?? 10)
-      : 10;
-    let min = typeMinBase;
-    // When subType is set, apply subType minimum (whichever is higher)
-    if (subType) {
-      const subMin = subTypeStakeMap.current[subType] ?? SUB_TYPE_MIN_STAKE_FALLBACK[subType];
-      if (subMin) min = Math.max(min, subMin);
-    }
-    // Governance/ops: add reference costs
-    const isGovOps = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
-    const govTargetCount = isGovOps ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
-    const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
-    if (isGovOps && govTargetCount > 0) min += govTargetCount * refMin;
-    return min;
-  })();
+  const { effectiveMinStake, totalConsumption, stakeFeeAmountRef } = useStakeCalculation({
+    relationType, subType, draftUnits, targetUnits, newMessageContent,
+    stakeAmount, relStakeAmount, relationStakeMap, subTypeStakeMap,
+    onRelStakeChange: (min) => { setMinSelfStake(min); setRelStakeAmount(min); },
+    stakeDefaultLoaded,
+  });
 
-  // Effective target count for multi-target relation types
-  const multiTargetCount = (() => {
-    const multiTargetTypes = new Set(['annotation', 'reference', 'reply', 'agree', 'disagree', 'tag']);
-    if (!relationType || !multiTargetTypes.has(relationType.toLowerCase())) return 0;
-    return draftUnits.length > 0 ? draftUnits.length : targetUnits.length;
-  })();
-
-  // Total consumption: text stake + relation stakes × count + all burn fees
-  const stakeFeeAmountRef = useRef(1); // default burn fee per stake (from rule parameters)
-  // Types where the text input is part of the relation payload (title/label/content),
-  // not a separate text message — no separate text stake should be counted.
-  const isTextInPayload = relationType === 'classify' || relationType === 'summary' || relationType === 'merge'
-    || relationType === 'tag' || relationType === 'proposal' || relationType === 'code_change' || relationType === 'operations';
-  const hasTextContentForTotal = !isTextInPayload && newMessageContent.trim().length > 0;
-  const totalConsumption = (() => {
-    const burnPerOp = stakeFeeAmountRef.current;
-    // Text message: stake + burn (if text is present)
-    const textStake = hasTextContentForTotal && typeof stakeAmount === 'number' ? stakeAmount : 0;
-    const textBurn = textStake > 0 ? burnPerOp : 0;
-    // Relation messages
-    if (!relationType) {
-      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: textStake, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
-      return null;
-    }
-    if (typeof relStakeAmount !== 'number') {
-      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: 0, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
-      return null;
-    }
-    const relCount = multiTargetCount > 0 ? multiTargetCount : 1;
-    const relStakeTotal = relStakeAmount * relCount;
-    const relBurnTotal = burnPerOp * relCount;
-    // Governance/ops: add reference stake costs for each target
-    const isGovOps2 = relationType === 'proposal' || relationType === 'code_change' || relationType === 'operations';
-    const govRefCount = isGovOps2 ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
-    const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
-    const refStakeTotal = govRefCount > 0 ? govRefCount * refMin : 0;
-    const refBurnTotal = govRefCount > 0 ? govRefCount * burnPerOp : 0;
-    // Container types (classify/summary/arrange/merge): each target gets a "join" relation
-    // created by createJoinRelationsForContainer with stakeAmount=1 + burn per op.
-    const isContainerType = relationType === 'classify' || relationType === 'summary' || relationType === 'arrange' || relationType === 'merge';
-    const JOIN_STAKE_PER_TARGET = 1;
-    const containerJoinCount = isContainerType ? (() => {
-      const baseTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
-      const uniqueCount = new Set(baseTargets.map(u => u.messageId)).size;
-      // arrange with text: the text message itself also gets a join relation
-      if (relationType === 'arrange' && hasTextContentForTotal) return uniqueCount + 1;
-      return uniqueCount;
-    })() : 0;
-    const joinStakeTotal = containerJoinCount * JOIN_STAKE_PER_TARGET;
-    const joinBurnTotal = containerJoinCount * burnPerOp;
-    const totalStake = textStake + relStakeTotal + refStakeTotal + joinStakeTotal;
-    const totalBurn = textBurn + relBurnTotal + refBurnTotal + joinBurnTotal;
-    return {
-      stakeTotal: totalStake,
-      burnTotal: totalBurn,
-      total: totalStake + totalBurn,
-      perStake: relStakeAmount,
-      textStake,
-      refStakeTotal,
-      refCount: govRefCount,
-      relCount,
-      joinCount: containerJoinCount,
-      joinStakeTotal,
-      joinBurnTotal,
-      hasText: textStake > 0,
-      hasRel: true,
-    };
-  })();
-
-  // Update relStakeAmount when relation type, subType, or target count changes
-  useEffect(() => {
-    if (!stakeDefaultLoaded.current) return;
-    setMinSelfStake(effectiveMinStake);
-    setRelStakeAmount(effectiveMinStake);
-  }, [relationType, subType, draftUnits.length, targetUnits.length]);
   useEffect(() => {
     if (!settlementOpenMsgId) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -4634,394 +4544,95 @@ export default function TopicDetailPage() {
           onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
         />
 
-        <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
-          {isPreviewMode && (
-            <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
-              ⚠ 预览模式 — 该分类已被反对，无法发送消息或修改
-            </div>
-          )}
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>候选区（Draft）</div>
-              <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
-                <button onClick={clearDraftAll} disabled={draftUnits.length === 0 && !activeTextSelectId}
-                  style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: draftUnits.length === 0 && !activeTextSelectId ? "#333" : "#444", color: draftUnits.length === 0 && !activeTextSelectId ? "#777" : "#fff", cursor: draftUnits.length === 0 && !activeTextSelectId ? "default" : "pointer" }}>
-                  清空
-                </button>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button onClick={() => { const selWhole = getSelectedWholeMessageIds(); if (selWhole.length > 0) enterFocusMultiple(selWhole, { replace: false }); else if (lastClickedMessageId) enterFocus(lastClickedMessageId, { replace: false }); }} disabled={!canSetFocus}
-                    style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canSetFocus ? "#444" : "#333", color: canSetFocus ? "#fff" : "#777", cursor: canSetFocus ? "pointer" : "default" }}>
-                    设为焦点消息
-                  </button>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出最近一次进入的焦点并恢复进入该焦点前的现场">退出焦点</button>
-                    <button onClick={exitAllFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#333" : "#222", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
-                  </div>
-                </div>
-              </div>
-            </div>
 
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div style={{ fontSize: 12, opacity: 0.8 }}>焦点距离（hop）：{focusHop}</div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => setFocusHop(h => Math.max(0, h - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
-                <button onClick={() => setFocusHop(h => Math.min(8, h + 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>+</button>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>（可设置 hop，默认 1，最大 8）</div>
-              </div>
-            </div>
-
-            {draftGroups.length === 0 ? (
-              <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>当前未选择任何候选。</div>
-            ) : (
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 220, overflow: "auto", fontSize: 12, marginTop: 8 }}>
-                {draftGroups.map(g => (
-                  <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid #333", paddingBottom: 6, marginBottom: 6 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                      <span>{g.messageId} · 整条：{g.wholeSelected ? "是" : "否"} · 片段数：{g.fragments.length}</span>
-                      {g.wholeSelected && <button onClick={() => removeUnitFromDraft({ messageId: g.messageId, selection: { kind: "whole" } })} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除整条</button>}
-                    </div>
-                    {g.fragments.length > 0 && (
-                      <ul style={{ listStyle: "disc", marginLeft: 18, marginTop: 2, marginBottom: 0 }}>
-                        {g.fragments.map(u => {
-                          const s = u.selection;
-                          const label = s.kind === "edge" ? `@edge:${s.edgeId}` : s.kind === "text" ? `start=${s.start} len=${s.len} "${s.text}"` : "(whole)";
-                          return (
-                            <li key={selKey(u)} style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
-                              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
-                              <button onClick={() => removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button onClick={() => commitDraftTo("source")} disabled={draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: draftUnits.length === 0 ? "#333" : "#444", color: draftUnits.length === 0 ? "#777" : "#fff", cursor: draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
-              <button onClick={() => commitDraftTo("target")} disabled={draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: draftUnits.length === 0 ? "#333" : "#444", color: draftUnits.length === 0 ? "#777" : "#fff", cursor: draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Sources</div>
-              {sourceUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
-                <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
-                  {sourceUnits.map(u => (
-                    <li key={selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                      <span>{describeUnit(u)}</span>
-                      <button onClick={() => removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Targets</div>
-              {targetUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
-                <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
-                  {targetUnits.map(u => (
-                    <li key={selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                      <span>{describeUnit(u)}</span>
-                      <button onClick={() => removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          {user && (
-            <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontWeight: 600 }}>关系标签与消息文本</div>
-              {hasSecondaryRelationSelector && (() => {
-                const opts = relationType === "reply"
-                  ? ["none", "question", "answer"]
-                  : relationType === "tag"
-                    ? tagSecondaryOptions
-                    : relationType === "arrange"
-                      ? ["vertical", "horizontal"]
-                      : relationType === "reference"
-                        ? ["none", "evidence", "custom"]
-                        : correctSecondaryOptions;
-                return (
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
-                    <span style={{ opacity: 0.85 }}>附加关系：</span>
-                    {opts.map(t => (
-                      <button key={t} onClick={() => {
-                        if (isArrangeType && isArrangeLayoutLocked) return;
-                        setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t);
-                      }}
-                        disabled={isArrangeType && isArrangeLayoutLocked}
-                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: (isArrangeType && isArrangeLayoutLocked) ? "not-allowed" : "pointer", opacity: (isArrangeType && isArrangeLayoutLocked) ? 0.5 : 1 }}>
-                        {secondaryRelationLabel(t)}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })()}
-              {/* SubType selector: shown when TAG + recommend/archive is selected */}
-              {((relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive")) || relationType === "recommend" || relationType === "archive") && (
-                <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
-                  <span style={{ opacity: 0.85 }}>标注理由：</span>
-                  {SUB_TYPE_OPTIONS.map(st => (
-                    <button key={st || 'none'} onClick={() => {
-                      if (st === 'CUSTOM') {
-                        // Switching TO custom: restore buffer
-                        setNewMessageContent(subTypeCustomBufferRef.current);
-                        setSubType(st);
-                      } else if (subType === 'CUSTOM') {
-                        // Switching FROM custom: save to buffer then clear
-                        subTypeCustomBufferRef.current = newMessageContent;
-                        setNewMessageContent('');
-                        setSubType(st);
-                        setSubTypeCustomLabel('');
-                      } else {
-                        setSubType(st);
-                        setNewMessageContent('');
-                        if (st !== 'CUSTOM') setSubTypeCustomLabel('');
-                      }
-                    }}
-                      style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: subType === st ? (secondaryRelationType === "recommend" ? "#f59e0b" : "#64748b") : "#222", color: subType === st ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
-                      {st ? subTypeLabel(st) : '无'}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {/* Label input: REPLY (auto-filled, read-only) or REFERENCE+custom (editable) */}
-              {relationType === "reply" && (
-              <input
-                style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: relationType === "reply" ? "#1a1a1a" : "#222", color: relationType === "reply" ? "#999" : "#eee", fontSize: 12 }}
-                placeholder="回复标签由附加关系决定"
-                value={relationType === "reply" ? replyAdditionalLabel(secondaryRelationType) : relationLabel}
-                readOnly={relationType === "reply"}
-                onChange={e => relationType !== "reply" && setRelationLabel(e.target.value)}
-              />
-              )}
-              {/* REFERENCE(自定义): show label input for custom text */}
-              {relationType === "reference" && secondaryRelationType === "custom" && (
-              <input
-                style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: "#222", color: "#eee", fontSize: 12 }}
-                placeholder="输入自定义引用标签"
-                value={relationLabel}
-                onChange={e => setRelationLabel(e.target.value)}
-              />
-              )}
-              <div key={composerRefreshKey}>
-              {(() => {
-                const isCustomSubType = subType === 'CUSTOM' && ((relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive")) || relationType === "recommend" || relationType === "archive");
-                // TAG + secondary=none is an invalid state — disable textarea (user must pick recommend/archive first)
-                const isTagWithoutSecondary = relationType === "tag" && secondaryRelationType === "none";
-                const textAreaDisabled =
-                  isTagWithoutSecondary
-                  || (isCustomSubType ? false : (
-                    (draftHasRelationTarget && relationType === "correct")
-                    || (isTagWithQuickAnnotate && hasTargetsAvailable)
-                    || (isMergeType && hasTargetsAvailable)
-                  ));
-                const placeholderText = isCustomSubType ? "输入自定义理由（最长20字）"
-                  : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
-                  : textAreaDisabled
-                  ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
-                  : isClassifyType ? "输入分类名称（不能为空）"
-                  : isSummaryType ? "输入总结内容（不能为空）"
-                  : isArrangeType ? "可选：输入文本消息加入排列框架"
-                  : isGovernanceOrOpsType ? (relationType === "proposal" ? "输入提案内容（不能为空，支持 Markdown）" : relationType === "code_change" ? "输入代码内容（不能为空，支持 Markdown）" : "输入运营公告内容（不能为空，支持 Markdown）")
-                  : "输入一条新普通消息（支持自由换行）";
-                return (
-                  <textarea
-                    style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                    placeholder={placeholderText}
-                    value={newMessageContent}
-                    readOnly={textAreaDisabled}
-                    onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}
-                  />
-                );
-              })()}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                {/* Text stake: only when text creates a separate message */}
-                {hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isArrangeType && !isGovernanceOrOpsType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) && (
-                  <>
-                    <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
-                    <input
-                      type="number"
-                      min={10}
-                      max={availablePoints}
-                      value={stakeAmount}
-                      onChange={e => {
-                        const raw = e.target.value;
-                        if (raw === '') { setStakeAmount(''); return; }
-                        const v = parseInt(raw);
-                        if (isNaN(v)) return;
-                        setStakeAmount(Math.min(v, availablePoints));
-                      }}
-                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
-                    />
-                  </>
-                )}
-                {/* Relation stake */}
-                {relationType && (
-                  <>
-                    <span style={{ fontSize: 11, color: "#888" }}>{hasTextContent && !isClassifyType && !isSummaryType && !isMergeType && !isGovernanceOrOpsType && !(draftHasRelationTarget && relationType === "correct") && !(isTagWithQuickAnnotate && hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
-                    <input
-                      type="number"
-                      min={effectiveMinStake}
-                      max={availablePoints}
-                      value={relStakeAmount}
-                      onChange={e => {
-                        const raw = e.target.value;
-                        if (raw === '') { setRelStakeAmount(''); return; }
-                        const v = parseInt(raw);
-                        if (isNaN(v)) return;
-                        setRelStakeAmount(Math.min(v, availablePoints));
-                      }}
-                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake ? "1px solid #f87171" : "1px solid #666", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
-                    />
-                    {subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0) && (
-                      <span style={{ fontSize: 10, color: "#f59e0b" }}>（「{subTypeLabel(subType)}」最低 {subTypeStakeMap.current[subType]} 点）</span>
-                    )}
-                  </>
-                )}
-                {/* Default: plain text message */}
-                {!hasTextContent && !relationType && (
-                  <>
-                    <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
-                    <input
-                      type="number"
-                      min={10}
-                      max={availablePoints}
-                      value={stakeAmount}
-                      onChange={e => {
-                        const raw = e.target.value;
-                        if (raw === '') { setStakeAmount(''); return; }
-                        const v = parseInt(raw);
-                        if (isNaN(v)) return;
-                        setStakeAmount(Math.min(v, availablePoints));
-                      }}
-                      style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }}
-                    />
-                  </>
-                )}
-                <span style={{ fontSize: 11, color: "#666" }}>点 / {availablePoints}</span>
-                {/* Total consumption breakdown */}
-                {singleButtonEnabled && totalConsumption && (
-                  <span style={{ fontSize: 11, color: totalConsumption.total > availablePoints ? "#f87171" : "#f59e0b" }}>
-                    总计 {totalConsumption.total} 点
-                    <span style={{ color: "#888" }}>
-                      （{[
-                        totalConsumption.hasText ? `文本 ${totalConsumption.textStake}` : null,
-                        totalConsumption.hasRel ? `关系 ${totalConsumption.perStake}×${totalConsumption.relCount}` : null,
-                        (totalConsumption as any).refCount > 0 ? `引用 ${(totalConsumption as any).refStakeTotal}` : null,
-                        (totalConsumption as any).joinCount > 0 ? `加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinBurnTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）` : null,
-                        totalConsumption.burnTotal > 0 ? `燃烧 ${totalConsumption.burnTotal}` : null,
-                      ].filter(Boolean).join(' + ')}）
-                    </span>
-                    {' '}
-                    <span style={{ color: availablePoints - totalConsumption.total < 0 ? "#f87171" : "#4ade80" }}>
-                      剩余 {availablePoints - totalConsumption.total} 点
-                    </span>
-                  </span>
-                )}
-                <button
-                  onClick={handleQuickSendAndRelateFromDraftTargets}
-                  disabled={isPreviewMode || !singleButtonEnabled}
-                  style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: (singleButtonEnabled && !isPreviewMode) ? "#0b84ff" : "#333", color: (singleButtonEnabled && !isPreviewMode) ? "#fff" : "#777", cursor: (singleButtonEnabled && !isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}
-                >
-                  发送
-                </button>
-                <span style={{ fontSize: 11, opacity: singleButtonEnabled ? 0.9 : 0.5, color: singleButtonEnabled ? "#cce4ff" : "#999" }}>
-                  {singleButtonLabel}
-                </span>
-              </div>
-              {sendError && (
-                <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{sendError}</div>
-              )}
-              </div>
-            </div>
-          )}
-
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-            <div style={{ fontWeight: 600 }}>焦点</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>{isInsideClassify ? "当前模式：分类" : "当前模式：焦点"}</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
-          </div>
-
-          <TopicStructureView key={`sv-${classifyKey}-${focusKey}`} focusIds={currentFocusIds ?? []} messages={messages} edges={edges} />
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>最近普通消息</div>
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
-                {recentNormals.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
-              </ul>
-            </div>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
-                {recentRelations.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
-              </ul>
-            </div>
-          </div>
-          {/* Phase 5: Stance History Panel */}
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>📋 站队 · 立场 · 表态</div>
-              <button
-                onClick={() => setShowStanceHistory(!showStanceHistory)}
-                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showStanceHistory ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
-              >
-                {showStanceHistory ? '收起' : '展开'}
-              </button>
-            </div>
-            {showStanceHistory && user && (
-              <div style={{ marginTop: 8 }}>
-                <StanceHistoryPanel userId={user.id} topicId={topicId} />
-              </div>
-            )}
-          </div>
-          {/* Audit Log Panel */}
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>📋 审计日志</div>
-              <button
-                onClick={() => setShowAuditLog(!showAuditLog)}
-                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showAuditLog ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
-              >
-                {showAuditLog ? '收起' : '展开'}
-              </button>
-            </div>
-            {showAuditLog && (
-              <div style={{ marginTop: 8 }}>
-                <AuditLogView topicId={topicId} />
-              </div>
-            )}
-          </div>
-          {/* Revenue Panel */}
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>💰 收入</div>
-              <button
-                onClick={() => setShowRevenue(!showRevenue)}
-                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: showRevenue ? "#0b84ff" : "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}
-              >
-                {showRevenue ? '收起' : '展开'}
-              </button>
-            </div>
-            {showRevenue && (
-              <div style={{ marginTop: 8 }}>
-                <RevenuePanel />
-              </div>
-            )}
-          </div>
-          {/* DEBUG: rectangle info */}
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 4, color: "#0f0" }}>Debug Rects</div>
-            <pre style={{ fontSize: 10, fontFamily: "monospace", color: "#0f0", margin: 0, maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap" }}>{debugRects || "等待数据..."}</pre>
-          </div>
-        </div>
+        <TopicRightPanel
+          rightPanelRef={rightPanelRef}
+          TOTAL_FLEX={TOTAL_FLEX}
+          leftFlex={leftFlex}
+          isPreviewMode={isPreviewMode}
+          draftUnits={draftUnits}
+          draftGroups={draftGroups}
+          activeTextSelectId={activeTextSelectId}
+          clearDraftAll={clearDraftAll}
+          removeUnitFromDraft={removeUnitFromDraft}
+          commitDraftTo={commitDraftTo}
+          selKey={selKey}
+          sourceUnits={sourceUnits}
+          targetUnits={targetUnits}
+          removeUnitFrom={removeUnitFrom}
+          describeUnit={describeUnit}
+          focusHop={focusHop}
+          setFocusHop={setFocusHop}
+          canSetFocus={canSetFocus}
+          canExitFocus={canExitFocus}
+          getSelectedWholeMessageIds={getSelectedWholeMessageIds}
+          lastClickedMessageId={lastClickedMessageId}
+          enterFocusMultiple={enterFocusMultiple}
+          enterFocus={enterFocus}
+          exitFocus={exitFocus}
+          exitAllFocus={exitAllFocus}
+          isInsideClassify={isInsideClassify}
+          currentFocusIds={currentFocusIds}
+          classifyKey={classifyKey}
+          focusKey={focusKey}
+          messages={messages}
+          edges={edges}
+          user={user}
+          relationType={relationType}
+          secondaryRelationType={secondaryRelationType}
+          setSecondaryRelationType={setSecondaryRelationType}
+          hasSecondaryRelationSelector={hasSecondaryRelationSelector}
+          tagSecondaryOptions={tagSecondaryOptions}
+          correctSecondaryOptions={correctSecondaryOptions}
+          isArrangeType={isArrangeType}
+          isArrangeLayoutLocked={isArrangeLayoutLocked}
+          isClassifyType={isClassifyType}
+          isSummaryType={isSummaryType}
+          isMergeType={isMergeType}
+          isGovernanceOrOpsType={isGovernanceOrOpsType}
+          isTagWithQuickAnnotate={isTagWithQuickAnnotate}
+          hasTargetsAvailable={hasTargetsAvailable}
+          draftHasRelationTarget={draftHasRelationTarget}
+          hasTextContent={hasTextContent}
+          secondaryRelationLabel={secondaryRelationLabel}
+          replyAdditionalLabel={replyAdditionalLabel}
+          subType={subType}
+          setSubType={setSubType}
+          subTypeCustomLabel={subTypeCustomLabel}
+          setSubTypeCustomLabel={setSubTypeCustomLabel}
+          subTypeCustomBufferRef={subTypeCustomBufferRef}
+          SUB_TYPE_OPTIONS={SUB_TYPE_OPTIONS}
+          subTypeLabel={subTypeLabel}
+          relationLabel={relationLabel}
+          setRelationLabel={setRelationLabel}
+          newMessageContent={newMessageContent}
+          setNewMessageContent={setNewMessageContent}
+          composerRefreshKey={composerRefreshKey}
+          stakeAmount={stakeAmount}
+          setStakeAmount={setStakeAmount}
+          relStakeAmount={relStakeAmount}
+          setRelStakeAmount={setRelStakeAmount}
+          availablePoints={availablePoints}
+          effectiveMinStake={effectiveMinStake}
+          singleButtonEnabled={singleButtonEnabled}
+          singleButtonLabel={singleButtonLabel}
+          totalConsumption={totalConsumption}
+          stakeFeeAmountRef={stakeFeeAmountRef}
+          subTypeStakeMap={subTypeStakeMap}
+          relationStakeMap={relationStakeMap}
+          handleQuickSendAndRelateFromDraftTargets={handleQuickSendAndRelateFromDraftTargets}
+          sendError={sendError}
+          recentNormals={recentNormals}
+          recentRelations={recentRelations}
+          showStanceHistory={showStanceHistory}
+          setShowStanceHistory={setShowStanceHistory}
+          showAuditLog={showAuditLog}
+          setShowAuditLog={setShowAuditLog}
+          showRevenue={showRevenue}
+          setShowRevenue={setShowRevenue}
+          topicId={topicId!}
+          debugRects={debugRects}
+        />
       </div>
     </div>
     </ErrorBoundary>

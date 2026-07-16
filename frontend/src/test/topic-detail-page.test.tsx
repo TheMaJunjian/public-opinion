@@ -34,6 +34,7 @@ vi.mock('react-router-dom', async () => {
     ...actual,
     useParams: () => ({ topicId: 'topic-1' }),
     useNavigate: () => mockNavigate,
+    useLocation: () => ({ pathname: '/topics/topic-1', state: null, key: '', search: '', hash: '' }),
     useSearchParams: () => [new URLSearchParams(), vi.fn()] as const,
   };
 });
@@ -98,9 +99,9 @@ describe('TopicDetailPage composer refresh', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    // TAG auto-selects "推荐" as secondary — don't click it again or it toggles off
     fireEvent.click(screen.getByRole('button', { name: '标注' }));
     fireEvent.click(screen.getByText('关系消息 rel-1'));
-    fireEvent.click(screen.getByRole('button', { name: '推荐' }));
 
     await waitFor(() => {
       const textarea = screen.getByPlaceholderText('已选择附加关系，此处不可输入');

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import type { ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
 import type {
@@ -11,6 +12,7 @@ import type { Topic, TargetRef, Relation } from '../types';
 import { getPresentationSpec, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 import ErrorBoundary from '../components/ErrorBoundary';
+import MessageCard, { type MessageCardContext } from '../components/MessageCard';
 import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
 import TopicRightPanel from '../components/TopicRightPanel';
@@ -72,6 +74,7 @@ type FocusEntry = {
 export default function TopicDetailPage() {
   const { topicId } = useParams<{ topicId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
 
   const [topic, setTopic] = useState<Topic | null>(null);
@@ -84,9 +87,57 @@ export default function TopicDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [stakeCounts, setStakeCounts] = useState<Record<string, { pro: number; con: number }>>({});
   const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
+  const [isPreloaded, setIsPreloaded] = useState(false);
+
+  // ── Preloaded data (from export viewer) ──
+  const location = useLocation();
+  const preloadedData = (location.state as { exportData?: ExportData })?.exportData ?? null;
+  const preloadedLoaded = useRef(false);
 
   useEffect(() => {
-    if (!topicId) return;
+    if (!preloadedData || preloadedLoaded.current) return;
+    preloadedLoaded.current = true;
+
+    // Convert export data to the same shape as API returns
+    const topicData: Topic = {
+      id: '__preloaded__',
+      title: preloadedData.topic.title,
+      body: preloadedData.topic.body ?? undefined,
+      status: preloadedData.topic.status as 'OPEN' | 'ARCHIVED',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: { id: '__system__', username: '导出数据', createdAt: '' },
+    };
+    const backendMessages: any[] = preloadedData.messages.map(m => ({
+      ...m,
+      topicId: '__preloaded__',
+      createdBy: { id: '', username: m.author, createdAt: '' },
+    }));
+    const backendRelations: any[] = preloadedData.relations.map(r => ({
+      id: r.id, topicId: '__preloaded__',
+      relationType: r.relationType ?? 'REFERENCE',
+      sourceMessageId: r.sourceMessageId,
+      targetRefs: r.targetRefs ?? [],
+      payload: r.payload ?? undefined,
+      createdAt: r.createdAt,
+      createdBy: { id: '', username: r.author, createdAt: '' },
+    }));
+
+    const { messages: demoMsgs, edges: demoEdges } = convertMessagesToDemoModel(
+      backendMessages, backendRelations
+    );
+    setTopic(topicData);
+    setRelations(backendRelations);
+    setMessages(demoMsgs);
+    setEdges(demoEdges);
+    setStakeCounts({});
+    setAuthorStakes({});
+    setLoading(false);
+    setIsPreloaded(true);
+  }, [preloadedData]);
+
+  useEffect(() => {
+    if (!topicId || preloadedData) return;
     let cancelled = false;
     async function load() {
       try {
@@ -4142,12 +4193,17 @@ export default function TopicDetailPage() {
     <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {isOwner && <>
+          {isPreloaded ? (
+            <button onClick={() => navigate('/')} style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>
+              退出阅览
+            </button>
+          ) : (isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
               {topic?.status === 'ARCHIVED' ? '重新开放' : '归档'}
             </button>
-          </>}
+          </>)}
         </div>
+        {!isPreloaded && (
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
@@ -4188,6 +4244,7 @@ export default function TopicDetailPage() {
             </button>
           ))}
         </div>
+        )}
       </div>
 
       <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
@@ -4196,6 +4253,22 @@ export default function TopicDetailPage() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button onClick={async () => {
+                try {
+                  const data = await api.exportTopic(topicId!);
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${topic?.title ?? 'export'}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                } catch (e: any) {
+                  alert(`导出失败: ${e?.message ?? e}`);
+                }
+              }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
+                导出
+              </button>
                 <CleanFilterPanel
                   active={cleanMode}
                   filters={cleanFilters}
@@ -4295,203 +4368,77 @@ export default function TopicDetailPage() {
                     : 0;
                   const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类（${topicMsgTargetCount}）` : isMergeTopicMsg ? `归并（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
                   const summaryCoverages = summaryCoverageByMessageId.get(msg.id) ?? [];
+                  const settleTargetId = (msg as any).settlementTargetId as string | undefined;
+                  const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
+                  const ctx: MessageCardContext = {
+                    isWholeSelected, isActiveText, isTopicMsg,
+                    isClassifyTopic: isClassifyTopicMsg,
+                    isSummaryTopic: isSummaryTopicMsg,
+                    isMergeTopic: isMergeTopicMsg,
+                    isGovernanceMsg,
+                    governanceColor,
+                    topicMsgTitle,
+                    topicMsgTargetCount,
+                    relType,
+                    settlementTargetId: settleTargetId,
+                    settlementTargetContent: targetMsg?.content ?? '',
+                    isValueSettlement: (msg as any).roundPayload?.settlementType === 'VALUE',
+                    lastClickedMsgId: lastClickedMessageId,
+                  };
+                  const sc = stakeCounts[msg.id];
+                  const showProCon = sc && (sc.pro > 0 || sc.con > 0);
+                  const isTruthOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'TRUTH';
+                  const isValueOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'VALUE';
+                  const hasCustomContent = isContentKind(msg.kind) && msg.kind !== 'round' && msg.kind !== 'round_result';
+
                   return (
-                    <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
-                      style={{
-                        position: "relative",
-                        borderRadius: isTopicMsg ? 8 : 6,
-                        border: isWholeSelected
-                          ? "2px solid #0b84ff"
-                          : isTopicMsg
-                            ? "1px solid #334155"
-                            : isGovernanceMsg ? `1px solid ${governanceColor}44` : isActiveText ? "2px dashed #0b84ff" : "1px solid #444",
-                        borderLeft: isWholeSelected
-                          ? "3px solid #0b84ff"
-                          : isTopicMsg ? "3px solid #6366f1"
-                          : isGovernanceMsg ? `3px solid ${governanceColor}` : undefined,
-                        background: isWholeSelected
-                          ? "#1e3a5f"
-                          : isTopicMsg ? "#1e293b"
-                          : isGovernanceMsg ? "#1a1f2e" : "#1f1f1f",
-                        color: undefined,
-                        padding: isTopicMsg ? "10px 12px" : "10px 14px",
-                        cursor: "pointer",
-                        fontSize: 13,
-                        boxShadow: isWholeSelected
-                          ? "0 2px 12px rgba(11,132,255,0.2)"
-                          : isTopicMsg ? "0 2px 8px rgba(0,0,0,0.15)" : undefined,
-                        outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none",
-                        userSelect: isActiveText ? "text" : "auto"
-                      }}>
-                      <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
-                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : (msg as any).backendKind === "ROUND" ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? `💎 发起价值仲裁` : `⚖️ 发起真假仲裁`) : (msg as any).backendKind === "ROUND_RESULT" ? `🏁 结算完成` : (msg as any).backendKind === "GOVERNANCE" ? `🏛️ 治理提案` : (msg as any).backendKind === "CODE" ? `💻 代码` : (msg as any).backendKind === "OPERATIONS" ? `📊 运营` : `消息 ${msg.id}`}</span>
-                        <span style={{textAlign:"right"}}>
-                          <div>{isClassifyTopicMsg ? "双击进入分类" : isSummaryTopicMsg ? "双击进入总结" : isMergeTopicMsg ? "归并" : `作者：${msg.author}`}</div>
+                    <MessageCard
+                      key={msg.id} msg={msg} ctx={ctx}
+                      onClick={handleMessageClick}
+                      onDoubleClick={handleMessageDoubleClick}
+                      onMouseDown={handleMessageMouseDown}
+                      onMouseUp={handleMessageMouseUp}
+                      onContentMouseUp={handleTextMouseUp}
+                      onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
+                      headerExtra={
+                        <>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
-                          {(() => {
-                            const sc = stakeCounts[msg.id];
-                            const showProCon = sc && (sc.pro > 0 || sc.con > 0);
-                            const isTruthOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'TRUTH';
-                            const isValueOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'VALUE';
-                            return (
-                              <div style={{ display: "flex", gap: 4, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
-                                {showProCon && sc!.pro > 0 && (
-                                  <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>
-                                )}
-                                {showProCon && sc!.con > 0 && (
-                                  <span style={{ color: "#f87171" }}>👎{sc!.con}</span>
-                                )}
-                                <button
-                                  data-settlement-toggle-truth
-                                  onClick={(e) => { e.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }}
-                                  style={{ fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }}
-                                  title="真假仲裁"
-                                >⚖️</button>
-                                <button
-                                  data-settlement-toggle-value
-                                  onClick={(e) => { e.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }}
-                                  style={{ fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }}
-                                  title="价值仲裁"
-                                >💎</button>
-                              </div>
-                            );
-                          })()}
-                        </span>
-                      </div>
-                      {isTopicMsg && (
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                          <div style={{ fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {topicMsgTitle}
+                          <div style={{ display: "flex", gap: 4, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
+                            {showProCon && sc!.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>}
+                            {showProCon && sc!.con > 0 && <span style={{ color: "#f87171" }}>👎{sc!.con}</span>}
+                            <button data-settlement-toggle-truth onClick={(e) => { e.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }} style={{ fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }} title="真假仲裁">⚖️</button>
+                            <button data-settlement-toggle-value onClick={(e) => { e.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }} style={{ fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }} title="价值仲裁">💎</button>
                           </div>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: isMergeTopicMsg ? "rgba(148,163,184,0.18)" : "rgba(34,197,94,0.15)", color: isMergeTopicMsg ? "#94a3b8" : "#4ade80" }}>
-                            {isMergeTopicMsg ? "归并" : "进行中"}
-                          </span>
-                        </div>
-                      )}
-                      {!isTopicMsg && msg.kind === "relation" && (
-                        <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#9ca3af" }}>
-                            {relType ? String(relType) : "关系"}
-                          </span>
-                          {suppressedRelIds.has(msg.id) && (
-                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>
-                              你已反对 · 点赞同恢复
-                            </span>
+                        </>
+                      }
+                      badges={
+                        <>
+                          {!isTopicMsg && msg.kind === "relation" && (
+                            <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#9ca3af" }}>{relType ? String(relType) : "关系"}</span>
+                              {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>你已反对 · 点赞同恢复</span>}
+                              {rejectedContainerIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">社区已反对 · 双击预览</span>}
+                              {activeStanceRelIds.has(msg.id) && (() => { const info = activeStanceByRelMsgId.get(msg.id); if (!info) return null; return info.type === 'disagree' ? <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.15)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.3)" }}>你的反对生效中</span> : <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>你的赞同生效中</span>; })()}
+                              {overriddenStanceRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#6b7280", border: "1px solid rgba(255,255,255,0.1)" }}>已失效</span>}
+                            </div>
                           )}
-                          {rejectedContainerIds.has(msg.id) && (
-                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">
-                              社区已反对 · 双击预览
-                            </span>
+                          {activeStanceTargetIds.has(msg.id) && (() => { const info = activeStanceMap.get(msg.id); if (!info) return null; return <div style={{ marginBottom: 4, display: "flex", gap: 6 }}><span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: info.type === 'disagree' ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)", color: info.type === 'disagree' ? "#fca5a5" : "#86efac", border: info.type === 'disagree' ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(34,197,94,0.3)" }}>{info.type === 'disagree' ? '被反对 · 你的反对生效中' : '被赞同 · 你的赞同生效中'}</span></div>; })()}
+                          {summaryCoverages.length > 0 && (
+                            <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              {summaryCoverages.map(item => <span key={item.summaryId} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)" }}>非线性视图由总结「{item.title}」覆盖</span>)}
+                            </div>
                           )}
-                          {activeStanceRelIds.has(msg.id) && (() => {
-                            const info = activeStanceByRelMsgId.get(msg.id);
-                            if (!info) return null;
-                            return info.type === 'disagree' ? (
-                              <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.15)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.3)" }}>
-                                你的反对生效中
-                              </span>
-                            ) : (
-                              <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>
-                                你的赞同生效中
-                              </span>
-                            );
-                          })()}
-                          {overriddenStanceRelIds.has(msg.id) && (
-                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#6b7280", border: "1px solid rgba(255,255,255,0.1)" }}>
-                              已失效
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {activeStanceTargetIds.has(msg.id) && (() => {
-                        const info = activeStanceMap.get(msg.id);
-                        if (!info) return null;
-                        return (
-                          <div style={{ marginBottom: 4, display: "flex", gap: 6 }}>
-                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: info.type === 'disagree' ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)", color: info.type === 'disagree' ? "#fca5a5" : "#86efac", border: info.type === 'disagree' ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(34,197,94,0.3)" }}>
-                              {info.type === 'disagree' ? '被反对 · 你的反对生效中' : '被赞同 · 你的赞同生效中'}
-                            </span>
-                          </div>
-                        );
-                      })()}
-                      {isActiveText && isContentKind(msg.kind) && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
-                      {summaryCoverages.length > 0 && (
-                        <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {summaryCoverages.map(item => (
-                            <span key={item.summaryId} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)" }}>
-                              非线性视图由总结「{item.title}」覆盖
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => isContentKind(msg.kind) && handleTextMouseUp(e, msg.id)}>
-                        {isContentKind(msg.kind)
-                          ? ((msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
-                              const settleTargetId = (msg as any).settlementTargetId as string | undefined;
-                              const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
-                              const targetContent = targetMsg?.content ?? '';
-                              const targetPreview = targetContent.length > 40
-                                ? targetContent.slice(0, 40) + '…'
-                                : targetContent;
-                              const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
-                              const tagColor = isValue ? '#f59e0b' : '#818cf8';
-                              const lines = (msg.content ?? '').split('\n');
-                              const firstLine = lines[0];
-                              const restLines = lines.slice(1).join('\n');
-                              return (
-                                <div>
-                                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-                                    <span style={{ whiteSpace: "pre-wrap" }}>{firstLine}</span>
-                                    {settleTargetId && (
-                                      <span
-                                        onClick={(e) => { e.stopPropagation(); handleNavigateToMessage(settleTargetId); }}
-                                        style={{
-                                          fontSize: 11,
-                                          fontWeight: 500,
-                                          padding: "1px 6px",
-                                          borderRadius: 4,
-                                          background: `${tagColor}12`,
-                                          color: tagColor,
-                                          border: `1px solid ${tagColor}35`,
-                                          cursor: "pointer",
-                                          maxWidth: 280,
-                                          overflow: "hidden",
-                                          textOverflow: "ellipsis",
-                                          whiteSpace: "nowrap",
-                                        }}
-                                        title={`点击跳转到目标消息 ${settleTargetId.slice(-6)}${targetContent ? '：' + targetContent : ''}`}
-                                      >
-                                        → {settleTargetId.slice(-6)}{targetPreview ? `「${targetPreview}」` : ''}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {restLines && (
-                                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{restLines}</pre>
-                                  )}
-                                </div>
-                              );
-                            })()
-                            : renderMessageContentWithAnchorsForList(msg))
-                          : isTopicMsg
-                            ? (
-                              <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                                <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{msg.author}</span> 发起</span>
-                                <span>💬 {topicMsgTargetCount} 条观点</span>
-                                <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
-                              </div>
-                            )
-                            : <div style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#d1d5db" }}>{msg.content}</div>}
-                      </div>
-                      {/* Phase 3: Settlement Panel as floating overlay */}
-                      {settlementOpenMsgId === msg.id && (
+                        </>
+                      }
+                      overlays={settlementOpenMsgId === msg.id ? (
                         <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
                           <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={(nm:any) => (window as any).__addSettlementMessage?.({...nm, kind: nm.kind})} filterSettlementType={settlementOpenType ?? undefined} />
-                          <div style={{ marginTop: 4 }}>
-                            <RoundHistory messageId={msg.id} compact />
-                          </div>
+                          <div style={{ marginTop: 4 }}><RoundHistory messageId={msg.id} compact /></div>
                         </div>
-                      )}
-                    </div>
+                      ) : undefined}
+                    >
+                      {hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
+                    </MessageCard>
                   );
                 })}
               </div>
@@ -4545,6 +4492,12 @@ export default function TopicDetailPage() {
         />
 
 
+        {isPreloaded ? (
+          <div style={{ padding: "16px", color: "#94a3b8", fontSize: 13, borderLeft: "1px solid #2a2a2a", minWidth: 280, flex: '0 0 auto' }}>
+            <div style={{ fontWeight: 600, marginBottom: 8, color: "#e2e8f0" }}>📋 只读阅览</div>
+            <div style={{ lineHeight: 1.6 }}>当前为导出数据阅览模式，不支持发送消息、建立关系或结算操作。</div>
+          </div>
+        ) : (
         <TopicRightPanel
           rightPanelRef={rightPanelRef}
           TOTAL_FLEX={TOTAL_FLEX}
@@ -4633,6 +4586,7 @@ export default function TopicDetailPage() {
           topicId={topicId!}
           debugRects={debugRects}
         />
+        )}
       </div>
     </div>
     </ErrorBoundary>

@@ -230,3 +230,33 @@ export function getRevenueDistributions(params?: { page?: number; limit?: number
   if (params?.limit) qs.set('limit', String(params.limit));
   return request<import('../types').PaginatedResponse<import('../types').RevenueDistributionItem>>(`/revenue/distributions?${qs}`);
 }
+
+// ============================================================
+// Export API
+// ============================================================
+
+export interface ExportData {
+  exportedAt: string;
+  topic: { title: string; body: string | null; status: string };
+  messages: Array<{
+    id: string;
+    kind: string;
+    contentType: string | null;
+    content: string | null;
+    createdAt: string;
+    author: string;
+  }>;
+  relations: Array<{
+    id: string;
+    relationType: string | null;
+    sourceMessageId: string | null;
+    targetRefs: unknown;
+    payload: unknown;
+    createdAt: string;
+    author: string;
+  }>;
+}
+
+export function exportTopic(topicId: string) {
+  return request<ExportData>(`/topics/${topicId}/export`);
+}

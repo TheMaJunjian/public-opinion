@@ -623,3 +623,42 @@ export async function getRevenueDistributions(params?: { page?: number; limit?: 
   const entries: RevenueDistributionItem[] = [];
   return paginate(entries, params?.page, params?.limit);
 }
+
+// ============================================================
+// Export Mock
+// ============================================================
+
+export async function exportTopic(topicId: string) {
+  await delay(100);
+  const topic = topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('分类不存在');
+
+  const topicMessages = messages.filter(m => m.topicId === topicId);
+  const topicRelations = relations.filter(r => r.topicId === topicId);
+
+  return {
+    exportedAt: new Date().toISOString(),
+    topic: {
+      title: topic.title,
+      body: topic.body ?? null,
+      status: topic.status,
+    },
+    messages: topicMessages.map(m => ({
+      id: m.id,
+      kind: (m as any).kind ?? 'TEXT',
+      contentType: m.contentType,
+      content: m.content,
+      createdAt: m.createdAt,
+      author: m.createdBy.username,
+    })),
+    relations: topicRelations.map(r => ({
+      id: r.id,
+      relationType: r.relationType,
+      sourceMessageId: r.sourceMessageId,
+      targetRefs: r.targetRefs,
+      payload: r.payload ?? null,
+      createdAt: r.createdAt,
+      author: r.createdBy.username,
+    })),
+  };
+}

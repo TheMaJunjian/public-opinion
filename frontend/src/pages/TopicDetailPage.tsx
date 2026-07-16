@@ -22,6 +22,7 @@ import { applyContainerExpansion } from '../utils/focusContainer';
 import { debugWarn } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
+import MessageFilterPanel, { type MessageFilterSettings, applyMessageFilter } from '../components/MessageFilterPanel';
 import {
   ALL_RELATION_TYPES,
   CLASSIFY_TARGET_HINT,
@@ -409,6 +410,8 @@ export default function TopicDetailPage() {
   } = useCleanView({ messages, edges, stakeCounts });
   // Count content messages for the filter panel stats
   const contentMsgCount = useMemo(() => messages.filter(m => isContentKind(m.kind)).length, [messages]);
+  // Message type filter: hide settlement / join messages
+  const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: false, hideJoin: false });
   const setMessagesRef = useRef(setMessages);
   setMessagesRef.current = setMessages;
   const messagesRef = useRef<DemoMessage[]>([]);
@@ -4154,6 +4157,8 @@ export default function TopicDetailPage() {
     ? messagesToRender.filter(m =>
         cleanVisibleIds.visibleTextIds.has(m.id) || cleanVisibleIds.visibleRelIds.has(m.id))
     : messagesToRender;
+  // Message type filter: hide settlement/join messages
+  const messagesToRenderFiltered = applyMessageFilter(messagesToRenderClean, msgFilter);
   const rawEdgesToRender = viewMode === "list" ? listEdgesToRender : graphEdgesToRender;
   // Phase 6: Also filter edges through clean view
   const rawEdgesToRenderClean = cleanVisibleIds
@@ -4168,7 +4173,7 @@ export default function TopicDetailPage() {
   // with visual indicators (empty frame, preview mode, etc.) instead.
   const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
   // Graph messages: no suppression hiding needed — all messages visible.
-  const graphMessagesFinal = messagesToRenderClean;
+  const graphMessagesFinal = messagesToRenderFiltered;
 
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
@@ -4279,6 +4284,10 @@ export default function TopicDetailPage() {
                   onUpdate={updateCleanFilter}
                   onClear={clearCleanFilters}
                 />
+                <MessageFilterPanel
+                  settings={msgFilter}
+                  onChange={setMsgFilter}
+                />
                 <button onClick={() => {
                 if (leftPanelRef.current) {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
@@ -4330,7 +4339,7 @@ export default function TopicDetailPage() {
               if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
               handleCanvasBlankClick();
             }}>
-            {messagesToRenderClean.length === 0 ? (
+            {messagesToRenderFiltered.length === 0 ? (
               <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
                 <div>{isInsideClassify ? `当前${classifyKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
@@ -4350,7 +4359,7 @@ export default function TopicDetailPage() {
               </div>
             ) : viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {messagesToRenderClean
+                {messagesToRenderFiltered
                   .filter(msg => !tagSourceIdsForList.has(msg.id))
                   .map(msg => {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");

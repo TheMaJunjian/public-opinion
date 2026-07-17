@@ -10,11 +10,7 @@ import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
 import { logSettlement, logUserSettlement, logLoserSettlement, logClawback, logClawbackLoser, logBetPoolRestore } from './settlementLogger';
 import { log, debugLog } from './logger';
-
-async function firstTransactionResult<T>(result: unknown): Promise<T> {
-  if (!Array.isArray(result)) throw new Error('Transaction result is not an array');
-  return await result[0] as T;
-}
+import { writeAuditLog } from './auditLog';
 
 // ============================================================
 // Event Type Definitions
@@ -146,6 +142,17 @@ export interface RoundSettledEvent {
   };
 }
 
+export interface RelationTargetsUpdatedEvent {
+  type: 'RELATION_TARGETS_UPDATED';
+  actorId: string;
+  topicId: string;
+  payload: {
+    relationId: string;
+    targetRefs: unknown[];
+    previousTargetRefs: unknown;
+  };
+}
+
 export type AppEvent =
   | UserRegisteredEvent
   | TopicCreatedEvent
@@ -157,7 +164,8 @@ export type AppEvent =
   | StakePlacedEvent
   | RoundCreatedEvent
   | VoteCastEvent
-  | RoundSettledEvent;
+  | RoundSettledEvent
+  | RelationTargetsUpdatedEvent;
 
 // ============================================================
 // Apply Event — the single write path
@@ -191,6 +199,8 @@ export async function applyEvent(event: AppEvent): Promise<unknown> {
       return applyVoteCast(event);
     case 'ROUND_SETTLED':
       return applyRoundSettled(event);
+    case 'RELATION_TARGETS_UPDATED':
+      return applyRelationTargetsUpdated(event);
   }
 }
 
@@ -245,27 +255,24 @@ async function applyUserRegistered(event: UserRegisteredEvent) {
         data: { reason: 'REGISTRATION_BONUS' },
       },
     }),
-    // Audit log: USER_REGISTERED
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'USER_REGISTERED',
-        entityType: 'User',
-        entityId: actorId,
-        data: { username: payload.username },
-      },
-    }),
-    // Audit log: POINT_MINTED
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'POINT_MINTED',
-        entityType: 'PointTransaction',
-        entityId: actorId,
-        data: { amount: REGISTRATION_BONUS, reason: 'REGISTRATION_BONUS' },
-      },
-    }),
   ]);
+
+  await writeAuditLog({
+    actorId,
+    action: 'USER_REGISTERED',
+    entityType: 'User',
+    entityId: actorId,
+    summary: '注册',
+    details: { username: payload.username },
+  });
+  await writeAuditLog({
+    actorId,
+    action: 'POINT_MINTED',
+    entityType: 'PointTransaction',
+    entityId: actorId,
+    summary: `注册奖励 ${REGISTRATION_BONUS} 点`,
+    details: { amount: REGISTRATION_BONUS, reason: 'REGISTRATION_BONUS' },
+  });
 
   return user;
 }
@@ -278,21 +285,16 @@ async function applyTopicCreated(event: TopicCreatedEvent) {
       data: { title: payload.title, body: payload.body, createdById: actorId },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'TOPIC_CREATED',
-        entityType: 'Topic',
-        entityId: '',
-        topicId: null,
-        data: { title: payload.title, body: payload.body },
-      },
-    }),
   ]);
 
-  await prisma.auditLog.updateMany({
-    where: { action: 'TOPIC_CREATED', entityId: '', actorId },
-    data: { entityId: topic.id, topicId: topic.id },
+  await writeAuditLog({
+    actorId,
+    action: 'TOPIC_CREATED',
+    entityType: 'Topic',
+    entityId: topic.id,
+    topicId: topic.id,
+    summary: `创建议题「${payload.title}」`,
+    details: { title: payload.title, body: payload.body },
   });
 
   return topic;
@@ -307,17 +309,17 @@ async function applyTopicStatusChanged(event: TopicStatusChangedEvent) {
       data: { status: payload.status },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: payload.status === 'ARCHIVED' ? 'TOPIC_ARCHIVED' : 'TOPIC_REOPENED',
-        entityType: 'Topic',
-        entityId: topicId,
-        topicId,
-        data: { status: payload.status },
-      },
-    }),
   ]);
+
+  await writeAuditLog({
+    actorId,
+    action: payload.status === 'ARCHIVED' ? 'TOPIC_ARCHIVED' : 'TOPIC_REOPENED',
+    entityType: 'Topic',
+    entityId: topicId,
+    topicId,
+    summary: payload.status === 'ARCHIVED' ? '归档分类' : '重开分类',
+    details: { status: payload.status },
+  });
 
   return topic;
 }
@@ -389,17 +391,6 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
         },
       }));
     }
-    ops.push(prisma.auditLog.create({
-        data: {
-          actorId,
-          action: 'MESSAGE_CREATED',
-          entityType: 'Message',
-          entityId: '',
-          topicId,
-          data: { kind: 'ROUND', targetMessageId: payload.targetMessageId },
-        },
-      }),
-    );
 
     const txResults = await prisma.$transaction(ops);
     let message = txResults[0] as any;
@@ -412,9 +403,14 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
       });
     }
 
-    await prisma.auditLog.updateMany({
-      where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
-      data: { entityId: message.id },
+    await writeAuditLog({
+      actorId,
+      action: 'MESSAGE_CREATED',
+      entityType: 'Message',
+      entityId: message.id,
+      topicId,
+      summary: `发起结算轮次`,
+      details: { kind: 'ROUND', targetMessageId: payload.targetMessageId, settlementType: stype, roundId: roundId ?? null },
     });
 
     return message;
@@ -440,7 +436,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
 
   if (!payload.content) throw new Error('TEXT 消息内容不能为空');
 
-  const message = await firstTransactionResult<any>(await prisma.$transaction([
+  const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
         topicId,
@@ -461,28 +457,23 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
       },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'MESSAGE_CREATED',
-        entityType: 'Message',
-        entityId: '',
-        topicId,
-        data: {
-          kind,
-          contentType: payload.contentType ?? 'TEXT',
-          content: payload.content,
-          quoteSourceId: payload.quoteSourceId,
-          quotedTextHash: payload.quotedTextHash,
-          relationType: payload.relationType,
-        },
-      },
-    }),
-  ]));
+  ]);
 
-  await prisma.auditLog.updateMany({
-    where: { action: 'MESSAGE_CREATED', entityId: '', actorId, topicId },
-    data: { entityId: message.id },
+  await writeAuditLog({
+    actorId,
+    action: 'MESSAGE_CREATED',
+    entityType: 'Message',
+    entityId: message.id,
+    topicId,
+    summary: `发布${kind}消息`,
+    details: {
+      kind,
+      contentType: payload.contentType ?? 'TEXT',
+      contentLength: payload.content?.length ?? 0,
+      quoteSourceId: payload.quoteSourceId ?? null,
+      quotedTextHash: payload.quotedTextHash ?? null,
+      relationType: payload.relationType ?? null,
+    },
   });
 
   // Auto-self-stake PRO (Phase 2.5) — must run AFTER ensureVotingRound so stake gets roundId
@@ -715,21 +706,20 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     });
 
     // Audit log for deduplicated action
-    await prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'RELATION_CREATED',
-        entityType: 'Relation',
-        entityId: dedupExistingId ?? '',
-        topicId,
-        data: {
-          relationType: effectiveRelationType,
-          originalType: transformedFrom ? payload.relationType : undefined,
-          transformed: !!transformedFrom,
-          deduplicated: true,
-          targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
-          settlementType: effectiveSettlementType,
-        },
+    await writeAuditLog({
+      actorId,
+      action: 'RELATION_CREATED',
+      entityType: 'Relation',
+      entityId: dedupExistingId ?? '',
+      topicId,
+      summary: `标注（重复） ${effectiveRelationType}`,
+      details: {
+        relationType: effectiveRelationType,
+        originalType: transformedFrom ? payload.relationType : undefined,
+        transformed: !!transformedFrom,
+        deduplicated: true,
+        targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
+        settlementType: effectiveSettlementType,
       },
     });
 
@@ -758,7 +748,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         ...(transformedFrom ? { transformedFrom } : {}),
       }
     : (payload.relationPayload as Record<string, unknown> | undefined);
-  const message = await firstTransactionResult<any>(await prisma.$transaction([
+  const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
         topicId,
@@ -772,26 +762,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: payload.supersedesRelationId ? 'RELATION_SUPERSEDED' : 'RELATION_CREATED',
-        entityType: 'Relation',
-        entityId: '',
-        topicId,
-        data: {
-          relationType: effectiveRelationType,
-          originalRelationType: transformedFrom ? payload.relationType : undefined,
-          transformed: !!transformedFrom,
-          sourceMessageId: payload.sourceMessageId,
-          supersedesRelationId: payload.supersedesRelationId,
-          targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
-          relationPayload: rpForCreate as Prisma.InputJsonValue | undefined,
-          settlementType: effectiveSettlementType,
-        },
-      },
-    }),
-  ]));
+  ]);
 
   log('rel-persist', `CREATED msg=${message.id.slice(-6)} kind=${message.kind} type=${effectiveRelationType} topic=${topicId.slice(-6)}`);
   if (payload.supersedesRelationId) {
@@ -801,12 +772,23 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     });
   }
 
-  await prisma.auditLog.updateMany({
-    where: {
-      action: payload.supersedesRelationId ? 'RELATION_SUPERSEDED' : 'RELATION_CREATED',
-      entityId: '', actorId, topicId,
+  const auditAction = payload.supersedesRelationId ? 'RELATION_SUPERSEDED' : 'RELATION_CREATED';
+  await writeAuditLog({
+    actorId,
+    action: auditAction,
+    entityType: 'Relation',
+    entityId: message.id,
+    topicId,
+    summary: payload.supersedesRelationId ? `替换关系 ${effectiveRelationType}` : `建立关系 ${effectiveRelationType}`,
+    details: {
+      relationType: effectiveRelationType,
+      originalRelationType: transformedFrom ? payload.relationType : undefined,
+      transformed: !!transformedFrom,
+      sourceMessageId: payload.sourceMessageId ?? null,
+      supersedesRelationId: payload.supersedesRelationId ?? null,
+      targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
+      settlementType: effectiveSettlementType,
     },
-    data: { entityId: message.id },
   });
 
   // Auto-stake based on effective relation type
@@ -935,7 +917,7 @@ async function ensureVotingRound(messageId: string, actorId: string, topicId: st
     select: { id: true },
   });
 
-  const round = await firstTransactionResult<any>(await prisma.$transaction([
+  const [round] = await prisma.$transaction([
     prisma.settlementRound.create({
       data: {
         messageId,
@@ -946,22 +928,7 @@ async function ensureVotingRound(messageId: string, actorId: string, topicId: st
         note: null,
       },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'ROUND_CREATED',
-        entityType: 'SettlementRound',
-        entityId: '',
-        topicId,
-        data: { messageId, settlementType, previousRoundId: latestSettled?.id ?? null, autoCreated: true },
-      },
-    }),
-  ]));
-
-  await prisma.auditLog.updateMany({
-    where: { action: 'ROUND_CREATED', entityId: '', actorId, topicId },
-    data: { entityId: round.id },
-  });
+  ]);
 
   return round;
 }
@@ -1008,16 +975,16 @@ async function applyPointMinted(event: PointMintedEvent) {
         data: { reason: payload.reason, note: payload.note },
       },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'POINT_MINTED',
-        entityType: 'PointTransaction',
-        entityId: actorId,
-        data: { amount: payload.amount, reason: payload.reason, note: payload.note },
-      },
-    }),
   ]);
+
+  await writeAuditLog({
+    actorId,
+    action: 'POINT_MINTED',
+    entityType: 'PointTransaction',
+    entityId: actorId,
+    summary: `铸造 ${payload.amount} 点`,
+    details: { amount: payload.amount, reason: payload.reason, note: payload.note },
+  });
 
   return { available: newAvailable, balance: newBalance };
 }
@@ -1082,16 +1049,16 @@ async function applyPointTransferred(event: PointTransferredEvent) {
         data: { transferTo: payload.toUserId, note: payload.note },
       },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'POINT_TRANSFERRED',
-        entityType: 'PointTransaction',
-        entityId: payload.fromUserId,
-        data: { from: payload.fromUserId, to: payload.toUserId, amount: payload.amount, note: payload.note },
-      },
-    }),
   ]);
+
+  await writeAuditLog({
+    actorId,
+    action: 'POINT_TRANSFERRED',
+    entityType: 'PointTransaction',
+    entityId: payload.fromUserId,
+    summary: `转移 ${payload.amount} 点给用户`,
+    details: { from: payload.fromUserId, to: payload.toUserId, amount: payload.amount, note: payload.note },
+  });
 
   return { fromAvailable: fromNewAvailable, toAvailable: toNewAvailable };
 }
@@ -1205,23 +1172,7 @@ export async function executeStake(params: {
         data: { fee: true, side },
       },
     })] : []),
-    prisma.auditLog.create({
-      data: {
-        actorId: userId,
-        action: 'STAKE_PLACED',
-        entityType: 'Stake',
-        entityId: '',
-        topicId,
-        data: { messageId, side, amount, feeAmount, roundId },
-      },
-    }),
   ]);
-
-  // Patch audit log entityId
-  await prisma.auditLog.updateMany({
-    where: { action: 'STAKE_PLACED', entityId: '', actorId: userId, topicId },
-    data: { entityId: stake.id },
-  });
 
   // Patch pointTransaction with stakeId for precise settlement-panel highlighting
   const pt = await prisma.pointTransaction.findFirst({
@@ -1248,7 +1199,7 @@ export async function executeStake(params: {
 
 async function applyStakePlaced(event: StakePlacedEvent) {
   const { actorId, topicId, payload } = event;
-  return executeStake({
+  const result = await executeStake({
     userId: actorId,
     topicId,
     messageId: payload.messageId,
@@ -1256,6 +1207,18 @@ async function applyStakePlaced(event: StakePlacedEvent) {
     amount: payload.amount,
     roundId: payload.roundId ?? null,
   });
+
+  await writeAuditLog({
+    actorId,
+    action: 'STAKE_PLACED',
+    entityType: 'Stake',
+    entityId: result.stakeId,
+    topicId,
+    summary: `${payload.side === 'PRO' ? '支持' : '反对'}押注 ${payload.amount} 点`,
+    details: { messageId: payload.messageId, side: payload.side, amount: payload.amount, roundId: payload.roundId ?? null },
+  });
+
+  return result;
 }
 
 // ── Phase 3: Settlement Handlers ────────────────────────────
@@ -1300,21 +1263,16 @@ async function applyRoundCreated(event: RoundCreatedEvent) {
         note: payload.note ?? null,
       },
     }),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'ROUND_CREATED',
-        entityType: 'SettlementRound',
-        entityId: '',
-        topicId,
-        data: { messageId: payload.messageId, previousRoundId: latestSettled?.id ?? null },
-      },
-    }),
   ]);
 
-  await prisma.auditLog.updateMany({
-    where: { action: 'ROUND_CREATED', entityId: '', actorId, topicId },
-    data: { entityId: round.id },
+  await writeAuditLog({
+    actorId,
+    action: 'ROUND_CREATED',
+    entityType: 'SettlementRound',
+    entityId: round.id,
+    topicId,
+    summary: `发起结算轮次`,
+    details: { messageId: payload.messageId, previousRoundId: latestSettled?.id ?? null, note: payload.note ?? null },
   });
 
   return round;
@@ -1420,21 +1378,16 @@ async function applyVoteCast(event: VoteCastEvent) {
         data: { fee: true, vote: payload.vote },
       },
     })] : []),
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'VOTE_CAST',
-        entityType: 'VoteStake',
-        entityId: '',
-        topicId,
-        data: { roundId: payload.roundId, vote: payload.vote, amount: payload.amount, feeAmount },
-      },
-    }),
   ]);
 
-  await prisma.auditLog.updateMany({
-    where: { action: 'VOTE_CAST', entityId: '', actorId, topicId },
-    data: { entityId: vote.id },
+  await writeAuditLog({
+    actorId,
+    action: 'VOTE_CAST',
+    entityType: 'VoteStake',
+    entityId: vote.id,
+    topicId,
+    summary: `投票 ${payload.vote === 'TRUE' ? '赞成' : '反对'} ${payload.amount} 点`,
+    details: { roundId: payload.roundId, vote: payload.vote, amount: payload.amount, feeAmount },
   });
 
   // Patch pointTransaction with voteId for precise settlement-panel highlighting
@@ -1799,29 +1752,20 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     }),
   );
 
-  // Audit log
-  ledgerOps.push(
-    prisma.auditLog.create({
-      data: {
-        actorId,
-        action: 'ROUND_SETTLED',
-        entityType: 'SettlementRound',
-        entityId: payload.roundId,
-        topicId,
-        data: {
-          messageId,
-          result,
-          weights,
-          totalPro,
-          totalCon,
-          dust,
-          affectedUsers: affectedUsers.length,
-        },
-      },
-    }),
-  );
+  // Audit log — written after transaction for consistency
+  const resultLabel = result === 'TRUE' ? '赞成胜出' : result === 'FALSE' ? '反对胜出' : '平局';
 
   await prisma.$transaction(ledgerOps);
+
+  await writeAuditLog({
+    actorId,
+    action: 'ROUND_SETTLED',
+    entityType: 'SettlementRound',
+    entityId: payload.roundId,
+    topicId,
+    summary: `结算完成：${resultLabel}`,
+    details: { messageId, result, weights, totalPro, totalCon, dust, affectedUsers: affectedUsers.length },
+  });
 
   // ── Phase 6: Create ROUND_RESULT message ──
   await prisma.message.create({
@@ -2039,26 +1983,43 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
   );
 
   // ── Audit log for clawback (actorId=null since it's system-triggered) ──
-  clawbackOps.push(
-    prisma.auditLog.create({
-      data: {
-        actorId: null,
-        action: 'SETTLEMENT_CLAWBACK',
-        entityType: 'SettlementRound',
-        entityId: previousRoundId,
-        topicId,
-        data: {
-          messageId,
-          previousRoundId,
-          restoredPro,
-          restoredCon,
-          affectedUsers: payouts.length,
-        },
-      },
-    }),
-  );
+  // Written after transaction for consistency
 
   if (clawbackOps.length > 0) {
     await prisma.$transaction(clawbackOps);
   }
+
+  await writeAuditLog({
+    actorId: null,
+    action: 'SETTLEMENT_CLAWBACK',
+    entityType: 'SettlementRound',
+    entityId: previousRoundId,
+    topicId,
+    summary: `结算回滚，恢复 PRO=${restoredPro} CON=${restoredCon}`,
+    details: { messageId, previousRoundId, restoredPro, restoredCon, affectedUsers: payouts.length },
+  });
+}
+
+// ── RelationTargetsUpdated Handler ──────────────────────────
+
+async function applyRelationTargetsUpdated(event: RelationTargetsUpdatedEvent) {
+  const { actorId, topicId, payload } = event;
+
+  const updated = await prisma.message.update({
+    where: { id: payload.relationId },
+    data: { targetRefs: payload.targetRefs as Prisma.InputJsonValue },
+    include: { createdBy: { select: { id: true, username: true } } },
+  });
+
+  await writeAuditLog({
+    actorId,
+    action: 'RELATION_TARGETS_UPDATED',
+    entityType: 'Relation',
+    entityId: payload.relationId,
+    topicId,
+    summary: `更新关系目标`,
+    details: { targetRefs: payload.targetRefs, previousTargetRefs: payload.previousTargetRefs },
+  });
+
+  return updated;
 }

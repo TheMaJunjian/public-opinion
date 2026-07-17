@@ -607,7 +607,7 @@ export async function closeAndSettle(roundId: string): Promise<SettlementResult>
 // Audit Log & Revenue Mock API (Phase 6)
 // ============================================================
 
-export async function getAuditLogs(params?: { topicId?: string; page?: number; limit?: number }) {
+export async function getAuditLogs(params?: { topicId?: string; page?: number; limit?: number; action?: string; actorId?: string; entityType?: string; entityId?: string }) {
   await delay(50);
   const entries: AuditLogEntry[] = [];
   return paginate(entries.filter(entry => !params?.topicId || entry.topicId === params.topicId), params?.page, params?.limit);

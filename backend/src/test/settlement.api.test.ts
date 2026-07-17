@@ -51,7 +51,7 @@ jest.mock('../lib/prisma', () => ({
     },
     auditLog: { create: jest.fn(), updateMany: jest.fn() },
     ruleVersion: { findFirst: jest.fn() },
-    $transaction: jest.fn().mockResolvedValue([{}, {}, {}, {}, {}, {}, {}]),
+    $transaction: jest.fn().mockResolvedValue([{}, {}, {}, {}, {}, {}]),
   },
 }));
 
@@ -261,7 +261,7 @@ describe('POST /api/rounds/:id/votes', () => {
     (prisma.stake.create as jest.Mock).mockResolvedValue({ id: 'stake-1' });
     (prisma.betPool.upsert as jest.Mock).mockResolvedValue({ lockedPro: 10, lockedCon: 0 });
     (prisma.$transaction as jest.Mock).mockImplementation(async (ops: unknown[]) => {
-      if (Array.isArray(ops) && ops.length > 0) return [ops[0]];
+      if (Array.isArray(ops) && ops.length > 0) return [await (ops[0] as Promise<unknown>)];
       return ops;
     });
     (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'audit-1' });

@@ -107,6 +107,10 @@ model AuditLog {
   topicId    String?
   topic      Topic?   @relation(fields: [topicId], references: [id])
   data       Json?
+
+  @@index([topicId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
 }
 
 model RuleVersion {

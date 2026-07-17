@@ -147,9 +147,20 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       ...mockRelationMsg,
       id: 'rel-new',
     });
-    // Event sourcing: audit log write
+    // Event sourcing: audit log write is now outside transaction
     (prisma.auditLog.create as jest.Mock).mockResolvedValue({});
-    (prisma.$transaction as jest.Mock).mockResolvedValue([{}, {}]);
+    const mockCreatedMsg = {
+      id: 'rel-new',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'REPLY',
+      relSourceId: 'msg-1',
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      relationPayload: null,
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    };
+    (prisma.$transaction as jest.Mock).mockResolvedValue([mockCreatedMsg]);
   });
 
   it('returns 400 for an invalid relationType', async () => {
@@ -699,7 +710,17 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
       relationType: 'SUMMARY',
       createdBy: mockUser,
     });
-    (prisma.$transaction as jest.Mock).mockResolvedValue([{}, {}]);
+    (prisma.$transaction as jest.Mock).mockResolvedValue([{
+      ...mockRelationMsg,
+      id: 'rel-new',
+      relationType: 'SUMMARY',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relSourceId: 'msg-1',
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    }]);
   });
 
   it('allows SUMMARY with sourceMessageId (join relations use it)', async () => {

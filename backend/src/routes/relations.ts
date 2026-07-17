@@ -222,23 +222,16 @@ relationsRouter.patch('/:id', requireAuth, async (req: AuthRequest, res: Respons
       }
     }
 
-    const updated = await prisma.message.update({
-      where: { id: relationId },
-      data: { targetRefs: targetRefs as any },
-      include: { createdBy: { select: { id: true, username: true } } },
-    });
-
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        actorId: req.user!.id,
-        action: 'RELATION_TARGETS_UPDATED',
-        entityType: 'Relation',
-        entityId: relationId,
-        topicId,
-        data: { targetRefs: targetRefs as any, previousTargetRefs: existing.targetRefs as any },
+    const updated = await applyEvent({
+      type: 'RELATION_TARGETS_UPDATED',
+      actorId: req.user!.id,
+      topicId,
+      payload: {
+        relationId,
+        targetRefs: targetRefs as any,
+        previousTargetRefs: existing.targetRefs as any,
       },
-    });
+    }) as any;
 
     res.json({
       id: updated.id,

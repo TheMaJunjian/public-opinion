@@ -64,7 +64,7 @@ describe('applyEvent — Phase 0 + Phase 1 event sourcing', () => {
       expect(prisma.$transaction).toHaveBeenCalled();
     });
 
-    it('mints 100 registration bonus points', async () => {
+    it('mints registration bonus points (audit logs now written outside transaction)', async () => {
       await applyEvent({
         type: 'USER_REGISTERED',
         actorId: 'user-002',
@@ -72,8 +72,8 @@ describe('applyEvent — Phase 0 + Phase 1 event sourcing', () => {
       });
 
       const txCall = (prisma.$transaction as jest.Mock).mock.calls[0][0];
-      // The 4th element should be the pointTransaction create with amount=100
-      expect(txCall.length).toBe(7);
+      // 5 ops: user + balance + pointAccount + pointTransaction + ledgerEntry
+      expect(txCall.length).toBe(5);
     });
   });
 

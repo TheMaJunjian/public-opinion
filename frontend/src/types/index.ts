@@ -580,8 +580,14 @@ export interface AuditLogEntry {
   entityId: string | null;
   topicId: string | null;
   createdAt: string;
-  data?: Record<string, unknown> | null;
+  data?: AuditLogData | null;
   actor?: { id: string; username: string } | null;
+}
+
+export interface AuditLogData {
+  summary: string;
+  details: Record<string, unknown>;
+  version: number;
 }
 
 export interface RevenuePoolData {

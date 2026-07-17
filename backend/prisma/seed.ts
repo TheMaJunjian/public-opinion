@@ -1,22 +1,58 @@
 /**
- * prisma/seed.ts — Seed initial data (RuleVersion v1).
+ * prisma/seed.ts — Seed initial data (default admin user + rule).
  *
  * Usage: npx prisma db seed
- * Requires "prisma": { "seed": "ts-node prisma/seed.ts" } in package.json
  */
 
 import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+import { createId } from '@paralleldrive/cuid2';
 
 const prisma = new PrismaClient();
 
-async function main() {
-  // ── RuleVersion v1: 初始经济规则 ──────────────────────────
-  const existing = await prisma.ruleVersion.findFirst({
-    where: { version: 1 },
-  });
+const DEFAULT_USERNAME = 'MaJunJian';
+const DEFAULT_PASSWORD = 'test123456';
+const REGISTRATION_BONUS = 2000;
 
-  if (existing) {
-    console.log('RuleVersion v1 already exists, skipping seed.');
+async function main() {
+  // ── 1. Default user ────────────────────────────────────────
+  let defaultUserId: string;
+  const existingUser = await prisma.user.findUnique({ where: { username: DEFAULT_USERNAME } });
+
+  if (existingUser) {
+    console.log(`User "${DEFAULT_USERNAME}" already exists, skipping.`);
+    defaultUserId = existingUser.id;
+  } else {
+    defaultUserId = createId();
+    const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+
+    await prisma.$transaction([
+      prisma.user.create({
+        data: { id: defaultUserId, username: DEFAULT_USERNAME, password: hashedPassword },
+      }),
+      prisma.balance.create({ data: { userId: defaultUserId, balance: REGISTRATION_BONUS, debtFrozen: false } }),
+      prisma.pointAccount.create({ data: { userId: defaultUserId, available: REGISTRATION_BONUS, locked: 0 } }),
+      prisma.pointTransaction.create({
+        data: { userId: defaultUserId, type: 'MINT', amount: REGISTRATION_BONUS, balanceAfter: REGISTRATION_BONUS, data: { reason: 'REGISTRATION_BONUS' } },
+      }),
+      prisma.ledgerEntry.create({
+        data: { userId: defaultUserId, entryType: 'MINT_INITIAL', amount: REGISTRATION_BONUS, balanceAfter: REGISTRATION_BONUS, data: { reason: 'REGISTRATION_BONUS' } },
+      }),
+      prisma.auditLog.create({
+        data: { actorId: defaultUserId, action: 'USER_REGISTERED', entityType: 'User', entityId: defaultUserId, data: { summary: `用户 ${DEFAULT_USERNAME} 注册`, details: { username: DEFAULT_USERNAME }, version: 1 } },
+      }),
+      prisma.auditLog.create({
+        data: { actorId: defaultUserId, action: 'POINT_MINTED', entityType: 'PointTransaction', entityId: defaultUserId, data: { summary: `注册奖励 ${REGISTRATION_BONUS} 点`, details: { amount: REGISTRATION_BONUS, reason: 'REGISTRATION_BONUS' }, version: 1 } },
+      }),
+    ]);
+
+    console.log(`Seed: created user "${DEFAULT_USERNAME}" (password: ${DEFAULT_PASSWORD}).`);
+  }
+
+  // ── 2. RuleVersion v1 ──────────────────────────────────────
+  const existingRule = await prisma.ruleVersion.findFirst({ where: { version: 1 } });
+  if (existingRule) {
+    console.log('RuleVersion v1 already exists, skipping.');
     return;
   }
 

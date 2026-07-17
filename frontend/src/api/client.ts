@@ -208,11 +208,15 @@ export function getUserStances(userId: string, params?: { page?: number; limit?:
 // Audit Log API (Phase 6)
 // ============================================================
 
-export function getAuditLogs(params?: { topicId?: string; page?: number; limit?: number }) {
+export function getAuditLogs(params?: { topicId?: string; page?: number; limit?: number; action?: string; actorId?: string; entityType?: string; entityId?: string }) {
   const qs = new URLSearchParams();
   if (params?.topicId) qs.set('topicId', params.topicId);
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.action) qs.set('action', params.action);
+  if (params?.actorId) qs.set('actorId', params.actorId);
+  if (params?.entityType) qs.set('entityType', params.entityType);
+  if (params?.entityId) qs.set('entityId', params.entityId);
   return request<import('../types').PaginatedResponse<import('../types').AuditLogEntry>>(`/audit-logs?${qs}`);
 }
 

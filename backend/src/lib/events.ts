@@ -1387,7 +1387,7 @@ async function applyVoteCast(event: VoteCastEvent) {
     entityId: vote.id,
     topicId,
     summary: `投票 ${payload.vote === 'TRUE' ? '赞成' : '反对'} ${payload.amount} 点`,
-    details: { roundId: payload.roundId, vote: payload.vote, amount: payload.amount, feeAmount },
+    details: { messageId: round.messageId, roundId: payload.roundId, vote: payload.vote, amount: payload.amount, feeAmount },
   });
 
   // Patch pointTransaction with voteId for precise settlement-panel highlighting
@@ -1764,7 +1764,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     entityId: payload.roundId,
     topicId,
     summary: `结算完成：${resultLabel}`,
-    details: { messageId, result, weights, totalPro, totalCon, dust, affectedUsers: affectedUsers.length },
+    details: { messageId, roundId: payload.roundId, result, weights, totalPro, totalCon, dust, affectedUsers: affectedUsers.length },
   });
 
   // ── Phase 6: Create ROUND_RESULT message ──

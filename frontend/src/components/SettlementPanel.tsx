@@ -488,7 +488,6 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   messageId: string;
   entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
 }) {
-  const { user: currentUser } = useAuth();
   const [detail, setDetail] = useState<import('../types').SettlementRoundItem | null>(null);
   const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; roundId?: string | null; user: { username: string } }>>([]);
   const [loading, setLoading] = useState(true);
@@ -508,19 +507,28 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   if (loading) return <div className="text-xs text-gray-400 p-2">加载中...</div>;
   if (!detail) return <div className="text-xs text-gray-400 p-2">加载失败</div>;
 
-  // Current round stakes for entry list
+  return <SettledRoundDetailView detail={detail} stakes={stakes} roundId={roundId} entryHighlight={entryHighlight} />;
+}
+
+/** Pure render — all data already loaded, no early returns */
+function SettledRoundDetailView({ detail, stakes, roundId, entryHighlight }: {
+  detail: import('../types').SettlementRoundItem;
+  stakes: Array<{ id: string; side: string; amount: number; createdAt: string; roundId?: string | null; user: { username: string } }>;
+  roundId: string;
+  entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
+}) {
+  const { user: currentUser } = useAuth();
+
   const roundStakes = stakes.filter(s => s.roundId === roundId);
   const entries = roundStakes.map(s => ({
     id: s.id, entryId: s.id, kind: 'stake' as const, username: s.user.username,
     label: s.side, amount: s.amount, createdAt: s.createdAt,
   })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  // Clawback from previous round (if overturned)
   const prevStakes = detail.previousRoundId ? stakes.filter(s => s.roundId === detail.previousRoundId) : [];
   const clawbackPro = prevStakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
   const clawbackCon = prevStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
 
-  // Merge votes from detail.votes + roundStakes for current user
   const myVotes = useMemo(() => {
     const fromVotes = (detail.votes ?? [])
       .filter(v => currentUser && v.user.username === currentUser.username)
@@ -528,7 +536,6 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
     const fromStakes = roundStakes
       .filter(s => currentUser && s.user.username === currentUser.username)
       .map(s => ({ vote: (s.side === 'PRO' ? 'TRUE' : 'FALSE') as 'TRUE' | 'FALSE', amount: s.amount }));
-    // Dedupe: prefer detail.votes entries (they have IDs), add stake-only entries
     const voteKeys = new Set(fromVotes.map(v => `${v.vote}_${v.amount}`));
     return [...fromVotes, ...fromStakes.filter(s => !voteKeys.has(`${s.vote}_${s.amount}`))];
   }, [detail.votes, roundStakes, currentUser]);
@@ -540,7 +547,6 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
         <span>{new Date(detail.openedAt).toLocaleString('zh-CN')}</span>
       </div>
 
-      {/* Settlement summary — public + personal */}
       {detail.result && detail.result !== 'UNKNOWN' && (
         <SettlementSummary
           weights={detail.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 }}
@@ -550,7 +556,6 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
         />
       )}
 
-      {/* Clawback from previous round */}
       {(clawbackPro > 0 || clawbackCon > 0) && (
         <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1.5 text-xs">
           <span className="text-amber-700 font-medium">↩ 推翻扣回</span>
@@ -560,7 +565,6 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
         </div>
       )}
 
-      {/* Merged chronological entries */}
       <div>
         <div className="font-medium text-gray-600 mb-1">记录 ({entries.length}):</div>
         {entries.length > 0 ? (

@@ -152,10 +152,10 @@ export default function MessageFilterPanel({
 }
 
 /** 根据过滤设置筛选消息 */
-export function applyMessageFilter(
-  messages: { id: string; kind: string }[],
+export function applyMessageFilter<T extends { id: string; kind: string }>(
+  messages: T[],
   settings: MessageFilterSettings,
-): { id: string; kind: string }[] {
+): T[] {
   if (!settings.hideSettlement && !settings.hideJoin) return messages;
   return messages.filter(m => {
     if (settings.hideSettlement && (m.kind === 'round' || m.kind === 'round_result')) return false;

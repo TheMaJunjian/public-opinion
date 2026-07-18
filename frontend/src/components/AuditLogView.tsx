@@ -54,16 +54,37 @@ function entityLinkLabel(entityType: string, entityId: string | null): string | 
   }
 }
 
-/** 根据 entityType + entityId 生成跳转 URL（不依赖 details 字段名） */
+/** 结算相关 action：跳转时带 roundId 以自动展开对应轮次 */
+const SETTLEMENT_ACTIONS = new Set([
+  'ROUND_CREATED', 'VOTE_CAST', 'ROUND_SETTLED', 'SETTLEMENT_CLAWBACK',
+]);
+
+/** 根据 entityType + entityId + details 生成跳转 URL */
 function resolveNavUrl(e: AuditLogEntry): string | null {
   if (!e.topicId) return null;
-  if (e.entityType === 'Message' && e.entityId) {
-    return `/topics/${e.topicId}?msg=${e.entityId}`;
-  }
+
   const d = e.data?.details as Record<string, unknown> | undefined;
-  const msgId = d?.messageId as string | undefined;
-  if (msgId) return `/topics/${e.topicId}?msg=${msgId}`;
-  return `/topics/${e.topicId}`;
+
+  // 优先从 details 取 messageId（结算/关系类 action 都有）
+  // 其次：Message 实体的 entityId 就是消息 ID
+  // 最后：Relation 实体的 entityId 是关系消息 ID，可作为跳转目标
+  const msgId = (d?.messageId as string)
+    || (e.entityType === 'Message' && e.entityId ? e.entityId : undefined)
+    || (e.entityType === 'Relation' && e.entityId ? e.entityId : undefined);
+
+  if (!msgId) return `/topics/${e.topicId}`;
+
+  const params = new URLSearchParams();
+  params.set('msg', msgId);
+
+  // 结算相关记录：设 settlement 参数以触发 SettlementPanel 展开
+  const roundId = d?.roundId as string | undefined;
+  if (roundId && SETTLEMENT_ACTIONS.has(e.action)) {
+    params.set('settlement', msgId);
+    params.set('highlightRound', roundId);
+  }
+
+  return `/topics/${e.topicId}?${params.toString()}`;
 }
 
 export default function AuditLogView({ topicId }: { topicId?: string }) {

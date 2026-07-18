@@ -1637,6 +1637,8 @@ export interface GraphViewProps {
   onDecorationBodyClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
   /** Double-click on a decoration badge — shows sender info popup */
   onDecorationDoubleClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
+  /** Which decoration badges are currently selected: keys are `${messageId}::agree` / `${messageId}::disagree` */
+  selectedDecorations?: Set<string>;
   /** Click on an aggregated tag badge — toggles selection of all relation messages in the group */
   onTagBodyClick?: (e: React.MouseEvent, messageId: string, tagLabel: string, relMsgIds: string[]) => void;
   /** Double-click on a tag badge — shows details popup */
@@ -1696,6 +1698,7 @@ export default function GraphView(props: GraphViewProps) {
     onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
     onMessageMouseDown, onMessageMouseUp,
     onDecorationIconClick, onDecorationBodyClick, onDecorationDoubleClick,
+    selectedDecorations,
     onTagBodyClick, onTagDoubleClick,
     onGroupFrameClick, onGroupFrameDoubleClick,
     onInlineBadgeClick, onInlineBadgeDoubleClick,
@@ -4068,17 +4071,28 @@ export default function GraphView(props: GraphViewProps) {
       {decorationRectsState&&decorationsByMsgState&&Object.entries(decorationRectsState).map(([,v])=>{
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
         const cnt=v.kind==="agree"?counts.agreeCount:counts.disagreeCount;
-        const bgColor=v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+        const baseBg=v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
         const icon=v.kind==="agree"?"👍":"👎";
+        const decKey=`${v.messageId}::${v.kind}`;
+        const isSel=selectedDecorations?.has(decKey)??false;
+        const bgColor=isSel
+          ? (v.kind==="agree"?"rgba(2,190,100,1)":"rgba(240,60,60,1)")
+          : baseBg;
+        const borderStyle=isSel
+          ?"2px solid rgba(255,255,255,0.45)"
+          :"1px solid rgba(255,255,255,0.08)";
+        const shadowStyle=isSel
+          ?"0 0 0 1px rgba(255,255,255,0.2), 0 2px 8px rgba(0,0,0,0.6)"
+          :"0 2px 6px rgba(0,0,0,0.5)";
         return (
           <div key={`dec-${v.key}`}
             data-rel-overlay="true"
             onClick={ev=>{ev.stopPropagation();}}
             onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}
-            title={`${v.kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+            title={`${v.kind==="agree"?"赞同":"反对"}${isSel?"（已选中）":""}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
             style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:7,
               background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-              fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+              fontSize:11,pointerEvents:"auto",boxShadow:shadowStyle,border:borderStyle,
               overflow:"hidden"}}>
             {/* Icon area: click = quick send */}
             <div

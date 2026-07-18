@@ -4175,6 +4175,19 @@ export default function TopicDetailPage() {
   // Graph messages: no suppression hiding needed — all messages visible.
   const graphMessagesFinal = messagesToRenderFiltered;
 
+  // Which agree/disagree decoration badges are currently selected (via draftUnits)
+  const selectedDecorations = (() => {
+    const sel = new Set<string>();
+    const draftRelIds = new Set(draftUnits.map(u => u.messageId));
+    for (const e of edgesToRender) {
+      if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
+      if (draftRelIds.has(e.relationMessageId)) {
+        sel.add(`${e.to.messageId}::${e.relationType}`);
+      }
+    }
+    return sel;
+  })();
+
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
   const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
@@ -4465,6 +4478,7 @@ export default function TopicDetailPage() {
                   onDecorationIconClick={handleDecorationIconClick}
                   onDecorationBodyClick={handleDecorationBodyClick}
                   onDecorationDoubleClick={handleDecorationDoubleClick}
+                  selectedDecorations={selectedDecorations}
                   onTagBodyClick={handleTagBodyClick}
                   onTagDoubleClick={handleTagDoubleClick}
                   onGroupFrameClick={handleGroupFrameClick}

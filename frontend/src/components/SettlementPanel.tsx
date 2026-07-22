@@ -358,6 +358,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         });
       }
       onSettled(localRound.id);
+      window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('points-flash'));
     } catch (e: unknown) {
       setSettleError((e as Error)?.message ?? '结算失败');

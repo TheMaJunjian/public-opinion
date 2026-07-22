@@ -875,7 +875,7 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
     const userBalance = await prisma.balance.findUnique({ where: { userId } });
     if (!userBalance || userBalance.debtFrozen || userBalance.balance < selfStakeAmount) return undefined;
 
-    await executeStake({
+    const result = await executeStake({
       userId,
       topicId,
       messageId,
@@ -883,6 +883,16 @@ async function autoSelfStake(userId: string, topicId: string, messageId: string,
       amount: selfStakeAmount,
       roundId: roundId ?? null,
       settlementType,
+    });
+
+    await writeAuditLog({
+      actorId: userId,
+      action: 'STAKE_PLACED',
+      entityType: 'Stake',
+      entityId: result.stakeId,
+      topicId,
+      summary: `${side === 'PRO' ? '支持' : '反对'}押注 ${selfStakeAmount} 点`,
+      details: { messageId, side, amount: selfStakeAmount, roundId: roundId ?? null, settlementType, feeAmount: result.feeAmount },
     });
 
     return selfStakeAmount;
@@ -1191,6 +1201,7 @@ export async function executeStake(params: {
     stakeId: stake.id,
     side,
     amount,
+    feeAmount,
     newAvailable,
     newLocked,
     newBalance,
@@ -1215,7 +1226,7 @@ async function applyStakePlaced(event: StakePlacedEvent) {
     entityId: result.stakeId,
     topicId,
     summary: `${payload.side === 'PRO' ? '支持' : '反对'}押注 ${payload.amount} 点`,
-    details: { messageId: payload.messageId, side: payload.side, amount: payload.amount, roundId: payload.roundId ?? null },
+    details: { messageId: payload.messageId, side: payload.side, amount: payload.amount, roundId: payload.roundId ?? null, feeAmount: result.feeAmount },
   });
 
   return result;

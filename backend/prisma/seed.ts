@@ -16,14 +16,12 @@ const REGISTRATION_BONUS = 2000;
 
 async function main() {
   // ── 1. Default user ────────────────────────────────────────
-  let defaultUserId: string;
   const existingUser = await prisma.user.findUnique({ where: { username: DEFAULT_USERNAME } });
 
   if (existingUser) {
     console.log(`User "${DEFAULT_USERNAME}" already exists, skipping.`);
-    defaultUserId = existingUser.id;
   } else {
-    defaultUserId = createId();
+    const defaultUserId = createId();
     const hashedPassword = await bcrypt.hash(DEFAULT_PASSWORD, 10);
 
     await prisma.$transaction([

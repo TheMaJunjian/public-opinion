@@ -24,6 +24,8 @@ export interface RoundState {
   result: 'TRUE' | 'FALSE' | 'UNKNOWN' | null;
   weights: { TRUE: number; FALSE: number };
   previousRoundId: string | null;
+  /** state.stakes.length at the moment this round was settled — used by clawback */
+  settledAtStakeCount: number;
 }
 
 export interface VoteRecord {

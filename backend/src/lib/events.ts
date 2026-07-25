@@ -1625,20 +1625,12 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     });
   }
 
-  // Build per-user contribution totals (stakes from current & clawed-back rounds)
+  // Build per-user contribution totals from all stakes of this settlement type.
+  // allStakes already includes stakes from every round (query is by messageId +
+  // settlementType, not roundId), so there is no need to add prevRoundStakes again.
   const userContributionMap = new Map<string, number>();
   for (const s of allStakes) {
     userContributionMap.set(s.userId, (userContributionMap.get(s.userId) ?? 0) + s.amount);
-  }
-  // If clawback happened, also include previous round stakes (they were re-locked)
-  if (round.previousRoundId) {
-    const prevRoundStakes = await prisma.stake.findMany({
-      where: { messageId, roundId: round.previousRoundId },
-      select: { userId: true, amount: true },
-    });
-    for (const ps of prevRoundStakes) {
-      userContributionMap.set(ps.userId, (userContributionMap.get(ps.userId) ?? 0) + ps.amount);
-    }
   }
 
   // Build transaction operations
@@ -1832,7 +1824,7 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
   // ── Look up original stakes (only those from before previous round ended) ──
   // Filter by settlementType to match the previous round's type
   const payoutUserIds = [...new Set(payouts.map(p => p.userId))];
-  const [userStakes, prevRoundVoteRels] = await Promise.all([
+  const [userStakes] = await Promise.all([
     prisma.stake.findMany({
       where: {
         messageId,
@@ -1842,33 +1834,10 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
       },
       select: { userId: true, amount: true },
     }),
-    // Query relation messages with vote amounts from the topic, matching settlement type
-    prisma.message.findMany({
-      where: {
-        topicId,
-        kind: 'RELATION',
-        relationType: prevStype === 'VALUE'
-          ? { in: ['RECOMMEND', 'ARCHIVE'] }
-          : { in: ['AGREE', 'DISAGREE'] },
-        relSourceId: null,
-        createdById: { in: payoutUserIds },
-        createdAt: prevRound.closedAt ? { lte: prevRound.closedAt } : undefined,
-      },
-      select: { createdById: true, relationPayload: true, targetRefs: true },
-    }),
   ]);
   const userStakeTotal = new Map<string, number>();
   for (const s of userStakes) {
     userStakeTotal.set(s.userId, (userStakeTotal.get(s.userId) ?? 0) + s.amount);
-  }
-  // Count vote amounts from AGREE/DISAGREE relations targeting this message
-  for (const v of prevRoundVoteRels) {
-    const refs = v.targetRefs as Array<{ messageId?: string }> | undefined;
-    if (refs?.some(r => r.messageId === messageId)) {
-      const payload = v.relationPayload as Record<string, unknown> | null;
-      const voteAmount = (payload?.amount as number) ?? 0;
-      userStakeTotal.set(v.createdById, (userStakeTotal.get(v.createdById) ?? 0) + voteAmount);
-    }
   }
 
   // ── Accumulate clawback per user (avoids duplicate reads overwriting) ──
@@ -1961,7 +1930,7 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
   const restoreType = prevRound?.settlementType ?? 'TRUTH';
 
   const stakes = await prisma.stake.findMany({
-    where: { messageId },
+    where: { messageId, settlementType: restoreType },
     select: { side: true, amount: true },
   });
   const prevVotes = await prisma.voteStake.findMany({

@@ -116,7 +116,7 @@ export default function MessageCard({
             : isMergeTopic ? `归并 ${msg.id}`
             : msg.kind === 'relation' ? `关系消息 ${msg.id}`
             : bk === 'ROUND' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '💎 发起价值仲裁' : '⚖️ 发起真假仲裁')
-            : bk === 'ROUND_RESULT' ? '🏁 结算完成'
+            : bk === 'ROUND_RESULT' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '💎 价值仲裁已结算' : '⚖️ 真假仲裁已结算')
             : bk === 'GOVERNANCE' ? '🏛️ 治理提案'
             : bk === 'CODE' ? '💻 代码'
             : bk === 'OPERATIONS' ? '📊 运营'
@@ -182,7 +182,10 @@ export default function MessageCard({
             const tgtContent = settlementTargetContent ?? '';
             const preview = tgtContent.length > 40 ? tgtContent.slice(0, 40) + '…' : tgtContent;
             const isVal = isValueSettlement ?? (msg as any).roundPayload?.settlementType === 'VALUE';
-            const tc = isVal ? '#f59e0b' : '#818cf8';
+            const isRound = msg.kind === 'round';
+            const tc = isVal
+              ? (isRound ? '#fcd34d' : '#f59e0b')
+              : (isRound ? '#a5b4fc' : '#818cf8');
             const lines = (msg.content ?? '').split('\n');
             return (
               <div>

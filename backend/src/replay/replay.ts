@@ -150,14 +150,15 @@ function applySettle(
 ) {
   let round = state.rounds.get(roundId);
   if (!round) {
-    const settlementType = state.stakes.find(stake => stake.roundId === roundId)?.settlementType ?? 'TRUTH';
+    const stype = state.stakes.find(stake => stake.roundId === roundId)?.settlementType ?? 'TRUTH';
     round = {
       messageId,
-      settlementType,
+      settlementType: stype,
       status: 'VOTING',
       result: null,
       weights: { TRUE: 0, FALSE: 0 },
       previousRoundId: null,
+      settledAtStakeCount: 0,
     };
     state.rounds.set(roundId, round);
   }
@@ -165,6 +166,7 @@ function applySettle(
   round.status = 'SETTLED';
   round.result = result;
   round.weights = weights;
+  round.settledAtStakeCount = state.stakes.length;
 
   if (result === 'UNKNOWN' || (weights.TRUE === 0 && weights.FALSE === 0)) return;
 
@@ -176,12 +178,14 @@ function applySettle(
 
   const rate = loserTotal / winnerTotal;
 
-  // Settlement distributes all message stakes, including auto-stakes that are
-  // not represented by a VoteStake record.
-  // Production settlement reads all stakes that exist for the message at the
-  // time it closes the round. Replay is chronological, so this already
-  // excludes stakes created after the settlement event.
-  const roundStakes = state.stakes.filter(stake => stake.messageId === messageId);
+  // Settlement only processes stakes that belong to this round's settlementType.
+  // A message may have multiple concurrent rounds (e.g. TRUTH + VALUE) with
+  // independent settlement lifecycles. Filtering by messageId alone would
+  // incorrectly include stakes from other settlement types.
+  const roundStakes = state.stakes.filter(stake =>
+    stake.messageId === messageId &&
+    stake.settlementType === round.settlementType
+  );
   const userDelta = new Map<string, number>();
   const userContribution = new Map<string, number>();
   const loserContribution = new Map<string, number>();
@@ -267,14 +271,35 @@ function applyClawback(
   const prevRound = state.rounds.get(previousRoundId);
   if (!prevRound || !prevRound.result || prevRound.result === 'UNKNOWN') return;
 
-  // Clawback: reverse previous round's payouts
+  // Clawback: reverse previous round's payouts for ALL stakes of this
+  // settlement type that existed when the round was settled.  The previous
+  // settlement processed every stake of this type that existed at the time,
+  // including stakes from earlier rounds that were re-locked by a prior
+  // clawback.  Filtering by roundId would miss those; not filtering at all
+  // would include new stakes added after the settlement.
   const winnerTotal = prevRound.result === 'TRUE' ? prevRound.weights.TRUE : prevRound.weights.FALSE;
   const loserTotal = prevRound.result === 'TRUE' ? prevRound.weights.FALSE : prevRound.weights.TRUE;
   const winnerSide = prevRound.result === 'TRUE' ? 'PRO' : 'CON';
-  const prevStakes = state.stakes.filter(
-    stake => stake.messageId === messageId && stake.roundId === previousRoundId,
+  const cutoff = prevRound.settledAtStakeCount;
+  const prevStakes = state.stakes.slice(0, cutoff).filter(
+    stake => stake.messageId === messageId && stake.settlementType === prevRound.settlementType,
   );
 
+  // First pass: calculate what was distributed (to reverse dust correctly)
+  let totalDistributed = 0;
+  let firstWinnerId: string | null = null;
+  for (const stake of prevStakes) {
+    const wasWinner = stake.side === winnerSide;
+    if (wasWinner && winnerTotal > 0) {
+      const gain = Math.floor(stake.amount * loserTotal / winnerTotal);
+      firstWinnerId ??= stake.userId;
+      totalDistributed += stake.amount + gain;
+    }
+  }
+  const totalPool = prevStakes.reduce((sum, st) => sum + st.amount, 0);
+  const dust = totalPool - totalDistributed;
+
+  // Second pass: reverse individual stakes
   for (const stake of prevStakes) {
     const acc = state.accounts.get(stake.userId);
     const ls = state.ledgerSummary.get(stake.userId);
@@ -298,6 +323,22 @@ function applyClawback(
 
     state.accounts.set(stake.userId, acc);
     state.ledgerSummary.set(stake.userId, ls);
+  }
+
+  // Reverse dust that was given to the first winner in the original settlement
+  if (dust > 0 && firstWinnerId) {
+    const acc = state.accounts.get(firstWinnerId);
+    const ls = state.ledgerSummary.get(firstWinnerId);
+    if (acc) {
+      acc.available -= dust;
+      state.accounts.set(firstWinnerId, acc);
+      const bal = state.balances.get(firstWinnerId) ?? 0;
+      state.balances.set(firstWinnerId, bal - dust);
+    }
+    if (ls) {
+      ls.earned -= dust;
+      ls.clawback += dust;
+    }
   }
 
   // Restore BetPool
@@ -338,6 +379,7 @@ function applyRoundCreated(
       result: null,
       weights: { TRUE: 0, FALSE: 0 },
       previousRoundId,
+      settledAtStakeCount: 0,
     });
   }
 }
@@ -439,11 +481,8 @@ export async function replay(): Promise<ReplayState> {
         case 'POINT_TRANSFERRED':
           applyTransfer(state, d.from as string, d.to as string, d.amount as number);
           break;
-
-        // MESSAGE_CREATED for ROUND messages: handled by ROUND_CREATED above
-        // RELATION_CREATED: auto-stake is handled by STAKE_PLACED that follows
-        // Other actions don't affect balances/pools
       }
+
     } catch (err) {
       console.error(`[replay] FAILED action=${entry.action} entityId=${entry.entityId?.slice(-6)}: ${(err as Error).message}`);
     }

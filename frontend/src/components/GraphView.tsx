@@ -3057,8 +3057,18 @@ export default function GraphView(props: GraphViewProps) {
             if (msg.kind === 'governance') return { color: '#f59e0b', label: '提案', bg: 'rgba(245,158,11,0.08)' };
             if (msg.kind === 'code')        return { color: '#14b8a6', label: '代码', bg: 'rgba(20,184,166,0.08)' };
             if (msg.kind === 'operations')  return { color: '#06b6d4', label: '📊 运营', bg: 'rgba(6,182,212,0.08)' };
-            if (msg.kind === 'round')       return { color: '#818cf8', label: '⚖️ 结算中', bg: 'rgba(129,140,248,0.08)' };
-            if (msg.kind === 'round_result')return { color: '#34d399', label: '✅ 已结算', bg: 'rgba(52,211,153,0.08)' };
+            if (msg.kind === 'round') {
+              const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
+              return isValue
+                ? { color: '#fcd34d', label: '💎 结算中', bg: 'rgba(252,211,77,0.08)' }
+                : { color: '#a5b4fc', label: '⚖️ 结算中', bg: 'rgba(165,180,252,0.08)' };
+            }
+            if (msg.kind === 'round_result') {
+              const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
+              return isValue
+                ? { color: '#f59e0b', label: '💎 已结算', bg: 'rgba(245,158,11,0.12)' }
+                : { color: '#818cf8', label: '⚖️ 已结算', bg: 'rgba(129,140,248,0.12)' };
+            }
             if (msg.kind === 'relation' && msg.relationType === 'summary') return { color: '#2dd4bf', label: '总结', bg: 'rgba(45,212,191,0.08)' };
             return null;
           })();
@@ -3202,7 +3212,10 @@ export default function GraphView(props: GraphViewProps) {
                   ? targetContent.slice(0, 40) + '…'
                   : targetContent;
                 const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
-                const tagColor = isValue ? '#f59e0b' : '#818cf8';
+                const isRound = msg.kind === 'round';
+                const tagColor = isValue
+                  ? (isRound ? '#fcd34d' : '#f59e0b')
+                  : (isRound ? '#a5b4fc' : '#818cf8');
                 const lines = (msg.content ?? '').split('\n');
                 const firstLine = lines[0];
                 const restLines = lines.slice(1).join('\n');

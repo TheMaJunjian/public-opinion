@@ -1523,10 +1523,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 
   const totalPool = totalPro + totalCon;
 
-  // ── Fetch message creator & rule params for creator reward ──
+  // ── Fetch message creator, kind & rule params for creator reward & governance ──
   const message = await prisma.message.findUnique({
     where: { id: messageId },
-    select: { createdById: true },
+    select: { createdById: true, kind: true, relationPayload: true },
   });
   const creatorId = message?.createdById ?? '';
   const settlementRule = await prisma.ruleVersion.findFirst({
@@ -1781,6 +1781,59 @@ async function applyRoundSettled(event: RoundSettledEvent) {
       relationPayload: { roundId: payload.roundId, result, weights, totalPro, totalCon, settlementType: stype },
     },
   });
+
+  // ── Governance → RuleVersion: apply proposed parameters when TRUE ──
+  if (result === 'TRUE' && message?.kind === 'GOVERNANCE') {
+    const proposedParams = (message.relationPayload as Record<string, unknown> | null)?.proposedParameters as Record<string, unknown> | undefined;
+    if (proposedParams && typeof proposedParams === 'object') {
+      const currentActive = await prisma.ruleVersion.findFirst({
+        where: { status: 'ACTIVE' },
+        orderBy: { version: 'desc' },
+        select: { id: true, version: true, parameters: true },
+      });
+
+      // Deep merge: proposed overrides current, missing fields kept from current
+      const merged = {
+        ...(currentActive?.parameters as Record<string, unknown> ?? {}),
+        ...proposedParams,
+      };
+
+      const newVersion = (currentActive?.version ?? 0) + 1;
+
+      // Create new ACTIVE RuleVersion
+      const newRule = await prisma.ruleVersion.create({
+        data: {
+          version: newVersion,
+          status: 'ACTIVE',
+          description: `治理提案通过 (消息 ${messageId.slice(-8)})`,
+          parameters: merged as Prisma.InputJsonValue,
+        },
+      });
+
+      // Mark old RuleVersion as SUPERSEDED
+      if (currentActive) {
+        await prisma.ruleVersion.update({
+          where: { id: currentActive.id },
+          data: { status: 'SUPERSEDED' },
+        });
+      }
+
+      await writeAuditLog({
+        actorId,
+        action: 'RULE_VERSION_CREATED',
+        entityType: 'RuleVersion',
+        entityId: newRule.id,
+        topicId,
+        summary: `治理提案通过 → 规则版本 v${newVersion}`,
+        details: {
+          version: newVersion,
+          previousVersion: currentActive?.version ?? null,
+          messageId,
+          proposedKeys: Object.keys(proposedParams),
+        },
+      });
+    }
+  }
 
   return {
     roundId: payload.roundId,

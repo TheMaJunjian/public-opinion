@@ -50,7 +50,7 @@ jest.mock('../lib/prisma', () => ({
       create: jest.fn(),
     },
     auditLog: { create: jest.fn(), updateMany: jest.fn() },
-    ruleVersion: { findFirst: jest.fn() },
+    ruleVersion: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
     $transaction: jest.fn().mockResolvedValue([{}, {}, {}, {}, {}, {}]),
   },
 }));
@@ -873,5 +873,181 @@ describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
     // FALSE=80 > TRUE=50
     expect(res.body.weights.FALSE).toBe(80);
     expect(res.body.weights.TRUE).toBe(50);
+  });
+});
+
+// ── Phase 6: Governance Settlement → RuleVersion ─────────────
+
+describe('Governance Settlement → RuleVersion', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const governanceMessage = {
+    id: 'gov-1',
+    topicId: 'topic-1',
+    kind: 'GOVERNANCE',
+    createdById: 'user-1',
+    relationPayload: {
+      proposedParameters: {
+        selfStakeOnCreate: 20,
+        settlementPermission: 'any_voter',
+      },
+    },
+  };
+
+  const mockActiveRule = {
+    id: 'rule-v1',
+    version: 1,
+    status: 'ACTIVE',
+    parameters: {
+      selfStakeOnCreate: 10,
+      settlementPermission: 'anyone',
+      stakeFeeAmount: 1,
+    },
+  };
+
+  it('creates new RuleVersion when GOVERNANCE settlement is TRUE', async () => {
+    (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({
+      ...mockRound, createdByUserId: 'user-1', previousRoundId: null, messageId: 'gov-1',
+    });
+    // settlementPermission check: skipped (user IS creator)
+    // First real call: settlementRule (creatorRewardRatio)
+    // Second real call: governance → currentActive for merge
+    (prisma.ruleVersion.findFirst as jest.Mock)
+      .mockResolvedValueOnce({ parameters: { creatorRewardRatio: 0 } })
+      .mockResolvedValueOnce(mockActiveRule);
+
+    (prisma.message.findUnique as jest.Mock).mockResolvedValue({
+      topicId: 'topic-1',
+      createdById: 'user-1',
+      kind: 'GOVERNANCE',
+      relationPayload: governanceMessage.relationPayload,
+    });
+
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 10, lockedCon: 0 });
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([{ id: 's1', userId: 'u1', side: 'PRO', amount: 10 }]);
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 100 });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 100, locked: 0 });
+
+    // Mock RuleVersion create and update
+    const newRule = { id: 'rule-v2', version: 2, status: 'ACTIVE' };
+    (prisma.ruleVersion.create as jest.Mock) = jest.fn().mockResolvedValue(newRule);
+    (prisma.ruleVersion.update as jest.Mock) = jest.fn().mockResolvedValue({ id: 'rule-v1', status: 'SUPERSEDED' });
+    (prisma.message.create as jest.Mock).mockResolvedValue({ id: 'result-1' });
+    (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'log-1' });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app)
+      .post('/api/rounds/round-1/close-and-settle')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe('TRUE');
+
+    // Verify new RuleVersion was created with merged parameters
+    expect(prisma.ruleVersion.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          version: 2,
+          status: 'ACTIVE',
+          parameters: expect.objectContaining({
+            selfStakeOnCreate: 20,        // proposed overrides
+            settlementPermission: 'any_voter', // proposed overrides
+            stakeFeeAmount: 1,            // kept from current
+          }),
+        }),
+      }),
+    );
+
+    // Verify old RuleVersion was superseded
+    expect(prisma.ruleVersion.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'rule-v1' },
+        data: { status: 'SUPERSEDED' },
+      }),
+    );
+  });
+
+  it('does NOT create RuleVersion when GOVERNANCE settlement is FALSE', async () => {
+    (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({
+      ...mockRound, createdByUserId: 'user-1', previousRoundId: null, messageId: 'gov-1',
+    });
+    // settlementPermission check: skipped (user IS creator)
+    // Only one real call: settlementRule (creatorRewardRatio)
+    (prisma.ruleVersion.findFirst as jest.Mock)
+      .mockResolvedValueOnce({ parameters: { creatorRewardRatio: 0 } });
+
+    (prisma.message.findUnique as jest.Mock).mockResolvedValue({
+      topicId: 'topic-1',
+      createdById: 'user-1',
+      kind: 'GOVERNANCE',
+      relationPayload: governanceMessage.relationPayload,
+    });
+
+    // CON dominates → result FALSE
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 10, lockedCon: 80 });
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([
+      { id: 's1', userId: 'u1', side: 'PRO', amount: 10 },
+      { id: 's2', userId: 'u2', side: 'CON', amount: 80 },
+    ]);
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 100 });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 100, locked: 0 });
+
+    (prisma.message.create as jest.Mock).mockResolvedValue({ id: 'result-1' });
+    (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'log-1' });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app)
+      .post('/api/rounds/round-1/close-and-settle')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe('FALSE');
+
+    // RuleVersion.create should NOT have been called
+    if ((prisma.ruleVersion.create as jest.Mock).mock) {
+      expect(prisma.ruleVersion.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does NOT create RuleVersion for non-GOVERNANCE messages', async () => {
+    (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({
+      ...mockRound, createdByUserId: 'user-1', previousRoundId: null, messageId: 'msg-1',
+    });
+    // settlementPermission check: skipped (user IS creator)
+    (prisma.ruleVersion.findFirst as jest.Mock)
+      .mockResolvedValueOnce({ parameters: { creatorRewardRatio: 0 } });
+
+    // Regular TEXT message
+    (prisma.message.findUnique as jest.Mock).mockResolvedValue({
+      topicId: 'topic-1',
+      createdById: 'user-1',
+      kind: 'TEXT',
+      relationPayload: null,
+    });
+
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 10, lockedCon: 0 });
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([{ id: 's1', userId: 'u1', side: 'PRO', amount: 10 }]);
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 100 });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 100, locked: 0 });
+    (prisma.message.create as jest.Mock).mockResolvedValue({ id: 'result-1' });
+    (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'log-1' });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(app)
+      .post('/api/rounds/round-1/close-and-settle')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe('TRUE');
+
+    // RuleVersion.create should NOT have been called for non-GOVERNANCE
+    if ((prisma.ruleVersion.create as jest.Mock).mock) {
+      expect(prisma.ruleVersion.create).not.toHaveBeenCalled();
+    }
   });
 });

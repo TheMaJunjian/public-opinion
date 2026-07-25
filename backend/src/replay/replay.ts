@@ -481,6 +481,11 @@ export async function replay(): Promise<ReplayState> {
         case 'POINT_TRANSFERRED':
           applyTransfer(state, d.from as string, d.to as string, d.amount as number);
           break;
+
+        case 'RULE_VERSION_CREATED':
+          // RuleVersion changes tracked for future audit completeness;
+          // does not directly affect economic state (balances/stakes/pools).
+          break;
       }
 
     } catch (err) {

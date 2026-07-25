@@ -96,8 +96,13 @@ describe('useCleanView', () => {
       makeTextMsg('m2', '李四'),
       makeTextMsg('m3', '张三'),
     ];
+    const stakeCounts = {
+      m1: { truth: { pro: 0, con: 0 }, value: { pro: 0, con: 0 } },
+      m2: { truth: { pro: 0, con: 0 }, value: { pro: 0, con: 0 } },
+      m3: { truth: { pro: 0, con: 0 }, value: { pro: 0, con: 0 } },
+    };
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges: [], stakeCounts: {} }),
+      useCleanView({ messages, edges: [], stakeCounts }),
     );
     act(() => {
       result.current.addFilter({ id: 'f1', kind: 'sender', username: '张三' });
@@ -115,8 +120,8 @@ describe('useCleanView', () => {
       makeTextMsg('m2', 'B'),
     ];
     const stakeCounts = {
-      m1: { pro: 100, con: 20 },
-      m2: { pro: 5, con: 3 },
+      m1: { truth: { pro: 100, con: 20 }, value: { pro: 0, con: 0 } },
+      m2: { truth: { pro: 5, con: 3 }, value: { pro: 0, con: 0 } },
     };
     const { result } = renderHook(() =>
       useCleanView({ messages, edges: [], stakeCounts }),
@@ -130,7 +135,7 @@ describe('useCleanView', () => {
 
   it('stake filter with side: only checks specified side', () => {
     const messages: DemoMessage[] = [makeTextMsg('m1', 'A')];
-    const stakeCounts = { m1: { pro: 10, con: 100 } };
+    const stakeCounts = { m1: { truth: { pro: 10, con: 100 }, value: { pro: 0, con: 0 } } };
     const { result } = renderHook(() =>
       useCleanView({ messages, edges: [], stakeCounts }),
     );
@@ -223,9 +228,9 @@ describe('useCleanView', () => {
       makeTextMsg('m3', '李四'),  // 李四 + enough stake → fails (wrong author)
     ];
     const stakeCounts = {
-      m1: { pro: 100, con: 0 },
-      m2: { pro: 5, con: 0 },
-      m3: { pro: 100, con: 0 },
+      m1: { truth: { pro: 100, con: 0 }, value: { pro: 0, con: 0 } },
+      m2: { truth: { pro: 5, con: 0 }, value: { pro: 0, con: 0 } },
+      m3: { truth: { pro: 100, con: 0 }, value: { pro: 0, con: 0 } },
     };
     const { result } = renderHook(() =>
       useCleanView({ messages, edges: [], stakeCounts }),

@@ -94,7 +94,14 @@ function applyStake(
   if (side === 'PRO') bp.pro += amount;
   else bp.con += amount;
 
-  state.stakes.push({ userId, messageId, side, amount, roundId: roundId ?? null });
+  state.stakes.push({
+    userId,
+    messageId,
+    side,
+    amount,
+    roundId: roundId ?? null,
+    settlementType,
+  });
 }
 
 function applyVote(
@@ -141,8 +148,19 @@ function applySettle(
   totalPro: number,
   totalCon: number,
 ) {
-  const round = state.rounds.get(roundId);
-  if (!round) return;
+  let round = state.rounds.get(roundId);
+  if (!round) {
+    const settlementType = state.stakes.find(stake => stake.roundId === roundId)?.settlementType ?? 'TRUTH';
+    round = {
+      messageId,
+      settlementType,
+      status: 'VOTING',
+      result: null,
+      weights: { TRUE: 0, FALSE: 0 },
+      previousRoundId: null,
+    };
+    state.rounds.set(roundId, round);
+  }
 
   round.status = 'SETTLED';
   round.result = result;
@@ -151,7 +169,6 @@ function applySettle(
   if (result === 'UNKNOWN' || (weights.TRUE === 0 && weights.FALSE === 0)) return;
 
   const winnerSide = result === 'TRUE' ? 'PRO' : 'CON';
-  const loserSide = result === 'TRUE' ? 'CON' : 'PRO';
   const winnerTotal = result === 'TRUE' ? weights.TRUE : weights.FALSE;
   const loserTotal = result === 'TRUE' ? weights.FALSE : weights.TRUE;
 
@@ -161,32 +178,77 @@ function applySettle(
 
   // Settlement distributes all message stakes, including auto-stakes that are
   // not represented by a VoteStake record.
-  const roundStakes = state.stakes.filter(s => s.messageId === messageId);
+  // Production settlement reads all stakes that exist for the message at the
+  // time it closes the round. Replay is chronological, so this already
+  // excludes stakes created after the settlement event.
+  const roundStakes = state.stakes.filter(stake => stake.messageId === messageId);
+  const userDelta = new Map<string, number>();
+  const userContribution = new Map<string, number>();
+  const loserContribution = new Map<string, number>();
+  let firstWinnerId: string | null = null;
+  let totalDistributed = 0;
 
   for (const stake of roundStakes) {
-    const acc = state.accounts.get(stake.userId);
-    const ls = state.ledgerSummary.get(stake.userId);
-    if (!acc || !ls) continue;
-
+    userContribution.set(
+      stake.userId,
+      (userContribution.get(stake.userId) ?? 0) + stake.amount,
+    );
     const isWinner = (result === 'TRUE' && stake.side === 'PRO') ||
                      (result === 'FALSE' && stake.side === 'CON');
-
     if (isWinner) {
       const gain = Math.floor(stake.amount * rate);
-      acc.available += gain + stake.amount; // unlock stake + gain
-      acc.locked -= stake.amount;
-      ls.earned += gain;
-      const bal = state.balances.get(stake.userId) ?? 0;
-      state.balances.set(stake.userId, bal + gain + stake.amount);
+      firstWinnerId ??= stake.userId;
+      userDelta.set(stake.userId, (userDelta.get(stake.userId) ?? 0) + stake.amount + gain);
+      totalDistributed += stake.amount + gain;
     } else {
-      // Loser: stake is lost
-      acc.locked -= stake.amount;
-      ls.lost += stake.amount;
-      // Balance already deducted when staking, no further deduction needed
+      loserContribution.set(stake.userId, (loserContribution.get(stake.userId) ?? 0) + stake.amount);
     }
+  }
 
-    state.accounts.set(stake.userId, acc);
-    state.ledgerSummary.set(stake.userId, ls);
+  const applyDelta = (userId: string, delta: number, contribution: number) => {
+    const acc = state.accounts.get(userId);
+    const ls = state.ledgerSummary.get(userId);
+    if (!acc || !ls) return;
+
+    const unlockAmount = Math.min(acc.locked, contribution);
+    acc.available += delta;
+    acc.locked = Math.max(0, acc.locked - unlockAmount);
+    ls.earned += Math.max(0, delta - contribution);
+    const bal = state.balances.get(userId) ?? 0;
+    state.balances.set(userId, bal + delta);
+    state.accounts.set(userId, acc);
+    state.ledgerSummary.set(userId, ls);
+  };
+
+  for (const [userId, delta] of userDelta) {
+    applyDelta(userId, delta, userContribution.get(userId) ?? 0);
+  }
+
+  // Losing stakes do not change balance, but production moves only the
+  // currently locked portion into totalLost and clamps the result at zero.
+  for (const [userId, contribution] of loserContribution) {
+    if (userDelta.has(userId)) continue;
+    const acc = state.accounts.get(userId);
+    const ls = state.ledgerSummary.get(userId);
+    if (!acc || !ls) continue;
+    const lostAmount = Math.min(acc.locked, contribution);
+    acc.locked = Math.max(0, acc.locked - lostAmount);
+    ls.lost += lostAmount;
+    state.accounts.set(userId, acc);
+    state.ledgerSummary.set(userId, ls);
+  }
+
+  // Match production settlement: distribute integer-division remainder to the
+  // first winner so the entire pool remains accounted for.
+  const dust = totalPro + totalCon - totalDistributed;
+  if (dust > 0 && firstWinnerId) {
+    const acc = state.accounts.get(firstWinnerId);
+    if (acc) {
+      acc.available += dust;
+      state.accounts.set(firstWinnerId, acc);
+      const bal = state.balances.get(firstWinnerId) ?? 0;
+      state.balances.set(firstWinnerId, bal + dust);
+    }
   }
 
   // Reset BetPool for this round's settlementType
@@ -206,37 +268,36 @@ function applyClawback(
   if (!prevRound || !prevRound.result || prevRound.result === 'UNKNOWN') return;
 
   // Clawback: reverse previous round's payouts
-  const prevVotes = state.votes.get(previousRoundId) ?? [];
   const winnerTotal = prevRound.result === 'TRUE' ? prevRound.weights.TRUE : prevRound.weights.FALSE;
+  const loserTotal = prevRound.result === 'TRUE' ? prevRound.weights.FALSE : prevRound.weights.TRUE;
+  const winnerSide = prevRound.result === 'TRUE' ? 'PRO' : 'CON';
+  const prevStakes = state.stakes.filter(
+    stake => stake.messageId === messageId && stake.roundId === previousRoundId,
+  );
 
-  for (const v of prevVotes) {
-    const acc = state.accounts.get(v.userId);
-    const ls = state.ledgerSummary.get(v.userId);
+  for (const stake of prevStakes) {
+    const acc = state.accounts.get(stake.userId);
+    const ls = state.ledgerSummary.get(stake.userId);
     if (!acc || !ls) continue;
 
-    const wasWinner = (prevRound.result === 'TRUE' && v.vote === 'TRUE') ||
-                      (prevRound.result === 'FALSE' && v.vote === 'FALSE');
+    const wasWinner = stake.side === winnerSide;
 
     if (wasWinner && winnerTotal > 0) {
-      const rate = (prevRound.result === 'TRUE' ? prevRound.weights.FALSE : prevRound.weights.TRUE) / winnerTotal;
-      const gain = Math.floor(v.amount * rate);
-      acc.available -= gain;          // reverse gain
-      acc.locked += v.amount;         // re-lock stake
+      const gain = Math.floor(stake.amount * loserTotal / winnerTotal);
+      acc.available -= gain + stake.amount;
+      acc.locked += stake.amount;
       ls.earned -= gain;
-      ls.clawback += gain + v.amount;
-      const bal = state.balances.get(v.userId) ?? 0;
-      state.balances.set(v.userId, bal - gain - v.amount);
+      ls.clawback += gain + stake.amount;
+      const bal = state.balances.get(stake.userId) ?? 0;
+      state.balances.set(stake.userId, bal - gain - stake.amount);
     } else {
-      // Loser gets their stake back
-      acc.available += v.amount;
-      acc.locked += v.amount; // Actually, the loser's stake was already lost.
-      // Let me reconsider: loser's locked was decremented during settlement.
-      // During clawback, the loser gets nothing back (they lost fair and square).
-      // Only winners are clawed back.
+      // The loser receives no balance back; only the lost stake is re-locked.
+      acc.locked += stake.amount;
+      ls.lost -= stake.amount;
     }
 
-    state.accounts.set(v.userId, acc);
-    state.ledgerSummary.set(v.userId, ls);
+    state.accounts.set(stake.userId, acc);
+    state.ledgerSummary.set(stake.userId, ls);
   }
 
   // Restore BetPool

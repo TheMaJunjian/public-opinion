@@ -38,6 +38,7 @@ export interface StakeRecord {
   side: 'PRO' | 'CON';
   amount: number;
   roundId: string | null;
+  settlementType: string;
 }
 
 export interface LedgerSummary {

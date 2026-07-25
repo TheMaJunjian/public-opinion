@@ -397,6 +397,7 @@ export interface StakeItem {
   amount: number;
   createdAt: string;
   roundId?: string | null;
+  settlementType?: 'TRUTH' | 'VALUE';
   user: User;
 }
 
@@ -406,11 +407,15 @@ export interface MessageStakes {
     lockedPro: number;
     lockedCon: number;
   };
+  /** Per-settlementType BetPool breakdown (current round, not cumulative) */
+  pools?: Record<string, { lockedPro: number; lockedCon: number }>;
   stakes: StakeItem[];
   counts: {
     pro: number;
     con: number;
   };
+  /** Per-settlementType cumulative stake counts */
+  countsByType?: Record<string, { pro: number; con: number }>;
 }
 
 // ============================================================

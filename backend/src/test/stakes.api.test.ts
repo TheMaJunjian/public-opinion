@@ -23,6 +23,7 @@ jest.mock('../lib/prisma', () => ({
     settlementRound: { findFirst: jest.fn() },
     betPool: {
       findUnique: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       upsert: jest.fn(),
     },
     balance: {
@@ -103,8 +104,15 @@ describe('GET /api/messages/:id/stakes', () => {
     jest.clearAllMocks();
     (prisma.stake.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.stake.aggregate as jest.Mock)
-      .mockResolvedValueOnce({ _sum: { amount: 20 } })
-      .mockResolvedValueOnce({ _sum: { amount: 15 } });
+      .mockResolvedValueOnce({ _sum: { amount: 20 } })  // PRO all
+      .mockResolvedValueOnce({ _sum: { amount: 15 } })  // CON all
+      .mockResolvedValueOnce({ _sum: { amount: 20 } })  // TRUTH PRO
+      .mockResolvedValueOnce({ _sum: { amount: 15 } })  // TRUTH CON
+      .mockResolvedValueOnce({ _sum: { amount: 0 } })   // VALUE PRO
+      .mockResolvedValueOnce({ _sum: { amount: 0 } });  // VALUE CON
+    (prisma.betPool.findMany as jest.Mock).mockResolvedValue([
+      { settlementType: 'TRUTH', lockedPro: 10, lockedCon: 5 },
+    ]);
   });
 
   it('returns stake stats without auth', async () => {
@@ -113,5 +121,9 @@ describe('GET /api/messages/:id/stakes', () => {
     expect(res.status).toBe(200);
     expect(res.body.pool).toEqual({ lockedPro: 20, lockedCon: 15 });
     expect(res.body.counts).toEqual({ pro: 20, con: 15 });
+    expect(res.body.countsByType).toEqual({
+      TRUTH: { pro: 20, con: 15 },
+      VALUE: { pro: 0, con: 0 },
+    });
   });
 });

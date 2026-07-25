@@ -1123,7 +1123,7 @@ export async function executeStake(params: {
   // Atomic write: account + stake + betPool + ledger + fee burn + auditLog
   const [stake] = await prisma.$transaction([
     prisma.stake.create({
-      data: { userId, topicId, messageId, side, amount, roundId: roundId ?? null },
+      data: { userId, topicId, messageId, side, amount, roundId: roundId ?? null, settlementType },
     }),
     prisma.pointAccount.update({
       where: { userId },
@@ -1536,9 +1536,9 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   });
   const ruleParams = settlementRule?.parameters as Record<string, unknown> | null;
 
-  // Get all stakes for this message (includes auto-stakes from AGREE/DISAGREE relations)
+  // Get all stakes for this message filtered by settlementType
   const allStakes = await prisma.stake.findMany({
-    where: { messageId },
+    where: { messageId, settlementType: stype },
     select: { id: true, userId: true, side: true, amount: true },
   });
 
@@ -1827,24 +1827,29 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
     },
   });
 
+  const prevStype = prevRound.settlementType ?? 'TRUTH';
+
   // ── Look up original stakes (only those from before previous round ended) ──
-  // Also query AGREE/DISAGREE relations from the previous round for re-lock amounts
+  // Filter by settlementType to match the previous round's type
   const payoutUserIds = [...new Set(payouts.map(p => p.userId))];
   const [userStakes, prevRoundVoteRels] = await Promise.all([
     prisma.stake.findMany({
       where: {
         messageId,
+        settlementType: prevStype,
         userId: { in: payoutUserIds },
         createdAt: prevRound.closedAt ? { lte: prevRound.closedAt } : undefined,
       },
       select: { userId: true, amount: true },
     }),
-    // Query AGREE/DISAGREE relations with vote amounts from the topic
+    // Query relation messages with vote amounts from the topic, matching settlement type
     prisma.message.findMany({
       where: {
         topicId,
         kind: 'RELATION',
-        relationType: { in: ['AGREE', 'DISAGREE'] },
+        relationType: prevStype === 'VALUE'
+          ? { in: ['RECOMMEND', 'ARCHIVE'] }
+          : { in: ['AGREE', 'DISAGREE'] },
         relSourceId: null,
         createdById: { in: payoutUserIds },
         createdAt: prevRound.closedAt ? { lte: prevRound.closedAt } : undefined,

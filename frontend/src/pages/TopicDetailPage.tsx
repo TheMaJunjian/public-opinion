@@ -86,7 +86,8 @@ export default function TopicDetailPage() {
   const [relations, setRelations] = useState<Relation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [stakeCounts, setStakeCounts] = useState<Record<string, { pro: number; con: number }>>({});
+  // Per-message stake counts, split by TRUTH/VALUE settlement type
+  const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
   const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
   const [isPreloaded, setIsPreloaded] = useState(false);
 
@@ -171,15 +172,21 @@ export default function TopicDetailPage() {
                         .filter(s => s.user.username === msg.author && s.side === 'PRO')
                         .reduce((sum, s) => sum + s.amount, 0)
                     : 0;
-                  return { id, pro: r.counts.pro, con: r.counts.con, authorStake };
+                  const byType = r.countsByType ?? {};
+                  return {
+                    id,
+                    truth: byType.TRUTH ?? { pro: 0, con: 0 },
+                    value: byType.VALUE ?? { pro: 0, con: 0 },
+                    authorStake,
+                  };
                 })
               )
             );
-            const map: Record<string, { pro: number; con: number }> = {};
+            const map: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }> = {};
             const aMap: Record<string, number> = {};
-            for (const s of stakes) { map[s.id] = { pro: s.pro, con: s.con }; aMap[s.id] = s.authorStake; }
-            // For RECOMMEND/ARCHIVE relations: mirror text target stake counts onto
-            // the annotation relation message so badges show correct stats.
+            for (const s of stakes) { map[s.id] = { truth: s.truth, value: s.value }; aMap[s.id] = s.authorStake; }
+            // For RECOMMEND/ARCHIVE relations: mirror text target's VALUE stake counts onto
+            // the annotation relation message so badges show correct VALUE stats.
             for (const rel of relationsData.data) {
               const rt = rel.relationType?.toUpperCase();
               if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
@@ -653,7 +660,11 @@ export default function TopicDetailPage() {
     const handler = (e: Event) => {
       const { messageId } = (e as CustomEvent<{ messageId: string }>).detail;
       api.getMessageStakes(messageId).then(s => {
-        setStakeCounts(prev => ({ ...prev, [messageId]: { pro: s.counts.pro, con: s.counts.con } }));
+        const byType = s.countsByType ?? {};
+        setStakeCounts(prev => ({ ...prev, [messageId]: {
+          truth: byType.TRUTH ?? { pro: 0, con: 0 },
+          value: byType.VALUE ?? { pro: 0, con: 0 },
+        }}));
       }).catch(() => {});
     };
     window.addEventListener('stakes-refresh', handler);
@@ -719,7 +730,11 @@ export default function TopicDetailPage() {
     const allIds = [backendRel.id, ...targetMsgIds];
     for (const mid of allIds) {
       api.getMessageStakes(mid).then(s => {
-        setStakeCounts(prev => ({ ...prev, [mid]: { pro: s.counts.pro, con: s.counts.con } }));
+        const byType = s.countsByType ?? {};
+        setStakeCounts(prev => ({ ...prev, [mid]: {
+          truth: byType.TRUTH ?? { pro: 0, con: 0 },
+          value: byType.VALUE ?? { pro: 0, con: 0 },
+        }}));
       }).catch(() => {});
     }
     // For RECOMMEND/ARCHIVE: the stake is on the text target, so also mirror its
@@ -728,9 +743,13 @@ export default function TopicDetailPage() {
       const textTarget = targetMsgIds[0];
       if (textTarget) {
         api.getMessageStakes(textTarget).then(s => {
+          const byType = s.countsByType ?? {};
           setStakeCounts(prev => ({
             ...prev,
-            [backendRel.id]: { pro: s.counts.pro, con: s.counts.con },
+            [backendRel.id]: {
+              truth: byType.TRUTH ?? { pro: 0, con: 0 },
+              value: byType.VALUE ?? { pro: 0, con: 0 },
+            },
           }));
         }).catch(() => {});
       }
@@ -1430,7 +1449,11 @@ export default function TopicDetailPage() {
       setMessages(prev => [...prev, msg]);
       // Fetch real stake counts from backend (not optimistic)
       api.getMessageStakes(msg.id).then(s => {
-        setStakeCounts(prev => ({ ...prev, [msg.id]: { pro: s.counts.pro, con: s.counts.con } }));
+        const byType = s.countsByType ?? {};
+        setStakeCounts(prev => ({ ...prev, [msg.id]: {
+          truth: byType.TRUTH ?? { pro: 0, con: 0 },
+          value: byType.VALUE ?? { pro: 0, con: 0 },
+        }}));
         setAuthorStakes(prev => ({ ...prev, [msg.id]: s.stakes.find(st => st.side === 'PRO' && st.user.username === msg.author)?.amount ?? 0 }));
       }).catch(() => {});
       // Reset to rule default
@@ -2958,7 +2981,11 @@ export default function TopicDetailPage() {
         const selfStake = relStakeRef.current;
         setAuthorStakes(prev => ({ ...prev, [backendRel.id]: selfStake }));
         api.getMessageStakes(backendRel.id).then(s => {
-          setStakeCounts(prev => ({ ...prev, [backendRel.id]: { pro: s.counts.pro, con: s.counts.con } }));
+          const byType = s.countsByType ?? {};
+          setStakeCounts(prev => ({ ...prev, [backendRel.id]: {
+            truth: byType.TRUTH ?? { pro: 0, con: 0 },
+            value: byType.VALUE ?? { pro: 0, con: 0 },
+          }}));
         }).catch(() => {});
         window.dispatchEvent(new Event('points-refresh'));
       } catch (e: any) {
@@ -4408,7 +4435,12 @@ export default function TopicDetailPage() {
                     lastClickedMsgId: lastClickedMessageId,
                   };
                   const sc = stakeCounts[msg.id];
-                  const showProCon = sc && (sc.pro > 0 || sc.con > 0);
+                  const truthPro = sc?.truth.pro ?? 0;
+                  const truthCon = sc?.truth.con ?? 0;
+                  const valuePro = sc?.value.pro ?? 0;
+                  const valueCon = sc?.value.con ?? 0;
+                  const showTruthProCon = truthPro > 0 || truthCon > 0;
+                  const showValueProCon = valuePro > 0 || valueCon > 0;
                   const isTruthOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'TRUTH';
                   const isValueOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'VALUE';
                   const hasCustomContent = isContentKind(msg.kind) && msg.kind !== 'round' && msg.kind !== 'round_result';
@@ -4426,8 +4458,20 @@ export default function TopicDetailPage() {
                         <>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
                           <div style={{ display: "flex", gap: 4, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
-                            {showProCon && sc!.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>}
-                            {showProCon && sc!.con > 0 && <span style={{ color: "#f87171" }}>👎{sc!.con}</span>}
+                            {showTruthProCon && (
+                              <span style={{ color: "#a5b4fc" }} title="真假仲裁">
+                                ⚖️{truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
+                                {truthPro > 0 && truthCon > 0 && ' '}
+                                {truthCon > 0 && <span style={{ color: "#f87171" }}>👎{truthCon}</span>}
+                              </span>
+                            )}
+                            {showValueProCon && (
+                              <span style={{ color: "#fcd34d" }} title="价值仲裁">
+                                💎{valuePro > 0 && <span style={{ color: "#4ade80" }}>👍{valuePro}</span>}
+                                {valuePro > 0 && valueCon > 0 && ' '}
+                                {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
+                              </span>
+                            )}
                             <button data-settlement-toggle-truth onClick={(e) => { e.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }} style={{ fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }} title="真假仲裁">⚖️</button>
                             <button data-settlement-toggle-value onClick={(e) => { e.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }} style={{ fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }} title="价值仲裁">💎</button>
                           </div>

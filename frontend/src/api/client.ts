@@ -155,8 +155,9 @@ export function getCurrentRules() {
 // Stake API (Phase 2 — read-only; writing via messages/relations)
 // ============================================================
 
-export function getMessageStakes(messageId: string) {
-  return request<import('../types').MessageStakes>(`/messages/${messageId}/stakes`);
+export function getMessageStakes(messageId: string, settlementType?: 'TRUTH' | 'VALUE') {
+  const qs = settlementType ? `?settlementType=${settlementType}` : '';
+  return request<import('../types').MessageStakes>(`/messages/${messageId}/stakes${qs}`);
 }
 
 // ============================================================

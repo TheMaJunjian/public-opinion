@@ -171,16 +171,17 @@ model LedgerEntry {
 // ============================================================
 
 model Stake {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  topicId   String
-  messageId String
-  message   Message  @relation(fields: [messageId], references: [id])
-  side      String   // PRO | CON
-  amount    Int
-  roundId   String?
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  topicId        String
+  messageId      String
+  message        Message  @relation(fields: [messageId], references: [id])
+  side           String   // PRO | CON
+  amount         Int
+  roundId        String?
+  settlementType String   @default("TRUTH") // TRUTH | VALUE
+  createdAt      DateTime @default(now())
 }
 
 model BetPool {

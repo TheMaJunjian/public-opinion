@@ -1665,8 +1665,8 @@ export interface GraphViewProps {
   onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) => void;
   /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
   hideMessageIds?: Set<string>;
-  /** Phase 2: stake counts per message (pro/con) for display on cards */
-  stakeCounts?: Record<string, { pro: number; con: number }>;
+  /** Phase 2: stake counts per message (truth/value split) for display on cards */
+  stakeCounts?: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
   /** Phase 3: callback when ⚖️ truth settlement toggle is clicked */
   onSettlementToggleTruth?: (messageId: string) => void;
   /** Phase 3: callback when 💎 value settlement toggle is clicked */
@@ -2974,13 +2974,28 @@ export default function GraphView(props: GraphViewProps) {
                   <div style={{display:"flex",alignItems:"center",gap:4}}>
                     {(() => {
                       const sc = stakeCounts?.[msg.id];
-                      if (sc && sc.pro > 0) return <span style={{color:"#4ade80",fontSize:10}}>👍{sc.pro}</span>;
-                      return null;
-                    })()}
-                    {(() => {
-                      const sc = stakeCounts?.[msg.id];
-                      if (sc && sc.con > 0) return <span style={{color:"#f87171",fontSize:10}}>👎{sc.con}</span>;
-                      return null;
+                      const truthPro = sc?.truth.pro ?? 0;
+                      const truthCon = sc?.truth.con ?? 0;
+                      const valuePro = sc?.value.pro ?? 0;
+                      const valueCon = sc?.value.con ?? 0;
+                      return (
+                        <>
+                          {(truthPro > 0 || truthCon > 0) && (
+                            <span style={{fontSize:10}}>
+                              <span style={{color:"#a5b4fc"}}>⚖️</span>
+                              {truthPro > 0 && <span style={{color:"#4ade80"}}>👍{truthPro}</span>}
+                              {truthCon > 0 && <span style={{color:"#f87171"}}>👎{truthCon}</span>}
+                            </span>
+                          )}
+                          {(valuePro > 0 || valueCon > 0) && (
+                            <span style={{fontSize:10}}>
+                              <span style={{color:"#fcd34d"}}>💎</span>
+                              {valuePro > 0 && <span style={{color:"#4ade80"}}>👍{valuePro}</span>}
+                              {valueCon > 0 && <span style={{color:"#f87171"}}>👎{valueCon}</span>}
+                            </span>
+                          )}
+                        </>
+                      );
                     })()}
                     {onSettlementToggleTruth && (
                       <button
@@ -3131,13 +3146,29 @@ export default function GraphView(props: GraphViewProps) {
                   <span style={{opacity:0.7}}>{msg.id}</span>
                   {(() => {
                     const sc = stakeCounts?.[msg.id];
-                    // Phase 6: always show settlement ⚖️ entry; PRO/CON counts when available
-                    const showProCon = sc && (sc.pro > 0 || sc.con > 0);
-                    if (showProCon || onSettlementToggleTruth) {
+                    const truthPro = sc?.truth.pro ?? 0;
+                    const truthCon = sc?.truth.con ?? 0;
+                    const valuePro = sc?.value.pro ?? 0;
+                    const valueCon = sc?.value.con ?? 0;
+                    const showTruth = truthPro > 0 || truthCon > 0;
+                    const showValue = valuePro > 0 || valueCon > 0;
+                    if (showTruth || showValue || onSettlementToggleTruth) {
                       return (
                         <div style={{ display: "flex", gap: 4, fontSize: 10, marginTop: 2, alignItems: "center" }}>
-                          {showProCon && sc!.pro > 0 && <span style={{ color: "#4ade80" }}>👍{sc!.pro}</span>}
-                          {showProCon && sc!.con > 0 && <span style={{ color: "#f87171" }}>👎{sc!.con}</span>}
+                          {showTruth && (
+                            <span>
+                              <span style={{ color: "#a5b4fc" }}>⚖️</span>
+                              {truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
+                              {truthCon > 0 && <span style={{ color: "#f87171" }}>👎{truthCon}</span>}
+                            </span>
+                          )}
+                          {showValue && (
+                            <span>
+                              <span style={{ color: "#fcd34d" }}>💎</span>
+                              {valuePro > 0 && <span style={{ color: "#4ade80" }}>👍{valuePro}</span>}
+                              {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
+                            </span>
+                          )}
                           {onSettlementToggleTruth && (
                             <button
                               data-settlement-toggle-truth
@@ -3780,13 +3811,29 @@ export default function GraphView(props: GraphViewProps) {
                   );
                   if (isMergeTopic) {
                     const scMerge = stakeCounts?.[gf.relMsgId];
+                    const truthPro = scMerge?.truth.pro ?? 0;
+                    const truthCon = scMerge?.truth.con ?? 0;
+                    const valuePro = scMerge?.value.pro ?? 0;
+                    const valueCon = scMerge?.value.con ?? 0;
                     return (
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, height: "100%" }}>
                         <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
                           {topicTitle}
                         </span>
-                        {scMerge && scMerge.pro > 0 && <span style={{ color: "#4ade80", fontSize: 10, flexShrink: 0 }}>👍{scMerge.pro}</span>}
-                        {scMerge && scMerge.con > 0 && <span style={{ color: "#f87171", fontSize: 10, flexShrink: 0 }}>👎{scMerge.con}</span>}
+                        {(truthPro > 0 || truthCon > 0) && (
+                          <span style={{ fontSize: 10, flexShrink: 0 }}>
+                            <span style={{ color: "#a5b4fc" }}>⚖️</span>
+                            {truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
+                            {truthCon > 0 && <span style={{ color: "#f87171" }}>👎{truthCon}</span>}
+                          </span>
+                        )}
+                        {(valuePro > 0 || valueCon > 0) && (
+                          <span style={{ fontSize: 10, flexShrink: 0 }}>
+                            <span style={{ color: "#fcd34d" }}>💎</span>
+                            {valuePro > 0 && <span style={{ color: "#4ade80" }}>👍{valuePro}</span>}
+                            {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
+                          </span>
+                        )}
                         {onSettlementToggleTruth && (
                           <button
                             onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(gf.relMsgId); }}
@@ -3846,14 +3893,16 @@ export default function GraphView(props: GraphViewProps) {
         // Phase 6: ⚖️ settlement entry at top-right of arrange frame
         if (onSettlementToggleTruth) {
           const sc = stakeCounts?.[sf.relMsgId];
-          const sfPro = sc?.pro ?? 0;
-          const sfCon = sc?.con ?? 0;
+          const truthPro = sc?.truth.pro ?? 0;
+          const truthCon = sc?.truth.con ?? 0;
+          const valuePro = sc?.value.pro ?? 0;
+          const valueCon = sc?.value.con ?? 0;
           nodes.push(
             <div key={`sf-settle-${sf.relMsgId}`} data-rel-overlay="true"
               style={{position:"absolute",left:sfDecLeft,top:sfDecTop,zIndex:7,
                 display:"flex",gap:4,alignItems:"center",pointerEvents:"auto"}}>
-              {sfPro > 0 && <span style={{color:"#4ade80",fontSize:10}}>👍{sfPro}</span>}
-              {sfCon > 0 && <span style={{color:"#f87171",fontSize:10}}>👎{sfCon}</span>}
+              {(truthPro > 0 || truthCon > 0) && <span style={{fontSize:10}}><span style={{color:"#a5b4fc"}}>⚖️</span>{truthPro > 0 && <span style={{color:"#4ade80"}}>👍{truthPro}</span>}{truthCon > 0 && <span style={{color:"#f87171"}}>👎{truthCon}</span>}</span>}
+              {(valuePro > 0 || valueCon > 0) && <span style={{fontSize:10}}><span style={{color:"#fcd34d"}}>💎</span>{valuePro > 0 && <span style={{color:"#4ade80"}}>👍{valuePro}</span>}{valueCon > 0 && <span style={{color:"#f87171"}}>👎{valueCon}</span>}</span>}
               <button
                 onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(sf.relMsgId); }}
                 style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}

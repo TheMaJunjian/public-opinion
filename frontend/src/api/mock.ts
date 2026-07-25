@@ -520,14 +520,19 @@ export async function placeStake(messageId: string, data: { side: 'PRO' | 'CON';
   };
 }
 
-export async function getMessageStakes(messageId: string) {
+export async function getMessageStakes(messageId: string, _settlementType?: 'TRUTH' | 'VALUE') {
   await delay(50);
   const pool = mockStakes[messageId] ?? { pro: 0, con: 0 };
   return {
     messageId,
     pool: { lockedPro: pool.pro, lockedCon: pool.con },
+    pools: { TRUTH: { lockedPro: pool.pro, lockedCon: pool.con } },
     stakes: [],
-    counts: { pro: 0, con: 0 },
+    counts: { pro: pool.pro, con: pool.con },
+    countsByType: {
+      TRUTH: { pro: pool.pro, con: pool.con },
+      VALUE: { pro: 0, con: 0 },
+    },
   };
 }
 

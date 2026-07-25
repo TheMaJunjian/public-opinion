@@ -10,7 +10,7 @@ import { isContentKind } from '../utils/modelBridge';
 interface UseCleanViewInput {
   messages: DemoMessage[];
   edges: DemoEdge[];
-  stakeCounts: Record<string, { pro: number; con: number }>;
+  stakeCounts: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
 }
 
 interface CleanVisibleIds {
@@ -43,7 +43,7 @@ function rulePassesMessage(
   msgId: string,
   ctx: {
     msgMap: Map<string, DemoMessage>;
-    stakeCounts: Record<string, { pro: number; con: number }>;
+    stakeCounts: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
     edges: DemoEdge[];
     roundCounts: Record<string, number>;
     participantCounts: Record<string, number>;
@@ -56,9 +56,11 @@ function rulePassesMessage(
     }
     case 'stake': {
       const sc = ctx.stakeCounts[msgId];
-      if (rule.side === 'PRO') return (sc?.pro ?? 0) >= rule.minAmount;
-      if (rule.side === 'CON') return (sc?.con ?? 0) >= rule.minAmount;
-      return ((sc?.pro ?? 0) + (sc?.con ?? 0)) >= rule.minAmount;
+      const totalPro = (sc?.truth.pro ?? 0) + (sc?.value.pro ?? 0);
+      const totalCon = (sc?.truth.con ?? 0) + (sc?.value.con ?? 0);
+      if (rule.side === 'PRO') return totalPro >= rule.minAmount;
+      if (rule.side === 'CON') return totalCon >= rule.minAmount;
+      return (totalPro + totalCon) >= rule.minAmount;
     }
     case 'rounds': {
       return (ctx.roundCounts[msgId] ?? 0) >= rule.minRounds;

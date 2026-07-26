@@ -1120,7 +1120,7 @@ export async function executeStake(params: {
   const newLocked = pointAccount.locked + amount;
   const newBalance = userBalance.balance - totalCost;
 
-  // Atomic write: account + stake + betPool + ledger + fee burn + auditLog
+  // Atomic write: account + stake + betPool + ledger + fee + auditLog
   const [stake] = await prisma.$transaction([
     prisma.stake.create({
       data: { userId, topicId, messageId, side, amount, roundId: roundId ?? null, settlementType },
@@ -1142,7 +1142,7 @@ export async function executeStake(params: {
         type: 'STAKE_LOCK',
         amount: -totalCost,
         balanceAfter: newAvailable,
-        data: { side, messageId, topicId, staked: amount, burned: feeAmount },
+        data: { side, messageId, topicId, staked: amount, fee: feeAmount },
       },
     }),
     // Upsert BetPool by (messageId, settlementType) — separate pools for TRUTH/VALUE
@@ -1170,7 +1170,7 @@ export async function executeStake(params: {
         data: { side, feeAmount },
       },
     }),
-    // Fee burned: permanently deducted
+    // Protocol fee: deducted from user, collected into RevenuePool
     ...(feeAmount > 0 ? [prisma.ledgerEntry.create({
       data: {
         userId,
@@ -1183,6 +1183,28 @@ export async function executeStake(params: {
       },
     })] : []),
   ]);
+
+  // ── Collect protocol fee into RevenuePool ──
+  if (feeAmount > 0) {
+    const pool = await prisma.revenuePool.findFirst();
+    if (pool) {
+      await prisma.revenuePool.update({
+        where: { id: pool.id },
+        data: { totalReceived: { increment: feeAmount }, balance: { increment: feeAmount } },
+      });
+    } else {
+      await prisma.revenuePool.create({ data: { totalReceived: feeAmount, balance: feeAmount } });
+    }
+    await writeAuditLog({
+      actorId: userId,
+      action: 'REVENUE_RECEIVED',
+      entityType: 'RevenuePool',
+      entityId: pool?.id ?? 'revenue-pool',
+      topicId,
+      summary: `协议手续费入池 ${feeAmount} 点`,
+      details: { amount: feeAmount, source: 'STAKE', messageId },
+    });
+  }
 
   // Patch pointTransaction with stakeId for precise settlement-panel highlighting
   const pt = await prisma.pointTransaction.findFirst({
@@ -1363,7 +1385,7 @@ async function applyVoteCast(event: VoteCastEvent) {
         type: 'VOTE_LOCK',
         amount: -totalCost,
         balanceAfter: newAvailable,
-        data: { vote: payload.vote, roundId: payload.roundId, messageId: round.messageId, topicId, staked: payload.amount, burned: feeAmount },
+        data: { vote: payload.vote, roundId: payload.roundId, messageId: round.messageId, topicId, staked: payload.amount, fee: feeAmount },
       },
     }),
     prisma.ledgerEntry.create({
@@ -1377,7 +1399,7 @@ async function applyVoteCast(event: VoteCastEvent) {
         data: { vote: payload.vote, feeAmount },
       },
     }),
-    // Fee burned
+    // Protocol fee: deducted from user, collected into RevenuePool
     ...(feeAmount > 0 ? [prisma.ledgerEntry.create({
       data: {
         userId: actorId,
@@ -1400,6 +1422,19 @@ async function applyVoteCast(event: VoteCastEvent) {
     summary: `投票 ${payload.vote === 'TRUE' ? '赞成' : '反对'} ${payload.amount} 点`,
     details: { messageId: round.messageId, roundId: payload.roundId, vote: payload.vote, amount: payload.amount, feeAmount },
   });
+
+  // ── Collect protocol fee into RevenuePool ──
+  if (feeAmount > 0) {
+    const pool = await prisma.revenuePool.findFirst();
+    if (pool) {
+      await prisma.revenuePool.update({
+        where: { id: pool.id },
+        data: { totalReceived: { increment: feeAmount }, balance: { increment: feeAmount } },
+      });
+    } else {
+      await prisma.revenuePool.create({ data: { totalReceived: feeAmount, balance: feeAmount } });
+    }
+  }
 
   // Patch pointTransaction with voteId for precise settlement-panel highlighting
   const pt = await prisma.pointTransaction.findFirst({

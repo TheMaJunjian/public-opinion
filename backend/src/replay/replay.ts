@@ -64,16 +64,19 @@ function applyStake(
   feeAmount: number = 0,
 ) {
   const totalCost = amount + feeAmount;
-  // Deduct from account (fee is burned, amount is locked)
+  // Deduct from account (fee goes to revenue pool, amount is locked)
   const acc = state.accounts.get(userId);
   if (acc) {
     acc.available -= totalCost;
     acc.locked += amount;
     state.accounts.set(userId, acc);
   }
-  // Deduct from balance (fee is permanently burned)
+  // Deduct from balance (fee goes to revenue pool)
   const bal = state.balances.get(userId) ?? 0;
   state.balances.set(userId, bal - totalCost);
+
+  // Protocol fee enters revenue pool
+  state.revenuePoolBalance += feeAmount;
 
   // Record locked amount in ledger
   const ls = state.ledgerSummary.get(userId);
@@ -134,9 +137,10 @@ function applyVote(
     else round.weights.FALSE += amount;
   }
 
-  // Fee is burned — reduce balance (not locked)
+  // Protocol fee goes to revenue pool — reduce balance (not locked)
   const bal = state.balances.get(userId) ?? 0;
   state.balances.set(userId, bal - feeAmount);
+  state.revenuePoolBalance += feeAmount;
 }
 
 function applySettle(
@@ -483,8 +487,19 @@ export async function replay(): Promise<ReplayState> {
           break;
 
         case 'RULE_VERSION_CREATED':
-          // RuleVersion changes tracked for future audit completeness;
-          // does not directly affect economic state (balances/stakes/pools).
+          // RuleVersion changes tracked for future audit completeness
+          break;
+
+        case 'REVENUE_RECEIVED':
+          state.revenuePoolBalance += (d.amount as number) ?? 0;
+          break;
+
+        case 'REVENUE_DISTRIBUTED':
+          // Revenue distributed to users — reduce pool, increase user balances
+          {
+            const distAmount = (d.contributorAmount as number) ?? 0;
+            state.revenuePoolBalance = Math.max(0, state.revenuePoolBalance - distAmount);
+          }
           break;
       }
 

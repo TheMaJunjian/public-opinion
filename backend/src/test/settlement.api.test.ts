@@ -51,6 +51,7 @@ jest.mock('../lib/prisma', () => ({
     },
     auditLog: { create: jest.fn(), updateMany: jest.fn() },
     ruleVersion: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+    revenuePool: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
     $transaction: jest.fn().mockResolvedValue([{}, {}, {}, {}, {}, {}]),
   },
 }));

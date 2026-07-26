@@ -58,7 +58,7 @@ async function main() {
     data: {
       version: 1,
       status: 'ACTIVE',
-      description: '初始默认规则 — 关系分级 1~50、自押 10、燃烧 1、创建者奖励 20%',
+      description: '初始默认规则 — 关系分级 1~50、自押 10、手续费 1 入收入池、创建者奖励 20%',
       parameters: {
         minStake: 1,
         maxSingleStake: null,       // 无单注保护上限
@@ -66,9 +66,16 @@ async function main() {
         concurrentRoundLimit: 1,    // 同一消息最多 1 个进行中轮次
         selfStakeOnCreate: 10,      // 创建消息时自动自押 PRO 点数（0=关闭）
         settlementPermission: 'anyone', // 结算权限：creator_only | any_voter | anyone
-        stakeFeeAmount: 1,          // 每次押注/投票固定燃烧点数（0=关闭）
-        settlementFeeAmount: 0,     // 结算不燃烧
+        stakeFeeAmount: 1,          // 每次押注/投票手续费点数（进入收入池，0=关闭）
+        settlementFeeAmount: 0,     // 结算不收费
         creatorRewardRatio: 0.2,    // 结算 TRUE 时创建者优先获得 CON 池的 20%
+        revenueDistribution: {       // 收入池分配规则
+          trigger: 'manual',         // 触发方式: manual | per_settlement | threshold
+          thresholdAmount: 1000,     // threshold 模式：池余额 ≥ 此值时自动分配
+          contributorShare: 0.5,     // 按贡献点持有比例分配给用户
+          auditorShare: 0.2,         // 审计节点份额（暂留池中）
+          publicPoolShare: 0.3,      // 公共池份额（暂留池中）
+        },
         relationTypeMinStake: {     // 不同关系类型的最低自押点数
           REFERENCE:   1,  AGREE:       1,  DISAGREE:    1,
           TAG:         3,  RECOMMEND:   3,

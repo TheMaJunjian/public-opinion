@@ -67,6 +67,8 @@ export interface ReplayState {
   stakes: StakeRecord[];
   /** userId → LedgerSummary */
   ledgerSummary: Map<string, LedgerSummary>;
+  /** accumulated protocol fee revenue (replaces burned fees) */
+  revenuePoolBalance: number;
 }
 
 export function createEmptyState(): ReplayState {
@@ -79,6 +81,7 @@ export function createEmptyState(): ReplayState {
     votes: new Map(),
     stakes: [],
     ledgerSummary: new Map(),
+    revenuePoolBalance: 0,
   };
 }
 

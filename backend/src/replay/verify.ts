@@ -35,7 +35,8 @@ interface VerifyReport {
     pendingVoteDb: number;
     otherLockedReplay: number;
     otherLockedDb: number;
-    burnedFees: number;
+    revenuePoolBalance: number;
+    revenuePoolDb: number;
     totalLostDb: number;
     totalEarnedDb: number;
     supplyCheckDifference: number;
@@ -114,14 +115,9 @@ export async function verify(state: ReplayState): Promise<VerifyReport> {
     const details = (entry.data as { details?: { amount?: unknown } } | null)?.details;
     return sum + (typeof details?.amount === 'number' ? details.amount : 0);
   }, 0);
-  const feeEntries = await prisma.auditLog.findMany({
-    where: { action: { in: ['STAKE_PLACED', 'VOTE_CAST'] } },
-    select: { data: true },
-  });
-  const burnedFees = feeEntries.reduce((sum, entry) => {
-    const details = (entry.data as { details?: { feeAmount?: unknown } } | null)?.details;
-    return sum + (typeof details?.feeAmount === 'number' ? details.feeAmount : 0);
-  }, 0);
+  // RevenuePool replaces burned fees — fees are collected, not destroyed
+  const pool = await prisma.revenuePool.findFirst({ select: { balance: true } });
+  const revenuePoolDb = pool?.balance ?? 0;
   const dbBalances = await prisma.balance.findMany();
   const totalBalanceDb = dbBalances.reduce((s, b) => s + b.balance, 0);
   const totalLostDb = dbBalances.reduce((s, b) => s + b.totalLost, 0);
@@ -155,9 +151,9 @@ export async function verify(state: ReplayState): Promise<VerifyReport> {
     .reduce((sum, [, votes]) => sum + votes.reduce((voteSum, vote) => voteSum + vote.amount, 0), 0);
   const otherLockedDb = totalLockedDb - pendingStakeDb - pendingVoteDb;
   const otherLockedReplay = totalLockedReplay - pendingStakeReplay - pendingVoteReplay;
-  // Locked stakes remain part of the point supply. Settlement losses are also
-  // redistributed to winners, so neither belongs to the burned amount.
-  const supplyCheckDifference = totalMintedReplay - totalBalanceDb - totalLockedDb - burnedFees;
+  // Protocol fees go to RevenuePool, not burned.
+  // totalMinted = totalBalance + totalLocked + revenuePool.balance
+  const supplyCheckDifference = totalMintedReplay - totalBalanceDb - totalLockedDb - revenuePoolDb;
   const supplyConservation = supplyCheckDifference === 0;
   const conservation = totalBalanceReplay === totalBalanceDb;
   const aggregate = {
@@ -172,7 +168,8 @@ export async function verify(state: ReplayState): Promise<VerifyReport> {
     pendingVoteDb,
     otherLockedReplay,
     otherLockedDb,
-    burnedFees,
+    revenuePoolBalance: state.revenuePoolBalance,
+    revenuePoolDb,
     totalLostDb,
     totalEarnedDb,
     supplyCheckDifference,
@@ -188,7 +185,7 @@ export async function verify(state: ReplayState): Promise<VerifyReport> {
       id: 'total',
       field: 'supply-formula',
       replayValue: totalMintedReplay,
-      dbValue: totalBalanceDb + totalLockedDb + burnedFees,
+      dbValue: totalBalanceDb + totalLockedDb + revenuePoolDb,
     });
   }
 
@@ -217,10 +214,11 @@ export function formatReport(report: VerifyReport): string {
   lines.push(`  未结算押注锁定:     replay=${report.aggregate.pendingStakeReplay.toLocaleString()} db=${report.aggregate.pendingStakeDb.toLocaleString()}`);
   lines.push(`  未结算投票锁定:     replay=${report.aggregate.pendingVoteReplay.toLocaleString()} db=${report.aggregate.pendingVoteDb.toLocaleString()}`);
   lines.push(`  其他锁定余额:       replay=${report.aggregate.otherLockedReplay.toLocaleString()} db=${report.aggregate.otherLockedDb.toLocaleString()}`);
-  lines.push(`  手续费燃烧:        ${report.aggregate.burnedFees.toLocaleString()}`);
+  lines.push(`  收入池余额 (replay): ${report.aggregate.revenuePoolBalance.toLocaleString()}`);
+  lines.push(`  收入池余额 (db):     ${report.aggregate.revenuePoolDb.toLocaleString()}`);
   lines.push(`  用户结算损失记录:  ${report.aggregate.totalLostDb.toLocaleString()}`);
   lines.push(`  用户结算收益记录:  ${report.aggregate.totalEarnedDb.toLocaleString()}`);
-  lines.push(`  总量公式: ${report.aggregate.totalMintedReplay.toLocaleString()} = ${report.aggregate.totalBalanceDb.toLocaleString()} + ${report.aggregate.totalLockedDb.toLocaleString()} + ${report.aggregate.burnedFees.toLocaleString()}`);
+  lines.push(`  总量公式: ${report.aggregate.totalMintedReplay.toLocaleString()} = ${report.aggregate.totalBalanceDb.toLocaleString()} + ${report.aggregate.totalLockedDb.toLocaleString()} + ${report.aggregate.revenuePoolDb.toLocaleString()}`);
   lines.push(`  总量公式校验:      ${report.aggregate.supplyConservation ? '✅' : '❌'}`);
   lines.push(`  守恒: ${report.aggregate.conservation ? '✅' : '❌'}`);
 

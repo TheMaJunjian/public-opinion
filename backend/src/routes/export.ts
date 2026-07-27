@@ -6,10 +6,11 @@ const exportRouter = Router({ mergeParams: true });
 /**
  * GET /api/topics/:topicId/export
  *
- * Exports all messages and relations in a topic as a JSON text blob.
- * The returned JSON can be saved and later viewed in the 阅览 (preview) panel.
- * Economic data (stakes, balances, ledgers, etc.) is NOT included — export is
- * purely the discussion structure.
+ * Exports the complete discussion structure of a topic as a JSON blob,
+ * including all message fields needed for independent replay/verification.
+ * Economic data (stakes, votes, settlement results) is carried in the
+ * message payloads and targetRefs fields — no separate economic models
+ * are fetched.
  */
 exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -43,6 +44,10 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         quotedTextHash: true,
         quoteContextBefore: true,
         quoteContextAfter: true,
+        targetRefs: true,
+        relationPayload: true,
+        relationType: true,
+        relSourceId: true,
         createdBy: { select: { username: true } },
       },
     });
@@ -95,6 +100,10 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         quotedTextHash: m.quotedTextHash,
         quoteContextBefore: m.quoteContextBefore,
         quoteContextAfter: m.quoteContextAfter,
+        targetRefs: m.targetRefs,
+        relationPayload: m.relationPayload,
+        relationType: m.relationType,
+        sourceMessageId: m.relSourceId,
       })),
       relations,
     };

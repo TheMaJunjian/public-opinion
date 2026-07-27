@@ -263,6 +263,15 @@ export interface ExportData {
     content: string | null;
     createdAt: string;
     author: string;
+    quoteSourceId?: string | null;
+    quotedText?: string | null;
+    quotedTextHash?: string | null;
+    quoteContextBefore?: string | null;
+    quoteContextAfter?: string | null;
+    targetRefs?: unknown;
+    relationPayload?: unknown;
+    relationType?: string | null;
+    sourceMessageId?: string | null;
   }>;
   relations: Array<{
     id: string;

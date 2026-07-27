@@ -13,6 +13,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
+  // Sign write requests with private key
+  if (options.method && options.method !== 'GET' && options.body) {
+    try {
+      const rawKey = localStorage.getItem('privateKey');
+      if (rawKey) {
+        const keyData = JSON.parse(rawKey);
+        const privateKey = await crypto.subtle.importKey('jwk', keyData, { name: 'Ed25519' }, false, ['sign']);
+        const encoded = new TextEncoder().encode(options.body as string);
+        const sig = await crypto.subtle.sign('Ed25519', privateKey, encoded);
+        headers['X-Signature'] = btoa(String.fromCharCode(...new Uint8Array(sig)));
+      }
+    } catch { /* signing best-effort */ }
+  }
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
@@ -22,7 +35,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data;
 }
 
-export function register(data: { username: string; password: string }) {
+export function register(data: { username: string; password: string; publicKey?: string | null }) {
   return request<{ message: string; user: import('../types').User }>('/auth/register', {
     method: 'POST',
     body: JSON.stringify(data),

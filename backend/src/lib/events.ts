@@ -19,9 +19,11 @@ import { writeAuditLog } from './auditLog';
 export interface UserRegisteredEvent {
   type: 'USER_REGISTERED';
   actorId: string;
+  signature?: string | null;
   payload: {
     username: string;
     passwordHash: string;
+    publicKey?: string | null;
   };
 }
 
@@ -41,6 +43,7 @@ export interface TopicStatusChangedEvent {
 export interface MessageCreatedEvent {
   type: 'MESSAGE_CREATED';
   actorId: string;
+  signature?: string | null;
   topicId: string;
   payload: {
     kind?: 'TEXT' | 'ROUND' | 'GOVERNANCE' | 'CODE' | 'OPERATIONS';
@@ -66,6 +69,7 @@ export interface MessageCreatedEvent {
 export interface RelationCreatedEvent {
   type: 'RELATION_CREATED';
   actorId: string;
+  signature?: string | null;
   topicId: string;
   payload: {
     relationType: string;
@@ -207,7 +211,7 @@ export async function applyEvent(event: AppEvent): Promise<unknown> {
 // ── Handlers ─────────────────────────────────────────────────
 
 async function applyUserRegistered(event: UserRegisteredEvent) {
-  const { actorId, payload } = event;
+  const { actorId, payload, signature } = event;
   const REGISTRATION_BONUS = 2000;
 
   const [user] = await prisma.$transaction([
@@ -216,6 +220,7 @@ async function applyUserRegistered(event: UserRegisteredEvent) {
         id: actorId,
         username: payload.username,
         password: payload.passwordHash,
+        publicKey: payload.publicKey ?? null,
       },
       select: { id: true, username: true, createdAt: true },
     }),
@@ -264,6 +269,7 @@ async function applyUserRegistered(event: UserRegisteredEvent) {
     entityId: actorId,
     summary: '注册',
     details: { username: payload.username },
+    signature,
   });
   await writeAuditLog({
     actorId,
@@ -272,6 +278,7 @@ async function applyUserRegistered(event: UserRegisteredEvent) {
     entityId: actorId,
     summary: `注册奖励 ${REGISTRATION_BONUS} 点`,
     details: { amount: REGISTRATION_BONUS, reason: 'REGISTRATION_BONUS' },
+    signature,
   });
 
   return user;

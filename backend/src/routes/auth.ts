@@ -16,6 +16,7 @@ const registerSchema = z.object({
     .max(30, '用户名最多 30 个字符')
     .regex(/^[a-zA-Z0-9_\u4e00-\u9fa5]+$/, '用户名只能包含字母、数字、下划线或汉字'),
   password: z.string().min(6, '密码至少 6 个字符').max(100, '密码最多 100 个字符'),
+  publicKey: z.string().nullable().optional(),
 });
 
 const loginSchema = z.object({
@@ -26,14 +27,16 @@ const loginSchema = z.object({
 // POST /api/auth/register — 用户注册
 router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { username, password } = registerSchema.parse(req.body);
+    const { username, password, publicKey } = registerSchema.parse(req.body);
     const userId = createId();
     const hashedPassword = await bcrypt.hash(password, 10);
+    const signature = (req.headers['x-signature'] as string) ?? null;
 
     const user = await applyEvent({
       type: 'USER_REGISTERED',
       actorId: userId,
-      payload: { username, passwordHash: hashedPassword },
+      signature,
+      payload: { username, passwordHash: hashedPassword, publicKey: publicKey ?? null },
     });
 
     res.status(201).json({ message: '注册成功', user });
@@ -72,7 +75,7 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
     res.json({
       message: '登录成功',
       token,
-      user: { id: user.id, username: user.username },
+      user: { id: user.id, username: user.username, publicKey: user.publicKey },
     });
   } catch (err) {
     next(err);

@@ -20,6 +20,8 @@ export interface AuditLogParams {
   topicId?: string | null;
   summary: string;
   details?: Record<string, unknown>;
+  /** Ed25519 signature of the event (verified against User.publicKey) */
+  signature?: string | null;
 }
 
 async function resolveActorName(actorId: string | null): Promise<string> {
@@ -48,6 +50,7 @@ export async function writeAuditLog(params: AuditLogParams): Promise<void> {
         entityType: params.entityType,
         entityId: params.entityId,
         topicId: params.topicId ?? null,
+        signature: params.signature ?? null,
         data: {
           summary: fullSummary,
           details: params.details ?? {},

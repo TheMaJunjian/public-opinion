@@ -107,6 +107,7 @@ model AuditLog {
   topicId    String?
   topic      Topic?   @relation(fields: [topicId], references: [id])
   data       Json?
+  signature  String?   // Ed25519 signature of the event payload, verified against User.publicKey
 
   @@index([topicId, createdAt])
   @@index([actorId, createdAt])

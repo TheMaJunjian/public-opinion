@@ -303,7 +303,7 @@ function paginate<T>(arr: T[], page = 1, limit = 20): PaginatedResponse<T> {
   return { data, pagination: { page, limit, total: arr.length, totalPages: Math.ceil(arr.length / limit) } };
 }
 
-export async function register(data: { username: string; password: string }) {
+export async function register(data: { username: string; password: string; publicKey?: string | null }) {
   await delay();
   const existing = users.find(u => u.username === data.username);
   if (existing) throw new Error('用户名已存在');

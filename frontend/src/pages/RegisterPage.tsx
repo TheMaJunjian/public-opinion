@@ -19,7 +19,14 @@ export default function RegisterPage() {
     setError('');
     setLoading(true);
     try {
-      await register(username.trim(), password);
+      // Generate Ed25519 keypair for message signing
+      const keyPair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+      const jwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+      localStorage.setItem('privateKey', JSON.stringify(jwk));
+      const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+      const publicKey = JSON.stringify(pubJwk);
+
+      await register(username.trim(), password, publicKey);
       navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '注册失败，请重试');

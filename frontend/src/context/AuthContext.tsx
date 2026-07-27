@@ -7,8 +7,10 @@ interface AuthContextValue {
   token: string | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string, publicKey?: string | null) => Promise<void>;
   logout: () => Promise<void>;
+  /** Sign a payload with the stored private key, returns base64 signature or null */
+  signPayload: (payload: string) => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -36,8 +38,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.user);
   }
 
-  async function register(username: string, password: string) {
-    await api.register({ username, password });
+  async function register(username: string, password: string, publicKey?: string | null) {
+    await api.register({ username, password, publicKey: publicKey ?? null });
     await login(username, password);
   }
 
@@ -45,12 +47,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try { await api.logout(); } catch { /* ignore */ }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    localStorage.removeItem('privateKey');
     setToken(null);
     setUser(null);
   }
 
+  async function signPayload(payload: string): Promise<string | null> {
+    try {
+      const rawKey = localStorage.getItem('privateKey');
+      if (!rawKey) return null;
+      const keyData = JSON.parse(rawKey);
+      const privateKey = await crypto.subtle.importKey(
+        'jwk', keyData, { name: 'Ed25519' }, false, ['sign'],
+      );
+      const encoded = new TextEncoder().encode(payload);
+      const sig = await crypto.subtle.sign('Ed25519', privateKey, encoded);
+      return btoa(String.fromCharCode(...new Uint8Array(sig)));
+    } catch {
+      return null;
+    }
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, signPayload }}>
       {children}
     </AuthContext.Provider>
   );

@@ -83,6 +83,7 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
     const message = await applyEvent({
       type: 'MESSAGE_CREATED',
       actorId: req.user!.id,
+      signature: (req.headers['x-signature'] as string) ?? null,
       topicId,
       payload: {
         kind: data.kind,

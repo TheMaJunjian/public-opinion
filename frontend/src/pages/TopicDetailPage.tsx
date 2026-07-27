@@ -409,13 +409,18 @@ export default function TopicDetailPage() {
   // with a grey filter.  null = normal mode, string = classify ID being previewed.
   const [previewClassifyId, setPreviewClassifyId] = useState<string | null>(null);
   const isPreviewMode = previewClassifyId !== null;
-  // Phase 6: Clean view — multi-dimensional filter rules (replaces simple boolean)
+  // Fetch tag counts for clean view
+  const [tagCounts, setTagCounts] = useState<Record<string, Record<string, number>>>({});
+  useEffect(() => {
+    if (!topicId) return;
+    api.getTopicTagCounts(topicId).then(res => setTagCounts(res.counts)).catch(() => {});
+  }, [topicId, messages.length]);
+  // Phase 6: Clean view — multi-dimensional filter rules
   const {
     cleanMode, cleanFilters, cleanVisibleIds,
     addFilter: addCleanFilter, removeFilter: removeCleanFilter,
     updateFilter: updateCleanFilter, clearFilters: clearCleanFilters,
-  } = useCleanView({ messages, edges, stakeCounts });
-  // Count content messages for the filter panel stats
+  } = useCleanView({ messages, edges, stakeCounts, tagCounts });
   const contentMsgCount = useMemo(() => messages.filter(m => isContentKind(m.kind)).length, [messages]);
   // Message type filter: hide settlement / join messages
   const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: false, hideJoin: false });

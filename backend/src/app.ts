@@ -18,6 +18,7 @@ import debugLogRouter from './routes/debugLog';
 import auditLogsRouter from './routes/auditLogs';
 import revenueRouter from './routes/revenue';
 import exportRouter from './routes/export';
+import tagsRouter from './routes/tags';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -67,6 +68,7 @@ app.use('/api/debug-log', debugLogRouter);
 app.use('/', auditLogsRouter);
 app.use('/', revenueRouter);
 app.use('/api/topics/:topicId/export', exportRouter);
+app.use('/', tagsRouter);
 
 // Health check
 app.get('/health', (_req, res) => {

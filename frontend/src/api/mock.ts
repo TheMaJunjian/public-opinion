@@ -630,6 +630,15 @@ export async function getRevenueDistributions(params?: { page?: number; limit?: 
 }
 
 // ============================================================
+// Tag Mock
+// ============================================================
+
+export async function getTopicTagCounts(_topicId: string) {
+  await delay(30);
+  return { topicId: _topicId, counts: {} };
+}
+
+// ============================================================
 // Export Mock
 // ============================================================
 

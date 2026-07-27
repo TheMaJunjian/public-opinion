@@ -17,6 +17,7 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
     createRound: vi.fn(),
     castVote: vi.fn(),
     closeAndSettle: vi.fn(),
+    getTopicTagCounts: vi.fn().mockResolvedValue({ topicId: '', counts: {} }),
   },
   mockNavigate: vi.fn(),
   mockGraphView: vi.fn(),

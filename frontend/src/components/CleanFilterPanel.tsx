@@ -108,7 +108,7 @@ export default function CleanFilterPanel({
       {/* Toggle 按钮 */}
       <button
         onClick={handleToggle}
-        title={active ? '聚焦模式已激活 — 点击关闭' : '聚焦模式：按规则过滤消息视图'}
+        title={active ? '清爽视图已激活 — 点击关闭' : '清爽视图：按规则过滤消息视图'}
         style={{
           padding: '4px 10px',
           borderRadius: 4,
@@ -120,7 +120,7 @@ export default function CleanFilterPanel({
           fontWeight: active ? 600 : 400,
         }}
       >
-        {active ? `🎯 聚焦 (${filters.length})` : '聚焦模式'}
+        {active ? `🧹 清爽 (${filters.length})` : '清爽视图'}
       </button>
 
       {/* 下拉面板 */}
@@ -141,7 +141,7 @@ export default function CleanFilterPanel({
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#e2e8f0' }}>
-            🎯 聚焦模式过滤器
+            🧹 清爽视图过滤器
           </div>
 
           {/* 已有规则列表 */}

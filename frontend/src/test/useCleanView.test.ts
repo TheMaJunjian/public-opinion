@@ -50,7 +50,7 @@ function makeEdge(
 describe('useCleanView', () => {
   it('cleanMode is false when no filters active', () => {
     const { result } = renderHook(() =>
-      useCleanView({ messages: [], edges: [], stakeCounts: {} }),
+      useCleanView({ messages: [], edges: [], stakeCounts: {}, tagCounts: {} }),
     );
     expect(result.current.cleanMode).toBe(false);
     expect(result.current.cleanVisibleIds).toBeNull();
@@ -58,7 +58,7 @@ describe('useCleanView', () => {
 
   it('cleanMode becomes true when a filter is added', () => {
     const { result } = renderHook(() =>
-      useCleanView({ messages: [], edges: [], stakeCounts: {} }),
+      useCleanView({ messages: [], edges: [], stakeCounts: {}, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f1', kind: 'sender', username: '张三' });
@@ -70,7 +70,7 @@ describe('useCleanView', () => {
 
   it('removeFilter removes a rule', () => {
     const { result } = renderHook(() =>
-      useCleanView({ messages: [], edges: [], stakeCounts: {} }),
+      useCleanView({ messages: [], edges: [], stakeCounts: {}, tagCounts: {} }),
     );
     act(() => { result.current.addFilter({ id: 'f1', kind: 'sender', username: '张三' }); });
     act(() => { result.current.removeFilter('f1'); });
@@ -80,7 +80,7 @@ describe('useCleanView', () => {
 
   it('clearFilters removes all rules', () => {
     const { result } = renderHook(() =>
-      useCleanView({ messages: [], edges: [], stakeCounts: {} }),
+      useCleanView({ messages: [], edges: [], stakeCounts: {}, tagCounts: {} }),
     );
     act(() => { result.current.addFilter({ id: 'f1', kind: 'sender', username: '张三' }); });
     act(() => { result.current.addFilter({ id: 'f2', kind: 'stake', minAmount: 50 }); });
@@ -102,7 +102,7 @@ describe('useCleanView', () => {
       m3: { truth: { pro: 0, con: 0 }, value: { pro: 0, con: 0 } },
     };
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges: [], stakeCounts }),
+      useCleanView({ messages, edges: [], stakeCounts, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f1', kind: 'sender', username: '张三' });
@@ -124,7 +124,7 @@ describe('useCleanView', () => {
       m2: { truth: { pro: 5, con: 3 }, value: { pro: 0, con: 0 } },
     };
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges: [], stakeCounts }),
+      useCleanView({ messages, edges: [], stakeCounts, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f2', kind: 'stake', minAmount: 50 });
@@ -137,7 +137,7 @@ describe('useCleanView', () => {
     const messages: DemoMessage[] = [makeTextMsg('m1', 'A')];
     const stakeCounts = { m1: { truth: { pro: 10, con: 100 }, value: { pro: 0, con: 0 } } };
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges: [], stakeCounts }),
+      useCleanView({ messages, edges: [], stakeCounts, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f3', kind: 'stake', minAmount: 50, side: 'PRO' });
@@ -161,7 +161,7 @@ describe('useCleanView', () => {
       makeEdge('e4', 'r4', 'agree', 'anon:4', 'm2'),
     ];
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges, stakeCounts: {} }),
+      useCleanView({ messages, edges, stakeCounts: {}, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f4', kind: 'participants', minCount: 3 });
@@ -183,7 +183,7 @@ describe('useCleanView', () => {
       makeRoundMsg('r4', 'm2'),
     ];
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges: [], stakeCounts: {} }),
+      useCleanView({ messages, edges: [], stakeCounts: {}, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f5', kind: 'rounds', minRounds: 2 });
@@ -194,23 +194,17 @@ describe('useCleanView', () => {
 
   // ── tag 规则 ──
 
-  it('tag filter: counts edges of specified relation type', () => {
+  it('tag filter: counts tags by tagCounts', () => {
     const messages: DemoMessage[] = [
       makeTextMsg('m1', 'A'),
       makeTextMsg('m2', 'B'),
     ];
-    const edges: DemoEdge[] = [
-      makeEdge('e1', 'r1', 'ARCHIVE', 'anon:1', 'm1'),
-      makeEdge('e2', 'r2', 'ARCHIVE', 'anon:2', 'm1'),
-      makeEdge('e3', 'r3', 'ARCHIVE', 'anon:3', 'm1'),
-      makeEdge('e4', 'r4', 'ARCHIVE', 'anon:4', 'm1'),
-      makeEdge('e5', 'r5', 'ARCHIVE', 'anon:5', 'm1'),
-      // m2 has only 2 ARCHIVE tags
-      makeEdge('e6', 'r6', 'ARCHIVE', 'anon:6', 'm2'),
-      makeEdge('e7', 'r7', 'ARCHIVE', 'anon:7', 'm2'),
-    ];
+    const tagCounts = {
+      m1: { archive: 5 },
+      m2: { archive: 2 },
+    };
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges, stakeCounts: {} }),
+      useCleanView({ messages, edges: [], stakeCounts: {}, tagCounts }),
     );
     act(() => {
       result.current.addFilter({ id: 'f6', kind: 'tag', tagType: 'ARCHIVE', minCount: 5 });
@@ -233,7 +227,7 @@ describe('useCleanView', () => {
       m3: { truth: { pro: 100, con: 0 }, value: { pro: 0, con: 0 } },
     };
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges: [], stakeCounts }),
+      useCleanView({ messages, edges: [], stakeCounts, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'fA', kind: 'sender', username: '张三' });
@@ -255,7 +249,7 @@ describe('useCleanView', () => {
       makeEdge('e1', 'rel-1', 'reference', 'm1', 'm2'),
     ];
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges, stakeCounts: {} }),
+      useCleanView({ messages, edges, stakeCounts: {}, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f1', kind: 'sender', username: '张三' });
@@ -273,7 +267,7 @@ describe('useCleanView', () => {
       makeEdge('e1', 'rel-1', 'reference', 'm1', 'm2'),
     ];
     const { result } = renderHook(() =>
-      useCleanView({ messages, edges, stakeCounts: {} }),
+      useCleanView({ messages, edges, stakeCounts: {}, tagCounts: {} }),
     );
     act(() => {
       result.current.addFilter({ id: 'f1', kind: 'sender', username: '张三' });

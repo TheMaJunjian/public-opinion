@@ -11,6 +11,8 @@ interface UseCleanViewInput {
   messages: DemoMessage[];
   edges: DemoEdge[];
   stakeCounts: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
+  /** per-message tag counts: messageId → { SPAM: n, OFFTOPIC: n, ..., recommend: n, archive: n } */
+  tagCounts: Record<string, Record<string, number>>;
 }
 
 interface CleanVisibleIds {
@@ -47,6 +49,7 @@ function rulePassesMessage(
     edges: DemoEdge[];
     roundCounts: Record<string, number>;
     participantCounts: Record<string, number>;
+    tagCounts: Record<string, Record<string, number>>;
   },
 ): boolean {
   switch (rule.kind) {
@@ -69,11 +72,11 @@ function rulePassesMessage(
       return (ctx.participantCounts[msgId] ?? 0) >= rule.minCount;
     }
     case 'tag': {
-      // tag 规则：统计对该消息的特定类型关系消息数量
+      // 按 subType 统计标签数量（RECOMMEND/ARCHIVE/TAG 的 subType）
       const tagType = rule.tagType.toUpperCase();
-      const count = ctx.edges.filter(
-        e => e.relationType.toUpperCase() === tagType && e.to.messageId === msgId,
-      ).length;
+      const msgTagCounts = ctx.tagCounts[msgId];
+      if (!msgTagCounts) return false;
+      const count = msgTagCounts[tagType] ?? msgTagCounts[tagType.toLowerCase()] ?? 0;
       return count >= rule.minCount;
     }
     case 'relationType': {
@@ -100,7 +103,7 @@ function rulePassesMessage(
   }
 }
 
-export function useCleanView({ messages, edges, stakeCounts }: UseCleanViewInput): UseCleanViewOutput {
+export function useCleanView({ messages, edges, stakeCounts, tagCounts }: UseCleanViewInput): UseCleanViewOutput {
   const [cleanFilters, setCleanFilters] = useState<CleanFilterRule[]>([]);
 
   const addFilter = useCallback((rule: CleanFilterRule) => {
@@ -153,7 +156,7 @@ export function useCleanView({ messages, edges, stakeCounts }: UseCleanViewInput
   const cleanVisibleIds = useMemo((): CleanVisibleIds | null => {
     if (!cleanMode) return null;
 
-    const ctx = { msgMap, stakeCounts, edges, roundCounts, participantCounts };
+    const ctx = { msgMap, stakeCounts, edges, roundCounts, participantCounts, tagCounts };
 
     // Step 1: 找出通过所有规则的内容消息
     const visibleTextIds = new Set<string>();
@@ -174,7 +177,7 @@ export function useCleanView({ messages, edges, stakeCounts }: UseCleanViewInput
     }
 
     return { visibleTextIds, visibleRelIds };
-  }, [cleanMode, cleanFilters, messages, edges, msgMap, stakeCounts, roundCounts, participantCounts]);
+  }, [cleanMode, cleanFilters, messages, edges, msgMap, stakeCounts, roundCounts, participantCounts, tagCounts]);
 
   return {
     cleanMode,

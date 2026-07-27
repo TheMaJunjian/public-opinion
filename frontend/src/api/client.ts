@@ -237,6 +237,19 @@ export function getRevenueDistributions(params?: { page?: number; limit?: number
 }
 
 // ============================================================
+// Tag API
+// ============================================================
+
+export interface TagCountsResponse {
+  topicId: string;
+  counts: Record<string, Record<string, number>>;
+}
+
+export function getTopicTagCounts(topicId: string) {
+  return request<TagCountsResponse>(`/topics/${topicId}/tag-counts`);
+}
+
+// ============================================================
 // Export API
 // ============================================================
 

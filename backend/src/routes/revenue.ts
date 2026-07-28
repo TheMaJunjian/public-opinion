@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { writeAuditLog } from '../lib/auditLog';
 
 const router = Router();
@@ -52,7 +52,7 @@ router.get('/api/revenue/distributions', async (req: Request, res: Response, nex
 });
 
 // POST /api/revenue/distribute — 手动触发收入分配
-router.post('/api/revenue/distribute', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/api/revenue/distribute', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const pool = await prisma.revenuePool.findFirst();
     if (!pool || pool.balance <= 0) {

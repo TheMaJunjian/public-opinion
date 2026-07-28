@@ -20,6 +20,7 @@ import revenueRouter from './routes/revenue';
 import exportRouter from './routes/export';
 import tagsRouter from './routes/tags';
 import { errorHandler } from './middleware/errorHandler';
+import { verifySignature } from './middleware/auth';
 
 const app = express();
 

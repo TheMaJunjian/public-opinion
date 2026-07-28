@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { createHash } from 'crypto';
 import { prisma } from '../lib/prisma';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { applyEvent } from '../lib/events';
 
 const messagesRouter = Router({ mergeParams: true });
@@ -60,7 +60,7 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
 });
 
 // POST /api/topics/:topicId/messages
-messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+messagesRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
     const data = createMessageSchema.parse(req.body);

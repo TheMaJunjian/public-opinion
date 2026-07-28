@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { RELATION_TYPES } from '../lib/relationTypes';
 import { applyEvent } from '../lib/events';
 import { log } from '../lib/logger';
@@ -176,7 +176,7 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
 // Used for operations like adding/removing targets from a CLASSIFY without
 // changing the relation's ID, so external references (stance records, etc.)
 // remain valid.
-relationsRouter.patch('/:id', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+relationsRouter.patch('/:id', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
     const relationId = req.params.id as string;
@@ -249,7 +249,7 @@ relationsRouter.patch('/:id', requireAuth, async (req: AuthRequest, res: Respons
 });
 
 // POST /api/topics/:topicId/relations
-relationsRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
     const data = createRelationSchema.parse(req.body);

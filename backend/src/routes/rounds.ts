@@ -1,7 +1,7 @@
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { applyEvent } from '../lib/events';
 
 const router = Router({ mergeParams: true });
@@ -21,7 +21,7 @@ const voteSchema = z.object({
 // ============================================================
 // POST /api/messages/:id/rounds — 发起结算（Phase 6：通过创建 ROUND 消息实现）
 // ============================================================
-router.post('/api/messages/:id/rounds', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/api/messages/:id/rounds', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const messageId = req.params.id as string;
     const data = createRoundSchema.parse(req.body);
@@ -180,7 +180,7 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
 // ============================================================
 // POST /api/rounds/:id/votes — 投票（统一为发送无文本赞同/反对关系消息）
 // ============================================================
-router.post('/api/rounds/:id/votes', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/api/rounds/:id/votes', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const roundId = req.params.id as string;
     const { vote, amount } = voteSchema.parse(req.body);
@@ -234,7 +234,7 @@ router.post('/api/rounds/:id/votes', requireAuth, async (req: AuthRequest, res: 
 // ============================================================
 // POST /api/rounds/:id/close-and-settle — 关闭并结算
 // ============================================================
-router.post('/api/rounds/:id/close-and-settle', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/api/rounds/:id/close-and-settle', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const roundId = req.params.id as string;
 

@@ -680,6 +680,17 @@ export default function TopicDetailPage() {
   const currentFocusIds = currentFocusEntry?.ids ?? null;
   const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
   const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
+
+  const sendWarning = useMemo((): string | null => {
+    if (relationType?.toUpperCase() !== 'DISAGREE') return null;
+    const allTargetIds = [...targetUnits, ...draftUnits].map(u => u.messageId);
+    const targetMsgs = allTargetIds.map(id => msgMap.get(id)).filter(Boolean) as DemoMessage[];
+    const hasContainer = targetMsgs.some(m => m.kind === 'relation' && ['classify','summary','merge','arrange'].includes(m.relationType ?? ''));
+    const hasRecommend = targetMsgs.some(m => m.kind === 'relation' && m.relationType === 'recommend');
+    if (hasContainer) return '反对此容器：若反对超过赞同，容器将被驳回（隐藏内部消息）';
+    if (hasRecommend) return '反对推荐标注：将转为冷藏标注（ARCHIVE）';
+    return null;
+  }, [relationType, targetUnits, draftUnits, msgMap]);
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
     // Skip adding duplicate relations (deduplicated on backend)
     // When deduplicated, update the existing relation/message in state instead
@@ -2905,11 +2916,28 @@ export default function TopicDetailPage() {
     }
 
     // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages.
-    // Source forbidden, targetRefs always empty — targets expressed via REFERENCE relations.
-    // Text is optional when targets are selected (auto-fills from targets if empty).
     if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
       let proposalContent = newMessageContent.trim();
-      if (!proposalContent && !hasTargetsAvailable) {
+
+      // DISTRIBUTE_REVENUE: built-in text, no user input
+      if (relationType === 'proposal' && secondaryRelationType === 'DISTRIBUTE_REVENUE') {
+        proposalContent = '提案：将当前收入池余额按规则分配给社区成员';
+      }
+      // TERMINATE_SETTLEMENT: require target
+      else if (relationType === 'proposal' && secondaryRelationType === 'TERMINATE_SETTLEMENT') {
+        if (!hasTargetsAvailable) { alert("请选择目标提案消息"); return; }
+        // Build target info for display
+        const targetInfos: string[] = [];
+        for (const t of effectiveTargets) {
+          const m = msgMap.get(t.messageId);
+          if (m?.kind === 'governance') {
+            const preview = m.content ? m.content.slice(0, 80) : '(无内容)';
+            targetInfos.push(`「${preview}」— ${m.author}`);
+          }
+        }
+        proposalContent = proposalContent || `终止结算提案\n目标提案：${targetInfos.join('; ')}`;
+      }
+      else if (!proposalContent && !hasTargetsAvailable) {
         alert("请输入内容或选择目标消息");
         return;
       }
@@ -2925,6 +2953,19 @@ export default function TopicDetailPage() {
         proposalContent = targetContents.join('\n\n---\n\n');
       }
       try {
+        const payloadExtra: Record<string, unknown> = {};
+        if (relationType === 'proposal' && secondaryRelationType !== 'none') {
+          payloadExtra.operationType = secondaryRelationType.toUpperCase();
+        }
+        // TERMINATE_SETTLEMENT: include target message IDs for carryOut
+        if (secondaryRelationType === 'TERMINATE_SETTLEMENT') {
+          const targetMsgIds: string[] = [];
+          for (const t of effectiveTargets) {
+            const m = msgMap.get(t.messageId);
+            if (m?.kind === 'governance') targetMsgIds.push(t.messageId);
+          }
+          if (targetMsgIds.length > 0) payloadExtra.targetMessageIds = targetMsgIds;
+        }
         const backendRel = await createRel(topicId!, {
           relationType: relationType.toUpperCase(),
           sourceMessageId: null,
@@ -2933,6 +2974,7 @@ export default function TopicDetailPage() {
             relationType: relationType.toUpperCase(),
             content: proposalContent || '',
             title: (proposalContent || '').slice(0, 200) || undefined,
+            ...payloadExtra,
           }),
         });
         // Add as governance/code/operations content message (not relation), so it renders as a card
@@ -3135,7 +3177,8 @@ export default function TopicDetailPage() {
     || (relationType === "correct" && draftHasRelationTarget)
     || relationType === "tag"
     || relationType === "arrange"
-    || relationType === "reference";
+    || relationType === "reference"
+    || relationType === "proposal";
 
   // Send button enabled logic (single button):
   //   - No relation type: just send message → need text
@@ -3317,6 +3360,11 @@ export default function TopicDetailPage() {
     }
     return ['recommend', 'archive', ...Array.from(existingTagLabels)];
   }, [relationType, draftUnits, targetUnits, edges]);
+
+  const proposalSecondaryOptions = useMemo((): string[] => {
+    if (relationType !== 'proposal') return ['none'];
+    return ['none', 'DISTRIBUTE_REVENUE', 'TERMINATE_SETTLEMENT'];
+  }, [relationType]);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
@@ -4609,6 +4657,7 @@ export default function TopicDetailPage() {
           hasSecondaryRelationSelector={hasSecondaryRelationSelector}
           tagSecondaryOptions={tagSecondaryOptions}
           correctSecondaryOptions={correctSecondaryOptions}
+          proposalSecondaryOptions={proposalSecondaryOptions}
           isArrangeType={isArrangeType}
           isArrangeLayoutLocked={isArrangeLayoutLocked}
           isClassifyType={isClassifyType}
@@ -4647,6 +4696,7 @@ export default function TopicDetailPage() {
           relationStakeMap={relationStakeMap}
           handleQuickSendAndRelateFromDraftTargets={handleQuickSendAndRelateFromDraftTargets}
           sendError={sendError}
+          sendWarning={sendWarning}
           recentNormals={recentNormals}
           recentRelations={recentRelations}
           showStanceHistory={showStanceHistory}

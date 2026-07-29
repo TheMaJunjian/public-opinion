@@ -204,7 +204,7 @@ model SettlementRound {
   message          Message  @relation(fields: [messageId], references: [id])
   createdByUserId  String
   createdBy        User     @relation(fields: [createdByUserId], references: [id])
-  status           String   @default("OPEN") // OPEN | VOTING | SETTLED | CANCELLED
+  status           String   @default("OPEN") // OPEN | VOTING | SETTLED | CANCELLED | EFFECTED
   settlementType   String   @default("TRUTH") // TRUTH | VALUE
   result           String?  // TRUE | FALSE | UNKNOWN
   previousRoundId  String?
@@ -215,6 +215,10 @@ model SettlementRound {
   note             String?
   settlementPro    Int?
   settlementCon    Int?
+  effectiveAt      DateTime?  // when governance requirements were met and carryOut executed
+  terminatedByRoundId String?
+  terminatedByRound  SettlementRound? @relation("TerminatedRounds", fields: [terminatedByRoundId], references: [id])
+  terminatingRounds  SettlementRound[] @relation("TerminatedRounds")
 
   votes VoteStake[]
 }

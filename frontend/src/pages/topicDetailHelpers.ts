@@ -22,6 +22,8 @@ export function secondaryRelationLabel(t: string): string {
   if (t === 'evidence') return '证据';
   if (t === 'custom') return '自定义';
   if (t === 'recommend' || t === 'archive') return relationTypeName(t);
+  if (t === 'distribute_revenue') return '分配收入';
+  if (t === 'terminate_settlement') return '终止结算';
   if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
   return t;
 }

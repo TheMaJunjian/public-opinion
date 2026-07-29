@@ -373,13 +373,14 @@ export async function getMessages(topicId: string, params?: { page?: number; lim
 }
 
 export async function createMessage(topicId: string, data: {
-  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND';
+  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
   content?: string;
   stakeAmount?: number;
   targetMessageId?: string;
   note?: string;
   settlementType?: string;
+  relationPayload?: Record<string, unknown>;
 }) {
   await delay();
   if (!mockUser) throw new Error('请先登录');

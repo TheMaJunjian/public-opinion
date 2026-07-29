@@ -66,6 +66,7 @@ interface TopicRightPanelProps {
   hasSecondaryRelationSelector: boolean;
   tagSecondaryOptions: string[];
   correctSecondaryOptions: string[];
+  proposalSecondaryOptions: string[];
   isArrangeType: boolean;
   isArrangeLayoutLocked: boolean;
   isClassifyType: boolean;
@@ -114,6 +115,7 @@ interface TopicRightPanelProps {
   // Send
   handleQuickSendAndRelateFromDraftTargets: () => void;
   sendError: string | null;
+  sendWarning: string | null;
 
   // Recent
   recentNormals: DemoMessage[];
@@ -248,7 +250,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                   ? ["vertical", "horizontal"]
                   : p.relationType === "reference"
                     ? ["none", "evidence", "custom"]
-                    : p.correctSecondaryOptions;
+                      : p.relationType === "proposal"
+                        ? p.proposalSecondaryOptions
+                      : p.correctSecondaryOptions;
             return (
               <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
                 <span style={{ opacity: 0.85 }}>附加关系：</span>
@@ -398,6 +402,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           </div>
           {p.sendError && (
             <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>
+          )}
+          {p.sendWarning && (
+            <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>
           )}
           </div>
         </div>

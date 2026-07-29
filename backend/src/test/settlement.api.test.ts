@@ -913,11 +913,11 @@ describe('Governance Settlement → RuleVersion', () => {
       ...mockRound, createdByUserId: 'user-1', previousRoundId: null, messageId: 'gov-1',
     });
     // settlementPermission check: skipped (user IS creator)
-    // First real call: settlementRule (creatorRewardRatio)
-    // Second real call: governance → currentActive for merge
+    // carryOut calls: settlementRule(creatorRewardRatio) + govReqs + currentActive
     (prisma.ruleVersion.findFirst as jest.Mock)
       .mockResolvedValueOnce({ parameters: { creatorRewardRatio: 0 } })
-      .mockResolvedValueOnce(mockActiveRule);
+      .mockResolvedValueOnce({ parameters: {} })           // governanceRequirements
+      .mockResolvedValueOnce(mockActiveRule);               // currentActive for merge
 
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({
       topicId: 'topic-1',

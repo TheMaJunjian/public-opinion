@@ -491,6 +491,164 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
   return message;
 }
 
+// ============================================================
+// Revenue Distribution — triggered by OPERATIONS message
+// ============================================================
+
+async function executeRevenueDistribution(actorId: string, topicId: string, messageId: string) {
+  const pool = await prisma.revenuePool.findFirst();
+  if (!pool || pool.balance <= 0) return;
+
+  const rule = await prisma.ruleVersion.findFirst({
+    where: { status: 'ACTIVE' },
+    orderBy: { version: 'desc' },
+    select: { parameters: true },
+  });
+  const distRules = (rule?.parameters as Record<string, unknown> | null)?.revenueDistribution as Record<string, number> | undefined;
+  const contributorShare = distRules?.contributorShare ?? 0.5;
+  const totalBalance = pool.balance;
+  const contributorAmount = Math.floor(totalBalance * contributorShare);
+  const retainedAmount = totalBalance - contributorAmount;
+
+  if (contributorAmount <= 0) return;
+
+  const balances = await prisma.balance.findMany({
+    where: { balance: { gt: 0 } },
+    select: { userId: true, balance: true },
+  });
+  const totalUserBalance = balances.reduce((s, b) => s + b.balance, 0);
+  if (totalUserBalance <= 0 || balances.length === 0) return;
+
+  const distOps: Array<{ userId: string; amount: number; balanceAfter: number }> = [];
+  const distributionRecords: Array<{ revenuePoolId: string; userId: string; amount: number }> = [];
+
+  for (const b of balances) {
+    const share = Math.floor((b.balance / totalUserBalance) * contributorAmount);
+    if (share <= 0) continue;
+    distOps.push({ userId: b.userId, amount: share, balanceAfter: b.balance + share });
+    distributionRecords.push({ revenuePoolId: pool.id, userId: b.userId, amount: share });
+  }
+
+  const totalDistributed = distOps.reduce((s, d) => s + d.amount, 0);
+  const dust = contributorAmount - totalDistributed;
+  if (dust > 0 && distOps.length > 0) {
+    distOps[0].amount += dust;
+    distOps[0].balanceAfter += dust;
+    distributionRecords[0].amount += dust;
+  }
+
+  await prisma.$transaction([
+    ...distOps.map(d => prisma.balance.update({ where: { userId: d.userId }, data: { balance: { increment: d.amount } } })),
+    ...distOps.map(d => prisma.pointAccount.update({ where: { userId: d.userId }, data: { available: { increment: d.amount } } })),
+    ...distOps.map(d => prisma.ledgerEntry.create({ data: { userId: d.userId, entryType: 'REVENUE_EARNED', amount: d.amount, balanceAfter: d.balanceAfter, data: { source: 'REVENUE_DISTRIBUTION', messageId, totalPool: totalBalance, contributorAmount } } })),
+    ...distributionRecords.map(dr => prisma.revenueDistribution.create({ data: { revenuePoolId: pool.id, userId: dr.userId, amount: dr.amount } })),
+    prisma.revenuePool.update({ where: { id: pool.id }, data: { balance: retainedAmount, totalDistributed: { increment: contributorAmount } } }),
+  ]);
+
+  await writeAuditLog({
+    actorId,
+    action: 'REVENUE_DISTRIBUTED',
+    entityType: 'RevenuePool',
+    entityId: pool.id,
+    topicId,
+    summary: `收入分配：${contributorAmount} 点分给 ${distOps.length} 位用户`,
+    details: { messageId, totalPool: totalBalance, contributorAmount, retainedAmount, recipientCount: distOps.length, contributorShare, distributions: distOps.map(d => ({ userId: d.userId, amount: d.amount })) },
+  });
+}
+
+// ============================================================
+// Proposal carryOut — unified governance action execution
+// ============================================================
+
+async function carryOutProposal(
+  actorId: string, topicId: string, messageId: string, roundId: string,
+  payload: Record<string, unknown> | null, opType?: string,
+) {
+  const rule = await prisma.ruleVersion.findFirst({
+    where: { status: 'ACTIVE' },
+    orderBy: { version: 'desc' },
+    select: { parameters: true },
+  });
+  const reqs = (rule?.parameters as Record<string, unknown> | null)?.governanceRequirements as Record<string, number> | undefined;
+
+  // Check governance requirements
+  if (reqs?.minTotalStakeWeight) {
+    const round = await prisma.settlementRound.findUnique({ where: { id: roundId }, select: { settlementPro: true, settlementCon: true } });
+    const weight = (round?.settlementPro ?? 0) + (round?.settlementCon ?? 0);
+    if (weight < reqs.minTotalStakeWeight) return;
+  }
+
+  const now = new Date();
+
+  if (opType === 'DISTRIBUTE_REVENUE') {
+    await executeRevenueDistribution(actorId, topicId, messageId);
+  } else if (opType === 'TERMINATE_SETTLEMENT') {
+    await executeTermination(payload, roundId, topicId, actorId);
+  } else {
+    // Default: UPDATE_RULES
+    const proposedParams = payload?.proposedParameters as Record<string, unknown> | undefined;
+    if (!proposedParams || typeof proposedParams !== 'object') return;
+    const currentActive = await prisma.ruleVersion.findFirst({
+      where: { status: 'ACTIVE' },
+      orderBy: { version: 'desc' },
+      select: { id: true, version: true, parameters: true },
+    });
+    const merged = { ...(currentActive?.parameters as Record<string, unknown> ?? {}), ...proposedParams };
+    const newVersion = (currentActive?.version ?? 0) + 1;
+    const newRule = await prisma.ruleVersion.create({
+      data: { version: newVersion, status: 'ACTIVE', description: `治理提案通过 (消息 ${messageId.slice(-8)})`, parameters: merged as Prisma.InputJsonValue },
+    });
+    if (currentActive) {
+      await prisma.ruleVersion.update({ where: { id: currentActive.id }, data: { status: 'SUPERSEDED' } });
+    }
+    await writeAuditLog({
+      actorId, action: 'RULE_VERSION_CREATED', entityType: 'RuleVersion', entityId: newRule.id, topicId,
+      summary: `治理提案通过 → 规则版本 v${newVersion}`,
+      details: { version: newVersion, previousVersion: currentActive?.version ?? null, messageId, proposedKeys: Object.keys(proposedParams) },
+    });
+  }
+
+  // Mark round as EFFECTED
+  await prisma.settlementRound.update({
+    where: { id: roundId },
+    data: { status: 'EFFECTED', effectiveAt: now },
+  });
+}
+
+async function executeTermination(payload: Record<string, unknown> | null, roundId: string, topicId: string, actorId: string) {
+  // Resolve target message IDs to their latest SETTLED round
+  const targetMsgIds = payload?.targetMessageIds as string[] | undefined;
+  if (!targetMsgIds || targetMsgIds.length === 0) return;
+
+  for (const msgId of targetMsgIds) {
+    // Validate target is a GOVERNANCE message
+    const targetMsg = await prisma.message.findUnique({
+      where: { id: msgId },
+      select: { kind: true },
+    });
+    if (targetMsg?.kind !== 'GOVERNANCE') continue;
+
+    // Find the latest SETTLED round for this message
+    const latestRound = await prisma.settlementRound.findFirst({
+      where: { messageId: msgId, status: { in: ['SETTLED', 'EFFECTED'] } },
+      orderBy: { closedAt: 'desc' },
+      select: { id: true },
+    });
+    if (!latestRound) continue;
+
+    await prisma.settlementRound.update({
+      where: { id: latestRound.id },
+      data: { terminatedByRoundId: roundId },
+    });
+
+    await writeAuditLog({
+      actorId, action: 'SETTLEMENT_TERMINATED', entityType: 'SettlementRound', entityId: latestRound.id, topicId,
+      summary: `结算轮次已被提案终止`,
+      details: { terminateRoundId: latestRound.id, targetMessageId: msgId, byRoundId: roundId },
+    });
+  }
+}
+
 /**
  * Resolve an annotation/ stance target: follow AGREE/DISAGREE/RECOMMEND/ARCHIVE
  * chain to find the ultimate text message target, with side transformation.
@@ -1824,57 +1982,10 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     },
   });
 
-  // ── Governance → RuleVersion: apply proposed parameters when TRUE ──
+  // ── Governance carryOut: execute proposal action when TRUE ──
   if (result === 'TRUE' && message?.kind === 'GOVERNANCE') {
-    const proposedParams = (message.relationPayload as Record<string, unknown> | null)?.proposedParameters as Record<string, unknown> | undefined;
-    if (proposedParams && typeof proposedParams === 'object') {
-      const currentActive = await prisma.ruleVersion.findFirst({
-        where: { status: 'ACTIVE' },
-        orderBy: { version: 'desc' },
-        select: { id: true, version: true, parameters: true },
-      });
-
-      // Deep merge: proposed overrides current, missing fields kept from current
-      const merged = {
-        ...(currentActive?.parameters as Record<string, unknown> ?? {}),
-        ...proposedParams,
-      };
-
-      const newVersion = (currentActive?.version ?? 0) + 1;
-
-      // Create new ACTIVE RuleVersion
-      const newRule = await prisma.ruleVersion.create({
-        data: {
-          version: newVersion,
-          status: 'ACTIVE',
-          description: `治理提案通过 (消息 ${messageId.slice(-8)})`,
-          parameters: merged as Prisma.InputJsonValue,
-        },
-      });
-
-      // Mark old RuleVersion as SUPERSEDED
-      if (currentActive) {
-        await prisma.ruleVersion.update({
-          where: { id: currentActive.id },
-          data: { status: 'SUPERSEDED' },
-        });
-      }
-
-      await writeAuditLog({
-        actorId,
-        action: 'RULE_VERSION_CREATED',
-        entityType: 'RuleVersion',
-        entityId: newRule.id,
-        topicId,
-        summary: `治理提案通过 → 规则版本 v${newVersion}`,
-        details: {
-          version: newVersion,
-          previousVersion: currentActive?.version ?? null,
-          messageId,
-          proposedKeys: Object.keys(proposedParams),
-        },
-      });
-    }
+    const opType = (message.relationPayload as Record<string, unknown> | null)?.operationType as string | undefined;
+    await carryOutProposal(actorId, topicId, messageId, payload.roundId, message.relationPayload as Record<string, unknown> | null, opType);
   }
 
   return {
@@ -1897,11 +2008,16 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 async function executeClawback(previousRoundId: string, messageId: string, topicId: string) {
   const prevRound = await prisma.settlementRound.findUnique({
     where: { id: previousRoundId },
-    select: { result: true, closedAt: true, settlementType: true },
+    select: { result: true, closedAt: true, settlementType: true, terminatedByRoundId: true },
   });
 
   if (!prevRound || !prevRound.result || prevRound.result === 'UNKNOWN') {
-    // Nothing to clawback — UNKNOWN returned all stakes
+    return;
+  }
+
+  // ── Terminated round: clawback is permanently blocked ──
+  if (prevRound.terminatedByRoundId) {
+    log('Clawback', `SKIPPED round=${previousRoundId.slice(-6)} — terminated`);
     return;
   }
 

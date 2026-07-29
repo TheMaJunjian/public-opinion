@@ -14,13 +14,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`;
   }
   // Sign write requests with private key
-  if (options.method && options.method !== 'GET' && options.body) {
+  if (options.method && options.method !== 'GET') {
     try {
       const rawKey = localStorage.getItem('privateKey');
       if (rawKey) {
         const keyData = JSON.parse(rawKey);
         const privateKey = await crypto.subtle.importKey('jwk', keyData, { name: 'Ed25519' }, false, ['sign']);
-        const encoded = new TextEncoder().encode(options.body as string);
+        const encoded = new TextEncoder().encode((options.body as string) ?? '');
         const sig = await crypto.subtle.sign('Ed25519', privateKey, encoded);
         headers['X-Signature'] = btoa(String.fromCharCode(...new Uint8Array(sig)));
       }
@@ -82,13 +82,14 @@ export function getMessages(topicId: string, params?: { page?: number; limit?: n
 }
 
 export function createMessage(topicId: string, data: {
-  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND';
+  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
   content?: string;
   stakeAmount?: number;
   targetMessageId?: string;
   note?: string;
   settlementType?: string;
+  relationPayload?: Record<string, unknown>;
 }) {
   return request<import('../types').Message>(`/topics/${topicId}/messages`, {
     method: 'POST',

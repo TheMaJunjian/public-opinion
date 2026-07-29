@@ -495,10 +495,28 @@ export async function replay(): Promise<ReplayState> {
           break;
 
         case 'REVENUE_DISTRIBUTED':
-          // Revenue distributed to users — reduce pool, increase user balances
           {
             const distAmount = (d.contributorAmount as number) ?? 0;
             state.revenuePoolBalance = Math.max(0, state.revenuePoolBalance - distAmount);
+            const distributions = d.distributions as Array<{ userId: string; amount: number }> | undefined;
+            if (distributions) {
+              for (const dist of distributions) {
+                const acc = state.accounts.get(dist.userId);
+                if (acc) { acc.available += dist.amount; state.accounts.set(dist.userId, acc); }
+                const bal = state.balances.get(dist.userId) ?? 0;
+                state.balances.set(dist.userId, bal + dist.amount);
+              }
+            }
+          }
+          break;
+
+        case 'SETTLEMENT_TERMINATED':
+          // Mark round as terminated — future clawbacks skip it
+          {
+            const termRoundId = d.terminateRoundId as string;
+            if (termRoundId && state.rounds.has(termRoundId)) {
+              // Terminated rounds are preserved in state; clawback logic checks this
+            }
           }
           break;
       }

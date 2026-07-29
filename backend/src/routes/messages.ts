@@ -8,7 +8,7 @@ import { applyEvent } from '../lib/events';
 const messagesRouter = Router({ mergeParams: true });
 
 const createMessageSchema = z.object({
-  kind: z.enum(['TEXT', 'GOVERNANCE', 'CODE', 'ROUND']).optional().default('TEXT'),
+  kind: z.enum(['TEXT', 'GOVERNANCE', 'CODE', 'ROUND', 'OPERATIONS']).optional().default('TEXT'),
   contentType: z.enum(['TEXT', 'MARKDOWN']).optional().default('TEXT'),
   content: z.string().max(20000, '内容最多 20000 个字符').optional(),
   quoteSourceId: z.string().optional(),

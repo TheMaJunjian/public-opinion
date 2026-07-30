@@ -102,6 +102,22 @@ export interface PointTransferredEvent {
   };
 }
 
+export interface RevenueInjectedEvent {
+  type: 'REVENUE_INJECTED';
+  actorId: string;
+  signature?: string | null;
+  topicId: string;
+  payload: { amount: number; source: string; note?: string | null };
+}
+
+export interface PointsRechargedEvent {
+  type: 'POINTS_RECHARGED';
+  actorId: string;
+  signature?: string | null;
+  topicId: string;
+  payload: { amount: number; revenuePoolShare: number; note?: string | null };
+}
+
 export interface StakePlacedEvent {
   type: 'STAKE_PLACED';
   actorId: string;
@@ -165,6 +181,8 @@ export type AppEvent =
   | RelationCreatedEvent
   | PointMintedEvent
   | PointTransferredEvent
+  | RevenueInjectedEvent
+  | PointsRechargedEvent
   | StakePlacedEvent
   | RoundCreatedEvent
   | VoteCastEvent
@@ -195,6 +213,10 @@ export async function applyEvent(event: AppEvent): Promise<unknown> {
       return applyPointMinted(event);
     case 'POINT_TRANSFERRED':
       return applyPointTransferred(event);
+    case 'REVENUE_INJECTED':
+      return applyRevenueInjected(event);
+    case 'POINTS_RECHARGED':
+      return applyPointsRecharged(event);
     case 'STAKE_PLACED':
       return applyStakePlaced(event);
     case 'ROUND_CREATED':
@@ -342,7 +364,7 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     // Validate target message
     const targetMsg = await prisma.message.findUnique({
       where: { id: payload.targetMessageId },
-      select: { id: true, kind: true },
+      select: { id: true, kind: true, content: true },
     });
     if (!targetMsg) throw new Error('目标消息不存在');
 
@@ -355,6 +377,9 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
 
     // Check for existing active round of same settlement type
     const stype = payload.settlementType ?? 'TRUTH';
+    const settlementLabel = stype === 'VALUE' ? '价值仲裁' : '真假仲裁';
+    const targetPreview = (targetMsg.content ?? '').trim().replace(/\s+/g, ' ').slice(0, 120) || `消息 ${targetMsg.id.slice(-8)}`;
+    const roundContent = `发起${settlementLabel}：目标消息「${targetPreview}」${payload.note ? `；说明：${payload.note}` : ''}`;
     const existing = await prisma.settlementRound.findFirst({
       where: { messageId: payload.targetMessageId, settlementType: stype, status: { in: ['OPEN', 'VOTING'] } },
       select: { id: true, status: true },
@@ -378,7 +403,8 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
           topicId,
           createdById: actorId,
           kind: 'ROUND',
-          content: null,
+          contentType: 'TEXT',
+          content: roundContent,
           targetRefs: [{ messageId: payload.targetMessageId }],
           relationPayload: { note: payload.note ?? null, settlementType: stype },
         },
@@ -582,6 +608,22 @@ async function carryOutProposal(
 
   if (opType === 'DISTRIBUTE_REVENUE') {
     await executeRevenueDistribution(actorId, topicId, messageId);
+  } else if (opType === 'REVENUE_INJECTION') {
+    const amount = payload?.amount;
+    const source = payload?.source;
+    if (!Number.isInteger(amount) || (amount as number) <= 0 || typeof source !== 'string' || !source.trim()) return;
+    await applyRevenueInjected({
+      type: 'REVENUE_INJECTED', actorId, topicId,
+      payload: { amount: amount as number, source: source.trim(), note: typeof payload?.note === 'string' ? payload.note : null },
+    });
+  } else if (opType === 'RECHARGE') {
+    const amount = payload?.amount;
+    const revenuePoolShare = payload?.revenuePoolShare;
+    if (!Number.isInteger(amount) || (amount as number) <= 0 || !Number.isInteger(revenuePoolShare) || (revenuePoolShare as number) < 0 || (revenuePoolShare as number) > (amount as number)) return;
+    await applyPointsRecharged({
+      type: 'POINTS_RECHARGED', actorId, topicId,
+      payload: { amount: amount as number, revenuePoolShare: revenuePoolShare as number, note: typeof payload?.note === 'string' ? payload.note : null },
+    });
   } else if (opType === 'TERMINATE_SETTLEMENT') {
     await executeTermination(payload, roundId, topicId, actorId);
   } else {
@@ -913,6 +955,13 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         ...(transformedFrom ? { transformedFrom } : {}),
       }
     : (payload.relationPayload as Record<string, unknown> | undefined);
+  const targetLabels = effectiveTargetRefs.map((target) => {
+    if (!target || typeof target !== 'object') return String(target);
+    const ref = target as Record<string, unknown>;
+    const id = ref.messageId ?? ref.fragmentId ?? ref.relationId ?? ref.id;
+    return id ? String(id).slice(-8) : JSON.stringify(target);
+  });
+  const relationContent = `建立关系：${effectiveRelationType}${targetLabels.length > 0 ? `；目标：${targetLabels.join('、')}` : ''}`;
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
@@ -923,7 +972,8 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         relSourceId: effectiveSourceMessageId,
         targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
         relationPayload: rpForCreate as Prisma.InputJsonValue | undefined,
-        content: null,
+        contentType: 'TEXT',
+        content: relationContent,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
@@ -1164,6 +1214,71 @@ async function applyPointMinted(event: PointMintedEvent) {
   return { available: newAvailable, balance: newBalance };
 }
 
+async function applyRevenueInjected(event: RevenueInjectedEvent) {
+  const { actorId, topicId, payload, signature } = event;
+  if (!Number.isInteger(payload.amount) || payload.amount <= 0) {
+    throw new Error('收入注入金额必须是正整数');
+  }
+  const source = payload.source.trim();
+  if (!source) throw new Error('收入来源不能为空');
+
+  const pool = await prisma.revenuePool.findFirst();
+  const poolRecord = pool
+    ? await prisma.revenuePool.update({ where: { id: pool.id }, data: { totalReceived: { increment: payload.amount }, balance: { increment: payload.amount } } })
+    : await prisma.revenuePool.create({ data: { totalReceived: payload.amount, balance: payload.amount } });
+
+  await writeAuditLog({
+    actorId, action: 'REVENUE_RECEIVED', entityType: 'RevenuePool', entityId: poolRecord.id, topicId,
+    summary: `运营收入入池 ${payload.amount} 点`,
+    details: { amount: payload.amount, source: 'PROPOSAL', sourceLabel: source, note: payload.note ?? null }, signature,
+  });
+  return { pool: poolRecord };
+}
+
+async function applyPointsRecharged(event: PointsRechargedEvent) {
+  const { actorId, topicId, payload, signature } = event;
+  if (!Number.isInteger(payload.amount) || payload.amount <= 0) {
+    throw new Error('充值金额必须是正整数');
+  }
+  if (!Number.isInteger(payload.revenuePoolShare) || payload.revenuePoolShare < 0 || payload.revenuePoolShare > payload.amount) {
+    throw new Error('收入池分成必须在 0 和充值金额之间');
+  }
+  const userAmount = payload.amount - payload.revenuePoolShare;
+  const account = await prisma.pointAccount.findUnique({ where: { userId: actorId } });
+  const currentBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
+  if (!account || !currentBalance) throw new Error('账户不存在');
+
+  const pool = await prisma.revenuePool.findFirst();
+
+  const newAvailable = account.available + userAmount;
+  await prisma.$transaction([
+    prisma.pointAccount.update({ where: { userId: actorId }, data: { available: newAvailable } }),
+    prisma.balance.update({ where: { userId: actorId }, data: { balance: { increment: userAmount } } }),
+    prisma.pointTransaction.create({ data: { userId: actorId, type: 'MINT', amount: userAmount, balanceAfter: newAvailable, data: { reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare } } }),
+    prisma.ledgerEntry.create({ data: { userId: actorId, entryType: 'MINT_DAILY', amount: userAmount, balanceAfter: currentBalance.balance + userAmount, data: { reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare } } }),
+    ...(payload.revenuePoolShare > 0
+      ? [pool
+        ? prisma.revenuePool.update({ where: { id: pool.id }, data: { totalReceived: { increment: payload.revenuePoolShare }, balance: { increment: payload.revenuePoolShare } } })
+        : prisma.revenuePool.create({ data: { totalReceived: payload.revenuePoolShare, balance: payload.revenuePoolShare } })]
+      : []),
+  ]);
+
+  const poolAfter = payload.revenuePoolShare > 0 ? await prisma.revenuePool.findFirst() : pool;
+  await writeAuditLog({
+    actorId, action: 'POINT_MINTED', entityType: 'PointTransaction', entityId: actorId,
+    summary: `充值铸造 ${payload.amount} 点`,
+    details: { amount: userAmount, creditedAmount: userAmount, reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare }, signature,
+  });
+  if (payload.revenuePoolShare > 0) {
+    await writeAuditLog({
+      actorId, action: 'REVENUE_RECEIVED', entityType: 'RevenuePool', entityId: poolAfter?.id ?? 'revenue-pool', topicId,
+      summary: `充值分成入池 ${payload.revenuePoolShare} 点`,
+      details: { amount: payload.revenuePoolShare, source: 'RECHARGE', totalAmount: payload.amount, userAmount }, signature,
+    });
+  }
+  return { userAmount, revenuePoolShare: payload.revenuePoolShare };
+}
+
 async function applyPointTransferred(event: PointTransferredEvent) {
   const { actorId, payload } = event;
 
@@ -1352,6 +1467,7 @@ export async function executeStake(params: {
   // ── Collect protocol fee into RevenuePool ──
   if (feeAmount > 0) {
     const pool = await prisma.revenuePool.findFirst();
+    let poolId = pool?.id;
     if (pool) {
       await prisma.revenuePool.update({
         where: { id: pool.id },
@@ -1591,14 +1707,25 @@ async function applyVoteCast(event: VoteCastEvent) {
   // ── Collect protocol fee into RevenuePool ──
   if (feeAmount > 0) {
     const pool = await prisma.revenuePool.findFirst();
+    let poolId = pool?.id;
     if (pool) {
       await prisma.revenuePool.update({
         where: { id: pool.id },
         data: { totalReceived: { increment: feeAmount }, balance: { increment: feeAmount } },
       });
     } else {
-      await prisma.revenuePool.create({ data: { totalReceived: feeAmount, balance: feeAmount } });
+      const createdPool = await prisma.revenuePool.create({ data: { totalReceived: feeAmount, balance: feeAmount } });
+      poolId = createdPool.id;
     }
+    await writeAuditLog({
+      actorId,
+      action: 'REVENUE_RECEIVED',
+      entityType: 'RevenuePool',
+      entityId: poolId ?? 'revenue-pool',
+      topicId,
+      summary: `协议投票费入池 ${feeAmount} 点`,
+      details: { amount: feeAmount, source: 'VOTE', roundId: payload.roundId, messageId: round.messageId },
+    });
   }
 
   // Patch pointTransaction with voteId for precise settlement-panel highlighting
@@ -1726,7 +1853,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   // ── Fetch message creator, kind & rule params for creator reward & governance ──
   const message = await prisma.message.findUnique({
     where: { id: messageId },
-    select: { createdById: true, kind: true, relationPayload: true },
+    select: { createdById: true, kind: true, content: true, relationPayload: true },
   });
   const creatorId = message?.createdById ?? '';
   const settlementRule = await prisma.ruleVersion.findFirst({
@@ -1957,6 +2084,9 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 
   // Audit log — written after transaction for consistency
   const resultLabel = result === 'TRUE' ? '赞成胜出' : result === 'FALSE' ? '反对胜出' : '平局';
+  const settlementLabel = stype === 'VALUE' ? '价值仲裁' : '真假仲裁';
+  const targetPreview = (message?.content ?? '').trim().replace(/\s+/g, ' ').slice(0, 120) || `消息 ${messageId.slice(-8)}`;
+  const resultContent = `${settlementLabel}完成：目标消息「${targetPreview}」；结果：${resultLabel}（${result}）；TRUE 权重 ${totalPro}，FALSE 权重 ${totalCon}，总押注 ${totalPool}`;
 
   await prisma.$transaction(ledgerOps);
 
@@ -1976,7 +2106,8 @@ async function applyRoundSettled(event: RoundSettledEvent) {
       topicId,
       createdById: actorId,
       kind: 'ROUND_RESULT',
-      content: null,
+      contentType: 'TEXT',
+      content: resultContent,
       targetRefs: [{ messageId }],
       relationPayload: { roundId: payload.roundId, result, weights, totalPro, totalCon, settlementType: stype },
     },

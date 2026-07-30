@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
-import { kindLabel } from '../utils/modelBridge';
 import { debugLog } from '../utils/debugLog';
 
 interface Props {
@@ -120,9 +119,10 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       setRounds(prev => [round, ...prev]);
       window.dispatchEvent(new Event('points-refresh'));
       if (onMessageCreated) {
+        const settlementLabel = round.settlementType === 'VALUE' ? '价值仲裁' : '真假仲裁';
         onMessageCreated({
           id: round.roundMessageId || round.id,
-          content: kindLabel('ROUND', undefined, round.settlementType),
+          content: `发起${settlementLabel}：目标消息 ${messageId.slice(-8)}；轮次 ${round.id.slice(-8)}`,
           createdAt: new Date().toISOString(),
           author: '',
           kind: 'round',
@@ -346,9 +346,11 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       const result = await api.closeAndSettle(localRound.id);
       debugLog('结算', `结算完成 round=${localRound.id.slice(-6)} result=${result.result}`);
       if (onMessageCreated) {
+        const settlementLabel = localRound.settlementType === 'VALUE' ? '价值仲裁' : '真假仲裁';
+        const resultLabel = result.result === 'TRUE' ? '赞成胜出' : result.result === 'FALSE' ? '反对胜出' : '平局';
         onMessageCreated({
           id: `settle-${localRound.id}`,
-          content: kindLabel('ROUND_RESULT', undefined, localRound.settlementType),
+          content: `${settlementLabel}完成：目标消息 ${messageId.slice(-8)}；结果：${resultLabel}（${result.result}）；TRUE 权重 ${result.weights.TRUE}，FALSE 权重 ${result.weights.FALSE}`,
           createdAt: new Date().toISOString(),
           author: '',
           kind: 'round_result',
@@ -360,6 +362,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       onSettled(localRound.id);
       window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('points-flash'));
+      window.dispatchEvent(new Event('revenue-refresh'));
     } catch (e: unknown) {
       setSettleError((e as Error)?.message ?? '结算失败');
     }

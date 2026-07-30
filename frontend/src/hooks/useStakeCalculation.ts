@@ -52,25 +52,25 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
   const hasTextContentForTotal = !isTextInPayload && newMessageContent.trim().length > 0;
 
   const totalConsumption = (() => {
-    const burnPerOp = stakeFeeAmountRef.current;
+    const protocolFeePerOp = stakeFeeAmountRef.current;
     const textStake = hasTextContentForTotal && typeof stakeAmount === 'number' ? stakeAmount : 0;
-    const textBurn = textStake > 0 ? burnPerOp : 0;
+    const textFee = textStake > 0 ? protocolFeePerOp : 0;
     if (!relationType) {
-      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: textStake, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
+      if (textStake > 0) return { stakeTotal: textStake, protocolFeeTotal: textFee, total: textStake + textFee, perStake: textStake, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
       return null;
     }
     if (typeof relStakeAmount !== 'number') {
-      if (textStake > 0) return { stakeTotal: textStake, burnTotal: textBurn, total: textStake + textBurn, perStake: 0, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
+      if (textStake > 0) return { stakeTotal: textStake, protocolFeeTotal: textFee, total: textStake + textFee, perStake: 0, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
       return null;
     }
     const relCount = multiTargetCount > 0 ? multiTargetCount : 1;
     const relStakeTotal = relStakeAmount * relCount;
-    const relBurnTotal = burnPerOp * relCount;
+    const relFeeTotal = protocolFeePerOp * relCount;
     const isGovOps2 = relationType === 'proposal' || relationType === 'code_change' || relationType === 'operations';
     const govRefCount = isGovOps2 ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
     const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
     const refStakeTotal = govRefCount > 0 ? govRefCount * refMin : 0;
-    const refBurnTotal = govRefCount > 0 ? govRefCount * burnPerOp : 0;
+    const refFeeTotal = govRefCount > 0 ? govRefCount * protocolFeePerOp : 0;
     const isContainerType = relationType === 'classify' || relationType === 'summary' || relationType === 'arrange' || relationType === 'merge';
     const JOIN_STAKE_PER_TARGET = 1;
     const containerJoinCount = isContainerType ? (() => {
@@ -80,13 +80,13 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
       return uniqueCount;
     })() : 0;
     const joinStakeTotal = containerJoinCount * JOIN_STAKE_PER_TARGET;
-    const joinBurnTotal = containerJoinCount * burnPerOp;
+    const joinFeeTotal = containerJoinCount * protocolFeePerOp;
     const totalStake = textStake + relStakeTotal + refStakeTotal + joinStakeTotal;
-    const totalBurn = textBurn + relBurnTotal + refBurnTotal + joinBurnTotal;
+    const totalProtocolFee = textFee + relFeeTotal + refFeeTotal + joinFeeTotal;
     return {
       stakeTotal: totalStake,
-      burnTotal: totalBurn,
-      total: totalStake + totalBurn,
+      protocolFeeTotal: totalProtocolFee,
+      total: totalStake + totalProtocolFee,
       perStake: relStakeAmount,
       textStake,
       refStakeTotal,
@@ -94,7 +94,7 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
       relCount,
       joinCount: containerJoinCount,
       joinStakeTotal,
-      joinBurnTotal,
+      joinFeeTotal,
       hasText: textStake > 0,
       hasRel: true,
     };

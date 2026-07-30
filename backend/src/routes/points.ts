@@ -9,7 +9,7 @@ router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next
   try {
     const userId = req.user!.id;
 
-    const [pointAccount, balance, mintAgg, burnedEntries] = await Promise.all([
+    const [pointAccount, balance, mintAgg, feeEntries] = await Promise.all([
       prisma.pointAccount.findUnique({
         where: { userId },
         select: { available: true, locked: true },
@@ -34,7 +34,7 @@ router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next
     }
 
     const initialMinted = mintAgg._sum.amount ?? 0;
-    const totalBurned = burnedEntries
+    const totalProtocolFees = feeEntries
       .filter(e => (e.data as Record<string, unknown> | null)?.fee === true)
       .reduce((sum, e) => sum + Math.abs(e.amount), 0);
     const totalLost = balance.totalLost ?? 0;
@@ -53,7 +53,7 @@ router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next
         initialMinted,
         totalEarned,
         totalLost,
-        totalBurned,
+        totalProtocolFees,
       },
     });
   } catch (err) {

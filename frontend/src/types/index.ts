@@ -355,7 +355,7 @@ export interface PointsBalance {
     initialMinted: number;
     totalEarned: number;   // 收益（结算成功）
     totalLost: number;     // 损失（结算失败）
-    totalBurned: number;   // 燃烧（手续费）
+    totalProtocolFees: number; // 进入收入池的协议手续费
   };
 }
 

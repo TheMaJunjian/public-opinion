@@ -20,7 +20,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       if (rawKey) {
         const keyData = JSON.parse(rawKey);
         const privateKey = await crypto.subtle.importKey('jwk', keyData, { name: 'Ed25519' }, false, ['sign']);
-        const encoded = new TextEncoder().encode((options.body as string) ?? '');
+        // express.json() exposes an empty POST body as {}, so sign the same
+        // canonical representation that verifySignature() reconstructs.
+        const rawBody = typeof options.body === 'string' ? options.body : '{}';
+        const encoded = new TextEncoder().encode(rawBody);
         const sig = await crypto.subtle.sign('Ed25519', privateKey, encoded);
         headers['X-Signature'] = btoa(String.fromCharCode(...new Uint8Array(sig)));
       }

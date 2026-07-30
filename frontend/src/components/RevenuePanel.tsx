@@ -8,14 +8,20 @@ export default function RevenuePanel() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
-    Promise.all([
-      api.getRevenuePool().catch(() => null),
-      api.getRevenueDistributions({ limit: 20 }).catch(() => ({ data: [] })),
-    ]).then(([p, d]) => {
-      setPool(p);
-      setDists(d.data);
-    }).finally(() => setLoading(false));
+    const load = () => {
+      setLoading(true);
+      Promise.all([
+        api.getRevenuePool().catch(() => null),
+        api.getRevenueDistributions({ limit: 20 }).catch(() => ({ data: [] })),
+      ]).then(([p, d]) => {
+        setPool(p);
+        setDists(d.data);
+      }).finally(() => setLoading(false));
+    };
+
+    load();
+    window.addEventListener('revenue-refresh', load);
+    return () => window.removeEventListener('revenue-refresh', load);
   }, []);
 
   if (loading) return <div className="text-sm text-gray-500 p-4">加载收入数据...</div>;
@@ -56,6 +62,10 @@ export default function RevenuePanel() {
           </div>
         </div>
       )}
+
+      <div className="border-t border-gray-100 pt-3 text-xs text-gray-500">
+        充值分账和运营收入注入必须发起提案，经讨论、结算和生效条件确认后才会进入收入池。
+      </div>
     </div>
   );
 }

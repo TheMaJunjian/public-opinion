@@ -117,7 +117,7 @@ export default function PointsBadge() {
       <button
         onClick={handleClick}
         className={`flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer ${flash ? `animate-pulse ring-2 rounded px-1 ${flash === 'gain' ? 'ring-red-400' : 'ring-green-400'}` : ''}`}
-        title={`可用${points.available} · 锁定${points.locked} · 损失${breakdown.totalLost} · 燃烧${breakdown.totalBurned} · 收益${breakdown.totalEarned}`}
+        title={`可用${points.available} · 锁定${points.locked} · 损失${breakdown.totalLost} · 协议费${breakdown.totalProtocolFees} · 收益${breakdown.totalEarned}`}
       >
         <span className="text-indigo-200">
           💎 {points.available.toLocaleString()}
@@ -128,8 +128,8 @@ export default function PointsBadge() {
         <span className="text-red-400 text-xs" title={`累计损失: ${breakdown.totalLost}`}>
           📉{breakdown.totalLost}
         </span>
-        <span className="text-orange-400 text-xs" title={`累计燃烧: ${breakdown.totalBurned}`}>
-          🔥{breakdown.totalBurned}
+        <span className="text-orange-400 text-xs" title={`累计协议费: ${breakdown.totalProtocolFees}`}>
+          🏛{breakdown.totalProtocolFees}
         </span>
         <span className="text-green-400 text-xs" title={`累计收益: ${breakdown.totalEarned}`}>
           📈{breakdown.totalEarned}

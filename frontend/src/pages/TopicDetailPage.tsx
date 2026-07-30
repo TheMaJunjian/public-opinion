@@ -1447,7 +1447,7 @@ export default function TopicDetailPage() {
     }
     const totalNeeded = pts + stakeFeeAmountRef.current + (isInsideClassify ? 1 + stakeFeeAmountRef.current : 0);
     if (totalNeeded > availablePoints) {
-      const parts = [`文本 ${pts}`, `燃烧 ${stakeFeeAmountRef.current}`];
+      const parts = [`文本 ${pts}`, `协议费 ${stakeFeeAmountRef.current}`];
       if (isInsideClassify) parts.push(`加入容器 ${1 + stakeFeeAmountRef.current}`);
       setSendError(`贡献点余额不足（可用 ${availablePoints}，需要 ${totalNeeded} 点 = ${parts.join(' + ')}）`);
       return null;
@@ -2151,8 +2151,8 @@ export default function TopicDetailPage() {
         if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
         if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
         if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
-        if ((totalConsumption as any).joinCount > 0) parts.push(`加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinBurnTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）`);
-        if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
+        if ((totalConsumption as any).joinCount > 0) parts.push(`加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinFeeTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）`);
+        if (totalConsumption.protocolFeeTotal > 0) parts.push(`协议费 ${totalConsumption.protocolFeeTotal}`);
         errors.push(`贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`);
       }
     }
@@ -2918,15 +2918,41 @@ export default function TopicDetailPage() {
     // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages.
     if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
       let proposalContent = newMessageContent.trim();
+      let payloadExtraForOperation: Record<string, unknown> = {};
 
-      // DISTRIBUTE_REVENUE: built-in text, no user input
-      if (relationType === 'proposal' && secondaryRelationType === 'DISTRIBUTE_REVENUE') {
+      // 分配收入：内置文案
+      if (relationType === 'proposal' && secondaryRelationType === '分配收入') {
         proposalContent = '提案：将当前收入池余额按规则分配给社区成员';
       }
-      // TERMINATE_SETTLEMENT: require target
-      else if (relationType === 'proposal' && secondaryRelationType === 'TERMINATE_SETTLEMENT') {
-        if (!hasTargetsAvailable) { alert("请选择目标提案消息"); return; }
-        // Build target info for display
+      const readProposalField = (labels: string[]): string | null => {
+        for (const label of labels) {
+          const match = proposalContent.match(new RegExp(`${label}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'));
+          if (match?.[1]?.trim()) return match[1].trim();
+        }
+        return null;
+      };
+      if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
+        const amount = Number(readProposalField(['充值总额', '总额', 'amount']));
+        const revenuePoolShare = Number(readProposalField(['收入池分成', '分成', 'revenuePoolShare']));
+        if (!Number.isInteger(amount) || amount <= 0 || !Number.isInteger(revenuePoolShare) || revenuePoolShare < 0 || revenuePoolShare > amount) {
+          setSendError('充值分账提案格式：充值总额=1000；收入池分成=100（分成不能超过总额）');
+          return;
+        }
+        proposalContent = `充值分账提案\n充值总额：${amount}\n收入池分成：${revenuePoolShare}`;
+        payloadExtraForOperation = { operationType: 'RECHARGE', amount, revenuePoolShare };
+      }
+      if (relationType === 'proposal' && secondaryRelationType === '运营收入注入') {
+        const amount = Number(readProposalField(['收入金额', '金额', 'amount']));
+        const source = readProposalField(['来源', 'source']);
+        if (!Number.isInteger(amount) || amount <= 0 || !source) {
+          setSendError('运营收入提案格式：收入金额=1000；来源=服务收入');
+          return;
+        }
+        proposalContent = `运营收入注入提案\n收入金额：${amount}\n来源：${source}`;
+        payloadExtraForOperation = { operationType: 'REVENUE_INJECTION', amount, source };
+      }
+      // 终止结算：内置文案带目标信息
+      else if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
         const targetInfos: string[] = [];
         for (const t of effectiveTargets) {
           const m = msgMap.get(t.messageId);
@@ -2935,7 +2961,7 @@ export default function TopicDetailPage() {
             targetInfos.push(`「${preview}」— ${m.author}`);
           }
         }
-        proposalContent = proposalContent || `终止结算提案\n目标提案：${targetInfos.join('; ')}`;
+        proposalContent = `终止结算提案\n目标提案：${targetInfos.join('; ')}`;
       }
       else if (!proposalContent && !hasTargetsAvailable) {
         alert("请输入内容或选择目标消息");
@@ -2955,10 +2981,12 @@ export default function TopicDetailPage() {
       try {
         const payloadExtra: Record<string, unknown> = {};
         if (relationType === 'proposal' && secondaryRelationType !== 'none') {
-          payloadExtra.operationType = secondaryRelationType.toUpperCase();
+          const opMap: Record<string, string> = { '分配收入': 'DISTRIBUTE_REVENUE', '终止结算': 'TERMINATE_SETTLEMENT' };
+          payloadExtra.operationType = opMap[secondaryRelationType] ?? secondaryRelationType.toUpperCase();
         }
-        // TERMINATE_SETTLEMENT: include target message IDs for carryOut
-        if (secondaryRelationType === 'TERMINATE_SETTLEMENT') {
+        Object.assign(payloadExtra, payloadExtraForOperation);
+        // 终止结算：传递目标消息 ID 给后端
+        if (secondaryRelationType === '终止结算') {
           const targetMsgIds: string[] = [];
           for (const t of effectiveTargets) {
             const m = msgMap.get(t.messageId);
@@ -3204,8 +3232,15 @@ export default function TopicDetailPage() {
     if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
     if (isGovernanceOrOpsType) {
-      // 来源禁止；目标可选；有目标时文本可不填
       if (sourceUnits.length > 0) return false;
+      // 分配收入：必须完全清空
+      if (relationType === 'proposal' && secondaryRelationType === '分配收入') {
+        return !hasTargetsAvailable && newMessageContent.trim().length === 0;
+      }
+      // 终止结算：目标必须是 governance 消息
+      if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
+        return targetUnits.some(t => msgMap.get(t.messageId)?.kind === 'governance');
+      }
       return newMessageContent.trim().length > 0 || hasTargetsAvailable;
     }
     // TAG with recommend/archive (inline badge): needs targets; if CUSTOM subType, also needs text
@@ -3246,8 +3281,8 @@ export default function TopicDetailPage() {
       if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
       if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
       if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
-      if ((totalConsumption as any).joinCount > 0) parts.push(`加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinBurnTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）`);
-      if (totalConsumption.burnTotal > 0) parts.push(`燃烧 ${totalConsumption.burnTotal}`);
+      if ((totalConsumption as any).joinCount > 0) parts.push(`加入 ${(totalConsumption as any).joinStakeTotal + (totalConsumption as any).joinFeeTotal}（${(totalConsumption as any).joinCount}×${1 + stakeFeeAmountRef.current}）`);
+      if (totalConsumption.protocolFeeTotal > 0) parts.push(`协议费 ${totalConsumption.protocolFeeTotal}`);
       return `贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`;
     }
     if (draftHasRelationTarget && relationType === "correct") {
@@ -3278,6 +3313,19 @@ export default function TopicDetailPage() {
       const govTypeLabel = relationType === "proposal" ? "提案" : relationType === "code_change" ? "代码" : "运营";
       if (sourceUnits.length > 0)
         return `请清空来源集合（${govTypeLabel}消息不需要来源）`;
+      // 分配收入
+      if (relationType === 'proposal' && secondaryRelationType === '分配收入') {
+        if (hasTargetsAvailable) return '分配收入提案不能选择目标，请清空目标集合';
+        if (newMessageContent.trim().length > 0) return '分配收入提案不需要输入文本，请清空文本框';
+        return '发送分配收入提案（将当前收入池余额按规则分配给社区成员）';
+      }
+      // 终止结算
+      if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
+        if (!hasTargetsAvailable) return '请选择目标提案消息';
+        if (!targetUnits.some(t => msgMap.get(t.messageId)?.kind === 'governance'))
+          return '终止结算的目标必须是提案消息';
+        return '发送终止结算提案';
+      }
       const usingDraft2 = draftUnits.length > 0;
       const targetCount = (usingDraft2 ? draftUnits : targetUnits).length;
       if (!hasTargetsAvailable && newMessageContent.trim().length === 0)
@@ -3363,7 +3411,7 @@ export default function TopicDetailPage() {
 
   const proposalSecondaryOptions = useMemo((): string[] => {
     if (relationType !== 'proposal') return ['none'];
-    return ['none', 'DISTRIBUTE_REVENUE', 'TERMINATE_SETTLEMENT'];
+    return ['none', '分配收入', '充值分账', '运营收入注入', '终止结算'];
   }, [relationType]);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {

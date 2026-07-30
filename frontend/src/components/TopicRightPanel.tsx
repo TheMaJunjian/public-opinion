@@ -322,6 +322,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                 (p.draftHasRelationTarget && p.relationType === "correct")
                 || (p.isTagWithQuickAnnotate && p.hasTargetsAvailable)
                 || (p.isMergeType && p.hasTargetsAvailable)
+                || (p.isGovernanceOrOpsType && p.relationType === "proposal" && (p.secondaryRelationType === '分配收入' || p.secondaryRelationType === '终止结算'))
               ));
             const placeholderText = isCustomSubType ? "输入自定义理由（最长20字）"
               : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
@@ -330,7 +331,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
               : p.isClassifyType ? "输入分类名称（不能为空）"
               : p.isSummaryType ? "输入总结内容（不能为空）"
               : p.isArrangeType ? "可选：输入文本消息加入排列框架"
-              : p.isGovernanceOrOpsType ? (p.relationType === "proposal" ? "输入提案内容（不能为空，支持 Markdown）" : p.relationType === "code_change" ? "输入代码内容（不能为空，支持 Markdown）" : "输入运营公告内容（不能为空，支持 Markdown）")
+              : p.isGovernanceOrOpsType ? (p.relationType === "proposal"
+                ? (p.secondaryRelationType === '分配收入' ? "系统自动生成分配提案内容" : p.secondaryRelationType === '终止结算' ? "系统自动生成终止结算提案内容" : "输入提案内容（不能为空，支持 Markdown）")
+                : "输入运营公告内容（不能为空，支持 Markdown）")
               : "输入一条新普通消息（支持自由换行）";
             return (
               <textarea

@@ -316,6 +316,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   const [voteDirection, setVoteDirection] = useState<'TRUE' | 'FALSE'>('TRUE');
   const [voteAmount, setVoteAmount] = useState(1);
   const [voting, setVoting] = useState(false);
+  const [settling, setSettling] = useState(false);
   const [localRound, setLocalRound] = useState(round);
   const [settleError, setSettleError] = useState<string | null>(null);
 
@@ -351,9 +352,11 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   }
 
   async function handleSettle() {
+    if (settling) return;
     if (!confirm('确定要结算此轮次吗？结算后将根据投票权重分配押注池资金，且不可撤销。')) return;
     try {
       setSettleError(null);
+      setSettling(true);
       const result = await api.closeAndSettle(localRound.id);
       debugLog('结算', `结算完成 round=${localRound.id.slice(-6)} result=${result.result}`);
       if (onMessageCreated) {
@@ -377,6 +380,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       window.dispatchEvent(new Event('revenue-refresh'));
     } catch (e: unknown) {
       setSettleError((e as Error)?.message ?? '结算失败');
+    } finally {
+      setSettling(false);
     }
   }
 
@@ -406,11 +411,11 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         </div>
         <button
           onClick={handleSettle}
-          disabled={totalWeight === 0}
-          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
-          title={totalWeight === 0 ? '暂无押注，无法结算' : '结算'}
+          disabled={totalWeight === 0 || settling}
+          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 || settling ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
+          title={totalWeight === 0 ? '暂无押注，无法结算' : settling ? '结算请求处理中' : '结算'}
         >
-          结算
+          {settling ? '结算中...' : '结算'}
         </button>
       </div>
 

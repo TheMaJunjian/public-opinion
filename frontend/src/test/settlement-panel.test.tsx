@@ -107,4 +107,29 @@ describe('SettlementPanel voting', () => {
       resolveCreate?.({ id: 'round-2', settlementType: 'TRUTH' });
     });
   });
+
+  it('prevents duplicate settlement while the request is pending', async () => {
+    let resolveSettlement: ((value: unknown) => void) | undefined;
+    mockApi.getRoundDetail.mockResolvedValue({
+      id: 'round-1',
+      status: 'VOTING',
+      settlementType: 'TRUTH',
+      weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 },
+      votes: [],
+    });
+    mockApi.closeAndSettle.mockImplementation(() => new Promise(resolve => { resolveSettlement = resolve; }));
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '结算' }));
+    expect(await screen.findByRole('button', { name: '结算中...' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '结算中...' }));
+
+    expect(mockApi.closeAndSettle).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveSettlement?.({ result: 'TRUE', weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 } });
+    });
+    vi.unstubAllGlobals();
+  });
 });

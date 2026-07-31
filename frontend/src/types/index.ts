@@ -120,6 +120,7 @@ export interface RelationPayload {
   note?: string;
   attentionUserIds?: string[];
   notifyUserIds?: string[];
+  notifyUsers?: Array<{ id: string; username: string }>;
 }
 
 export interface Relation {

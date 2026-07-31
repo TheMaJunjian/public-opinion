@@ -172,10 +172,18 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
   } else if (relType === 'tag' && label) {
     content = `标签「${label}」\n目标：${targetSummary}`;
   } else if (relType === 'notify') {
-    const notifyUserIds = Array.isArray((relation.payload as Record<string, unknown> | null)?.notifyUserIds)
-      ? ((relation.payload as Record<string, unknown>).notifyUserIds as unknown[]).filter((id): id is string => typeof id === 'string')
+    const notifyPayload = relation.payload as Record<string, unknown> | null;
+    const notifyUsers = Array.isArray(notifyPayload?.notifyUsers)
+      ? (notifyPayload.notifyUsers as unknown[]).filter((user): user is { id: string; username: string } =>
+          !!user && typeof user === 'object' && typeof (user as { id?: unknown }).id === 'string' && typeof (user as { username?: unknown }).username === 'string')
       : [];
-    content = `回复通知：${notifyUserIds.length > 0 ? notifyUserIds.map(id => `用户 ${id}`).join('、') : '无匹配用户'}\n目标：${targetSummary}`;
+    const notifyUserIds = Array.isArray(notifyPayload?.notifyUserIds)
+      ? (notifyPayload.notifyUserIds as unknown[]).filter((id): id is string => typeof id === 'string')
+      : [];
+    const notifyLabels = notifyUsers.length > 0
+      ? notifyUsers.map(user => user.username)
+      : notifyUserIds.map(id => `用户 ${id}`);
+    content = `回复通知：${notifyLabels.length > 0 ? notifyLabels.join('、') : '无匹配用户'}\n目标：${targetSummary}`;
   } else if (relType === 'recommend' || relType === 'archive') {
     const st = (relation.payload as Record<string, unknown> | null)?.subType as string | undefined;
     const stLabel = st ? (st === 'CUSTOM' ? ((relation.payload as Record<string, unknown> | null)?.customLabel as string | undefined || '自定义') : subTypeLabel(st)) : '';

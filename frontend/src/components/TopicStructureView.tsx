@@ -1,5 +1,6 @@
 import type { DemoEdge, DemoMessage, UnitSelection } from '../utils/modelBridge';
 import { relationTypeName } from './GraphView';
+import { Link } from 'react-router-dom';
 
 const INCOMING_OUTGOING_LIST_MAX_H = 120;
 
@@ -9,6 +10,33 @@ function fmtSel(u: UnitSelection) {
   const sel = u.selection;
   const preview = sel.text.slice(0, 12) + (sel.text.length > 12 ? '…' : '');
   return `${u.messageId}（文本片段 第${sel.start}位起 共${sel.len}字「${preview}」）`;
+}
+
+function notifyUsersForEdge(edge: DemoEdge, messages: DemoMessage[]) {
+  const relationMessage = messages.find(message => message.id === edge.relationMessageId);
+  return relationMessage?.relationPayload?.notifyUsers ?? [];
+}
+
+function notifyLabel(edge: DemoEdge, messages: DemoMessage[]) {
+  const relationMessage = messages.find(message => message.id === edge.relationMessageId);
+  const users = notifyUsersForEdge(edge, messages);
+  const names = users.map(user => user.username);
+  const legacyIds = relationMessage?.relationPayload?.notifyUserIds ?? [];
+  return names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '用户';
+}
+
+function notifyUserLinks(edge: DemoEdge, messages: DemoMessage[]) {
+  const relationMessage = messages.find(message => message.id === edge.relationMessageId);
+  const users = notifyUsersForEdge(edge, messages);
+  const userIds = users.length > 0 ? users.map(user => user.id) : (relationMessage?.relationPayload?.notifyUserIds ?? []);
+  return userIds.map((userId, index) => (
+    <span key={userId}>
+      {index > 0 && '、'}
+      <Link to={`/users/${userId}`} style={{ color: '#2563eb', textDecoration: 'underline' }}>
+        {userId}
+      </Link>
+    </span>
+  ));
 }
 
 function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; kind: 'in' | 'out'; messages: DemoMessage[] }) {
@@ -35,7 +63,12 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
               <ul style={{ listStyle: 'none', paddingLeft: 10, margin: 0 }}>
                 {r.entries.map(e => (
                   <li key={e.id} style={{ marginBottom: 4 }}>
-                    {relationTypeName(e.relationType)}：{fmtSel(e.from)} → {fmtSel(e.to)}
+                    {e.relationType === 'notify' ? (
+                      <>
+                        {notifyUserLinks(e, messages)}
+                        {notifyUserLinks(e, messages).length === 0 && notifyLabel(e, messages)}：通知：{fmtSel(e.from)} → {fmtSel(e.to)}
+                      </>
+                    ) : `${relationTypeName(e.relationType)}：${fmtSel(e.from)} → ${fmtSel(e.to)}`}
                   </li>
                 ))}
               </ul>

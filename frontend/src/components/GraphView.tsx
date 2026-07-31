@@ -1828,13 +1828,20 @@ export default function GraphView(props: GraphViewProps) {
   }, [edges]);
 
   const notifyUsersByRelationMsg = useMemo(() => {
-    const result = new Map<string, string[]>();
+    const result = new Map<string, Array<{ id: string; username: string }>>();
     for (const message of messages) {
       if (message.kind !== 'relation' || message.relationType !== 'notify') continue;
+      const payloadUsers = Array.isArray(message.relationPayload?.notifyUsers)
+        ? message.relationPayload.notifyUsers.filter(user => user && typeof user.id === 'string' && typeof user.username === 'string')
+        : [];
+      if (payloadUsers.length > 0) {
+        result.set(message.id, Array.from(new Map(payloadUsers.map(user => [user.id, user])).values()));
+        continue;
+      }
       const ids = Array.isArray(message.relationPayload?.notifyUserIds)
         ? message.relationPayload.notifyUserIds.filter((id): id is string => typeof id === 'string')
         : [];
-      if (ids.length > 0) result.set(message.id, Array.from(new Set(ids)));
+      if (ids.length > 0) result.set(message.id, Array.from(new Set(ids), id => ({ id, username: `用户 ${id}` })));
     }
     return result;
   }, [messages]);
@@ -2458,7 +2465,7 @@ export default function GraphView(props: GraphViewProps) {
       const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
       const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
       if (!box) continue;
-      const rt = e.relationType === 'recommend' ? 'RECOMMEND' : 'ARCHIVE';
+      const rt = e.relationType.toUpperCase();
       const groupKey = `${mid}|${rt}`;
       let group = inlineBadgeGroups.get(groupKey);
       if (!group) {
@@ -2648,8 +2655,17 @@ export default function GraphView(props: GraphViewProps) {
       if (normalized === "evidence" || normalized === "证据") return "证据";
       return (normalized === "reference" || normalized === "ref") ? "引用" : raw;
     }
+    function notifyEdgeLabel(edge: DemoEdge): string {
+      const relationMessage = msgMap.get(edge.relationMessageId);
+      const users = relationMessage?.relationPayload?.notifyUsers ?? [];
+      const names = users
+        .filter(user => user && typeof user.username === 'string')
+        .map(user => user.username);
+      const legacyIds = relationMessage?.relationPayload?.notifyUserIds ?? [];
+      return `${names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '用户'}：通知`;
+    }
     const labelText = (e: DemoEdge, author: string) => {
-      if (e.relationType === "notify") return "通知";
+      if (e.relationType === "notify") return notifyEdgeLabel(e);
       if (e.relationType === "reply") return `${author} · ${replyEdgeLabel(e.relationLabel)}`;
       if (e.relationType === "reference") return `${author} · ${referenceEdgeLabel(e.relationLabel)}`;
       return `${author} · ${edgeLabelName(e.relationType)}`;
@@ -3272,16 +3288,16 @@ export default function GraphView(props: GraphViewProps) {
               {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
                 <div style={{ marginTop: 6, fontSize: 11, color: '#67e8f9' }}>
                   通知用户：
-                  {notifyUsersByRelationMsg.get(msg.id)!.map((userId, index) => (
-                    <React.Fragment key={userId}>
+                  {notifyUsersByRelationMsg.get(msg.id)!.map((notifyUser, index) => (
+                    <React.Fragment key={notifyUser.id}>
                       {index > 0 && '、'}
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); navigate(`/users/${userId}`); }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/users/${notifyUser.id}`); }}
                         style={{ color: '#a5f3fc', textDecoration: 'underline', cursor: 'pointer', background: 'none', border: 0, padding: 0 }}
-                        title={`打开用户页 ${userId}`}
+                        title={`打开用户页 ${notifyUser.username}`}
                       >
-                        {userId}
+                        {notifyUser.username}
                       </button>
                     </React.Fragment>
                   ))}

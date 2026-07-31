@@ -234,7 +234,7 @@ export function getUserMessages(userId: string, params?: { page?: number; limit?
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
-  return request<import('../types').PaginatedResponse<import('../types').Message>>(`/users/${userId}/messages?${qs}`);
+  return request<import('../types').PaginatedResponse<import('../types').Message> & { context?: import('../types').Message[] }>(`/users/${userId}/messages?${qs}`);
 }
 
 // ============================================================

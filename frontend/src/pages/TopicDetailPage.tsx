@@ -1988,6 +1988,7 @@ export default function TopicDetailPage() {
               targetRefs: [unitSelectionToTargetRef(t, msgMap)],
               payload: notifyPayload,
             });
+            await registerCreatedRelationInCurrentClassify(backendRel);
             newEdgesList.push(buildEdges({ ...src }, { ...t }, "notify", "notify", backendRel.id));
           } catch (e: any) { alert(`建立通知关系失败: ${e?.message ?? e}`); }
         }

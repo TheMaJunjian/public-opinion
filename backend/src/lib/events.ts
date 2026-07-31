@@ -974,7 +974,15 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     if (messageIds.length === 0 || attentionUserIds.size === 0 || messageIds.some(id => !attentionUsers.has(id))) {
       throw new Error('通知目标没有关注用户，无法发送通知');
     }
-    persistedPayload = { ...(rpForCreate ?? {}), notifyUserIds: [...attentionUserIds] };
+    const notifyUsers = await prisma.user.findMany({
+      where: { id: { in: [...attentionUserIds] } },
+      select: { id: true, username: true },
+    });
+    persistedPayload = {
+      ...(rpForCreate ?? {}),
+      notifyUserIds: [...attentionUserIds],
+      notifyUsers,
+    };
     const note = typeof rpForCreate?.content === 'string' ? rpForCreate.content : '回复通知';
     persistedRelationContent = `${note}\n通知用户：${[...attentionUserIds].map(id => `用户 ${id}`).join('、')}；目标：${targetLabels.join('、')}`;
   }

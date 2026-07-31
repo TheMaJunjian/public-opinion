@@ -4,6 +4,7 @@ import TopicStructureView from './TopicStructureView';
 import StanceHistoryPanel from './StanceHistoryPanel';
 import AuditLogView from './AuditLogView';
 import RevenuePanel from './RevenuePanel';
+import { Link } from 'react-router-dom';
 
 interface DraftGroup {
   messageId: string;
@@ -431,7 +432,28 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
-            {p.recentRelations.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
+            {p.recentRelations.map(m => {
+              const notifyUsers = m.relationType === 'notify'
+                ? (Array.isArray(m.relationPayload?.notifyUsers) && m.relationPayload.notifyUsers.length > 0
+                  ? m.relationPayload.notifyUsers
+                  : (m.relationPayload?.notifyUserIds ?? []).map(id => ({ id, username: `用户 ${id}` })))
+                : [];
+              return (
+                <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>
+                  {m.id}：{m.content}
+                  {notifyUsers.length > 0 && (
+                    <span>（通知用户：{notifyUsers.map((notifyUser, index) => (
+                      <span key={notifyUser.id}>
+                        {index > 0 && '、'}
+                        <Link to={`/users/${notifyUser.id}`} style={{ color: '#a5f3fc', textDecoration: 'underline' }}>
+                          {notifyUser.username}
+                        </Link>
+                      </span>
+                    ))}）</span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       </div>

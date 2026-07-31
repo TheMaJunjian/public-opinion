@@ -176,6 +176,20 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
       }),
     ]);
 
+    const notifyUserIds = new Set<string>();
+    for (const message of messages) {
+      if (message.relationType !== 'NOTIFY') continue;
+      const payload = message.relationPayload as { notifyUserIds?: unknown } | null;
+      if (!Array.isArray(payload?.notifyUserIds)) continue;
+      for (const id of payload.notifyUserIds) {
+        if (typeof id === 'string') notifyUserIds.add(id);
+      }
+    }
+    const notifyUsers = notifyUserIds.size > 0
+      ? await prisma.user.findMany({ where: { id: { in: [...notifyUserIds] } }, select: { id: true, username: true } })
+      : [];
+    const notifyUserById = new Map(notifyUsers.map(user => [user.id, user]));
+
     // Map unified Message rows back to the Relation API shape expected by the frontend.
     const relations = messages.map(m => ({
       id: m.id,
@@ -183,7 +197,17 @@ relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
       relationType: m.relationType!,
       sourceMessageId: m.relSourceId ?? null,
       targetRefs: m.targetRefs,
-      payload: m.relationPayload ?? undefined,
+      payload: m.relationType === 'NOTIFY' && m.relationPayload
+        ? {
+            ...(m.relationPayload as Record<string, unknown>),
+            notifyUsers: Array.isArray((m.relationPayload as { notifyUserIds?: unknown }).notifyUserIds)
+              ? ((m.relationPayload as { notifyUserIds: unknown[] }).notifyUserIds)
+                  .filter((id): id is string => typeof id === 'string')
+                  .map(id => notifyUserById.get(id))
+                  .filter((user): user is { id: string; username: string } => Boolean(user))
+              : [],
+          }
+        : m.relationPayload ?? undefined,
       createdAt: m.createdAt,
       createdBy: m.createdBy,
     }));

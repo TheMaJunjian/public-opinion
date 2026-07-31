@@ -322,7 +322,12 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
     : null;
 
   async function handleVote() {
+    if (!Number.isInteger(voteAmount) || voteAmount < 1) {
+      setSettleError('投票押注必须是至少 1 点的整数');
+      return;
+    }
     try {
+      setSettleError(null);
       setVoting(true);
       const result = await api.castVote(localRound.id, { vote: voteDirection, amount: voteAmount });
       debugLog('结算', `投票 round=${localRound.id.slice(-6)} ${voteDirection} ${voteAmount}`);
@@ -332,8 +337,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       window.dispatchEvent(new CustomEvent('relation-created', { detail: result }));
       const updated = await api.getRoundDetail(localRound.id);
       setLocalRound(updated);
-    } catch {
-      // error displayed in parent
+    } catch (e: unknown) {
+      setSettleError((e as Error)?.message ?? '投票失败');
     } finally {
       setVoting(false);
     }

@@ -2203,6 +2203,11 @@ export default function TopicDetailPage() {
     // Clear saved text on type switch since user is sending/committing
     savedTextOnTypeSwitchRef.current = "";
 
+    if (draftUnits.length > 0 && targetUnits.length > 0) {
+      setSendError('候选区和目标集合不能同时有内容，请先将候选区移入目标集合或清空其中一方');
+      return;
+    }
+
     // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
     const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
     // Validate both stakes — collect all errors

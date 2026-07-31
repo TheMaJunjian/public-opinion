@@ -64,7 +64,7 @@ const createRelationSchema = z.object({
     title: z.string().trim().min(1).max(200).optional(),
     targetLayout: z.enum(['single-column', 'multi-column', 'single-row']).optional(),
     content: z.string().trim().min(1).max(50000).optional(),
-    subType: z.enum(['SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'ATTENTION', 'CUSTOM']).optional(),
+    subType: z.enum(['SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM']).optional(),
     customLabel: z.string().trim().min(1).max(20).optional(),
     operationType: z.string().trim().min(1).max(80).optional(),
     amount: z.number().int().positive().optional(),
@@ -116,12 +116,12 @@ const createRelationSchema = z.object({
   }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'NOTIFY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'NOTIFY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
 
 // Types that forbid sourceMessageId entirely (must be null)
 const SOURCE_FORBIDDEN_RELATION_TYPES: Record<string, string> = {
-  RECOMMEND: '推荐', ARCHIVE: '冷藏',
+  RECOMMEND: '推荐', ARCHIVE: '冷藏', ATTENTION: '关注', BLOCK: '拉黑',
   PROPOSAL: '提案', CODE_CHANGE: '代码变更', OPERATIONS: '运营',
 };
 // Types that forbid targetRefs entirely (must be empty array)

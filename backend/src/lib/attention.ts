@@ -3,7 +3,6 @@ import { prisma } from './prisma';
 type AttentionRelation = {
   createdById: string;
   targetRefs: unknown;
-  relationPayload: unknown;
 };
 
 function targetMessageIds(targetRefs: unknown): string[] {
@@ -24,13 +23,11 @@ export async function getAttentionUsersByTargetIds(
 ): Promise<Map<string, Set<string>>> {
   const requestedIds = targetIds ? new Set(targetIds) : null;
   const relations = await prisma.message.findMany({
-    where: { topicId, kind: 'RELATION', relationType: 'TAG', supersededBy: null },
-    select: { createdById: true, targetRefs: true, relationPayload: true },
+    where: { topicId, kind: 'RELATION', relationType: 'ATTENTION', supersededBy: null },
+    select: { createdById: true, targetRefs: true },
   }) as AttentionRelation[];
   const result = new Map<string, Set<string>>();
   for (const relation of relations) {
-    const payload = relation.relationPayload;
-    if (!payload || typeof payload !== 'object' || (payload as { subType?: unknown }).subType !== 'ATTENTION') continue;
     const ids = targetMessageIds(relation.targetRefs);
     for (const id of ids) {
       if (requestedIds && !requestedIds.has(id)) continue;

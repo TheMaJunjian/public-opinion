@@ -47,6 +47,8 @@ export const RELATION_TYPES = [
   'SUMMARY',      // 总结
   'RECOMMEND',    // 推荐
   'ARCHIVE',      // 冷藏
+  'ATTENTION',    // 关注
+  'BLOCK',        // 拉黑
   'PROPOSAL',     // 提案（修改规则/制度的治理提案，需质押，可投票结算）
   'CODE_CHANGE',  // 代码变更（修改程序代码的提案，需质押，可投票结算后自动部署）
   'OPERATIONS',   // 运营（收入、统计等程序运营公告信息）

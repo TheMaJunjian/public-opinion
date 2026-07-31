@@ -133,7 +133,7 @@ export default function TopicDetailPage() {
     setRelations(backendRelations);
     const preloadedAttention: Record<string, string[]> = {};
     for (const relation of backendRelations) {
-      if (relation.relationType.toUpperCase() !== 'TAG' || relation.payload?.subType !== 'ATTENTION') continue;
+      if (relation.relationType.toUpperCase() !== 'ATTENTION') continue;
       for (const ref of relation.targetRefs) {
         if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
         const users = preloadedAttention[ref.messageId] ?? [];
@@ -2043,8 +2043,8 @@ export default function TopicDetailPage() {
           } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
-    } else if (relationType === "recommend" || relationType === "archive") {
-      // RECOMMEND/ARCHIVE: user-to-message relations with no source message, one per target.
+    } else if (relationType === "recommend" || relationType === "archive" || relationType === "attention" || relationType === "block") {
+      // Annotation relations: user-to-message relations with no source message, one per target.
       // Source units are intentionally ignored — these relations never carry a source message.
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       for (const targetMid of uniqueTargetMids) {
@@ -2262,7 +2262,7 @@ export default function TopicDetailPage() {
       const secType = secondaryRelationType;
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       const newEdgesList: DemoEdge[] = [];
-      if (secType === "recommend" || secType === "archive") {
+      if (secType === "recommend" || secType === "archive" || secType === "attention" || secType === "block") {
         // Create inline badge relation (no source message), one per target
         for (const tgtMid of uniqueTargetMids) {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
@@ -3259,12 +3259,12 @@ export default function TopicDetailPage() {
   const isGovernanceOrOpsType = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
-  const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
+  const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive" || secondaryRelationType === "attention" || secondaryRelationType === "block");
   const notifyTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
   const attentionTargetMessageIds = useMemo(() => {
     const targetIds = new Set(Object.keys(attentionUsersByTarget).filter(id => attentionUsersByTarget[id].length > 0));
     for (const relation of relations) {
-      if (relation.relationType.toUpperCase() !== 'TAG' || relation.payload?.subType !== 'ATTENTION') continue;
+      if (relation.relationType.toUpperCase() !== 'ATTENTION') continue;
       for (const targetRef of relation.targetRefs) {
         if (targetRef.kind === 'message' || targetRef.kind === 'text-fragment') {
           targetIds.add(targetRef.messageId);
@@ -3491,7 +3491,7 @@ export default function TopicDetailPage() {
     return ['none', ...sameKindTypes];
   }, [relationType, draftUnits, targetUnits, edges, msgMap]);
 
-  // Secondary relation options for TAG type: none, recommend, archive, plus existing tags on target messages.
+  // Secondary relation options for TAG type: recommend, archive, attention, block, plus existing tags.
   const tagSecondaryOptions = useMemo((): string[] => {
     if (relationType !== 'tag') return ['none'];
     const allUnits = [...draftUnits, ...targetUnits];
@@ -3505,7 +3505,7 @@ export default function TopicDetailPage() {
         }
       }
     }
-    return ['recommend', 'archive', ...Array.from(existingTagLabels)];
+    return ['recommend', 'archive', 'attention', 'block', ...Array.from(existingTagLabels)];
   }, [relationType, draftUnits, targetUnits, edges]);
 
   const proposalSecondaryOptions = useMemo((): string[] => {

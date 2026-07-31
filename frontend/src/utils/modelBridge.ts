@@ -24,6 +24,8 @@ export type RelationType =
   | "summary"
   | "recommend"
   | "archive"
+  | "attention"
+  | "block"
   | "proposal"
   | "code_change"
   | "operations";

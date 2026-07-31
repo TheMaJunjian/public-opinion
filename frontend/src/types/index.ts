@@ -69,6 +69,8 @@ export type RelationType =
   | 'SUMMARY'      // 总结
   | 'RECOMMEND'    // 推荐
   | 'ARCHIVE'      // 冷藏
+  | 'ATTENTION'    // 关注
+  | 'BLOCK'        // 拉黑
   | 'OPERATIONS'   // 运营（收入、统计等程序运营信息）
   | 'JOIN'         // 加入（内部成员关系记录）
   | string;        // future extensibility
@@ -108,7 +110,7 @@ export interface RelationPayload {
   title?: string;
   targetLayout?: RelationTargetLayout;
   content?: string;
-  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'ATTENTION' | 'CUSTOM';
+  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'CUSTOM';
   customLabel?: string;
   operationType?: string;
   amount?: number;
@@ -221,6 +223,8 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true, isContainer: true  },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
+  ATTENTION:   { kind: 'inline-badge',      label: '关注', color: 'cyan',   formsTrees: false },
+  BLOCK:       { kind: 'inline-badge',      label: '拉黑', color: 'red',    formsTrees: false },
   PROPOSAL:    { kind: 'edge-label',        label: '🏛️ 提案', color: 'amber',  formsTrees: false },
   CODE_CHANGE: { kind: 'edge-label',        label: '💻 代码', color: 'teal',  formsTrees: false },
   OPERATIONS:  { kind: 'edge-label',        label: '📊 运营', color: 'cyan',   formsTrees: false },

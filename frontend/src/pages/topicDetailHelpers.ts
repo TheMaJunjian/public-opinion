@@ -22,7 +22,7 @@ export function secondaryRelationLabel(t: string): string {
   if (t === 'horizontal') return '横';
   if (t === 'evidence') return '证据';
   if (t === 'custom') return '自定义';
-  if (t === 'recommend' || t === 'archive') return relationTypeName(t);
+  if (t === 'recommend' || t === 'archive' || t === 'attention' || t === 'block') return relationTypeName(t as RelationType);
   if (t === '分配收入') return '分配收入';
   if (t === '终止结算') return '终止结算';
   if (t === '充值分账') return '充值分账';
@@ -41,8 +41,8 @@ export function isValidTagLabel(label: string | undefined): label is string {
   return !!label && label !== 'tag';
 }
 
-export const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', ATTENTION: '关注', CUSTOM: '自定义' };
-export const SUB_TYPE_OPTIONS = ['', 'SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'ATTENTION', 'CUSTOM'];
+export const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义' };
+export const SUB_TYPE_OPTIONS = ['', 'SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM'];
 
 export function subTypeLabel(st: string) {
   return SUB_TYPE_LABELS[st] ?? st;

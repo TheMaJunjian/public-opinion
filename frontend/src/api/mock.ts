@@ -415,7 +415,7 @@ export async function getRelations(topicId: string, params?: { page?: number; li
 export async function getAttentionUsers(topicId: string) {
   await delay();
   const data: Record<string, string[]> = {};
-  const attentionRelations = relations.filter(r => r.topicId === topicId && r.relationType.toUpperCase() === 'TAG' && r.payload?.subType === 'ATTENTION');
+  const attentionRelations = relations.filter(r => r.topicId === topicId && r.relationType.toUpperCase() === 'ATTENTION');
   for (const attentionRelation of attentionRelations) {
     for (const target of attentionRelation.targetRefs) {
       if (target.kind !== 'message' && target.kind !== 'text-fragment') continue;

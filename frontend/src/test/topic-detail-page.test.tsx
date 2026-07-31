@@ -8,6 +8,7 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
     getTopic: vi.fn(),
     getMessages: vi.fn(),
     getRelations: vi.fn(),
+    getAttentionUsers: vi.fn().mockResolvedValue({ data: {} }),
     getPointsBalance: vi.fn().mockResolvedValue({ points: { available: 100, locked: 0 }, balance: { amount: 100, debtFrozen: false } }),
     getPointsTransactions: vi.fn().mockResolvedValue({ data: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 } }),
     getMessageStakes: vi.fn().mockResolvedValue({ messageId: '', pool: { lockedPro: 0, lockedCon: 0 }, stakes: [], counts: { pro: 0, con: 0 } }),

@@ -43,6 +43,20 @@ export interface ReplayExportSnapshot {
   }>;
 }
 
+export interface EconomicAuditExportSnapshot {
+  formatVersion: number;
+  exportKind: 'economic-audit';
+  topicId: string;
+  auditEvents: Array<{
+    id: string;
+    createdAt: string | Date;
+    actorId: string | null;
+    action: string;
+    entityId: string | null;
+    data: unknown;
+  }>;
+}
+
 // ═══════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════
@@ -172,6 +186,22 @@ function applyVote(
   const bal = state.balances.get(userId) ?? 0;
   state.balances.set(userId, bal - feeAmount);
   state.revenuePoolBalance += feeAmount;
+}
+
+function recordRelationVote(
+  state: ReplayState,
+  userId: string,
+  messageId: string,
+  roundId: string,
+  vote: 'TRUE' | 'FALSE',
+  amount: number,
+) {
+  if (!state.votes.has(roundId)) state.votes.set(roundId, []);
+  state.votes.get(roundId)!.push({ userId, vote, amount });
+  const round = state.rounds.get(roundId);
+  if (round) round.weights[vote] += amount;
+  ensureBalance(state, userId);
+  void messageId;
 }
 
 function applySettle(
@@ -608,6 +638,83 @@ export function replayFromExport(snapshot: ReplayExportSnapshot): ReplayState {
       relationPayload: relation.payload,
       supersededBy: relation.supersededBy,
     });
+  }
+
+  return state;
+}
+
+/**
+ * Replay the economic portion of a topic audit export.
+ * Topic exports do not contain account history from other topics, so callers
+ * should use this result for topic-local stakes/rounds, not global balances.
+ */
+export function replayFromAuditExport(snapshot: EconomicAuditExportSnapshot): ReplayState {
+  if (snapshot.formatVersion !== 1 || snapshot.exportKind !== 'economic-audit') {
+    throw new Error('Unsupported economic audit export format');
+  }
+
+  const state = createEmptyState();
+  const entries = [...snapshot.auditEvents].sort((left, right) => {
+    const time = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+    return time || left.id.localeCompare(right.id);
+  });
+
+  for (const entry of entries) {
+    const actorId = entry.actorId ?? 'system';
+    const details = (entry.data as { details?: Record<string, unknown> } | null)?.details;
+    if (!details) continue;
+
+    switch (entry.action) {
+      case 'USER_REGISTERED':
+        ensureBalance(state, actorId);
+        break;
+      case 'POINT_MINTED':
+        applyMint(state, actorId, details.amount as number);
+        break;
+      case 'MESSAGE_CREATED':
+        if (details.kind === 'ROUND' && details.roundId) {
+          applyRoundCreated(state, details.targetMessageId as string, details.roundId as string,
+            (details.settlementType as string) ?? 'TRUTH', (details.previousRoundId as string) ?? null);
+        }
+        break;
+      case 'STAKE_PLACED':
+        applyStake(state, actorId, details.messageId as string, details.side as 'PRO' | 'CON',
+          details.amount as number, details.roundId as string | null | undefined,
+          (details.settlementType as string) ?? 'TRUTH', (details.feeAmount as number) ?? 0);
+        break;
+      case 'RELATION_CREATED': {
+        const payload = details.relationPayload as Record<string, unknown> | null | undefined;
+        if (payload?.vote === true && payload.roundId && payload.amount) {
+          const relationType = String(details.relationType ?? '');
+          recordRelationVote(state, actorId, details.messageId as string,
+            payload.roundId as string,
+            relationType === 'AGREE' || relationType === 'RECOMMEND' ? 'TRUE' : 'FALSE',
+            payload.amount as number);
+        }
+        break;
+      }
+      case 'VOTE_CAST':
+        recordRelationVote(state, actorId, details.messageId as string, details.roundId as string,
+          details.vote as 'TRUE' | 'FALSE', details.amount as number);
+        break;
+      case 'ROUND_CREATED':
+        applyRoundCreated(state, details.messageId as string, entry.entityId as string,
+          (details.settlementType as string) ?? 'TRUTH', (details.previousRoundId as string) ?? null);
+        break;
+      case 'ROUND_SETTLED':
+        applySettle(state, details.messageId as string, details.roundId as string,
+          details.result as 'TRUE' | 'FALSE' | 'UNKNOWN',
+          details.weights as { TRUE: number; FALSE: number },
+          details.totalPro as number, details.totalCon as number);
+        break;
+      case 'SETTLEMENT_CLAWBACK':
+        applyClawback(state, details.messageId as string, details.previousRoundId as string,
+          details.restoredPro as number, details.restoredCon as number);
+        break;
+      case 'REVENUE_RECEIVED':
+        state.revenuePoolBalance += (details.amount as number) ?? 0;
+        break;
+    }
   }
 
   return state;

@@ -268,6 +268,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 | 4.3.1 | 事件被记录 | 检查数据库 AuditLog 表 | 包含 USER_REGISTERED, POINT_MINTED, TOPIC_CREATED, MESSAGE_CREATED, STAKE_PLACED, ROUND_CREATED/相关 MESSAGE_CREATED、ROUND_SETTLED；当前投票通过带 `relationPayload.vote=true` 的 RELATION_CREATED 记录 |
 | 4.3.2 | 事件含完整 payload | 查看各条 AuditLog.data | 含相关 messageId、amount、side 等信息；投票关系还应含 relationPayload.roundId 和 relationPayload.amount |
 | 4.3.3 | 审计快照导出 | `GET /topics/{topicId}/export/audit-export` | 返回 `formatVersion=1`，含 messages、auditEvents、stakes、votes、rounds、rules，可作为独立 replay 输入 |
+| 4.3.4 | 离线回放 | `cd backend; npm run replay:export -- path/to/audit-export.json` | 输出主题范围的 stakes、votes、rounds 复算摘要；不宣称完成全局余额守恒 |
 
 ---
 

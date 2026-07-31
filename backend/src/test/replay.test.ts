@@ -3,7 +3,7 @@
  */
 
 import { prisma } from '../lib/prisma';
-import { replay, replayFromExport } from '../replay/replay';
+import { replay, replayFromAuditExport, replayFromExport } from '../replay/replay';
 import { verify } from '../replay/verify';
 import { applyEvent } from '../lib/events';
 
@@ -38,6 +38,25 @@ describe('Replay/Verify', () => {
   it('rejects unknown export versions', () => {
     expect(() => replayFromExport({ formatVersion: 1, topicId: 'topic-1', messages: [], relations: [] }))
       .toThrow('Unsupported export format version: 1');
+  });
+
+  it('replays topic-local stakes, relation votes and settlement from audit events', () => {
+    const state = replayFromAuditExport({
+      formatVersion: 1,
+      exportKind: 'economic-audit',
+      topicId: 'topic-1',
+      auditEvents: [
+        { id: '1', createdAt: '2026-08-01T00:00:00.000Z', actorId: 'user-a', action: 'USER_REGISTERED', entityId: 'user-a', data: { details: {} } },
+        { id: '2', createdAt: '2026-08-01T00:00:01.000Z', actorId: 'user-a', action: 'MESSAGE_CREATED', entityId: 'round-message', data: { details: { kind: 'ROUND', targetMessageId: 'message-1', roundId: 'round-1', settlementType: 'TRUTH' } } },
+        { id: '3', createdAt: '2026-08-01T00:00:02.000Z', actorId: 'user-a', action: 'STAKE_PLACED', entityId: 'stake-1', data: { details: { messageId: 'message-1', side: 'PRO', amount: 10, roundId: 'round-1', settlementType: 'TRUTH', feeAmount: 1 } } },
+        { id: '4', createdAt: '2026-08-01T00:00:03.000Z', actorId: 'user-b', action: 'RELATION_CREATED', entityId: 'relation-1', data: { details: { relationType: 'DISAGREE', relationPayload: { vote: true, amount: 5, roundId: 'round-1' } } } },
+        { id: '5', createdAt: '2026-08-01T00:00:04.000Z', actorId: 'user-a', action: 'ROUND_SETTLED', entityId: 'round-1', data: { details: { messageId: 'message-1', roundId: 'round-1', result: 'TRUE', weights: { TRUE: 10, FALSE: 5 }, totalPro: 10, totalCon: 5 } } },
+      ],
+    });
+
+    expect(state.stakeTotals.get('message-1')).toEqual({ pro: 10, con: 0 });
+    expect(state.votes.get('round-1')).toEqual([{ userId: 'user-b', vote: 'FALSE', amount: 5 }]);
+    expect(state.rounds.get('round-1')?.result).toBe('TRUE');
   });
 
   beforeAll(async () => {

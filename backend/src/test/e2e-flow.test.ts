@@ -14,6 +14,7 @@
 import request from 'supertest';
 import app from '../app';
 import { prisma } from '../lib/prisma';
+import { replayFromAuditExport } from '../replay/replay';
 
 const BASE = '/api';
 
@@ -343,6 +344,11 @@ describe('E2E — 完整用户流程（模拟所有前端操作）', () => {
     expect(exportRes.body.votes.length).toBeGreaterThan(0);
     expect(exportRes.body.votes.some((vote: { roundId: string }) => vote.roundId)).toBe(true);
     expect(exportRes.body.rules.length).toBeGreaterThan(0);
+
+    const replayed = replayFromAuditExport(exportRes.body);
+    expect(replayed.stakes.length).toBe(exportRes.body.stakes.length);
+    expect(replayed.rounds.size).toBeGreaterThanOrEqual(2);
+    expect(replayed.votes.size).toBeGreaterThan(0);
   });
 
   // ═══════════════════════════════════════════════════════════

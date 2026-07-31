@@ -15,7 +15,8 @@
     "test": "jest --config jest.config.json",
     "test:watch": "jest --config jest.config.json --watch",
     "test:coverage": "jest --config jest.config.json --coverage",
-    "replay:verify": "ts-node src/replay/run.ts"
+    "replay:verify": "ts-node src/replay/run.ts",
+    "replay:export": "ts-node src/replay/run-export.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

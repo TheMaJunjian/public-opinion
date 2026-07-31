@@ -329,7 +329,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
     : null;
 
   async function handleVote() {
-    if (voting) return;
+    if (voting || settling) return;
     if (!Number.isInteger(voteAmount) || voteAmount < 1) {
       setSettleError('投票押注必须是至少 1 点的整数');
       return;
@@ -353,7 +353,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   }
 
   async function handleSettle() {
-    if (settling) return;
+    if (voting || settling) return;
     if (!confirm('确定要结算此轮次吗？结算后将根据投票权重分配押注池资金，且不可撤销。')) return;
     try {
       setSettleError(null);
@@ -412,9 +412,9 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         </div>
         <button
           onClick={handleSettle}
-          disabled={totalWeight === 0 || settling}
-          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 || settling ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
-          title={totalWeight === 0 ? '暂无押注，无法结算' : settling ? '结算请求处理中' : '结算'}
+          disabled={totalWeight === 0 || voting || settling}
+          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 || voting || settling ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
+          title={totalWeight === 0 ? '暂无押注，无法结算' : voting ? '投票请求处理中' : settling ? '结算请求处理中' : '结算'}
         >
           {settling ? '结算中...' : '结算'}
         </button>
@@ -478,7 +478,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
         />
         <button
           onClick={handleVote}
-          disabled={voting}
+          disabled={voting || settling}
           className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs font-medium rounded transition-colors"
         >
           {voting ? '投票中...' : '投票'}

@@ -9,8 +9,39 @@
 import { prisma } from '../lib/prisma';
 import {
   createEmptyState, ReplayState, betPoolKey,
-  type StakeTotals, type VoteRecord,
+  type MessageState, type StakeTotals, type VoteRecord,
 } from './types';
+
+export interface ReplayExportSnapshot {
+  formatVersion: number;
+  topicId: string;
+  messages: Array<{
+    id: string;
+    kind: string;
+    contentType?: string | null;
+    content?: string | null;
+    authorId: string;
+    quoteSourceId?: string | null;
+    quotedText?: string | null;
+    quotedTextHash?: string | null;
+    quoteContextBefore?: string | null;
+    quoteContextAfter?: string | null;
+    targetRefs?: unknown;
+    relationPayload?: unknown;
+    relationType?: string | null;
+    sourceMessageId?: string | null;
+    supersededBy?: string | null;
+  }>;
+  relations: Array<{
+    id: string;
+    relationType: string | null;
+    sourceMessageId: string | null;
+    targetRefs: unknown;
+    payload: unknown;
+    authorId: string;
+    supersededBy: string | null;
+  }>;
+}
 
 // ═══════════════════════════════════════════════════════════
 // Helpers
@@ -524,6 +555,59 @@ export async function replay(): Promise<ReplayState> {
     } catch (err) {
       console.error(`[replay] FAILED action=${entry.action} entityId=${entry.entityId?.slice(-6)}: ${(err as Error).message}`);
     }
+  }
+
+  return state;
+}
+
+/** Rebuild the public discussion projection from a versioned topic export. */
+export function replayFromExport(snapshot: ReplayExportSnapshot): ReplayState {
+  if (snapshot.formatVersion !== 2) {
+    throw new Error(`Unsupported export format version: ${snapshot.formatVersion}`);
+  }
+
+  const state = createEmptyState();
+  for (const item of snapshot.messages) {
+    const message: MessageState = {
+      id: item.id,
+      topicId: snapshot.topicId,
+      createdById: item.authorId,
+      kind: item.kind,
+      contentType: item.contentType ?? null,
+      content: item.content ?? null,
+      quoteSourceId: item.quoteSourceId ?? null,
+      quotedText: item.quotedText ?? null,
+      quotedTextHash: item.quotedTextHash ?? null,
+      quoteContextBefore: item.quoteContextBefore ?? null,
+      quoteContextAfter: item.quoteContextAfter ?? null,
+      relationType: item.relationType ?? null,
+      relSourceId: item.sourceMessageId ?? null,
+      targetRefs: item.targetRefs ?? null,
+      relationPayload: item.relationPayload ?? null,
+      supersededBy: item.supersededBy ?? null,
+    };
+    state.messages.set(message.id, message);
+  }
+
+  for (const relation of snapshot.relations) {
+    state.messages.set(relation.id, {
+      id: relation.id,
+      topicId: snapshot.topicId,
+      createdById: relation.authorId,
+      kind: 'RELATION',
+      contentType: 'TEXT',
+      content: null,
+      quoteSourceId: null,
+      quotedText: null,
+      quotedTextHash: null,
+      quoteContextBefore: null,
+      quoteContextAfter: null,
+      relationType: relation.relationType,
+      relSourceId: relation.sourceMessageId,
+      targetRefs: relation.targetRefs,
+      relationPayload: relation.payload,
+      supersededBy: relation.supersededBy,
+    });
   }
 
   return state;

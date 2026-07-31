@@ -43,6 +43,25 @@ export interface StakeRecord {
   settlementType: string;
 }
 
+export interface MessageState {
+  id: string;
+  topicId: string;
+  createdById: string;
+  kind: string;
+  contentType: string | null;
+  content: string | null;
+  quoteSourceId: string | null;
+  quotedText: string | null;
+  quotedTextHash: string | null;
+  quoteContextBefore: string | null;
+  quoteContextAfter: string | null;
+  relationType: string | null;
+  relSourceId: string | null;
+  targetRefs: unknown;
+  relationPayload: unknown;
+  supersededBy: string | null;
+}
+
 export interface LedgerSummary {
   earned: number;
   lost: number;
@@ -51,6 +70,8 @@ export interface LedgerSummary {
 }
 
 export interface ReplayState {
+  /** messageId -> reconstructed message */
+  messages: Map<string, MessageState>;
   /** userId → balance */
   balances: Map<string, number>;
   /** userId → PointAccount */
@@ -73,6 +94,7 @@ export interface ReplayState {
 
 export function createEmptyState(): ReplayState {
   return {
+    messages: new Map(),
     balances: new Map(),
     accounts: new Map(),
     stakeTotals: new Map(),

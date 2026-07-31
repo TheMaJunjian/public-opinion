@@ -6,11 +6,9 @@ const exportRouter = Router({ mergeParams: true });
 /**
  * GET /api/topics/:topicId/export
  *
- * Exports the complete discussion structure of a topic as a JSON blob,
- * including all message fields needed for independent replay/verification.
- * Economic data (stakes, votes, settlement results) is carried in the
- * message payloads and targetRefs fields — no separate economic models
- * are fetched.
+ * Exports the discussion projection as a versioned JSON snapshot.
+ * This is the public content/relationship format; it is not the complete
+ * economic audit stream consumed by replay/verify.
  */
 exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -48,16 +46,17 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         relationPayload: true,
         relationType: true,
         relSourceId: true,
-        createdBy: { select: { username: true } },
+        createdBy: { select: { id: true, username: true } },
+        supersededBy: true,
       },
     });
 
-    // Fetch all RELATION messages and map to the Relation API shape
+    // Keep superseded relations in the export so relationship history is reproducible.
     const relationMessages = await prisma.message.findMany({
       where: {
         topicId,
         kind: 'RELATION',
-        supersededBy: null,
+        supersededBy: undefined,
       },
       orderBy: { createdAt: 'asc' },
       select: {
@@ -67,7 +66,8 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         targetRefs: true,
         relationPayload: true,
         createdAt: true,
-        createdBy: { select: { username: true } },
+        createdBy: { select: { id: true, username: true } },
+        supersededBy: true,
       },
     });
 
@@ -78,11 +78,15 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
       targetRefs: m.targetRefs,
       payload: m.relationPayload,
       createdAt: m.createdAt,
+      authorId: m.createdBy.id,
       author: m.createdBy.username,
+      supersededBy: m.supersededBy,
     }));
 
     const exportData = {
+      formatVersion: 2,
       exportedAt: new Date().toISOString(),
+      topicId,
       topic: {
         title: topic.title,
         body: topic.body,
@@ -94,6 +98,7 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         contentType: m.contentType,
         content: m.content,
         createdAt: m.createdAt,
+        authorId: m.createdBy.id,
         author: m.createdBy.username,
         quoteSourceId: m.quoteSourceId,
         quotedText: m.quotedText,
@@ -104,6 +109,7 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         relationPayload: m.relationPayload,
         relationType: m.relationType,
         sourceMessageId: m.relSourceId,
+        supersededBy: m.supersededBy,
       })),
       relations,
     };

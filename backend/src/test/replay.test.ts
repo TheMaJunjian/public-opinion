@@ -3,13 +3,43 @@
  */
 
 import { prisma } from '../lib/prisma';
-import { replay } from '../replay/replay';
+import { replay, replayFromExport } from '../replay/replay';
 import { verify } from '../replay/verify';
 import { applyEvent } from '../lib/events';
 
 const PREFIX = 'rply-';
 
 describe('Replay/Verify', () => {
+  it('rebuilds messages and relation history from export format v2', () => {
+    const state = replayFromExport({
+      formatVersion: 2,
+      topicId: 'topic-1',
+      messages: [{
+        id: 'message-1', kind: 'TEXT', contentType: 'TEXT', content: '原始观点', authorId: 'user-a',
+        targetRefs: null, relationPayload: null, relationType: null, sourceMessageId: null,
+        supersededBy: null,
+      }],
+      relations: [{
+        id: 'relation-1', relationType: 'DISAGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId: 'message-1' }], payload: { content: '反驳' },
+        authorId: 'user-b', supersededBy: 'relation-2',
+      }, {
+        id: 'relation-2', relationType: 'DISAGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId: 'message-1' }], payload: { content: '更新后的反驳' },
+        authorId: 'user-b', supersededBy: null,
+      }],
+    });
+
+    expect(state.messages.get('message-1')?.content).toBe('原始观点');
+    expect(state.messages.get('relation-1')?.supersededBy).toBe('relation-2');
+    expect(state.messages.get('relation-2')?.relationPayload).toEqual({ content: '更新后的反驳' });
+  });
+
+  it('rejects unknown export versions', () => {
+    expect(() => replayFromExport({ formatVersion: 1, topicId: 'topic-1', messages: [], relations: [] }))
+      .toThrow('Unsupported export format version: 1');
+  });
+
   beforeAll(async () => {
     const ids = [`${PREFIX}a`, `${PREFIX}b`];
     const ourMsgs = await prisma.message.findMany({ where: { createdById: { in: ids } }, select: { id: true } });

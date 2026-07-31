@@ -286,7 +286,9 @@ export function getTopicTagCounts(topicId: string) {
 // ============================================================
 
 export interface ExportData {
+  formatVersion: number;
   exportedAt: string;
+  topicId: string;
   topic: { title: string; body: string | null; status: string };
   messages: Array<{
     id: string;
@@ -294,6 +296,7 @@ export interface ExportData {
     contentType: string | null;
     content: string | null;
     createdAt: string;
+    authorId: string;
     author: string;
     quoteSourceId?: string | null;
     quotedText?: string | null;
@@ -304,6 +307,7 @@ export interface ExportData {
     relationPayload?: unknown;
     relationType?: string | null;
     sourceMessageId?: string | null;
+    supersededBy?: string | null;
   }>;
   relations: Array<{
     id: string;
@@ -312,7 +316,9 @@ export interface ExportData {
     targetRefs: unknown;
     payload: unknown;
     createdAt: string;
+    authorId: string;
     author: string;
+    supersededBy: string | null;
   }>;
 }
 

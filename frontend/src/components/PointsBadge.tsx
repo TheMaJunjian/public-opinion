@@ -249,6 +249,8 @@ function typeLabel(type: string): string {
     UNLOCK: '解锁',
     SPEND: '支出',
     TRANSFER: '转入',
+    REVENUE_DISTRIBUTION: '收入分配',
+    REVENUE_WITHDRAWAL: '收入撤回',
   };
   return labels[type] ?? type;
 }
@@ -293,6 +295,9 @@ function txDetail(tx: import('../types').PointTransaction): string {
 
   // Mint: show reason
   if (d.reason) return String(d.reason);
+
+  if (tx.type === 'REVENUE_DISTRIBUTION') return '按贡献点比例分配';
+  if (tx.type === 'REVENUE_WITHDRAWAL') return '收入撤回';
 
   return '';
 }

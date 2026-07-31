@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
@@ -1717,6 +1718,7 @@ export default function GraphView(props: GraphViewProps) {
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
+  const navigate = useNavigate();
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
   const cardRefs = useRef<Record<string,HTMLDivElement|null>>({});
@@ -1824,6 +1826,18 @@ export default function GraphView(props: GraphViewProps) {
     for (const e of edges) { const arr=map.get(e.relationMessageId)??[]; arr.push(e); map.set(e.relationMessageId,arr); }
     return map;
   }, [edges]);
+
+  const notifyUsersByRelationMsg = useMemo(() => {
+    const result = new Map<string, string[]>();
+    for (const message of messages) {
+      if (message.kind !== 'relation' || message.relationType !== 'notify') continue;
+      const ids = Array.isArray(message.relationPayload?.notifyUserIds)
+        ? message.relationPayload.notifyUserIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      if (ids.length > 0) result.set(message.id, Array.from(new Set(ids)));
+    }
+    return result;
+  }, [messages]);
 
   // IDs of all targets of CORRECT relations that have a real (non-anonymous) replacement source.
   // Their cards are hidden in the non-linear view because the replacement source card/edge
@@ -2635,6 +2649,7 @@ export default function GraphView(props: GraphViewProps) {
       return (normalized === "reference" || normalized === "ref") ? "引用" : raw;
     }
     const labelText = (e: DemoEdge, author: string) => {
+      if (e.relationType === "notify") return "通知";
       if (e.relationType === "reply") return `${author} · ${replyEdgeLabel(e.relationLabel)}`;
       if (e.relationType === "reference") return `${author} · ${referenceEdgeLabel(e.relationLabel)}`;
       return `${author} · ${edgeLabelName(e.relationType)}`;
@@ -3253,6 +3268,24 @@ export default function GraphView(props: GraphViewProps) {
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
               </div>
+              )}
+              {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
+                <div style={{ marginTop: 6, fontSize: 11, color: '#67e8f9' }}>
+                  通知用户：
+                  {notifyUsersByRelationMsg.get(msg.id)!.map((userId, index) => (
+                    <React.Fragment key={userId}>
+                      {index > 0 && '、'}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); navigate(`/users/${userId}`); }}
+                        style={{ color: '#a5f3fc', textDecoration: 'underline', cursor: 'pointer', background: 'none', border: 0, padding: 0 }}
+                        title={`打开用户页 ${userId}`}
+                      >
+                        {userId}
+                      </button>
+                    </React.Fragment>
+                  ))}
+                </div>
               )}
               {/* 加入容器消息：显示容器和目标消息 ID 标签（可点击跳转） */}
               {msg.joinInfo && (() => {

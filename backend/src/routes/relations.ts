@@ -5,6 +5,7 @@ import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { RELATION_TYPES } from '../lib/relationTypes';
 import { applyEvent } from '../lib/events';
 import { log } from '../lib/logger';
+import { attentionUsersToJson, getAttentionUsersByTargetIds } from '../lib/attention';
 import {
   extractTextTargetIds,
   extractNestedRelationIds,
@@ -63,8 +64,16 @@ const createRelationSchema = z.object({
     title: z.string().trim().min(1).max(200).optional(),
     targetLayout: z.enum(['single-column', 'multi-column', 'single-row']).optional(),
     content: z.string().trim().min(1).max(50000).optional(),
-    subType: z.enum(['SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM']).optional(),
+    subType: z.enum(['SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'ATTENTION', 'CUSTOM']).optional(),
     customLabel: z.string().trim().min(1).max(20).optional(),
+    operationType: z.string().trim().min(1).max(80).optional(),
+    amount: z.number().int().positive().optional(),
+    revenuePoolShare: z.number().int().min(0).optional(),
+    recipientUserId: z.string().trim().min(1).optional(),
+    source: z.string().trim().min(1).max(200).optional(),
+    note: z.string().max(2000).optional(),
+    attentionUserIds: z.array(z.string().min(1)).max(100).optional(),
+    notifyUserIds: z.array(z.string().min(1)).max(100).optional(),
   }).strict().optional(),
 }).superRefine((data, ctx) => {
   if (data.relationType === 'TAG' && !(data.payload && data.payload.label)) {
@@ -95,6 +104,9 @@ const createRelationSchema = z.object({
       path: ['payload', 'content'],
     });
   }
+  if (data.relationType === 'NOTIFY' && data.targetRefs.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '通知关系需要至少一个目标消息', path: ['targetRefs'] });
+  }
   if (data.relationType === 'CORRECT' && data.targetRefs.length > 1) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -104,7 +116,7 @@ const createRelationSchema = z.object({
   }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'NOTIFY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
 
 // Types that forbid sourceMessageId entirely (must be null)
@@ -125,6 +137,21 @@ const paginationSchema = z.object({
 // ============================================================
 
 // GET /api/topics/:topicId/relations
+relationsRouter.get('/attention-users', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const topicId = req.params.topicId as string;
+    const topic = await prisma.topic.findUnique({ where: { id: topicId }, select: { id: true } });
+    if (!topic) {
+      res.status(404).json({ error: '分类不存在' });
+      return;
+    }
+    const attentionUsers = await getAttentionUsersByTargetIds(topicId);
+    res.json({ data: attentionUsersToJson(attentionUsers) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 relationsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
@@ -405,6 +432,33 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       (data.relationType === 'MERGE' || data.relationType === 'SUMMARY') && !data.payload?.targetLayout
         ? { ...data.payload, targetLayout: 'multi-column' as const }
         : data.payload;
+
+    if (data.relationType === 'PROPOSAL' && data.payload?.operationType === 'RECHARGE') {
+      const recipientUserId = data.payload.recipientUserId;
+      if (!recipientUserId) {
+        res.status(400).json({ error: '充值分账提案必须指定用户' });
+        return;
+      }
+      const recipient = await prisma.user.findUnique({
+        where: { id: recipientUserId },
+        select: { id: true },
+      });
+      if (!recipient) {
+        res.status(400).json({ error: `指定用户不存在：${recipientUserId}` });
+        return;
+      }
+    }
+
+    if (data.relationType === 'NOTIFY') {
+      const targetMessageIds = data.targetRefs
+        .filter(ref => ref.kind === 'message' || ref.kind === 'text-fragment')
+        .map(ref => ref.messageId);
+      const attentionUsers = await getAttentionUsersByTargetIds(topicId, targetMessageIds);
+      if (targetMessageIds.length === 0 || !targetMessageIds.every(id => (attentionUsers.get(id)?.size ?? 0) > 0)) {
+        res.status(400).json({ error: '通知目标没有关注用户，无法发送通知' });
+        return;
+      }
+    }
 
     // Validate supersedesRelationId BEFORE any write, so we don't leave orphans.
     if (data.supersedesRelationId) {

@@ -5,7 +5,7 @@ import { getRelationLabel, getRelationTitle } from '../types';
 import { relationTypeName } from '../components/GraphView';
 
 export const ALL_RELATION_TYPES: RelationType[] = [
-  'annotation', 'reference', 'reply', 'agree', 'disagree', 'tag', 'arrange',
+  'annotation', 'reference', 'reply', 'notify', 'agree', 'disagree', 'tag', 'arrange',
   'correct', 'classify', 'merge', 'summary',
   'proposal', 'code_change', 'operations',
 ];
@@ -17,6 +17,7 @@ export function secondaryRelationLabel(t: string): string {
   if (t === 'none') return '无';
   if (t === 'question') return '疑问';
   if (t === 'answer') return '回答';
+  if (t === 'notify') return '通知';
   if (t === 'vertical') return '纵';
   if (t === 'horizontal') return '横';
   if (t === 'evidence') return '证据';
@@ -40,8 +41,8 @@ export function isValidTagLabel(label: string | undefined): label is string {
   return !!label && label !== 'tag';
 }
 
-export const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义' };
-export const SUB_TYPE_OPTIONS = ['', 'SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM'];
+export const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', ATTENTION: '关注', CUSTOM: '自定义' };
+export const SUB_TYPE_OPTIONS = ['', 'SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'ATTENTION', 'CUSTOM'];
 
 export function subTypeLabel(st: string) {
   return SUB_TYPE_LABELS[st] ?? st;
@@ -102,12 +103,28 @@ export function buildRelationPayload(params: {
   title?: string;
   targetLayout?: RelationPayload['targetLayout'];
   content?: string;
+  operationType?: string;
+  amount?: number;
+  revenuePoolShare?: number;
+  recipientUserId?: string;
+  source?: string;
+  note?: string;
+  attentionUserIds?: string[];
+  notifyUserIds?: string[];
 }): RelationPayload | undefined {
   const payload: RelationPayload = {};
   if (params.label) payload.label = params.label;
   if (params.title) payload.title = params.title;
   if (params.targetLayout) payload.targetLayout = params.targetLayout;
   if (params.content) payload.content = params.content;
+  if (params.operationType) payload.operationType = params.operationType;
+  if (params.amount !== undefined) payload.amount = params.amount;
+  if (params.revenuePoolShare !== undefined) payload.revenuePoolShare = params.revenuePoolShare;
+  if (params.recipientUserId) payload.recipientUserId = params.recipientUserId;
+  if (params.source) payload.source = params.source;
+  if (params.note) payload.note = params.note;
+  if (params.attentionUserIds?.length) payload.attentionUserIds = params.attentionUserIds;
+  if (params.notifyUserIds?.length) payload.notifyUserIds = params.notifyUserIds;
   if ((params.relationType.toUpperCase() === 'MERGE' || params.relationType.toUpperCase() === 'SUMMARY') && !payload.targetLayout) {
     payload.targetLayout = 'multi-column';
   }
@@ -154,6 +171,11 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     content = `${typeName}\n${proposalContent}\n目标：${targetSummary}`;
   } else if (relType === 'tag' && label) {
     content = `标签「${label}」\n目标：${targetSummary}`;
+  } else if (relType === 'notify') {
+    const notifyUserIds = Array.isArray((relation.payload as Record<string, unknown> | null)?.notifyUserIds)
+      ? ((relation.payload as Record<string, unknown>).notifyUserIds as unknown[]).filter((id): id is string => typeof id === 'string')
+      : [];
+    content = `回复通知：${notifyUserIds.length > 0 ? notifyUserIds.map(id => `用户 ${id}`).join('、') : '无匹配用户'}\n目标：${targetSummary}`;
   } else if (relType === 'recommend' || relType === 'archive') {
     const st = (relation.payload as Record<string, unknown> | null)?.subType as string | undefined;
     const stLabel = st ? (st === 'CUSTOM' ? ((relation.payload as Record<string, unknown> | null)?.customLabel as string | undefined || '自定义') : subTypeLabel(st)) : '';

@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client';
 import { logSettlement, logUserSettlement, logLoserSettlement, logClawback, logClawbackLoser, logBetPoolRestore } from './settlementLogger';
 import { log, debugLog } from './logger';
 import { writeAuditLog } from './auditLog';
+import { getAttentionUsersByTargetIds } from './attention';
 
 // ============================================================
 // Event Type Definitions
@@ -115,7 +116,7 @@ export interface PointsRechargedEvent {
   actorId: string;
   signature?: string | null;
   topicId: string;
-  payload: { amount: number; revenuePoolShare: number; note?: string | null };
+  payload: { amount: number; revenuePoolShare: number; recipientUserId: string; note?: string | null };
 }
 
 export interface StakePlacedEvent {
@@ -566,6 +567,7 @@ async function executeRevenueDistribution(actorId: string, topicId: string, mess
   await prisma.$transaction([
     ...distOps.map(d => prisma.balance.update({ where: { userId: d.userId }, data: { balance: { increment: d.amount } } })),
     ...distOps.map(d => prisma.pointAccount.update({ where: { userId: d.userId }, data: { available: { increment: d.amount } } })),
+    ...distOps.map(d => prisma.pointTransaction.create({ data: { userId: d.userId, type: 'REVENUE_DISTRIBUTION', amount: d.amount, balanceAfter: d.balanceAfter, data: { source: 'REVENUE_DISTRIBUTION', messageId, topicId, revenuePoolId: pool.id, totalPool: totalBalance, contributorAmount } } })),
     ...distOps.map(d => prisma.ledgerEntry.create({ data: { userId: d.userId, entryType: 'REVENUE_EARNED', amount: d.amount, balanceAfter: d.balanceAfter, data: { source: 'REVENUE_DISTRIBUTION', messageId, totalPool: totalBalance, contributorAmount } } })),
     ...distributionRecords.map(dr => prisma.revenueDistribution.create({ data: { revenuePoolId: pool.id, userId: dr.userId, amount: dr.amount } })),
     prisma.revenuePool.update({ where: { id: pool.id }, data: { balance: retainedAmount, totalDistributed: { increment: contributorAmount } } }),
@@ -619,10 +621,11 @@ async function carryOutProposal(
   } else if (opType === 'RECHARGE') {
     const amount = payload?.amount;
     const revenuePoolShare = payload?.revenuePoolShare;
-    if (!Number.isInteger(amount) || (amount as number) <= 0 || !Number.isInteger(revenuePoolShare) || (revenuePoolShare as number) < 0 || (revenuePoolShare as number) > (amount as number)) return;
+    const recipientUserId = typeof payload?.recipientUserId === 'string' ? payload.recipientUserId : actorId;
+    if (!Number.isInteger(amount) || (amount as number) <= 0 || !Number.isInteger(revenuePoolShare) || (revenuePoolShare as number) < 0 || (revenuePoolShare as number) > (amount as number) || !recipientUserId) return;
     await applyPointsRecharged({
       type: 'POINTS_RECHARGED', actorId, topicId,
-      payload: { amount: amount as number, revenuePoolShare: revenuePoolShare as number, note: typeof payload?.note === 'string' ? payload.note : null },
+      payload: { amount: amount as number, revenuePoolShare: revenuePoolShare as number, recipientUserId, note: typeof payload?.note === 'string' ? payload.note : null },
     });
   } else if (opType === 'TERMINATE_SETTLEMENT') {
     await executeTermination(payload, roundId, topicId, actorId);
@@ -962,6 +965,19 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     return id ? String(id).slice(-8) : JSON.stringify(target);
   });
   const relationContent = `建立关系：${effectiveRelationType}${targetLabels.length > 0 ? `；目标：${targetLabels.join('、')}` : ''}`;
+  let persistedRelationContent = relationContent;
+  let persistedPayload = rpForCreate;
+  if (effectiveRelationType.toUpperCase() === 'NOTIFY') {
+    const messageIds = (effectiveTargetRefs as Array<{ kind?: string; messageId?: string }>).map(ref => ref.messageId).filter((id): id is string => Boolean(id));
+    const attentionUsers = await getAttentionUsersByTargetIds(topicId, messageIds);
+    const attentionUserIds = new Set([...attentionUsers.values()].flatMap(users => [...users]));
+    if (messageIds.length === 0 || attentionUserIds.size === 0 || messageIds.some(id => !attentionUsers.has(id))) {
+      throw new Error('通知目标没有关注用户，无法发送通知');
+    }
+    persistedPayload = { ...(rpForCreate ?? {}), notifyUserIds: [...attentionUserIds] };
+    const note = typeof rpForCreate?.content === 'string' ? rpForCreate.content : '回复通知';
+    persistedRelationContent = `${note}\n通知用户：${[...attentionUserIds].map(id => `用户 ${id}`).join('、')}；目标：${targetLabels.join('、')}`;
+  }
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
@@ -971,9 +987,9 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         relationType: effectiveRelationType,
         relSourceId: effectiveSourceMessageId,
         targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
-        relationPayload: rpForCreate as Prisma.InputJsonValue | undefined,
+        relationPayload: persistedPayload as Prisma.InputJsonValue | undefined,
         contentType: 'TEXT',
-        content: relationContent,
+        content: persistedRelationContent,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
@@ -1244,18 +1260,19 @@ async function applyPointsRecharged(event: PointsRechargedEvent) {
     throw new Error('收入池分成必须在 0 和充值金额之间');
   }
   const userAmount = payload.amount - payload.revenuePoolShare;
-  const account = await prisma.pointAccount.findUnique({ where: { userId: actorId } });
-  const currentBalance = await prisma.balance.findUnique({ where: { userId: actorId } });
+  const recipientUserId = payload.recipientUserId;
+  const account = await prisma.pointAccount.findUnique({ where: { userId: recipientUserId } });
+  const currentBalance = await prisma.balance.findUnique({ where: { userId: recipientUserId } });
   if (!account || !currentBalance) throw new Error('账户不存在');
 
   const pool = await prisma.revenuePool.findFirst();
 
   const newAvailable = account.available + userAmount;
   await prisma.$transaction([
-    prisma.pointAccount.update({ where: { userId: actorId }, data: { available: newAvailable } }),
-    prisma.balance.update({ where: { userId: actorId }, data: { balance: { increment: userAmount } } }),
-    prisma.pointTransaction.create({ data: { userId: actorId, type: 'MINT', amount: userAmount, balanceAfter: newAvailable, data: { reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare } } }),
-    prisma.ledgerEntry.create({ data: { userId: actorId, entryType: 'MINT_DAILY', amount: userAmount, balanceAfter: currentBalance.balance + userAmount, data: { reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare } } }),
+    prisma.pointAccount.update({ where: { userId: recipientUserId }, data: { available: newAvailable } }),
+    prisma.balance.update({ where: { userId: recipientUserId }, data: { balance: { increment: userAmount } } }),
+    prisma.pointTransaction.create({ data: { userId: recipientUserId, type: 'MINT', amount: userAmount, balanceAfter: newAvailable, data: { reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare, sourceActorId: actorId } } }),
+    prisma.ledgerEntry.create({ data: { userId: recipientUserId, entryType: 'MINT_DAILY', amount: userAmount, balanceAfter: currentBalance.balance + userAmount, data: { reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare, sourceActorId: actorId } } }),
     ...(payload.revenuePoolShare > 0
       ? [pool
         ? prisma.revenuePool.update({ where: { id: pool.id }, data: { totalReceived: { increment: payload.revenuePoolShare }, balance: { increment: payload.revenuePoolShare } } })
@@ -1265,15 +1282,15 @@ async function applyPointsRecharged(event: PointsRechargedEvent) {
 
   const poolAfter = payload.revenuePoolShare > 0 ? await prisma.revenuePool.findFirst() : pool;
   await writeAuditLog({
-    actorId, action: 'POINT_MINTED', entityType: 'PointTransaction', entityId: actorId,
-    summary: `充值铸造 ${payload.amount} 点`,
-    details: { amount: userAmount, creditedAmount: userAmount, reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare }, signature,
+    actorId, action: 'POINT_MINTED', entityType: 'PointTransaction', entityId: recipientUserId,
+    summary: `充值分账 ${userAmount} 点给用户 ${recipientUserId.slice(-8)}`,
+    details: { amount: userAmount, creditedAmount: userAmount, recipientUserId, reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare }, signature,
   });
   if (payload.revenuePoolShare > 0) {
     await writeAuditLog({
       actorId, action: 'REVENUE_RECEIVED', entityType: 'RevenuePool', entityId: poolAfter?.id ?? 'revenue-pool', topicId,
       summary: `充值分成入池 ${payload.revenuePoolShare} 点`,
-      details: { amount: payload.revenuePoolShare, source: 'RECHARGE', totalAmount: payload.amount, userAmount }, signature,
+      details: { amount: payload.revenuePoolShare, source: 'RECHARGE', totalAmount: payload.amount, userAmount, recipientUserId }, signature,
     });
   }
   return { userAmount, revenuePoolShare: payload.revenuePoolShare };

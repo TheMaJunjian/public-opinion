@@ -61,6 +61,7 @@ export type RelationType =
   | 'AGREE'        // 赞同（有文本时视为支持）
   | 'DISAGREE'     // 反对（有文本时视为反驳）
   | 'TAG'          // 标注（消息旁的装饰标签）
+  | 'NOTIFY'       // 回复通知
   | 'CORRECT'      // 更正
   | 'ARRANGE'      // 排列（边框包裹目标消息；payload.targetLayout 控制横/纵排列）
   | 'CLASSIFY'     // 分类
@@ -107,8 +108,16 @@ export interface RelationPayload {
   title?: string;
   targetLayout?: RelationTargetLayout;
   content?: string;
-  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'CUSTOM';
+  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'ATTENTION' | 'CUSTOM';
   customLabel?: string;
+  operationType?: string;
+  amount?: number;
+  revenuePoolShare?: number;
+  recipientUserId?: string;
+  source?: string;
+  note?: string;
+  attentionUserIds?: string[];
+  notifyUserIds?: string[];
 }
 
 export interface Relation {
@@ -201,6 +210,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   ANNOTATION:  { kind: 'edge-label',        label: '注释', color: 'blue',   formsTrees: false },
   REFERENCE:   { kind: 'edge-label',        label: '引用', color: 'indigo', formsTrees: false },
   REPLY:       { kind: 'edge-label',        label: '回复', color: 'blue',   formsTrees: true  },
+  NOTIFY:      { kind: 'edge-label',        label: '通知', color: 'cyan',   formsTrees: false },
   AGREE:       { kind: 'decoration',        label: '赞同', color: 'green',  stanceEffect: 'support' },
   DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },

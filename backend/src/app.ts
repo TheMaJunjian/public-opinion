@@ -19,6 +19,7 @@ import auditLogsRouter from './routes/auditLogs';
 import revenueRouter from './routes/revenue';
 import exportRouter from './routes/export';
 import tagsRouter from './routes/tags';
+import usersRouter from './routes/users';
 import { errorHandler } from './middleware/errorHandler';
 import { verifySignature } from './middleware/auth';
 
@@ -70,6 +71,7 @@ app.use('/', auditLogsRouter);
 app.use('/', revenueRouter);
 app.use('/api/topics/:topicId/export', exportRouter);
 app.use('/', tagsRouter);
+app.use('/', usersRouter);
 
 // Health check
 app.get('/health', (_req, res) => {

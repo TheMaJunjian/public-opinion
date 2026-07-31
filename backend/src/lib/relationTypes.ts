@@ -36,6 +36,7 @@ export const RELATION_TYPES = [
   'ANNOTATION',   // 注释
   'REFERENCE',    // 引用
   'REPLY',        // 回复
+  'NOTIFY',       // 通知回复目标消息相关用户
   'AGREE',        // 赞同（有附带文本消息时，视为支持）
   'DISAGREE',     // 反对（有附带文本消息时，视为反驳）
   'TAG',          // 标注（消息旁的装饰标签，内容不能为空）

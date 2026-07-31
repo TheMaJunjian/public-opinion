@@ -13,6 +13,7 @@ export type RelationType =
   | "annotation"
   | "reference"
   | "reply"
+  | "notify"
   | "agree"
   | "disagree"
   | "tag"

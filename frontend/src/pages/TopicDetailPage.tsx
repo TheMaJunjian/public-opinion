@@ -84,6 +84,7 @@ export default function TopicDetailPage() {
   const edgesRef = useRef<DemoEdge[]>([]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
   const [relations, setRelations] = useState<Relation[]>([]);
+  const [attentionUsersByTarget, setAttentionUsersByTarget] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Per-message stake counts, split by TRUTH/VALUE settlement type
@@ -130,6 +131,17 @@ export default function TopicDetailPage() {
     );
     setTopic(topicData);
     setRelations(backendRelations);
+    const preloadedAttention: Record<string, string[]> = {};
+    for (const relation of backendRelations) {
+      if (relation.relationType.toUpperCase() !== 'TAG' || relation.payload?.subType !== 'ATTENTION') continue;
+      for (const ref of relation.targetRefs) {
+        if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
+        const users = preloadedAttention[ref.messageId] ?? [];
+        if (!users.includes(relation.createdBy.id)) users.push(relation.createdBy.id);
+        preloadedAttention[ref.messageId] = users;
+      }
+    }
+    setAttentionUsersByTarget(preloadedAttention);
     setMessages(demoMsgs);
     setEdges(demoEdges);
     setStakeCounts({});
@@ -144,10 +156,11 @@ export default function TopicDetailPage() {
     async function load() {
       try {
         setLoading(true); setLoadError(null);
-        const [topicData, messagesData, relationsData] = await Promise.all([
+        const [topicData, messagesData, relationsData, attentionData] = await Promise.all([
           api.getTopic(topicId!),
           api.getMessages(topicId!, { limit: 200 }),
           api.getRelations(topicId!, { limit: 200 }),
+          api.getAttentionUsers(topicId!),
         ]);
         if (cancelled) return;
         setTopic(topicData);
@@ -155,6 +168,7 @@ export default function TopicDetailPage() {
           messagesData.data, relationsData.data
         );
         setRelations(relationsData.data);
+        setAttentionUsersByTarget(attentionData.data);
         debugWarn('diag', `LOAD relations=${relationsData.data.length} types=[${relationsData.data.map(r=>r.relationType).join(',')}] ids=[${relationsData.data.map(r=>r.id.slice(-6)).join(',')}]`);
         setMessages(demoMsgs);
         setEdges(demoEdges);
@@ -388,6 +402,16 @@ export default function TopicDetailPage() {
   const lastTagSecondaryRef = useRef<string>("recommend"); // remember last TAG secondary selection
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
+  useEffect(() => {
+    if (relationType !== 'proposal') return;
+    if (secondaryRelationType === '终止结算' || secondaryRelationType === '分配收入') {
+      setNewMessageContent('');
+    } else if (secondaryRelationType === '充值分账') {
+      setNewMessageContent('充值总额=1000\n收入池分成=100\n指定用户=user-id');
+    } else if (secondaryRelationType === '运营收入注入') {
+      setNewMessageContent('收入金额=1000\n来源=服务收入');
+    }
+  }, [relationType, secondaryRelationType]);
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
   const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
   const [targetUnits, setTargetUnits] = useState<UnitSelection[]>([]);
@@ -679,7 +703,13 @@ export default function TopicDetailPage() {
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
   const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
-  const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
+  const msgMap = useMemo(() => {
+    const map = new Map(messages.map(m => [m.id, m]));
+    for (const relation of relations) {
+      if (!map.has(relation.id)) map.set(relation.id, buildRelationDemoMessage(relation));
+    }
+    return map;
+  }, [messages, relations]);
 
   const sendWarning = useMemo((): string | null => {
     if (relationType?.toUpperCase() !== 'DISAGREE') return null;
@@ -1944,7 +1974,25 @@ export default function TopicDetailPage() {
       } as DemoEdge;
     };
 
-    if (relationType === "reply") {
+    if (relationType === "notify") {
+      const notifyPayload = buildRelationPayload({
+        relationType: "NOTIFY",
+        content: newMessageContent.trim() || "回复通知",
+      });
+      for (const src of sources) {
+        for (const t of targets) {
+          try {
+            const backendRel = await createRel(topicId, {
+              relationType: "NOTIFY",
+              sourceMessageId: src.messageId,
+              targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+              payload: notifyPayload,
+            });
+            newEdgesList.push(buildEdges({ ...src }, { ...t }, "notify", "notify", backendRel.id));
+          } catch (e: any) { alert(`建立通知关系失败: ${e?.message ?? e}`); }
+        }
+      }
+    } else if (relationType === "reply") {
       // REPLY: 每条边一个关系消息（source→target 一一对应）
       const replyAdditional = secondaryRelationType === "question" || secondaryRelationType === "answer"
         ? secondaryRelationType
@@ -2187,6 +2235,27 @@ export default function TopicDetailPage() {
     const isArrange = relationType === "arrange";
     // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
     const isInlineBadge = false;
+
+    if (relationType === "notify") {
+      let notifySources = sourceUnits;
+      if (notifySources.length === 0 && text.length > 0) {
+        const sourceMessage = await handleSendMessageOnly(text);
+        if (!sourceMessage) return;
+        notifySources = [{ messageId: sourceMessage.id, selection: { kind: "whole" } }];
+      }
+      if (notifySources.length === 0) {
+        setSendError('通知需要来源消息，请输入通知内容或选择来源消息');
+        return;
+      }
+      await handleCreateRelationWithSourcesAndTargets({
+        sources: notifySources,
+        targets: effectiveTargets,
+        label: '通知',
+      });
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent(''); setSubType(''); setRelationType(null); setSecondaryRelationType('none');
+      return;
+    }
 
     // TAG + secondary relation: create RECOMMEND/ARCHIVE or quick-annotate TAG with label from secondary
     if (relationType === "tag" && secondaryRelationType !== "none") {
@@ -2934,12 +3003,13 @@ export default function TopicDetailPage() {
       if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
         const amount = Number(readProposalField(['充值总额', '总额', 'amount']));
         const revenuePoolShare = Number(readProposalField(['收入池分成', '分成', 'revenuePoolShare']));
-        if (!Number.isInteger(amount) || amount <= 0 || !Number.isInteger(revenuePoolShare) || revenuePoolShare < 0 || revenuePoolShare > amount) {
-          setSendError('充值分账提案格式：充值总额=1000；收入池分成=100（分成不能超过总额）');
+        const recipientUserId = readProposalField(['指定用户', 'recipientUserId']);
+        if (!Number.isInteger(amount) || amount <= 0 || !Number.isInteger(revenuePoolShare) || revenuePoolShare < 0 || revenuePoolShare > amount || !recipientUserId) {
+          setSendError('充值分账提案格式：充值总额=1000；收入池分成=100；指定用户=user-id');
           return;
         }
-        proposalContent = `充值分账提案\n充值总额：${amount}\n收入池分成：${revenuePoolShare}`;
-        payloadExtraForOperation = { operationType: 'RECHARGE', amount, revenuePoolShare };
+        proposalContent = `充值分账提案\n充值总额：${amount}\n收入池分成：${revenuePoolShare}\n指定用户：${recipientUserId}`;
+        payloadExtraForOperation = { operationType: 'RECHARGE', amount, revenuePoolShare, recipientUserId };
       }
       if (relationType === 'proposal' && secondaryRelationType === '运营收入注入') {
         const amount = Number(readProposalField(['收入金额', '金额', 'amount']));
@@ -2981,7 +3051,7 @@ export default function TopicDetailPage() {
       try {
         const payloadExtra: Record<string, unknown> = {};
         if (relationType === 'proposal' && secondaryRelationType !== 'none') {
-          const opMap: Record<string, string> = { '分配收入': 'DISTRIBUTE_REVENUE', '终止结算': 'TERMINATE_SETTLEMENT' };
+          const opMap: Record<string, string> = { '分配收入': 'DISTRIBUTE_REVENUE', '充值分账': 'RECHARGE', '运营收入注入': 'REVENUE_INJECTION', '终止结算': 'TERMINATE_SETTLEMENT' };
           payloadExtra.operationType = opMap[secondaryRelationType] ?? secondaryRelationType.toUpperCase();
         }
         Object.assign(payloadExtra, payloadExtraForOperation);
@@ -3155,6 +3225,7 @@ export default function TopicDetailPage() {
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isArrangeType = relationType === "arrange";
+  const isNotifyType = relationType === "notify";
 
   // Lock arrange layout when appending to an existing ARRANGE frame.
   // When the user selects an existing arrange relation as a source or target,
@@ -3189,6 +3260,22 @@ export default function TopicDetailPage() {
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
+  const notifyTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+  const attentionTargetMessageIds = useMemo(() => {
+    const targetIds = new Set(Object.keys(attentionUsersByTarget).filter(id => attentionUsersByTarget[id].length > 0));
+    for (const relation of relations) {
+      if (relation.relationType.toUpperCase() !== 'TAG' || relation.payload?.subType !== 'ATTENTION') continue;
+      for (const targetRef of relation.targetRefs) {
+        if (targetRef.kind === 'message' || targetRef.kind === 'text-fragment') {
+          targetIds.add(targetRef.messageId);
+        }
+      }
+    }
+    return targetIds;
+  }, [attentionUsersByTarget, relations]);
+  const hasAttentionNotifyTarget = notifyTargets.length > 0 && notifyTargets.every(target =>
+    attentionTargetMessageIds.has(target.messageId)
+  );
 
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
@@ -3237,6 +3324,9 @@ export default function TopicDetailPage() {
       if (relationType === 'proposal' && secondaryRelationType === '分配收入') {
         return !hasTargetsAvailable && newMessageContent.trim().length === 0;
       }
+      if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
+        return newMessageContent.trim().length > 0;
+      }
       // 终止结算：目标必须是 governance 消息
       if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
         return targetUnits.some(t => msgMap.get(t.messageId)?.kind === 'governance');
@@ -3254,6 +3344,7 @@ export default function TopicDetailPage() {
     // TAG with secondary=none: invalid state, cannot send
     if (relationType === "tag") return false;
     if (isAgreeDisagreeType || isArrangeType) return hasTargetsAvailable;
+    if (isNotifyType) return (sourceUnits.length > 0 || newMessageContent.trim().length > 0) && hasAttentionNotifyTarget;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
     return hasTargetsAvailable && newMessageContent.trim().length > 0;
@@ -3309,6 +3400,11 @@ export default function TopicDetailPage() {
       if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
+    if (isNotifyType) {
+      if (!hasAttentionNotifyTarget) return '请选择已有关注用户的目标消息';
+      if (sourceUnits.length === 0 && newMessageContent.trim().length === 0) return '请输入通知内容或选择来源消息';
+      return `发送通知（通知目标消息的关注用户）`;
+    }
     if (isGovernanceOrOpsType) {
       const govTypeLabel = relationType === "proposal" ? "提案" : relationType === "code_change" ? "代码" : "运营";
       if (sourceUnits.length > 0)
@@ -3318,6 +3414,9 @@ export default function TopicDetailPage() {
         if (hasTargetsAvailable) return '分配收入提案不能选择目标，请清空目标集合';
         if (newMessageContent.trim().length > 0) return '分配收入提案不需要输入文本，请清空文本框';
         return '发送分配收入提案（将当前收入池余额按规则分配给社区成员）';
+      }
+      if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
+        return '发送充值分账提案（提交后验证指定用户）';
       }
       // 终止结算
       if (relationType === 'proposal' && secondaryRelationType === '终止结算') {

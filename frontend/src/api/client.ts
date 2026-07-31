@@ -107,6 +107,10 @@ export function getRelations(topicId: string, params?: { page?: number; limit?: 
   return request<import('../types').PaginatedResponse<import('../types').Relation>>(`/topics/${topicId}/relations?${qs}`);
 }
 
+export function getAttentionUsers(topicId: string) {
+  return request<{ data: Record<string, string[]> }>(`/topics/${topicId}/relations/attention-users`);
+}
+
 export function createRelation(topicId: string, data: {
   relationType: string;
   sourceMessageId?: string | null;
@@ -220,6 +224,17 @@ export function getUserStances(userId: string, params?: { page?: number; limit?:
   if (params?.limit) qs.set('limit', String(params.limit));
   if (params?.topicId) qs.set('topicId', params.topicId);
   return request<import('../types').StanceHistoryResponse>(`/users/${userId}/stances?${qs}`);
+}
+
+export function getUser(userId: string) {
+  return request<import('../types').User>(`/users/${userId}`);
+}
+
+export function getUserMessages(userId: string, params?: { page?: number; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.limit) qs.set('limit', String(params.limit));
+  return request<import('../types').PaginatedResponse<import('../types').Message>>(`/users/${userId}/messages?${qs}`);
 }
 
 // ============================================================

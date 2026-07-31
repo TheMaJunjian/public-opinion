@@ -372,6 +372,18 @@ export async function getMessages(topicId: string, params?: { page?: number; lim
   return paginate(filtered, params?.page, params?.limit);
 }
 
+export async function getUser(userId: string) {
+  const message = messages.find(item => item.createdBy.id === userId);
+  return message?.createdBy ?? { id: userId, username: userId, createdAt: new Date().toISOString() };
+}
+
+export async function getUserMessages(userId: string, params?: { page?: number; limit?: number }) {
+  const all = messages.filter(message => message.createdBy.id === userId);
+  const page = params?.page ?? 1;
+  const limit = params?.limit ?? 50;
+  return { data: all.slice((page - 1) * limit, page * limit), pagination: { page, limit, total: all.length, totalPages: Math.ceil(all.length / limit) } };
+}
+
 export async function createMessage(topicId: string, data: {
   kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
@@ -398,6 +410,21 @@ export async function getRelations(topicId: string, params?: { page?: number; li
   await delay();
   const filtered = relations.filter(r => r.topicId === topicId);
   return paginate(filtered, params?.page, params?.limit);
+}
+
+export async function getAttentionUsers(topicId: string) {
+  await delay();
+  const data: Record<string, string[]> = {};
+  const attentionRelations = relations.filter(r => r.topicId === topicId && r.relationType.toUpperCase() === 'TAG' && r.payload?.subType === 'ATTENTION');
+  for (const attentionRelation of attentionRelations) {
+    for (const target of attentionRelation.targetRefs) {
+      if (target.kind !== 'message' && target.kind !== 'text-fragment') continue;
+      const users = data[target.messageId] ?? [];
+      if (!users.includes(attentionRelation.createdBy.id)) users.push(attentionRelation.createdBy.id);
+      data[target.messageId] = users;
+    }
+  }
+  return { data };
 }
 
 export async function createRelation(topicId: string, data: {

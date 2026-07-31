@@ -132,4 +132,20 @@ describe('SettlementPanel voting', () => {
     });
     vi.unstubAllGlobals();
   });
+
+  it('prevents duplicate voting while the request is pending', async () => {
+    let resolveVote: ((value: unknown) => void) | undefined;
+    mockApi.castVote.mockImplementation(() => new Promise(resolve => { resolveVote = resolve; }));
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '投票' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '投票' }));
+    expect(await screen.findByRole('button', { name: '投票中...' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '投票中...' }));
+
+    expect(mockApi.castVote).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveVote?.({ voteId: 'vote-1', vote: 'TRUE', amount: 1 });
+    });
+  });
 });

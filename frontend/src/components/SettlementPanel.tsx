@@ -329,6 +329,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
     : null;
 
   async function handleVote() {
+    if (voting) return;
     if (!Number.isInteger(voteAmount) || voteAmount < 1) {
       setSettleError('投票押注必须是至少 1 点的整数');
       return;

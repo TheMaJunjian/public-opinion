@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SettlementPanel from '../components/SettlementPanel';
 
@@ -88,5 +88,23 @@ describe('SettlementPanel voting', () => {
     }));
     dispatchSpy.mockRestore();
     vi.unstubAllGlobals();
+  });
+
+  it('prevents duplicate round creation while the request is pending', async () => {
+    let resolveCreate: ((value: unknown) => void) | undefined;
+    mockApi.getMessageRounds.mockResolvedValue({ data: [] });
+    mockApi.createRound.mockImplementation(() => new Promise(resolve => { resolveCreate = resolve; }));
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '发起结算' })).toBeEnabled());
+    const createButton = screen.getByRole('button', { name: '发起结算' });
+    fireEvent.click(createButton);
+    expect(await screen.findByRole('button', { name: '创建中...' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '创建中...' }));
+
+    expect(mockApi.createRound).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveCreate?.({ id: 'round-2', settlementType: 'TRUTH' });
+    });
   });
 });

@@ -39,6 +39,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
   const [rounds, setRounds] = useState<SettlementRoundItem[]>([]);
   const [activeRounds, setActiveRounds] = useState<SettlementRoundItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [creatingRound, setCreatingRound] = useState(false);
 
   // Vote form state — removed (now per-round inside ActiveRoundCard)
   const [expandedSettledRound, setExpandedSettledRound] = useState<string | null>(null);
@@ -110,8 +111,10 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
   }, [entryHighlight, rounds]);
 
   async function handleCreateRound() {
+    if (creatingRound) return;
     try {
       setError(null);
+      setCreatingRound(true);
       const stype = filterSettlementType ?? 'TRUTH';
       const round = await api.createRound(messageId, { settlementType: stype });
       debugLog('结算', `创建轮次 msg=${messageId.slice(-6)} round=${round.id.slice(-6)} type=${stype}`);
@@ -133,6 +136,8 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       }
     } catch (e: unknown) {
       setError((e as Error)?.message ?? '创建轮次失败');
+    } finally {
+      setCreatingRound(false);
     }
   }
 
@@ -177,9 +182,10 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
         {activeRounds.length === 0 && (
           <button
             onClick={handleCreateRound}
-            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded transition-colors"
+            disabled={creatingRound}
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-xs font-medium rounded transition-colors"
           >
-            发起结算
+            {creatingRound ? '创建中...' : '发起结算'}
           </button>
         )}
       </div>
@@ -417,7 +423,14 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
 
       {/* Weights summary */}
       {totalWeight > 0 && (
-        <div className="flex items-stretch gap-1 text-center text-xs">
+        <div>
+          <div className="text-xs text-gray-500 mb-1">本轮投票权重（按投票押注点数计算）</div>
+          {weights.TRUE === weights.FALSE && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-1">
+              当前平局，结算结果将为 UNKNOWN
+            </div>
+          )}
+          <div className="flex items-stretch gap-1 text-center text-xs">
           <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${weights.TRUE > weights.FALSE ? 'border-green-400' : 'border-gray-200'}`}>
             <div className="font-semibold text-green-800">{weights.TRUE}</div>
             <div className="text-green-700">{trueLabel}</div>
@@ -430,6 +443,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
           <div className={`flex-1 bg-white rounded px-2 py-1 border-2 ${weights.FALSE > weights.TRUE ? 'border-red-400' : 'border-gray-200'}`}>
             <div className="font-semibold text-red-800">{weights.FALSE}</div>
             <div className="text-red-700">{falseLabel}</div>
+          </div>
           </div>
         </div>
       )}

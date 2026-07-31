@@ -120,4 +120,110 @@ exportRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
   }
 });
 
+/**
+ * GET /api/topics/:topicId/audit-export
+ *
+ * Exports the immutable inputs needed by an independent economic replay.
+ * This is intentionally separate from the public discussion projection above.
+ */
+exportRouter.get('/audit-export', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const topicId = req.params.topicId as string;
+    const topic = await prisma.topic.findUnique({
+      where: { id: topicId },
+      select: { title: true, body: true, status: true },
+    });
+
+    if (!topic) {
+      res.status(404).json({ error: '分类不存在' });
+      return;
+    }
+
+    const [messages, auditEvents, stakes, rounds, rules] = await Promise.all([
+      prisma.message.findMany({
+        where: { topicId },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true, kind: true, contentType: true, content: true, createdAt: true,
+          quoteSourceId: true, quotedText: true, quotedTextHash: true,
+          quoteContextBefore: true, quoteContextAfter: true, relationType: true,
+          relSourceId: true, targetRefs: true, relationPayload: true, supersededBy: true,
+          createdById: true,
+        },
+      }),
+      prisma.auditLog.findMany({
+        where: { topicId },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true, createdAt: true, actorId: true, action: true, entityType: true,
+          entityId: true, topicId: true, data: true, signature: true,
+        },
+      }),
+      prisma.stake.findMany({
+        where: { topicId },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true, userId: true, messageId: true, side: true, amount: true,
+          roundId: true, settlementType: true, createdAt: true,
+        },
+      }),
+      prisma.settlementRound.findMany({
+        where: { message: { topicId } },
+        orderBy: [{ openedAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true, messageId: true, createdByUserId: true, status: true,
+          settlementType: true, result: true, previousRoundId: true,
+          openedAt: true, closedAt: true, note: true, settlementPro: true,
+          settlementCon: true, effectiveAt: true, terminatedByRoundId: true,
+          votes: {
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            select: { id: true, userId: true, vote: true, amount: true, createdAt: true },
+          },
+        },
+      }),
+      prisma.ruleVersion.findMany({
+        orderBy: [{ version: 'asc' }, { id: 'asc' }],
+        select: { id: true, createdAt: true, version: true, status: true, description: true, parameters: true },
+      }),
+    ]);
+
+    const votes = auditEvents
+      .filter(event => event.action === 'VOTE_CAST' || event.action === 'RELATION_CREATED')
+      .map(event => {
+        const details = (event.data as { details?: Record<string, unknown> } | null)?.details ?? {};
+        const relationPayload = details.relationPayload as Record<string, unknown> | null | undefined;
+        const isRelationVote = event.action === 'RELATION_CREATED' && relationPayload?.vote === true;
+        if (event.action !== 'VOTE_CAST' && !isRelationVote) return null;
+        const relationType = details.relationType as string | undefined;
+        return {
+          id: event.entityId,
+          createdAt: event.createdAt,
+          userId: event.actorId,
+          messageId: details.messageId ?? (details.targetRefs as Array<{ messageId?: string }> | undefined)?.[0]?.messageId ?? null,
+          roundId: details.roundId ?? relationPayload?.roundId ?? null,
+          vote: details.vote ?? (relationType === 'AGREE' || relationType === 'RECOMMEND' ? 'TRUE' : 'FALSE'),
+          amount: details.amount ?? relationPayload?.amount ?? null,
+          feeAmount: details.feeAmount ?? 0,
+        };
+      })
+      .filter((vote): vote is NonNullable<typeof vote> => vote !== null);
+
+    res.json({
+      formatVersion: 1,
+      exportKind: 'economic-audit',
+      exportedAt: new Date().toISOString(),
+      topicId,
+      topic,
+      messages,
+      auditEvents,
+      stakes,
+      votes,
+      rounds,
+      rules,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default exportRouter;

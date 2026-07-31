@@ -1026,6 +1026,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       sourceMessageId: payload.sourceMessageId ?? null,
       supersedesRelationId: payload.supersedesRelationId ?? null,
       targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
+      relationPayload: persistedPayload ?? null,
       settlementType: effectiveSettlementType,
     },
   });

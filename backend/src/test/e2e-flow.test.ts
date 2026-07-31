@@ -326,7 +326,27 @@ describe('E2E — 完整用户流程（模拟所有前端操作）', () => {
   });
 
   // ═══════════════════════════════════════════════════════════
-  // Step 10: 验证数据一致性
+  // Step 10: 审计导出
+  // ═══════════════════════════════════════════════════════════
+  it('10. 导出可供独立 replay 的经济审计快照', async () => {
+    const exportRes = await request(app)
+      .get(`${BASE}/topics/${topicId}/export/audit-export`);
+
+    expect(exportRes.status).toBe(200);
+    expect(exportRes.body.formatVersion).toBe(1);
+    expect(exportRes.body.exportKind).toBe('economic-audit');
+    expect(exportRes.body.topicId).toBe(topicId);
+    expect(exportRes.body.messages.length).toBeGreaterThanOrEqual(2);
+    expect(exportRes.body.auditEvents.length).toBeGreaterThan(0);
+    expect(exportRes.body.stakes.length).toBeGreaterThan(0);
+    expect(exportRes.body.rounds.length).toBeGreaterThanOrEqual(2);
+    expect(exportRes.body.votes.length).toBeGreaterThan(0);
+    expect(exportRes.body.votes.some((vote: { roundId: string }) => vote.roundId)).toBe(true);
+    expect(exportRes.body.rules.length).toBeGreaterThan(0);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Step 11: 验证数据一致性
   // ═══════════════════════════════════════════════════════════
   it('10. 验证数据一致性（Balance = PointAccount 总和）', async () => {
     const balRes = await request(app)

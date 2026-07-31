@@ -1,14 +1,56 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../api';
+import MessageCard from '../components/MessageCard';
+import CleanFilterPanel from '../components/CleanFilterPanel';
+import type { DemoMessage } from '../utils/modelBridge';
 import type { Message, User } from '../types';
+import { useCleanView } from '../hooks/useCleanView';
+
+function toDemoMessage(message: Message): DemoMessage {
+  const raw = message as Message & {
+    relationType?: string;
+    relationPayload?: DemoMessage['relationPayload'];
+    targetRefs?: unknown;
+  };
+  const relationType = raw.relationType?.toLowerCase() as DemoMessage['relationType'];
+  return {
+    id: message.id,
+    author: message.createdBy.username,
+    createdAt: message.createdAt,
+    content: message.content,
+    kind: message.kind === 'RELATION' ? 'relation' : message.kind === 'GOVERNANCE' ? 'governance' : message.kind === 'CODE' ? 'code' : message.kind === 'OPERATIONS' ? 'operations' : message.kind === 'ROUND' ? 'round' : message.kind === 'ROUND_RESULT' ? 'round_result' : 'normal',
+    backendKind: message.kind,
+    relationType,
+    relationPayload: raw.relationPayload,
+  };
+}
 
 export default function UserPage() {
   const { userId } = useParams<{ userId: string }>();
   const [user, setUser] = useState<User | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [contextMessages, setContextMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<DemoMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const { addFilter, clearFilters, removeFilter, updateFilter, cleanFilters, cleanVisibleIds } = useCleanView({
+    messages,
+    edges: [],
+    stakeCounts: {},
+    tagCounts: {},
+  });
+
+  useEffect(() => {
+    if (!user) return;
+    clearFilters();
+    addFilter({ id: `user-page-sender-${user.id}`, kind: 'sender', username: user.username });
+    return clearFilters;
+  }, [user, addFilter, clearFilters]);
+
+  const keepUserFilter = () => {
+    clearFilters();
+    if (user) {
+      addFilter({ id: `user-page-sender-${user.id}`, kind: 'sender', username: user.username });
+    }
+  };
 
   useEffect(() => {
     if (!userId) return;
@@ -16,8 +58,7 @@ export default function UserPage() {
     Promise.all([api.getUser(userId), api.getUserMessages(userId, { limit: 200 })])
       .then(([profile, result]) => {
         setUser(profile);
-        setMessages(result.data);
-        setContextMessages((result as typeof result & { context?: Message[] }).context ?? []);
+        setMessages(result.data.map(toDemoMessage));
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : '用户页加载失败'));
   }, [userId]);
@@ -25,40 +66,37 @@ export default function UserPage() {
   if (error) return <div className="p-6 text-red-600">{error}</div>;
   if (!user) return <div className="p-6 text-gray-500">加载用户页...</div>;
 
+  const filteredMessages = cleanVisibleIds
+    ? messages.filter(message => cleanVisibleIds.visibleTextIds.has(message.id))
+    : messages;
+
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-5">
-      <header className="border-b border-gray-200 pb-4">
-        <div className="text-xs text-gray-500">用户页 · 过滤视图</div>
-        <h1 className="text-2xl font-semibold text-gray-900">{user.username}</h1>
-        <div className="text-xs text-gray-500 mt-1">用户 ID：{user.id}</div>
-        <div className="text-sm text-gray-600 mt-3">显示该用户发送的消息及其必要上下文，本人消息 {messages.length} 条，关联消息 {contextMessages.length} 条</div>
+      <header style={{ borderBottom: '1px solid #333', paddingBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <CleanFilterPanel
+            active={cleanFilters.length > 0}
+            filters={cleanFilters}
+            matchCount={filteredMessages.length}
+            totalCount={messages.length}
+            onAdd={addFilter}
+            onRemove={removeFilter}
+            onUpdate={updateFilter}
+            onClear={keepUserFilter}
+          />
+          <span style={{ fontSize: 12, opacity: 0.75 }}>发送者 ID：{user.id}</span>
+          <span style={{ fontSize: 12, opacity: 0.75 }}>匹配 {filteredMessages.length} 条</span>
+        </div>
       </header>
-      <div className="space-y-3">
-        {messages.map(message => (
-          <article key={message.id} className="bg-white border border-gray-200 rounded-lg p-4">
-            <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
-              <span>{message.kind}</span>
-              <span>{new Date(message.createdAt).toLocaleString('zh-CN')}</span>
-            </div>
-            <div className="whitespace-pre-wrap text-sm text-gray-800">{message.content || '（无内容）'}</div>
-            <Link className="inline-block mt-3 text-xs text-indigo-600 hover:underline" to={`/topics/${message.topicId}`}>
-              查看所在分类
-            </Link>
-          </article>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {filteredMessages.map(message => (
+          <MessageCard
+            key={message.id}
+            msg={message}
+            ctx={{ relType: message.relationType ?? null }}
+          />
         ))}
-        {contextMessages.map(message => (
-          <article key={`context-${message.id}`} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-            <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
-              <span>关联上下文 · {message.kind}</span>
-              <span>{new Date(message.createdAt).toLocaleString('zh-CN')}</span>
-            </div>
-            <div className="whitespace-pre-wrap text-sm text-gray-800">{message.content || '（无内容）'}</div>
-            <Link className="inline-block mt-3 text-xs text-indigo-600 hover:underline" to={`/topics/${message.topicId}`}>
-              查看所在分类
-            </Link>
-          </article>
-        ))}
-        {messages.length === 0 && <div className="text-sm text-gray-500">该用户尚未发送消息。</div>}
+        {filteredMessages.length === 0 && <div style={{ fontSize: 12, color: '#9ca3af' }}>该用户尚未发送消息。</div>}
       </div>
     </div>
   );

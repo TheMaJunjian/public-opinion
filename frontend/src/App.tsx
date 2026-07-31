@@ -7,7 +7,6 @@ import RegisterPage from './pages/RegisterPage';
 import HomePage from './pages/HomePage';
 import TopicDetailPage from './pages/TopicDetailPage';
 import ExportViewerModal from './components/ExportViewerModal';
-import UserPage from './pages/UserPage';
 
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -23,7 +22,6 @@ export default function App() {
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/" element={<HomePage />} />
               <Route path="/topics/:topicId" element={<TopicDetailPage />} />
-              <Route path="/users/:userId" element={<UserPage />} />
             </Routes>
           </main>
           <ExportViewerModal key={viewerOpen ? 'open' : 'closed'} open={viewerOpen} onClose={() => setViewerOpen(false)} />

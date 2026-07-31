@@ -379,22 +379,9 @@ export async function getUser(userId: string) {
 
 export async function getUserMessages(userId: string, params?: { page?: number; limit?: number }) {
   const all = messages.filter(message => message.createdBy.id === userId);
-  const ownedIds = new Set(all.map(message => message.id));
-  const contextIds = new Set<string>();
-  relations.forEach(relation => {
-    const referencesOwnedMessage = relation.targetRefs.some(target => target.kind === 'message' && ownedIds.has(target.messageId)) ||
-      (relation.sourceMessageId ? ownedIds.has(relation.sourceMessageId) : false);
-    if (referencesOwnedMessage) {
-      relation.targetRefs.forEach(target => {
-        if (target.kind === 'message') contextIds.add(target.messageId);
-      });
-      if (relation.sourceMessageId) contextIds.add(relation.sourceMessageId);
-    }
-  });
-  const context = messages.filter(message => contextIds.has(message.id) && !ownedIds.has(message.id));
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 50;
-  return { data: all.slice((page - 1) * limit, page * limit), context, pagination: { page, limit, total: all.length, totalPages: Math.ceil(all.length / limit) } };
+  return { data: all.slice((page - 1) * limit, page * limit), pagination: { page, limit, total: all.length, totalPages: Math.ceil(all.length / limit) } };
 }
 
 export async function createMessage(topicId: string, data: {

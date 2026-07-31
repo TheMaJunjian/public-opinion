@@ -4,7 +4,7 @@ import TopicStructureView from './TopicStructureView';
 import StanceHistoryPanel from './StanceHistoryPanel';
 import AuditLogView from './AuditLogView';
 import RevenuePanel from './RevenuePanel';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 interface DraftGroup {
   messageId: string;
@@ -137,6 +137,7 @@ interface TopicRightPanelProps {
 
 export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
+  const navigate = useNavigate();
 
   return (
     <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
@@ -420,7 +421,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{p.currentFocusIds ? p.currentFocusIds.join(", ") : "（无）"}</div>
       </div>
 
-      <TopicStructureView key={`sv-${p.classifyKey}-${p.focusKey}`} focusIds={p.currentFocusIds ?? []} messages={p.messages} edges={p.edges} />
+      <TopicStructureView key={`sv-${p.classifyKey}-${p.focusKey}`} topicId={p.topicId} focusIds={p.currentFocusIds ?? []} messages={p.messages} edges={p.edges} />
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
@@ -445,9 +446,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                     <span>（通知用户：{notifyUsers.map((notifyUser, index) => (
                       <span key={notifyUser.id}>
                         {index > 0 && '、'}
-                        <Link to={`/users/${notifyUser.id}`} style={{ color: '#a5f3fc', textDecoration: 'underline' }}>
+                        <span onClick={() => navigate(`/topics/${p.topicId}?sender=${encodeURIComponent(notifyUser.username)}`)} style={{ color: '#a5f3fc', textDecoration: 'underline', cursor: 'pointer' }}>
                           {notifyUser.username}
-                        </Link>
+                        </span>
                       </span>
                     ))}）</span>
                   )}

@@ -445,6 +445,28 @@ export default function TopicDetailPage() {
     addFilter: addCleanFilter, removeFilter: removeCleanFilter,
     updateFilter: updateCleanFilter, clearFilters: clearCleanFilters,
   } = useCleanView({ messages, edges, stakeCounts, tagCounts });
+  const cleanSender = searchParams.get('sender');
+  const skipCleanSenderInitRef = useRef(false);
+  useEffect(() => {
+    if (!cleanSender) {
+      skipCleanSenderInitRef.current = false;
+      return;
+    }
+    if (skipCleanSenderInitRef.current) return;
+    if (messages.length === 0) return;
+    if (cleanFilters.some(rule => rule.kind === 'sender' && rule.username === cleanSender)) return;
+    clearCleanFilters();
+    addCleanFilter({ id: `url-sender-${cleanSender}`, kind: 'sender', username: cleanSender });
+  }, [cleanSender, messages.length, cleanFilters, addCleanFilter, clearCleanFilters]);
+  const clearCleanView = useCallback(() => {
+    skipCleanSenderInitRef.current = true;
+    clearCleanFilters();
+    if (searchParams.has('sender')) {
+      const nextSearchParams = new URLSearchParams(searchParams);
+      nextSearchParams.delete('sender');
+      setSearchParams(nextSearchParams, { replace: true });
+    }
+  }, [clearCleanFilters, searchParams, setSearchParams]);
   const contentMsgCount = useMemo(() => messages.filter(m => isContentKind(m.kind)).length, [messages]);
   // Message type filter: hide settlement / join messages
   const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: false, hideJoin: false });
@@ -4515,6 +4537,9 @@ export default function TopicDetailPage() {
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
                 导出
               </button>
+                <button onClick={() => navigate(`/topics/${topicId}?sender=${encodeURIComponent(user?.username ?? '')}`)} disabled={!user?.username} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: user?.username ? "pointer" : "not-allowed", opacity: user?.username ? 1 : 0.5 }} title="在当前主题中查看我的消息">
+                  主页
+                </button>
                 <CleanFilterPanel
                   active={cleanMode}
                   filters={cleanFilters}
@@ -4523,7 +4548,7 @@ export default function TopicDetailPage() {
                   onAdd={addCleanFilter}
                   onRemove={removeCleanFilter}
                   onUpdate={updateCleanFilter}
-                  onClear={clearCleanFilters}
+                  onClear={clearCleanView}
                 />
                 <MessageFilterPanel
                   settings={msgFilter}
@@ -4683,6 +4708,41 @@ export default function TopicDetailPage() {
                           {!isTopicMsg && msg.kind === "relation" && (
                             <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                               <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#9ca3af" }}>{relType ? String(relType) : "关系"}</span>
+                              {relType === 'notify' && (() => {
+                                const payload = msg.relationPayload;
+                                const notifyUsers = Array.isArray(payload?.notifyUsers) && payload.notifyUsers.length > 0
+                                  ? payload.notifyUsers
+                                  : (payload?.notifyUserIds ?? []).map(id => ({ id, username: id }));
+                                return notifyUsers.length > 0 ? (
+                                  <span
+                                    title="通知关系标签"
+                                    style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(59,130,246,0.18)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.45)", display: "inline-flex", alignItems: "center", gap: 3 }}
+                                  >
+                                    {notifyUsers.map((notifyUser, index) => (
+                                      <React.Fragment key={notifyUser.id}>
+                                        {index > 0 && '、'}
+                                        <span
+                                          role="link"
+                                          tabIndex={0}
+                                          onClick={(event) => { event.stopPropagation(); navigate(`/topics/${topicId}?sender=${encodeURIComponent(notifyUser.username)}`); }}
+                                          onKeyDown={(event) => {
+                                            if (event.key === 'Enter' || event.key === ' ') {
+                                              event.preventDefault();
+                                              event.stopPropagation();
+                                              navigate(`/topics/${topicId}?sender=${encodeURIComponent(notifyUser.username)}`);
+                                            }
+                                          }}
+                                          style={{ color: "#bfdbfe", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontFamily: "monospace" }}
+                                          title={`在清爽视图中查看 ${notifyUser.username} 的消息`}
+                                        >
+                                          {notifyUser.id}
+                                        </span>
+                                      </React.Fragment>
+                                    ))}
+                                    <span>：通知</span>
+                                  </span>
+                                ) : null;
+                              })()}
                               {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>你已反对 · 点赞同恢复</span>}
                               {rejectedContainerIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">社区已反对 · 双击预览</span>}
                               {activeStanceRelIds.has(msg.id) && (() => { const info = activeStanceByRelMsgId.get(msg.id); if (!info) return null; return info.type === 'disagree' ? <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.15)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.3)" }}>你的反对生效中</span> : <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>你的赞同生效中</span>; })()}

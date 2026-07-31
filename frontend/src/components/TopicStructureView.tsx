@@ -1,6 +1,6 @@
 import type { DemoEdge, DemoMessage, UnitSelection } from '../utils/modelBridge';
 import { relationTypeName } from './GraphView';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 const INCOMING_OUTGOING_LIST_MAX_H = 120;
 
@@ -25,22 +25,56 @@ function notifyLabel(edge: DemoEdge, messages: DemoMessage[]) {
   return names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '用户';
 }
 
-function notifyUserLinks(edge: DemoEdge, messages: DemoMessage[]) {
+function notifyUserLinks(edge: DemoEdge, messages: DemoMessage[], navigate: (to: string) => void, topicId?: string) {
   const relationMessage = messages.find(message => message.id === edge.relationMessageId);
   const users = notifyUsersForEdge(edge, messages);
-  const userIds = users.length > 0 ? users.map(user => user.id) : (relationMessage?.relationPayload?.notifyUserIds ?? []);
-  return userIds.map((userId, index) => (
-    <span key={userId}>
-      {index > 0 && '、'}
-      <Link to={`/users/${userId}`} style={{ color: '#2563eb', textDecoration: 'underline' }}>
-        {userId}
-      </Link>
+  const notifyUsers = users.length > 0 ? users : (relationMessage?.relationPayload?.notifyUserIds ?? []).map(id => ({ id, username: id }));
+  if (notifyUsers.length === 0) return null;
+  return (
+    <span
+      title="通知关系标签"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 7px',
+        border: '1px solid #60a5fa',
+        borderRadius: 4,
+        background: '#dbeafe',
+        color: '#1e3a8a',
+        fontWeight: 700,
+        lineHeight: 1.5,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {notifyUsers.map((notifyUser, index) => (
+        <span key={notifyUser.id}>
+          {index > 0 && '、'}
+          <span
+            role="link"
+            tabIndex={0}
+            onClick={(event) => { event.stopPropagation(); if (topicId) navigate(`/topics/${topicId}?sender=${encodeURIComponent(notifyUser.username)}`); }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                if (topicId) navigate(`/topics/${topicId}?sender=${encodeURIComponent(notifyUser.username)}`);
+              }
+            }}
+            title={`在清爽视图中查看 ${notifyUser.username} 的消息`}
+            style={{ color: '#1d4ed8', textDecoration: 'underline' }}
+          >
+            {notifyUser.id}
+          </span>
+        </span>
+      ))}
+      <span aria-label="通知">：通知</span>
     </span>
-  ));
+  );
 }
 
-function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; kind: 'in' | 'out'; messages: DemoMessage[] }) {
-  const { focusIds, edges, kind, messages } = props;
+function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; kind: 'in' | 'out'; messages: DemoMessage[]; navigate: (to: string) => void; topicId?: string }) {
+  const { focusIds, edges, kind, messages, navigate, topicId } = props;
   const rows = focusIds.map(id => {
     const m = messages.find(mm => mm.id === id);
     let arr: DemoEdge[] = [];
@@ -63,10 +97,14 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
               <ul style={{ listStyle: 'none', paddingLeft: 10, margin: 0 }}>
                 {r.entries.map(e => (
                   <li key={e.id} style={{ marginBottom: 4 }}>
-                    {e.relationType === 'notify' ? (
+                    {e.relationType.toLowerCase() === 'notify' ? (
                       <>
-                        {notifyUserLinks(e, messages)}
-                        {notifyUserLinks(e, messages).length === 0 && notifyLabel(e, messages)}：通知：{fmtSel(e.from)} → {fmtSel(e.to)}
+                        {notifyUserLinks(e, messages, navigate, topicId) ?? (
+                          <span style={{ display: 'inline-flex', padding: '2px 7px', border: '1px solid #60a5fa', borderRadius: 4, background: '#dbeafe', color: '#1e3a8a', fontWeight: 700 }}>
+                            {notifyLabel(e, messages)}：通知
+                          </span>
+                        )}
+                        ：{fmtSel(e.from)} → {fmtSel(e.to)}
                       </>
                     ) : `${relationTypeName(e.relationType)}：${fmtSel(e.from)} → ${fmtSel(e.to)}`}
                   </li>
@@ -80,8 +118,9 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
   );
 }
 
-export default function TopicStructureView(props: { focusIds: string[]; messages: DemoMessage[]; edges: DemoEdge[] }) {
-  const { focusIds, messages, edges } = props;
+export default function TopicStructureView(props: { focusIds: string[]; messages: DemoMessage[]; edges: DemoEdge[]; topicId?: string }) {
+  const { focusIds, messages, edges, topicId } = props;
+  const navigate = useNavigate();
   const msgMap = new Map(messages.map(m => [m.id, m]));
   if (!focusIds || focusIds.length === 0) {
     return (
@@ -104,11 +143,11 @@ export default function TopicStructureView(props: { focusIds: string[]; messages
       <div style={{ display: 'flex', gap: 8 }}>
         <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>左侧（Incoming：指向焦点集合）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="in" messages={messages} />
+          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="in" messages={messages} navigate={navigate} topicId={topicId} />
         </div>
         <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>右侧（Outgoing：焦点集合指向）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="out" messages={messages} />
+          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="out" messages={messages} navigate={navigate} topicId={topicId} />
         </div>
       </div>
     </div>

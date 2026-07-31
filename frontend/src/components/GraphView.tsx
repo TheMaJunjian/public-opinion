@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
@@ -1718,7 +1717,6 @@ export default function GraphView(props: GraphViewProps) {
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
-  const navigate = useNavigate();
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
   const cardRefs = useRef<Record<string,HTMLDivElement|null>>({});
@@ -3291,14 +3289,12 @@ export default function GraphView(props: GraphViewProps) {
                   {notifyUsersByRelationMsg.get(msg.id)!.map((notifyUser, index) => (
                     <React.Fragment key={notifyUser.id}>
                       {index > 0 && '、'}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); navigate(`/users/${notifyUser.id}`); }}
-                        style={{ color: '#a5f3fc', textDecoration: 'underline', cursor: 'pointer', background: 'none', border: 0, padding: 0 }}
-                        title={`打开用户页 ${notifyUser.username}`}
+                      <span
+                        style={{ color: '#a5f3fc' }}
+                        title={`通知用户 ${notifyUser.username}`}
                       >
                         {notifyUser.username}
-                      </button>
+                      </span>
                     </React.Fragment>
                   ))}
                 </div>

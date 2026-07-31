@@ -213,7 +213,10 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Sources</div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, marginBottom: 4 }}>
+            <span>来源集合</span>
+            <span style={{ fontSize: 11, opacity: 0.65 }}>{p.sourceUnits.length} 项</span>
+          </div>
           {p.sourceUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.sourceUnits.map((u: any) => (
@@ -226,7 +229,10 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           )}
         </div>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Targets</div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, marginBottom: 4 }}>
+            <span>目标集合</span>
+            <span style={{ fontSize: 11, opacity: 0.65 }}>{p.targetUnits.length} 项</span>
+          </div>
           {p.targetUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.targetUnits.map((u: any) => (
@@ -239,6 +245,11 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           )}
         </div>
       </div>
+      {p.draftUnits.length > 0 && p.targetUnits.length > 0 && (
+        <div style={{ border: "1px solid #b45309", borderRadius: 4, padding: "6px 8px", background: "#3b2708", color: "#fbbf24", fontSize: 12 }}>
+          候选区和目标集合同时有内容。发送前请将候选区移入目标集合，或清空其中一方。
+        </div>
+      )}
 
       {p.user && (
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -380,7 +391,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
             )}
             <span style={{ fontSize: 11, color: "#666" }}>点 / {p.availablePoints}</span>
             {/* Total consumption */}
-            {p.singleButtonEnabled && p.totalConsumption && (
+            {p.totalConsumption && (
               <span style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? "#f87171" : "#f59e0b" }}>
                 总计 {p.totalConsumption.total} 点
                 <span style={{ color: "#888" }}>

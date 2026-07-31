@@ -475,7 +475,7 @@ export default function TopicDetailPage() {
   const messagesRef = useRef<DemoMessage[]>([]);
   messagesRef.current = messages;
   // Phase 6: expose for SettlementPanel direct access
-  useEffect(() => { (window as any).__addSettlementMessage = (m: any) => { setMessagesRef.current((prev: any) => [...prev, {...m, author: m.author || user?.username || ''}]); setTimeout(() => scrollMsgToCenter(m.id), 50); }; return () => { delete (window as any).__addSettlementMessage; }; }, [user]);
+  useEffect(() => { (window as any).__addSettlementMessage = (m: any) => { setMessagesRef.current((prev: any) => [...prev, {...m, author: m.author || user?.username || ''}]); setTimeout(() => scrollMsgToCenter(m.settlementTargetId ?? m.id), 50); }; return () => { delete (window as any).__addSettlementMessage; }; }, [user]);
 
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
@@ -859,7 +859,7 @@ export default function TopicDetailPage() {
               settlementTargetId: settleTargetId,
               roundPayload: { settlementType: roundSt, roundId: (roundMsg as any).relationPayload?.roundId },
             }]);
-            scrollMsgToCenter(roundMsg.id);
+            scrollMsgToCenter(settleTargetId);
             resolve(roundMsg.id);
           }).catch(() => resolve(null));
         });
@@ -1484,7 +1484,7 @@ export default function TopicDetailPage() {
       settlementTargetId: settleTargetId,
       roundPayload: { settlementType, roundId: (roundMsg as any).relationPayload?.roundId },
     }]);
-    scrollMsgToCenter(roundMsg.id);
+    scrollMsgToCenter(settleTargetId);
     return roundMsg.id;
   }
 
@@ -1582,7 +1582,7 @@ export default function TopicDetailPage() {
             roundPayload: { settlementType: 'TRUTH', roundId: (roundMsg as any).relationPayload?.roundId },
           }]);
           await addTargetToClassifyTopic({ kind: 'message', messageId: roundMsg.id });
-          scrollMsgToCenter(roundMsg.id);
+          scrollMsgToCenter(msg.id);
         } catch { /* round creation optional */ }
       }
       return msg;
@@ -4803,7 +4803,7 @@ export default function TopicDetailPage() {
                   settlementOpenType={settlementOpenType}
                   onSettlementMessageCreated={(m: any) => {
                     setMessages(prev => [...prev, { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' }]);
-                    setTimeout(() => scrollMsgToCenter(m.id), 50);
+                    setTimeout(() => scrollMsgToCenter(m.settlementTargetId ?? m.id), 50);
                   }}
                   stanceHighlight={stanceHighlight}
                   settlementEntryHighlight={settlementEntryHighlight}

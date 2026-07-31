@@ -1,7 +1,17 @@
- # 公论（Public-Opinion）Phase 0-3 手动测试文档
+# 公论（Public-Opinion）当前手动测试文档
 
-> 基于 `http://localhost:3000/api`，使用 curl 或 Postman 执行。
+> 版本：v1.1，日期：2026-07-31。基于当前源码和 RuleVersion v1，使用 curl 或 Postman 执行。
 > 测试前请先 `cd backend && npx prisma db push --force-reset && npx prisma db seed` 重置数据库。
+
+## 当前口径
+
+- 注册奖励：`2000` 点。
+- 创建消息默认自押：`10` 点 PRO；每次押注/投票另收 `1` 点手续费，进入 RevenuePool。
+- 当前关系类型由 `backend/src/lib/relationTypes.ts` 定义，共 `20` 种；`JOIN` 是容器内部关系，`RECOMMEND`/`ARCHIVE` 通过 TAG 入口使用。
+- 投票接口仍是 `/api/rounds/:id/votes`，但实际创建无文本 `AGREE`/`DISAGREE` 关系消息；`UNKNOWN` 是结算平局结果，不是投票选项。
+- 结算权限由 RuleVersion 决定，seed 默认 `anyone`。
+- `/api/messages/:id/stakes` 是押注统计查询；写入押注可来自消息自押、关系消息和兼容的独立押注入口。
+- 本文验证中心化 Web 原型的当前行为，不验证独立节点、P2P 或链上执行。
 
 ---
 
@@ -23,7 +33,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 0.1.1 | 注册成功 | `POST /auth/register` `{"username":"alice","password":"123456"}` | 返回 201，user 含 id/username，自动获 100 点注册奖励 |
+| 0.1.1 | 注册成功 | `POST /auth/register` `{"username":"alice","password":"123456"}` | 返回 201，user 含 id/username，自动获 2000 点注册奖励 |
 | 0.1.2 | 重复注册 | 再用相同 username 注册 | 返回 409，"该资源已存在" |
 | 0.1.3 | 用户名校验 | username="a" | 返回 400，"用户名至少 2 个字符" |
 | 0.1.4 | 密码校验 | password="123" | 返回 400，"密码至少 6 个字符" |
@@ -42,7 +52,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 0.3.1 | 查询当前规则 | `GET /rules/current` | 返回 version=1, status="ACTIVE"，parameters 含 minStake=1, selfStakeOnCreate=1 |
+| 0.3.1 | 查询当前规则 | `GET /rules/current` | 返回 version=1, status="ACTIVE"，parameters 含 minStake=1, selfStakeOnCreate=10, stakeFeeAmount=1, settlementPermission="anyone" |
 
 ### 0.4 User publicKey 字段
 
@@ -58,17 +68,17 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 1.1.1 | 注册获 100 点 | 注册新用户 bob/123456 | 注册成功 |
-| 1.1.2 | 查询余额 | bob 登录后 `GET /points/balance` | available=100, locked=0, balance.amount=100, debtFrozen=false |
-| 1.1.3 | 查询流水 | bob 登录后 `GET /points/transactions` | 有 1 条 MINT 类型记录，amount=+100，reason="REGISTRATION_BONUS" |
+| 1.1.1 | 注册获 2000 点 | 注册新用户 bob/123456 | 注册成功 |
+| 1.1.2 | 查询余额 | bob 登录后 `GET /points/balance` | available=2000, locked=0, balance.amount=2000, debtFrozen=false |
+| 1.1.3 | 查询流水 | bob 登录后 `GET /points/transactions` | 有 1 条 MINT 类型记录，amount=+2000，reason="REGISTRATION_BONUS" |
 | 1.1.4 | 查询流水无认证 | `GET /points/transactions` 无 token | 返回 401 |
 
 ### 1.2 前端 PointsBadge
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 1.2.1 | 导航栏显示余额 | 登录后查看页面顶部导航栏 | 显示 "💎 100" |
-| 1.2.2 | 点击展开流水 | 点击 PointsBadge | 弹出面板显示 "铸造 +100 余额 100" |
+| 1.2.1 | 导航栏显示余额 | 登录后查看页面顶部导航栏 | 显示 "💎 2000" |
+| 1.2.2 | 点击展开流水 | 点击 PointsBadge | 弹出面板显示 "铸造 +2000 余额 2000" |
 | 1.2.3 | 锁定金额显示 | 押注后（Phase 2 操作后）回来检查 | 显示 "🔒N" |
 | 1.2.4 | 负债冻结显示 | 负债后（Phase 4 操作后）检查 | 显示 "❄️冻结" + "负债N" |
 
@@ -76,7 +86,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 1.3.1 | 两个模型余额一致 | 注册后检查 Balance.balance 和 PointAccount.available | 两者相等（均为 100） |
+| 1.3.1 | 两个模型余额一致 | 注册后检查 Balance.balance 和 PointAccount.available | 两者相等（均为 2000） |
 | 1.3.2 | 押注后一致性 | 押注后检查两者 | Balance.balance = PointAccount.available + PointAccount.locked |
 
 ---
@@ -88,13 +98,15 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
 | 2.1.1 | 创建 Topic | `POST /topics` `{"title":"测试议题"}` （需 token） | 返回 201，记下 topicId |
-| 2.1.2 | 发消息（无 stakeAmount） | `POST /topics/{topicId}/messages` `{"content":"第一条消息"}` | 返回 201，可用点减少 1（auto selfStakeOnCreate） |
-| 2.1.3 | 查询消息押注 | `GET /messages/{msgId}/stakes` | pro=1, con=0, pool.lockedPro=1 |
-| 2.1.4 | 发消息（指定 stakeAmount=5） | `POST /topics/{topicId}/messages` `{"content":"重押消息","stakeAmount":5}` | 返回 201，可用点减少 5 |
+| 2.1.2 | 发消息（无 stakeAmount） | `POST /topics/{topicId}/messages` `{"content":"第一条消息"}` | 返回 201，可用点减少 11（10 点自押 + 1 点手续费） |
+| 2.1.3 | 查询消息押注 | `GET /messages/{msgId}/stakes` | pro=10, con=0, pool.lockedPro=10 |
+| 2.1.4 | 发消息（指定 stakeAmount=20） | `POST /topics/{topicId}/messages` `{"content":"重押消息","stakeAmount":20}` | 返回 201，可用点减少 21（20 点自押 + 1 点手续费） |
 | 2.1.5 | stakeAmount 超过余额 | stakeAmount=9999（余额不足时） | 返回 402，"贡献点余额不足" |
 | 2.1.6 | 查询 PointsBadge | 查看导航栏余额 | 数字正确减少 |
 
-### 2.2 独立押注 API
+### 2.2 押注统计和兼容写入 API
+
+> 产品主流程使用“创建消息自押”和“AGREE/DISAGREE 关系消息投票”。独立押注 POST 仍用于兼容性测试，不作为标准演示路径。
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
@@ -124,8 +136,8 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 2.5.1 | 赞同 → 目标 PRO | 在 UI 中对某消息点"赞同"（agree 关系） | 目标消息的 BetPool.lockedPro 增加 1 |
-| 2.5.2 | 反对 → 目标 CON | 在 UI 中对某消息点"反对"（disagree 关系） | 目标消息的 BetPool.lockedCon 增加 1 |
+| 2.5.1 | 赞同 → 目标 PRO | 在 UI 中对某消息点"赞同"（AGREE 关系） | 创建无文本 AGREE 关系并按当前规则记入目标 PRO 统计 |
+| 2.5.2 | 反对 → 目标 CON | 在 UI 中对某消息点"反对"（DISAGREE 关系） | 创建无文本 DISAGREE 关系并按当前规则记入目标 CON 统计 |
 | 2.5.3 | 赞同/反对消耗余额 | 执行赞同/反对后查看余额 | available 减少 selfStakeOnCreate 数量 |
 | 2.5.4 | 押注流水记录 | `GET /points/transactions` | 出现 LOCK 类型记录，data 含 side 和 messageId |
 
@@ -156,14 +168,14 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 |---|--------|------|------|
 | 3.2.1 | 投 TRUE | `POST /rounds/{roundId}/votes` `{"vote":"TRUE","amount":10}` | 返回 201，newAvailable 减少 10 |
 | 3.2.2 | 投 FALSE | `POST /rounds/{roundId}/votes` `{"vote":"FALSE","amount":5}` | 返回 201 |
-| 3.2.3 | 投 UNKNOWN | `POST /rounds/{roundId}/votes` `{"vote":"UNKNOWN","amount":3}` | 返回 201 |
+| 3.2.3 | 平局结果 | 不提交 UNKNOWN 投票；让 TRUE/FALSE 权重相等后结算 | 返回 result="UNKNOWN" |
 | 3.2.4 | 多次投票（同一用户） | 同一用户投 TRUE 10 → TRUE 5 | 两次均成功，累计 15 |
 | 3.2.5 | 改变投票方向 | 同一用户先投 TRUE 10 → FALSE 5 | 两次均成功，两条 VoteStake 记录 |
 | 3.2.6 | 投票金额 < 1 | amount=0 | 返回 400 |
 | 3.2.7 | 轮次不存在 | roundId 不存在 | 返回 404 |
 | 3.2.8 | 轮次非 VOTING | 对 SETTLED 轮次投票 | 返回错误 |
 | 3.2.9 | 余额不足 | amount=99999 | 返回错误 |
-| 3.2.10 | 负债冻结 | debt_frozen=true 用户 | 返回错误 |
+| 3.2.10 | 负债冻结 | debt_frozen=true 用户 | 返回 403 错误 |
 
 ### 3.3 查询轮次
 
@@ -201,7 +213,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 | 3.6.1 | 点击 ⚖️ 展开 | 在消息卡片头部（有押注时）点击 ⚖️ 按钮 | 展开结算面板，显示押注池（PRO/CON 数量） |
 | 3.6.2 | 无押注时不显示 ⚖️ | 查看一条没有任何押注的消息 | 不显示 ⚖️ 按钮 |
 | 3.6.3 | 发起结算按钮 | 点击"发起结算" | 创建轮次，面板显示"投票中"状态 |
-| 3.6.4 | 投票操作 | 选择 TRUE/FALSE/UNKNOWN + 金额 → 点"投票" | 投票成功，权重条更新 |
+| 3.6.4 | 投票操作 | 选择 TRUE/FALSE + 金额 → 点"投票" | 投票成功，权重条更新；平局时结算结果为 UNKNOWN |
 | 3.6.5 | 结算按钮 | 点"结算"（需是 round 创建者） | 弹出确认框，确认后显示结算结果 |
 | 3.6.6 | 结算历史 | 展开 ⚖️ 后查看轮次列表 | 显示已结算轮次的结果（TRUE/FALSE/UNKNOWN）和推翻链 |
 
@@ -224,11 +236,11 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | 步骤 | 用户 | 操作 | 预期 |
 |------|------|------|------|
-| 1 | alice | 注册 alice/123456，登录 | 余额 100 |
-| 2 | bob | 注册 bob/123456，登录 | 余额 100 |
-| 3 | charlie | 注册 charlie/123456，登录 | 余额 100 |
+| 1 | alice | 注册 alice/123456，登录 | 余额 2000 |
+| 2 | bob | 注册 bob/123456，登录 | 余额 2000 |
+| 3 | charlie | 注册 charlie/123456，登录 | 余额 2000 |
 | 4 | alice | 创建 Topic "E2E测试" | topicId 记下 |
-| 5 | alice | 发送消息 "太阳从东边升起" | msgId 记下，alice 自押 1 PRO，余额 99 |
+| 5 | alice | 发送消息 "太阳从东边升起" | msgId 记下，alice 自押 10 PRO 并支付 1 点手续费，余额 1989 |
 | 6 | bob | 对 msgId 押注 PRO 20 | 余额 80 |
 | 7 | charlie | 对 msgId 押注 CON 15 | 余额 85 |
 | 8 | alice | 对 msgId 押注 PRO 10 | 余额 89 |
@@ -277,7 +289,7 @@ $authBob    = @{Authorization="Bearer $bobToken"}
 
 # 3. 查余额
 Invoke-RestMethod "$BASE/points/balance" -Headers $authAlice
-# 预期: available=100, locked=0
+# 预期: available=2000, locked=0
 
 # 4. 创建话题
 $topic = Invoke-RestMethod "$BASE/topics" -Method POST -Body '{"title":"测试"}' -Headers $authAlice -ContentType "application/json"
@@ -285,12 +297,12 @@ $topic = Invoke-RestMethod "$BASE/topics" -Method POST -Body '{"title":"测试"}
 # 5. 发消息
 $msg = Invoke-RestMethod "$BASE/topics/$($topic.id)/messages" -Method POST -Body '{"content":"hello"}' -Headers $authAlice -ContentType "application/json"
 
-# 6. bob 押注 CON
+# 6. bob 通过 DISAGREE 关系消息对目标表达 CON 立场
 Invoke-RestMethod "$BASE/messages/$($msg.id)/stakes" -Method POST -Body '{"side":"CON","amount":10}' -Headers $authBob -ContentType "application/json"
 
 # 7. 查押注统计
 Invoke-RestMethod "$BASE/messages/$($msg.id)/stakes"
-# 预期: pro=1(alice自押), con=10
+# 预期: pro=10(alice自押), con=10
 
 # 8. alice 发起结算
 $round = Invoke-RestMethod "$BASE/messages/$($msg.id)/rounds" -Method POST -Body '{}' -Headers $authAlice -ContentType "application/json"
@@ -321,4 +333,4 @@ Write-Host "FALSE权重: $($result.weights.FALSE)"
 | Phase 2 | 16 | 自押、独立押注、BetPool 同步、赞同/反对映射、前端控件 |
 | Phase 3 | 26 | 创建轮次、并发约束、投票（含多次/改向）、TRUE/FALSE/UNKNOWN 结算、Clawback、前端面板 |
 | 集成 | 19 | 端到端流程、负债冻结、审计日志 |
-| **合计** | **79** | 覆盖全部 Phase 0-3 功能细节 |
+| **合计** | **79** | 覆盖当前 Phase 0-3 核心功能；其中独立押注写入用例属于兼容性验证 |

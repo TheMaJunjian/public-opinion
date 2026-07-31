@@ -13,10 +13,11 @@
 > 消息是节点；消息的关系也是消息；消息的关系的关系依然是消息。
 
 核心功能：
-- **非线性树视图** — 按 REPLY/SUPPORT/OPPOSE/CORRECT 关系形成讨论分支树，直观呈现逻辑关联
-- **立场统计** — 每条消息显示"▲ N 支持 / ▼ N 反对"的实时立场汇总
-- **关联图谱** — 分类侧边栏汇总所有关系，支持添加新关联
-- **时间轴视图** — 可切换为传统线性时序排列
+- **图谱、树和列表视图** — 同一批消息与关系的不同投影
+- **关系消息递归引用** — 关系本身也是消息，可作为后续关系的目标
+- **分类、总结、归并、排列和焦点导航** — 通过容器关系降低复杂讨论的阅读负担
+- **立场、押注和结算面板** — 展示 PRO/CON、轮次、结果、推翻链和账本变化
+- **审计、收入和清爽视图** — 查看操作历史、收入池和组合过滤结果
 
 ---
 
@@ -53,7 +54,7 @@ VITE_USE_MOCK=true npm run dev
 
 Mock 模式内置示例：
 - 3 个用户（alice / bob / charlie，密码任意）
-- 3 个分类，含多层 REPLY/SUPPORT/OPPOSE/CORRECT 关系
+- 3 个分类，含多层 REPLY/AGREE/DISAGREE/CORRECT 关系
 - 分类 t1"人工智能与就业"展示完整的 5 层非线性讨论树
 
 ### 构建
@@ -82,7 +83,7 @@ npm run build
 | `/` | 分类广场（搜索/分页/创建分类） |
 | `/login` | 登录 |
 | `/register` | 注册 |
-| `/topics/:id` | 分类详情（非线性树视图 / 时间轴 + 关联图谱 + 立场统计） |
+| `/topics/:id` | 分类详情（图谱 / 树 / 列表 + 关系创建 + 结算面板） |
 | `/topics/:id/messages/:msgId` | 节点详情（单条消息的全量关联分析） |
 
 ---
@@ -98,9 +99,9 @@ src/
   context/
     AuthContext.tsx    # 用户认证状态（localStorage 持久化）
   utils/
-    graph.ts          # buildMessageTree() / computeStanceStats()
+    graph.ts          # 图关系、立场和焦点子图计算
   types/
-    index.ts          # User / Topic / Message / Relation / MessageNode / StanceStats
+    index.ts          # User / Topic / Message / Relation / 结算和过滤类型
   pages/
     TopicListPage.tsx
     TopicDetailPage.tsx   # 非线性视图核心页
@@ -111,21 +112,26 @@ src/
     Navbar.tsx
     TopicCard.tsx
     MessageCard.tsx       # 支持 relationType 左边框色 + 立场统计
-    MessageThread.tsx     # 递归树节点组件（含缩进连接线）
-    RelationBadge.tsx     # 关系类型彩色标签
-    RelationView.tsx      # 节点维度的关联分析视图
-    MessageForm.tsx
-    RelationForm.tsx
+    GraphView.tsx         # 图谱投影和关系实体渲染
+    TopicStructureView.tsx # 分类、总结、归并等容器视图
+    SettlementPanel.tsx   # 轮次、投票和结算
+    PointsBadge.tsx       # 可用、锁定和冻结积分
+    AuditLogView.tsx      # 审计日志
+    CleanFilterPanel.tsx  # 清爽视图过滤器
 ```
 
 ---
 
-## 关系类型说明
+## 当前关系类型说明
+
+后端当前允许 20 种关系类型：`ANNOTATION`、`REFERENCE`、`REPLY`、`NOTIFY`、`AGREE`、`DISAGREE`、`TAG`、`CORRECT`、`ARRANGE`、`CLASSIFY`、`MERGE`、`SUMMARY`、`RECOMMEND`、`ARCHIVE`、`ATTENTION`、`BLOCK`、`PROPOSAL`、`CODE_CHANGE`、`OPERATIONS`、`JOIN`。
+
+其中 `RECOMMEND`/`ARCHIVE` 由 TAG 入口创建，`JOIN` 是容器创建时的内部成员关系，不一定作为顶层工具栏按钮展示。
 
 | 类型 | 颜色 | 含义 |
 |------|------|------|
-| SUPPORT | 绿色 | 支持某条消息的论点 |
-| OPPOSE  | 红色 | 反对某条消息的论点 |
+| AGREE | 绿色 | 赞同目标；无文本时是纯立场消息 |
+| DISAGREE | 红色 | 反对目标；无文本时是纯立场消息 |
 | CORRECT | 黄色 | 对某条消息的事实纠正 |
 | REPLY   | 蓝色 | 回复某条消息 |
 | QUOTE   | 靛蓝 | 引用某条消息的片段 |

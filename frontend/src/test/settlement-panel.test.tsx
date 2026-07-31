@@ -61,4 +61,32 @@ describe('SettlementPanel voting', () => {
 
     await waitFor(() => expect(mockApi.castVote).toHaveBeenCalledWith('round-1', { vote: 'TRUE', amount: 1 }));
   });
+
+  it('refreshes the target stakes after settlement', async () => {
+    mockApi.getRoundDetail.mockResolvedValue({
+      id: 'round-1',
+      status: 'VOTING',
+      settlementType: 'TRUTH',
+      weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 },
+      votes: [],
+    });
+    mockApi.closeAndSettle.mockResolvedValue({
+      result: 'TRUE',
+      weights: { TRUE: 2, FALSE: 0 },
+    });
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '结算' }));
+
+    await waitFor(() => expect(mockApi.closeAndSettle).toHaveBeenCalledWith('round-1'));
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'stakes-refresh',
+      detail: { messageId: 'message-1' },
+    }));
+    dispatchSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
 });

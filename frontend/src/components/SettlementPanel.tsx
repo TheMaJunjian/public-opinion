@@ -366,6 +366,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       }
       onSettled(localRound.id);
       window.dispatchEvent(new Event('points-refresh'));
+      window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
       window.dispatchEvent(new CustomEvent('points-flash'));
       window.dispatchEvent(new Event('revenue-refresh'));
     } catch (e: unknown) {

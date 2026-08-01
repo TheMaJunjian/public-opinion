@@ -2954,7 +2954,7 @@ export default function GraphView(props: GraphViewProps) {
 
 
   return (
-    <div ref={canvasRef} className="topic-graph-canvas" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
+    <div ref={canvasRef} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
         {normals.map(msg=>{
@@ -2985,7 +2985,7 @@ export default function GraphView(props: GraphViewProps) {
             const isActive = lastClickedMessageId === msg.id;
             const isTopicStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
             return (
-              <div key={msg.id} className="topic-graph-card topic-graph-topic-card" data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
+              <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
                 onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
                 style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:isTopicStanceTarget?"#2a2410":"#1f1f1f",borderRadius:6,
@@ -3105,7 +3105,7 @@ export default function GraphView(props: GraphViewProps) {
           const kindBg = kindMeta ? kindMeta.bg : undefined;
 
           return (
-            <div key={msg.id} className="topic-graph-card" data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
+            <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:stanceBg||kindBg||"#1f1f1f",borderRadius:6,borderTop:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444"),borderRight:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444"),borderBottom:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444"),borderLeft:kindBorder||(stanceBorder?undefined:(isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444")),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
@@ -3407,7 +3407,7 @@ export default function GraphView(props: GraphViewProps) {
           Wide arrange frames (spanning multiple columns) no longer visually encompass
           unrelated cards that happen to share the same horizontal range. */}
       {(arrangeFrames.length>0||groupFrames.length>0)&&(
-        <svg className="topic-graph-frames" width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
+        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
           {/* arrange frames — stroke and fill reflect selection state; hidden when blank-corrected */}
           {arrangeFrames.map(sf=>{
             if (sf.isBlankCorrected) return null;
@@ -3440,7 +3440,7 @@ export default function GraphView(props: GraphViewProps) {
       )}
       {/* SVG layer: edge paths (above cards, zIndex:6) */}
       {positionedEdges.length>0&&(
-        <svg className="topic-graph-edges" width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
+        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
           {positionedEdges.map(pe=>{
             const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
@@ -3810,7 +3810,7 @@ export default function GraphView(props: GraphViewProps) {
               );
             })()}
             {(gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
-              <div className="topic-graph-frame-header" data-rel-overlay="true"
+              <div data-rel-overlay="true"
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
                 title={title}

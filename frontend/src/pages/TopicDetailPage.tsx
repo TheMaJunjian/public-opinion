@@ -4463,8 +4463,8 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div className="topic-detail-shell" style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
-      <div className="topic-detail-toolbar" style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
+    <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+      <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {isPreloaded ? (
             <button onClick={() => navigate('/')} style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>
@@ -4522,7 +4522,7 @@ export default function TopicDetailPage() {
 
       <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
-          <div className="topic-detail-controlbar" style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
+          <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -4629,7 +4629,7 @@ export default function TopicDetailPage() {
                 )}
               </div>
             ) : viewMode === "list" ? (
-              <div className="topic-message-list" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {messagesToRenderFiltered
                   .filter(msg => !tagSourceIdsForList.has(msg.id))
                   .map(msg => {

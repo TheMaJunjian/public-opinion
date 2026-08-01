@@ -183,6 +183,17 @@ describe('computeMinColumnsForAnnoRefRule1', () => {
     expect(result.col['b']).toBeGreaterThanOrEqual(1);
   });
 
+  it('places notify source to the right of its target', () => {
+    const normals = [makeNormal('a'), makeNormal('b')];
+    const normalIds = normals.map(m => m.id);
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'notify', 'rel-1', 'b', 'a'),
+    ];
+    const result = computeMinColumnsForAnnoRefRule1(normalIds, edges, new Set());
+    expect(result.col['a']).toBe(0);
+    expect(result.col['b']).toBeGreaterThanOrEqual(1);
+  });
+
   it('cascades constraints through a chain: a←b←c', () => {
     const normals = [makeNormal('a'), makeNormal('b'), makeNormal('c')];
     const normalIds = normals.map(m => m.id);
@@ -1435,6 +1446,21 @@ describe('computeFrameAwareColumnCorrection', () => {
       normals, edges, colOf, maxCol: 0, frameRects,
     });
     // minCol = ceil((370 - 18) / 400) = ceil(352/400) = 1
+    expect(result.col['src']).toBeGreaterThanOrEqual(1);
+  });
+
+  it('pushes notify source right of a frame', () => {
+    const normals = [makeNormal('src'), makeNormal('a')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'notify', 'rel-notify', 'src', 'frame1'),
+    ];
+    const colOf = { src: 0, a: 0 };
+    const frameRects = {
+      frame1: { x: colX(0), y: 0, width: CARD_W + FRAME_PAD * 2, height: 200 },
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 0, frameRects,
+    });
     expect(result.col['src']).toBeGreaterThanOrEqual(1);
   });
 

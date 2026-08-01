@@ -78,11 +78,12 @@ function isCorrectionBadgeRel(relType: string): boolean {
 // ============================================================
 
 /**
- * Compute minimum column assignments for annotation/reference relations.
+ * Compute minimum column assignments for annotation/reference/notify relations.
  *
  * Rules:
  *   - ANNOTATION source must be ≥ target col + 1 (source to the right of target)
  *   - REFERENCE source must be ≥ target col + 1
+ *   - NOTIFY source must be ≥ target col + 1 (same spatial rule as REFERENCE)
  *   - When targeting a relation message, source must be to the right of the
  *     relation's rightmost normal-message endpoint.
  *
@@ -96,15 +97,15 @@ export function computeMinColumnsForAnnoRefRule1(
 ): { col: Record<string, number>; maxCol: number } {
   const normalSet = new Set(normalIds);
 
-  // anno/ref edges between two normal messages
+  // annotation/reference/notify edges between two normal messages
   const relevant = edges.filter(
-    (e) => (e.relationType === 'annotation' || e.relationType === 'reference') &&
+    (e) => (e.relationType === 'annotation' || e.relationType === 'reference' || e.relationType === 'notify') &&
       normalSet.has(e.from.messageId) && normalSet.has(e.to.messageId),
   );
 
-  // anno/ref edges where target is a relation message
+  // annotation/reference/notify edges where target is a relation message
   const toRelEdges = edges.filter(
-    (e) => (e.relationType === 'annotation' || e.relationType === 'reference') &&
+    (e) => (e.relationType === 'annotation' || e.relationType === 'reference' || e.relationType === 'notify') &&
       normalSet.has(e.from.messageId) && relIds.has(e.to.messageId),
   );
 
@@ -640,7 +641,7 @@ export function verifyColumnOrder(
 
 /**
  * After the first layout pass produces frame rects, correct column assignments
- * for sources that annotate/reference/reply-to relation messages (frames).
+ * for sources that annotate/reference/notify/reply-to relation messages (frames).
  *
  * Problem: Stage 1 column pipeline uses discrete column numbers derived from
  * frame endpoints (e.g. m5, m6 for frame r10). But the actual frame may be much
@@ -654,7 +655,7 @@ export function verifyColumnOrder(
  * corrections — never from messages that were unaffected.
  *
  * Algorithm:
- *   1. For each anno/ref/reply edge targeting a relation message with a frame rect,
+ *   1. For each anno/ref/notify/reply edge targeting a relation message with a frame rect,
  *      compute minCol = ⌈(frame.right + COL_GAP - GRID_LEFT) / (CARD_W + COL_GAP)⌉
  *   2. Apply frame-based minimums; track which sources changed → dirty set
  *   3. Propagate ONLY from dirty sources: if B.col increased, any A with
@@ -678,6 +679,7 @@ export function computeFrameAwareColumnCorrection(params: {
     const isRelevantRel =
       e.relationType === 'annotation' ||
       e.relationType === 'reference' ||
+      e.relationType === 'notify' ||
       e.relationType === 'reply';
     if (!isRelevantRel) continue;
     if (!normalSet.has(e.from.messageId)) continue;
@@ -702,12 +704,13 @@ export function computeFrameAwareColumnCorrection(params: {
 
   // ── Step 3: propagate only from dirty sources ──
   // Build reverse index: targetId → list of edges where from→target
-  // Only for anno/ref/reply edges where both ends are normal text messages.
+  // Only for anno/ref/notify/reply edges where both ends are normal text messages.
   const sourcesByTarget = new Map<string, { fromId: string; edge: DemoEdge }[]>();
   for (const e of edges) {
     const isRelevant =
       e.relationType === 'annotation' ||
       e.relationType === 'reference' ||
+      e.relationType === 'notify' ||
       e.relationType === 'reply';
     if (!isRelevant) continue;
     if (!normalSet.has(e.from.messageId)) continue;

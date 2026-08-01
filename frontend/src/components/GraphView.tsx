@@ -757,11 +757,11 @@ function applyFrameAvoidanceReservations(params: {
 function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
   const normalSet = new Set(normalIds);
   const relevant = edges.filter(
-    (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
+    (e) => (e.relationType === "annotation" || e.relationType === "reference" || e.relationType === "notify") &&
       normalSet.has(e.from.messageId) && normalSet.has(e.to.messageId)
   );
   const toRelEdges = edges.filter(
-    (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
+    (e) => (e.relationType === "annotation" || e.relationType === "reference" || e.relationType === "notify") &&
       normalSet.has(e.from.messageId) && relIds.has(e.to.messageId)
   );
   const relEdgesByRelMsg = new Map<string, DemoEdge[]>();
@@ -835,7 +835,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
     relEdgesByRelMsgForReply.set(e.relationMessageId, arr);
   }
   for (const e of edges) {
-    if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
+    if (!(e.relationType === "annotation" || e.relationType === "reference" || e.relationType === "notify")) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const need = (col[e.to.messageId] ?? 0) + 1;
     minAllowed[e.from.messageId] = Math.max(minAllowed[e.from.messageId] ?? 0, need);

@@ -8,7 +8,7 @@ import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType, MessageKind,
 } from '../utils/modelBridge';
-import type { Topic, TargetRef, Relation } from '../types';
+import type { Topic, TargetRef, Relation, MessageStakes } from '../types';
 import { getPresentationSpec, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 import ErrorBoundary from '../components/ErrorBoundary';
@@ -16,6 +16,7 @@ import MessageCard, { type MessageCardContext } from '../components/MessageCard'
 import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
 import TopicRightPanel from '../components/TopicRightPanel';
+import LeaderboardModal from '../components/LeaderboardModal';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
@@ -89,6 +90,7 @@ export default function TopicDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   // Per-message stake counts, split by TRUTH/VALUE settlement type
   const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
+  const [messageBettorCounts, setMessageBettorCounts] = useState<Record<string, number>>({});
   const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
   const [isPreloaded, setIsPreloaded] = useState(false);
 
@@ -145,6 +147,7 @@ export default function TopicDetailPage() {
     setMessages(demoMsgs);
     setEdges(demoEdges);
     setStakeCounts({});
+    setMessageBettorCounts({});
     setAuthorStakes({});
     setLoading(false);
     setIsPreloaded(true);
@@ -192,13 +195,19 @@ export default function TopicDetailPage() {
                     truth: byType.TRUTH ?? { pro: 0, con: 0 },
                     value: byType.VALUE ?? { pro: 0, con: 0 },
                     authorStake,
+                    bettors: new Set(r.stakes.map(s => s.user.id || s.user.username)).size,
                   };
                 })
               )
             );
             const map: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }> = {};
             const aMap: Record<string, number> = {};
-            for (const s of stakes) { map[s.id] = { truth: s.truth, value: s.value }; aMap[s.id] = s.authorStake; }
+            const bettorsMap: Record<string, number> = {};
+            for (const s of stakes) {
+              map[s.id] = { truth: s.truth, value: s.value };
+              aMap[s.id] = s.authorStake;
+              bettorsMap[s.id] = s.bettors;
+            }
             // For RECOMMEND/ARCHIVE relations: mirror text target's VALUE stake counts onto
             // the annotation relation message so badges show correct VALUE stats.
             for (const rel of relationsData.data) {
@@ -211,7 +220,11 @@ export default function TopicDetailPage() {
                 }
               }
             }
-            if (!cancelled) { setStakeCounts(map); setAuthorStakes(aMap); }
+            if (!cancelled) {
+              setStakeCounts(map);
+              setAuthorStakes(aMap);
+              setMessageBettorCounts(bettorsMap);
+            }
           } catch {
             // stake fetch is best-effort; don't block the page
           }
@@ -548,6 +561,20 @@ export default function TopicDetailPage() {
   const [showStanceHistory, setShowStanceHistory] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showRevenue, setShowRevenue] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+
+  const mergeStakeSnapshot = useCallback((messageId: string, stakes: MessageStakes) => {
+    const byType = stakes.countsByType ?? {};
+    setStakeCounts(prev => ({
+      ...prev,
+      [messageId]: {
+        truth: byType.TRUTH ?? { pro: 0, con: 0 },
+        value: byType.VALUE ?? { pro: 0, con: 0 },
+      },
+    }));
+    const bettors = new Set(stakes.stakes.map(s => s.user.id || s.user.username)).size;
+    setMessageBettorCounts(prev => ({ ...prev, [messageId]: bettors }));
+  }, []);
 
   // Phase 5: Refs to avoid stale closure in points-navigate handler
   // (initialized empty; values synced via useEffect below after all useMemos run)
@@ -711,16 +738,12 @@ export default function TopicDetailPage() {
     const handler = (e: Event) => {
       const { messageId } = (e as CustomEvent<{ messageId: string }>).detail;
       api.getMessageStakes(messageId).then(s => {
-        const byType = s.countsByType ?? {};
-        setStakeCounts(prev => ({ ...prev, [messageId]: {
-          truth: byType.TRUTH ?? { pro: 0, con: 0 },
-          value: byType.VALUE ?? { pro: 0, con: 0 },
-        }}));
+        mergeStakeSnapshot(messageId, s);
       }).catch(() => {});
     };
     window.addEventListener('stakes-refresh', handler);
     return () => window.removeEventListener('stakes-refresh', handler);
-  }, []);
+  }, [mergeStakeSnapshot]);
 
   const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
   const currentFocusIds = currentFocusEntry?.ids ?? null;
@@ -798,11 +821,7 @@ export default function TopicDetailPage() {
     const allIds = [backendRel.id, ...targetMsgIds];
     for (const mid of allIds) {
       api.getMessageStakes(mid).then(s => {
-        const byType = s.countsByType ?? {};
-        setStakeCounts(prev => ({ ...prev, [mid]: {
-          truth: byType.TRUTH ?? { pro: 0, con: 0 },
-          value: byType.VALUE ?? { pro: 0, con: 0 },
-        }}));
+        mergeStakeSnapshot(mid, s);
       }).catch(() => {});
     }
     // For RECOMMEND/ARCHIVE: the stake is on the text target, so also mirror its
@@ -811,6 +830,7 @@ export default function TopicDetailPage() {
       const textTarget = targetMsgIds[0];
       if (textTarget) {
         api.getMessageStakes(textTarget).then(s => {
+          mergeStakeSnapshot(textTarget, s);
           const byType = s.countsByType ?? {};
           setStakeCounts(prev => ({
             ...prev,
@@ -819,6 +839,8 @@ export default function TopicDetailPage() {
               value: byType.VALUE ?? { pro: 0, con: 0 },
             },
           }));
+          const bettors = new Set(s.stakes.map(st => st.user.id || st.user.username)).size;
+          setMessageBettorCounts(prev => ({ ...prev, [backendRel.id]: bettors }));
         }).catch(() => {});
       }
     }
@@ -867,7 +889,7 @@ export default function TopicDetailPage() {
       }
     }
     return Promise.resolve(null);
-  }, [topicId]);
+  }, [topicId, mergeStakeSnapshot]);
 
   const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
     const amount = Math.max(relStakeRef.current, 1);
@@ -1517,11 +1539,7 @@ export default function TopicDetailPage() {
       setMessages(prev => [...prev, msg]);
       // Fetch real stake counts from backend (not optimistic)
       api.getMessageStakes(msg.id).then(s => {
-        const byType = s.countsByType ?? {};
-        setStakeCounts(prev => ({ ...prev, [msg.id]: {
-          truth: byType.TRUTH ?? { pro: 0, con: 0 },
-          value: byType.VALUE ?? { pro: 0, con: 0 },
-        }}));
+        mergeStakeSnapshot(msg.id, s);
         setAuthorStakes(prev => ({ ...prev, [msg.id]: s.stakes.find(st => st.side === 'PRO' && st.user.username === msg.author)?.amount ?? 0 }));
       }).catch(() => {});
       // Reset to rule default
@@ -3154,11 +3172,7 @@ export default function TopicDetailPage() {
         const selfStake = relStakeRef.current;
         setAuthorStakes(prev => ({ ...prev, [backendRel.id]: selfStake }));
         api.getMessageStakes(backendRel.id).then(s => {
-          const byType = s.countsByType ?? {};
-          setStakeCounts(prev => ({ ...prev, [backendRel.id]: {
-            truth: byType.TRUTH ?? { pro: 0, con: 0 },
-            value: byType.VALUE ?? { pro: 0, con: 0 },
-          }}));
+          mergeStakeSnapshot(backendRel.id, s);
         }).catch(() => {});
         window.dispatchEvent(new Event('points-refresh'));
       } catch (e: any) {
@@ -4559,6 +4573,13 @@ export default function TopicDetailPage() {
                   settings={msgFilter}
                   onChange={setMsgFilter}
                 />
+                <button
+                  onClick={() => setShowLeaderboard(true)}
+                  style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#3f2a06", color: "#fbbf24", fontSize: 12, cursor: "pointer" }}
+                  title="查看用户榜与消息榜"
+                >
+                  排行榜
+                </button>
                 <button onClick={() => {
                 if (leftPanelRef.current) {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
@@ -4925,6 +4946,16 @@ export default function TopicDetailPage() {
       </div>
     </div>
     </ErrorBoundary>
+
+    <LeaderboardModal
+      open={showLeaderboard}
+      onClose={() => setShowLeaderboard(false)}
+      messages={messages}
+      edges={edges}
+      relations={relations}
+      stakeCounts={stakeCounts}
+      messageBettorCounts={messageBettorCounts}
+    />
 
     {/* Decoration double-click popup: shows sender info for agree/disagree relations */}
     {decorationPopup && (() => {

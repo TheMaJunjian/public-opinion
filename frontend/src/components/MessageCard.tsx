@@ -70,10 +70,7 @@ export default function MessageCard({
   return (
     <div
       key={msg.id}
-      className={`topic-message-card${isTopicMsg ? ' is-topic-message' : ''}`}
       data-msgid={msg.id}
-      data-message-kind={msg.kind}
-      data-relation-type={relType ?? undefined}
       onClick={e => onClick?.(e, msg.id)}
       onDoubleClick={e => onDoubleClick?.(e, msg.id)}
       onMouseDown={e => onMouseDown?.(e, msg.id)}

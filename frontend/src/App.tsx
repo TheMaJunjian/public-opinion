@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route } from 'react-router-dom';
 import { Suspense, lazy, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import Navbar from './components/Navbar';
@@ -11,6 +11,7 @@ const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
+  const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter;
   const routeFallback = (
     <div className="flex h-full items-center justify-center text-sm text-gray-500">
       加载中…
@@ -19,7 +20,7 @@ export default function App() {
 
   return (
     <AuthProvider>
-      <BrowserRouter>
+      <Router>
         <div className="h-screen overflow-hidden flex flex-col bg-gray-50">
           <Navbar onOpenViewer={() => setViewerOpen(true)} />
           <main className="flex-1 min-h-0 overflow-auto">
@@ -42,7 +43,7 @@ export default function App() {
             </Suspense>
           )}
         </div>
-      </BrowserRouter>
+      </Router>
     </AuthProvider>
   );
 }

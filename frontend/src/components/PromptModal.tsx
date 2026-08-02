@@ -1,3 +1,5 @@
+import { createPortal } from 'react-dom';
+
 interface PromptModalProps {
   open: boolean;
   title: string;
@@ -27,15 +29,16 @@ export default function PromptModal({
 }: PromptModalProps) {
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
+      data-prompt-modal="true"
       role="presentation"
       onClick={() => onCancel?.()}
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 2000,
-        background: 'rgba(0,0,0,0.5)',
+        zIndex: 3000,
+        background: 'transparent',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -101,6 +104,7 @@ export default function PromptModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

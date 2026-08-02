@@ -698,7 +698,12 @@ export default function TopicDetailPage() {
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       // Keep panel open if clicking inside it or on the settlement toggle buttons
-      if (target.closest('[data-settlement-panel]') || target.closest('[data-settlement-toggle-truth]') || target.closest('[data-settlement-toggle-value]')) return;
+      if (
+        target.closest('[data-settlement-panel]') ||
+        target.closest('[data-settlement-toggle-truth]') ||
+        target.closest('[data-settlement-toggle-value]') ||
+        target.closest('[data-prompt-modal="true"]')
+      ) return;
       closeSettlement();
     };
     document.addEventListener('mousedown', onMouseDown);

@@ -548,18 +548,19 @@ export async function placeStake(messageId: string, data: { side: 'PRO' | 'CON';
   };
 }
 
-export async function getMessageStakes(messageId: string, _settlementType?: 'TRUTH' | 'VALUE') {
+export async function getMessageStakes(messageId: string, settlementType?: 'TRUTH' | 'VALUE') {
   await delay(50);
   const pool = mockStakes[messageId] ?? { pro: 0, con: 0 };
+  const resolvedType = settlementType ?? 'TRUTH';
   return {
     messageId,
     pool: { lockedPro: pool.pro, lockedCon: pool.con },
-    pools: { TRUTH: { lockedPro: pool.pro, lockedCon: pool.con } },
+    pools: { [resolvedType]: { lockedPro: pool.pro, lockedCon: pool.con } },
     stakes: [],
     counts: { pro: pool.pro, con: pool.con },
     countsByType: {
-      TRUTH: { pro: pool.pro, con: pool.con },
-      VALUE: { pro: 0, con: 0 },
+      TRUTH: resolvedType === 'TRUTH' ? { pro: pool.pro, con: pool.con } : { pro: 0, con: 0 },
+      VALUE: resolvedType === 'VALUE' ? { pro: pool.pro, con: pool.con } : { pro: 0, con: 0 },
     },
   };
 }
@@ -687,7 +688,7 @@ export async function exportTopic(topicId: string) {
     },
     messages: topicMessages.map(m => ({
       id: m.id,
-      kind: (m as any).kind ?? 'TEXT',
+      kind: m.kind ?? 'TEXT',
       contentType: m.contentType,
       content: m.content,
       createdAt: m.createdAt,

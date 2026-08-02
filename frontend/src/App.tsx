@@ -1,15 +1,21 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import Navbar from './components/Navbar';
-import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
-import HomePage from './pages/HomePage';
-import TopicDetailPage from './pages/TopicDetailPage';
-import ExportViewerModal from './components/ExportViewerModal';
+
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const RegisterPage = lazy(() => import('./pages/RegisterPage'));
+const HomePage = lazy(() => import('./pages/HomePage'));
+const TopicDetailPage = lazy(() => import('./pages/TopicDetailPage'));
+const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
+  const routeFallback = (
+    <div className="flex h-full items-center justify-center text-sm text-gray-500">
+      加载中…
+    </div>
+  );
 
   return (
     <AuthProvider>
@@ -17,14 +23,24 @@ export default function App() {
         <div className="h-screen overflow-hidden flex flex-col bg-gray-50">
           <Navbar onOpenViewer={() => setViewerOpen(true)} />
           <main className="flex-1 min-h-0 overflow-auto">
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-              <Route path="/" element={<HomePage />} />
-              <Route path="/topics/:topicId" element={<TopicDetailPage />} />
-            </Routes>
+            <Suspense fallback={routeFallback}>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+                <Route path="/" element={<HomePage />} />
+                <Route path="/topics/:topicId" element={<TopicDetailPage />} />
+              </Routes>
+            </Suspense>
           </main>
-          <ExportViewerModal key={viewerOpen ? 'open' : 'closed'} open={viewerOpen} onClose={() => setViewerOpen(false)} />
+          {viewerOpen && (
+            <Suspense fallback={null}>
+              <ExportViewerModal
+                key="open"
+                open={viewerOpen}
+                onClose={() => setViewerOpen(false)}
+              />
+            </Suspense>
+          )}
         </div>
       </BrowserRouter>
     </AuthProvider>

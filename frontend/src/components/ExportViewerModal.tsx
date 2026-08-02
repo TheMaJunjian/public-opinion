@@ -33,7 +33,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       const data = JSON.parse(raw) as ExportData;
       return { data, title: data.topic.title };
     } catch { return null; }
-  }, [open]);
+  }, []);
 
   const openData = (data: ExportData) => {
     onClose();
@@ -61,8 +61,8 @@ export default function ExportViewerModal({ open, onClose }: Props) {
         }
         sessionStorage.setItem(LAST_EXPORT_KEY, text);
         openData(data);
-      } catch (e: any) {
-        setError(`JSON 解析失败: ${e?.message ?? e}`);
+      } catch (error: unknown) {
+        setError(`JSON 解析失败: ${error instanceof Error ? error.message : String(error)}`);
         setProcessing(false);
       }
     };

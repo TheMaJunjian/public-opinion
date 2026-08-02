@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
-import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
+import { computeFrameAwareColumnCorrection, compactAnnoRefClusters, convergeGroupingAndRightConstraints } from '../utils/layout';
 import { debugWarn } from '../utils/debugLog';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
@@ -950,6 +950,45 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
     if (bestC === null) { let c = Math.max(baseMin, maxCol+1); while (forbidden.has(c)) c++; bestC = c; }
     col[fromId] = bestC; maxCol = Math.max(maxCol, bestC); authorPrevLane[fromMsg.author] = bestC;
   }
+
+  // Propagate right-shift constraints after reply placement.
+  // If a target moved right, sources that point to it via
+  // annotation/reference/notify/reply must remain at least target+1.
+  const sourcesByTarget = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.relationType !== "annotation" && e.relationType !== "reference" && e.relationType !== "notify" && e.relationType !== "reply") continue;
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    const arr = sourcesByTarget.get(e.to.messageId) ?? [];
+    arr.push(e.from.messageId);
+    sourcesByTarget.set(e.to.messageId, arr);
+  }
+  const queue: string[] = [];
+  const queued = new Set<string>();
+  for (const m of normals) {
+    const id = m.id;
+    if ((col[id] ?? 0) > (baseCol[id] ?? 0)) {
+      queue.push(id);
+      queued.add(id);
+    }
+  }
+  let qi = 0;
+  while (qi < queue.length) {
+    const targetId = queue[qi++];
+    const targetCol = col[targetId] ?? 0;
+    const sources = sourcesByTarget.get(targetId) ?? [];
+    for (const fromId of sources) {
+      const need = targetCol + 1;
+      if ((col[fromId] ?? 0) < need) {
+        col[fromId] = need;
+        maxCol = Math.max(maxCol, need);
+        if (!queued.has(fromId)) {
+          queued.add(fromId);
+          queue.push(fromId);
+        }
+      }
+    }
+  }
+
   return { col, maxCol };
 }
 
@@ -1017,8 +1056,14 @@ export function applyGroupingColumnOverride(params: {
       if ((col[srcId] ?? 0) !== tgtCol) { col[srcId] = tgtCol; changed = true; }
     }
   }
-  const maxCol = Math.max(0, ...(Object.values(col).length ? Object.values(col) : [0]));
-  return { col, maxCol, groupSourceToTarget };
+
+  const converged = convergeGroupingAndRightConstraints({
+    normals,
+    edges,
+    col,
+    groupSourceToTarget,
+  });
+  return { col: converged.col, maxCol: converged.maxCol, groupSourceToTarget };
 }
 
 /**

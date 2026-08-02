@@ -73,6 +73,110 @@ function isCorrectionBadgeRel(relType: string): boolean {
   return getRelKind(relType) === 'correction-badge';
 }
 
+/**
+ * Converge grouping-equality and right-of constraints on top of current columns.
+ *
+ * Priority model:
+ *   1) Messages linked by groupSourceToTarget stay in the same column.
+ *   2) annotation/reference/notify/reply keep source >= target + 1.
+ *
+ * When an edge's source and target are already in the same grouping component,
+ * its right-of constraint is skipped as contradictory.
+ */
+export function convergeGroupingAndRightConstraints(params: {
+  normals: DemoMessage[];
+  edges: DemoEdge[];
+  col: Record<string, number>;
+  groupSourceToTarget: Map<string, string>;
+}): { col: Record<string, number>; maxCol: number } {
+  const { normals, edges, groupSourceToTarget } = params;
+  const col: Record<string, number> = { ...params.col };
+  const normalSet = new Set(normals.map(m => m.id));
+
+  const parent: Record<string, string> = {};
+  for (const m of normals) parent[m.id] = m.id;
+  const find = (x: string): string => {
+    let p = parent[x] ?? x;
+    while (p !== (parent[p] ?? p)) p = parent[p] ?? p;
+    let cur = x;
+    while ((parent[cur] ?? cur) !== p) {
+      const next = parent[cur] ?? cur;
+      parent[cur] = p;
+      cur = next;
+    }
+    return p;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+  for (const [srcId, tgtId] of groupSourceToTarget) {
+    if (!normalSet.has(srcId) || !normalSet.has(tgtId)) continue;
+    union(srcId, tgtId);
+  }
+
+  const equalNeighbors = new Map<string, string[]>();
+  for (const [srcId, tgtId] of groupSourceToTarget) {
+    if (!normalSet.has(srcId) || !normalSet.has(tgtId)) continue;
+    const a = equalNeighbors.get(srcId) ?? [];
+    a.push(tgtId);
+    equalNeighbors.set(srcId, a);
+    const b = equalNeighbors.get(tgtId) ?? [];
+    b.push(srcId);
+    equalNeighbors.set(tgtId, b);
+  }
+
+  const sourcesByTarget = new Map<string, string[]>();
+  for (const e of edges) {
+    const isRightConstraint =
+      e.relationType === 'annotation' ||
+      e.relationType === 'reference' ||
+      e.relationType === 'notify' ||
+      e.relationType === 'reply';
+    if (!isRightConstraint) continue;
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    if (find(e.from.messageId) === find(e.to.messageId)) continue;
+    const arr = sourcesByTarget.get(e.to.messageId) ?? [];
+    arr.push(e.from.messageId);
+    sourcesByTarget.set(e.to.messageId, arr);
+  }
+
+  const queue: string[] = normals.map(m => m.id);
+  const queued = new Set(queue);
+  let qi = 0;
+  while (qi < queue.length) {
+    const targetId = queue[qi++];
+    const targetCol = col[targetId] ?? 0;
+
+    const peers = equalNeighbors.get(targetId) ?? [];
+    for (const peerId of peers) {
+      if ((col[peerId] ?? 0) !== targetCol) {
+        col[peerId] = targetCol;
+        if (!queued.has(peerId)) {
+          queued.add(peerId);
+          queue.push(peerId);
+        }
+      }
+    }
+
+    const sources = sourcesByTarget.get(targetId) ?? [];
+    for (const fromId of sources) {
+      const need = targetCol + 1;
+      if ((col[fromId] ?? 0) < need) {
+        col[fromId] = need;
+        if (!queued.has(fromId)) {
+          queued.add(fromId);
+          queue.push(fromId);
+        }
+      }
+    }
+  }
+
+  const maxCol = Math.max(0, ...(Object.values(col).length ? Object.values(col) : [0]));
+  return { col, maxCol };
+}
+
 // ============================================================
 // Stage 1-①: ANNOTATION / REFERENCE column constraints
 // ============================================================
@@ -347,6 +451,45 @@ export function applyReplyLayoutAdjustments(params: {
     authorPrevLane[fromMsg.author] = bestC;
   }
 
+  // If a reply source moved right, any source that targets it via
+  // anno/ref/reply must also stay to its right.
+  const sourcesByTarget = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.relationType !== 'annotation' && e.relationType !== 'reference' && e.relationType !== 'reply') continue;
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    const arr = sourcesByTarget.get(e.to.messageId) ?? [];
+    arr.push(e.from.messageId);
+    sourcesByTarget.set(e.to.messageId, arr);
+  }
+
+  const queue: string[] = [];
+  const queued = new Set<string>();
+  for (const m of normals) {
+    const id = m.id;
+    if ((col[id] ?? 0) > (baseCol[id] ?? 0)) {
+      queue.push(id);
+      queued.add(id);
+    }
+  }
+
+  let qi = 0;
+  while (qi < queue.length) {
+    const targetId = queue[qi++];
+    const targetCol = col[targetId] ?? 0;
+    const sources = sourcesByTarget.get(targetId) ?? [];
+    for (const fromId of sources) {
+      const need = targetCol + 1;
+      if ((col[fromId] ?? 0) < need) {
+        col[fromId] = need;
+        maxCol = Math.max(maxCol, need);
+        if (!queued.has(fromId)) {
+          queued.add(fromId);
+          queue.push(fromId);
+        }
+      }
+    }
+  }
+
   return { col, maxCol };
 }
 
@@ -482,8 +625,13 @@ export function applyGroupingColumnOverride(params: {
     }
   }
 
-  const maxCol = Math.max(0, ...(Object.values(col).length ? Object.values(col) : [0]));
-  return { col, maxCol, groupSourceToTarget };
+  const converged = convergeGroupingAndRightConstraints({
+    normals,
+    edges,
+    col,
+    groupSourceToTarget,
+  });
+  return { col: converged.col, maxCol: converged.maxCol, groupSourceToTarget };
 }
 
 // ============================================================

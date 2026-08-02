@@ -339,6 +339,27 @@ describe('applyReplyLayoutAdjustments', () => {
     expect(result.col['a']).toBe(0);
     expect(result.col['b']).toBe(0);
   });
+
+  it('propagates right shift to dependent anno/ref sources after reply movement', () => {
+    // B replies to A so B moves right; C references B and must stay to B's right.
+    const normals = [
+      makeNormal('a', 'alice', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'bob', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'carol', '2024-01-01T00:02:00Z'),
+    ];
+    const baseCol = { a: 0, b: 0, c: 1 };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+      makeEdge('e2', 'reference', 'rel-2', 'c', 'b'),
+    ];
+
+    const result = applyReplyLayoutAdjustments({
+      normals, edges, baseCol, baseMaxCol: 1, relIds: new Set(),
+    });
+
+    expect(result.col['b']).toBeGreaterThanOrEqual(result.col['a'] + 1);
+    expect(result.col['c']).toBeGreaterThanOrEqual(result.col['b'] + 1);
+  });
 });
 
 // ============================================================
@@ -570,6 +591,28 @@ describe('applyGroupingColumnOverride', () => {
     // All three end up in the same column
     expect(result.col['a']).toBe(result.col['b']);
     expect(result.col['b']).toBe(result.col['c']);
+  });
+
+  it('re-applies right-of constraints after grouping shifts a target', () => {
+    // b is grouped to a (same column), and c references b.
+    // If grouping moves b right, c must also move to at least b+1.
+    const normals = [
+      makeNormal('a', 'u1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'u1', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'u1', '2024-01-01T00:02:00Z'),
+    ];
+    const baseCol = { a: 5, b: 0, c: 1 };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'arrange', 'rel-arr', 'b', 'a'),
+      makeEdge('e2', 'reference', 'rel-ref', 'c', 'b'),
+    ];
+
+    const result = applyGroupingColumnOverride({
+      normals, edges, col: baseCol, maxCol: 5,
+    });
+
+    expect(result.col['b']).toBe(5);
+    expect(result.col['c']).toBeGreaterThanOrEqual(result.col['b'] + 1);
   });
 });
 

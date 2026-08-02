@@ -75,11 +75,11 @@ describe('SettlementPanel voting', () => {
       weights: { TRUE: 2, FALSE: 0 },
     });
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
-    vi.stubGlobal('confirm', vi.fn(() => true));
     render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '结算' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认结算' }));
 
     await waitFor(() => expect(mockApi.closeAndSettle).toHaveBeenCalledWith('round-1'));
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -87,7 +87,6 @@ describe('SettlementPanel voting', () => {
       detail: { messageId: 'message-1' },
     }));
     dispatchSpy.mockRestore();
-    vi.unstubAllGlobals();
   });
 
   it('prevents duplicate round creation while the request is pending', async () => {
@@ -118,19 +117,18 @@ describe('SettlementPanel voting', () => {
       votes: [],
     });
     mockApi.closeAndSettle.mockImplementation(() => new Promise(resolve => { resolveSettlement = resolve; }));
-    vi.stubGlobal('confirm', vi.fn(() => true));
     render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '结算' }));
-    expect(await screen.findByRole('button', { name: '结算中...' })).toBeDisabled();
+    fireEvent.click(await screen.findByRole('button', { name: '确认结算' }));
+    expect(await screen.findByRole('button', { name: '结算中...' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '结算中...' }));
 
     expect(mockApi.closeAndSettle).toHaveBeenCalledTimes(1);
     await act(async () => {
       resolveSettlement?.({ result: 'TRUE', weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 } });
     });
-    vi.unstubAllGlobals();
   });
 
   it('prevents duplicate voting while the request is pending', async () => {

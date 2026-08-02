@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
 import { debugLog } from '../utils/debugLog';
+import PromptModal from './PromptModal';
 
 interface Props {
   messageId: string;
@@ -319,6 +320,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
   const [settling, setSettling] = useState(false);
   const [localRound, setLocalRound] = useState(round);
   const [settleError, setSettleError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const isValue = round.settlementType === 'VALUE';
   const weights = localRound.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
@@ -354,10 +356,15 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
 
   async function handleSettle() {
     if (voting || settling) return;
-    if (!confirm('确定要结算此轮次吗？结算后将根据投票权重分配押注池资金，且不可撤销。')) return;
+    setConfirmOpen(true);
+  }
+
+  async function handleSettleConfirmed() {
+    if (voting || settling) return;
     try {
       setSettleError(null);
       setSettling(true);
+      setConfirmOpen(false);
       const result = await api.closeAndSettle(localRound.id);
       debugLog('结算', `结算完成 round=${localRound.id.slice(-6)} result=${result.result}`);
       if (onMessageCreated) {
@@ -383,6 +390,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
       setSettleError((e as Error)?.message ?? '结算失败');
     } finally {
       setSettling(false);
+      setConfirmOpen(false);
     }
   }
 
@@ -508,6 +516,26 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, entryHighlight, onM
           </ul>
         </div>
       )}
+
+      <PromptModal
+        open={confirmOpen}
+        title="确认结算"
+        message="确定要结算此轮次吗？结算后将根据投票权重分配押注池资金，且不可撤销。"
+        confirmText={settling ? '结算中...' : '确认结算'}
+        confirmDisabled={settling}
+        cancelText="取消"
+        danger
+        onConfirm={() => {
+          if (!settling) {
+            void handleSettleConfirmed();
+          }
+        }}
+        onCancel={() => {
+          if (!settling) {
+            setConfirmOpen(false);
+          }
+        }}
+      />
     </div>
   );
 }

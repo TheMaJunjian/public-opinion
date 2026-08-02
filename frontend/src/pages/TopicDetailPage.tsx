@@ -17,6 +17,7 @@ import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
 import TopicRightPanel from '../components/TopicRightPanel';
 import LeaderboardModal from '../components/LeaderboardModal';
+import PromptModal from '../components/PromptModal';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
@@ -562,6 +563,11 @@ export default function TopicDetailPage() {
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showRevenue, setShowRevenue] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [alertMessage, setAlertMessage] = useState<string | null>(null);
+
+  const showAlert = useCallback((message: string) => {
+    setAlertMessage(message);
+  }, []);
 
   const mergeStakeSnapshot = useCallback((messageId: string, stakes: MessageStakes) => {
     const byType = stakes.countsByType ?? {};
@@ -1979,7 +1985,7 @@ export default function TopicDetailPage() {
       const anonSrcId = `anon:${relId}`;
       return { id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge;
     } catch (e: any) {
-      alert(`建立标注关系失败: ${e?.message ?? e}`);
+      showAlert(`建立标注关系失败: ${e?.message ?? e}`);
       return null;
     }
   }
@@ -2030,7 +2036,7 @@ export default function TopicDetailPage() {
             });
             await registerCreatedRelationInCurrentClassify(backendRel);
             newEdgesList.push(buildEdges({ ...src }, { ...t }, "notify", "notify", backendRel.id));
-          } catch (e: any) { alert(`建立通知关系失败: ${e?.message ?? e}`); }
+          } catch (e: any) { showAlert(`建立通知关系失败: ${e?.message ?? e}`); }
         }
       }
     } else if (relationType === "reply") {
@@ -2058,7 +2064,7 @@ export default function TopicDetailPage() {
               const relId = backendRel.id;
               await registerCreatedRelationInCurrentClassify(backendRel);
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reply", replyEdgeLabel, relId));
-            } catch (e: any) { alert(`建立回复关系失败: ${e?.message ?? e}`); }
+            } catch (e: any) { showAlert(`建立回复关系失败: ${e?.message ?? e}`); }
           }
         }
       }
@@ -2072,7 +2078,7 @@ export default function TopicDetailPage() {
             try {
               const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs: [unitSelectionToTargetRef(t, msgMap)] });
               await registerCreatedRelationInCurrentClassify(backendRel);
-            } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+            } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
           }
         }
       } else {
@@ -2081,7 +2087,7 @@ export default function TopicDetailPage() {
           try {
             const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
             await registerCreatedRelationInCurrentClassify(backendRel);
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
     } else if (relationType === "recommend" || relationType === "archive" || relationType === "attention" || relationType === "block") {
@@ -2097,7 +2103,7 @@ export default function TopicDetailPage() {
           await registerCreatedRelationInCurrentClassify(backendRel);
           const anonSrcId = `anon:${backendRel.id}`;
           newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
       }
     } else if (relationType === "tag") {
       // TAG: user-to-message relation with no source message; label stored as tagLabel.
@@ -2135,7 +2141,7 @@ export default function TopicDetailPage() {
               const relId = backendRel.id;
               await registerCreatedRelationInCurrentClassify(backendRel);
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reference", refEdgeLabel, relId));
-            } catch (e: any) { alert(`建立引用关系失败: ${e?.message ?? e}`); }
+            } catch (e: any) { showAlert(`建立引用关系失败: ${e?.message ?? e}`); }
           }
         }
       }
@@ -2155,7 +2161,7 @@ export default function TopicDetailPage() {
               const relId = backendRel.id;
               await registerCreatedRelationInCurrentClassify(backendRel);
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "annotation", label, relId));
-            } catch (e: any) { alert(`建立注释关系失败: ${e?.message ?? e}`); }
+            } catch (e: any) { showAlert(`建立注释关系失败: ${e?.message ?? e}`); }
           }
         }
       }
@@ -2163,7 +2169,7 @@ export default function TopicDetailPage() {
       // Generic types (ARRANGE/CLASSIFY/MERGE/SUMMARY/PROPOSAL/CODE_CHANGE/OPERATIONS etc.) with source message.
       // CORRECT: single target only.
       if (relationType === "correct" && targets.length > 1) {
-        alert("更正关系只能有一个目标");
+        showAlert("更正关系只能有一个目标");
         return;
       }
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
@@ -2184,7 +2190,7 @@ export default function TopicDetailPage() {
                 newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, secType, label, relId));
               }
             }
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
     }
@@ -2331,7 +2337,7 @@ export default function TopicDetailPage() {
               const anonSrcId = `anon:${backendRel.id}`;
               newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
             }
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
         }
         setEdges(prev => [...prev, ...newEdgesList]);
       } else {
@@ -2369,7 +2375,7 @@ export default function TopicDetailPage() {
         const targetRelMsgId = relDraftMsgIds[0];
         const oldRelEdges = edges.filter(e => e.relationMessageId === targetRelMsgId);
         if (oldRelEdges.length === 0) {
-          alert(`无法找到目标关系消息的边（ID：${targetRelMsgId}），无法创建更正关系`);
+          showAlert(`无法找到目标关系消息的边（ID：${targetRelMsgId}），无法创建更正关系`);
           return;
         }
         const secType = secondaryRelationType as RelationType;
@@ -2391,7 +2397,7 @@ export default function TopicDetailPage() {
           ? oldRelEdges
           : oldRelEdges.filter(e => selectedEdgeIds.has(e.id));
         if (edgesToCorrect.length === 0) {
-          alert(`没有选中的片段，无法创建更正关系`);
+          showAlert(`没有选中的片段，无法创建更正关系`);
           return;
         }
 
@@ -2430,7 +2436,7 @@ export default function TopicDetailPage() {
               newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
             }
           }
-        } catch (e: any) { alert(`建立更正关系失败: ${e?.message ?? e}`); }
+        } catch (e: any) { showAlert(`建立更正关系失败: ${e?.message ?? e}`); }
         setEdges(prev => [...prev, ...newEdgesList]);
         setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
         setRelationType(null); setSecondaryRelationType("none");
@@ -2440,7 +2446,7 @@ export default function TopicDetailPage() {
       // CORRECT (no secondary) targeting a relation message: create null-source relation, single target only.
       // Generic path also covers REFERENCE/ANNOTATION with secondary labels
       if (relationType === "correct" && draftUnits.length > 1) {
-        alert("更正关系只能有一个目标");
+        showAlert("更正关系只能有一个目标");
         return;
       }
       const targetRefs = draftUnits.map(u => unitSelectionToTargetRef(u, msgMap));
@@ -2462,7 +2468,7 @@ export default function TopicDetailPage() {
             newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: relationTypeName(secType) } as DemoEdge);
           }
         }
-      } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+      } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent(""); setSubType(""); setRelationType(null); setSecondaryRelationType("none");
@@ -2500,7 +2506,7 @@ export default function TopicDetailPage() {
               }
             }
           }
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
       }
       if (newEdgesList2.length > 0) setEdges(prev => [...prev, ...newEdgesList2]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2564,7 +2570,7 @@ export default function TopicDetailPage() {
             // Create join relations for each new target
             await createJoinRelationsForContainer(existingRel.id, 'ARRANGE', newTargetMids);
           } catch (e: any) {
-            alert(`追加到排列框架失败: ${e?.message ?? e}`);
+            showAlert(`追加到排列框架失败: ${e?.message ?? e}`);
           }
         }
         setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2608,7 +2614,7 @@ export default function TopicDetailPage() {
         }
         // Create join relations for each target
         await createJoinRelationsForContainer(backendRel.id, 'ARRANGE', allTargetMids);
-      } catch (e: any) { alert(`建立排列关系失败: ${e?.message ?? e}`); }
+      } catch (e: any) { showAlert(`建立排列关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
@@ -2640,11 +2646,11 @@ export default function TopicDetailPage() {
         }
       }
       if (orphanLabels.length > 0) {
-        alert(`选中的${orphanLabels.join('、')}标签对应的消息不在分类目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        showAlert(`选中的${orphanLabels.join('、')}标签对应的消息不在分类目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        alert("分类目标与其他文本消息存在非引用关联，无法建立分类关系");
+        showAlert("分类目标与其他文本消息存在非引用关联，无法建立分类关系");
         return;
       }
       const selectedSet = new Set(targetTextIds);
@@ -2661,13 +2667,13 @@ export default function TopicDetailPage() {
         if (uniqueMids.length <= 1) continue;
         const selectedCount = uniqueMids.filter(mid => selectedSet.has(mid)).length;
         if (selectedCount > 0 && selectedCount < uniqueMids.length) {
-          alert(`同一条排列关系关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
+          showAlert(`同一条排列关系关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
           return;
         }
       }
       const classifyTitle = newMessageContent.trim();
       if (!classifyTitle) {
-        alert("分类名称不能为空");
+        showAlert("分类名称不能为空");
         return;
       }
       const targetRefs = getClassifyTargetRefs(effectiveTargets);
@@ -2685,7 +2691,7 @@ export default function TopicDetailPage() {
           ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
         );
         if (targetsAncestor) {
-          alert('不能将当前分类或其上级分类作为新分类的目标');
+          showAlert('不能将当前分类或其上级分类作为新分类的目标');
           return;
         }
       }
@@ -2778,7 +2784,7 @@ export default function TopicDetailPage() {
         // Create join relations for each target
         await createJoinRelationsForContainer(backendRel.id, 'CLASSIFY', edgeTargetIds);
       } catch (e: any) {
-        alert(`建立关系失败: ${e?.message ?? e}`);
+        showAlert(`建立关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2795,7 +2801,7 @@ export default function TopicDetailPage() {
     if (relationType === "summary") {
       const summaryTitle = newMessageContent.trim();
       if (!summaryTitle) {
-        alert("总结内容不能为空");
+        showAlert("总结内容不能为空");
         return;
       }
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
@@ -2814,16 +2820,16 @@ export default function TopicDetailPage() {
         }
       }
       if (orphanSummaryLabels.length > 0) {
-        alert(`选中的${orphanSummaryLabels.join('、')}标签对应的消息不在总结目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        showAlert(`选中的${orphanSummaryLabels.join('、')}标签对应的消息不在总结目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
       if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        alert("总结目标与其他文本消息存在非引用关联，无法建立总结关系");
+        showAlert("总结目标与其他文本消息存在非引用关联，无法建立总结关系");
         return;
       }
       const summaryTargetRefs = getClassifyTargetRefs(effectiveTargets);
       if (summaryTargetRefs.length === 0) {
-        alert("总结关系至少需要一个目标消息");
+        showAlert("总结关系至少需要一个目标消息");
         return;
       }
       // Prevent circular nesting (same as CLASSIFY above)
@@ -2836,7 +2842,7 @@ export default function TopicDetailPage() {
         if (summaryTargetRefs.some(ref =>
           ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
         )) {
-          alert('不能将当前分类或其上级分类作为新总结的目标');
+          showAlert('不能将当前分类或其上级分类作为新总结的目标');
           return;
         }
       }
@@ -2870,7 +2876,7 @@ export default function TopicDetailPage() {
         // Create join relations for each target
         await createJoinRelationsForContainer(backendRel.id, 'SUMMARY', edgeTargetIds);
       } catch (e: any) {
-        alert(`建立总结关系失败: ${e?.message ?? e}`);
+        showAlert(`建立总结关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2906,11 +2912,11 @@ export default function TopicDetailPage() {
         }
       }
       if (orphanMergeLabels.length > 0) {
-        alert(`选中的${orphanMergeLabels.join('、')}标签对应的消息不在归并目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        showAlert(`选中的${orphanMergeLabels.join('、')}标签对应的消息不在归并目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
       if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
-        alert("归并目标与其他文本消息存在非引用关联，无法建立归并关系");
+        showAlert("归并目标与其他文本消息存在非引用关联，无法建立归并关系");
         return;
       }
       const mergeTargetRefs = Array.from(new Map(
@@ -2920,7 +2926,7 @@ export default function TopicDetailPage() {
         })
       ).values());
       if (mergeTargetRefs.length === 0) {
-        alert("归并关系至少需要一个文本消息或关系消息作为目标");
+        showAlert("归并关系至少需要一个文本消息或关系消息作为目标");
         return;
       }
       try {
@@ -2950,7 +2956,7 @@ export default function TopicDetailPage() {
         const mergeTargetMids = mergeTargetRefs.map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId);
         await createJoinRelationsForContainer(backendRel.id, 'MERGE', mergeTargetMids);
       } catch (e: any) {
-        alert(`建立归并关系失败: ${e?.message ?? e}`);
+        showAlert(`建立归并关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2969,7 +2975,7 @@ export default function TopicDetailPage() {
     if (relationType === "correct") {
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       if (uniqueTargetMids.length !== 1) {
-        alert("更正关系目前仅支持单个目标消息");
+        showAlert("更正关系目前仅支持单个目标消息");
         return;
       }
       const rawTargetMid = uniqueTargetMids[0];
@@ -3000,7 +3006,7 @@ export default function TopicDetailPage() {
 
       const generated = generateCorrectionContent(resolvedTargets, text, msgMap);
       if (generated === null) {
-        alert("更正关系目标必须是普通文本消息");
+        showAlert("更正关系目标必须是普通文本消息");
         return;
       }
       const msg = await handleSendMessageOnly(generated);
@@ -3080,7 +3086,7 @@ export default function TopicDetailPage() {
         proposalContent = `终止结算提案\n目标提案：${targetInfos.join('; ')}`;
       }
       else if (!proposalContent && !hasTargetsAvailable) {
-        alert("请输入内容或选择目标消息");
+        showAlert("请输入内容或选择目标消息");
         return;
       }
       // Auto-fill content from target text messages when input is empty
@@ -3176,7 +3182,7 @@ export default function TopicDetailPage() {
         }).catch(() => {});
         window.dispatchEvent(new Event('points-refresh'));
       } catch (e: any) {
-        alert(`建立${relationTypeName(relationType)}关系失败: ${e?.message ?? e}`);
+        showAlert(`建立${relationTypeName(relationType)}关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -4202,7 +4208,7 @@ export default function TopicDetailPage() {
         targetRefs: [unitSelectionToTargetRef({ messageId, selection: { kind: "whole" } }, msgMap)],
       });
       await registerCreatedRelationInCurrentClassify(backendRel);
-    } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+    } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
   }
 
   function handleDecorationBodyClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {
@@ -4383,7 +4389,7 @@ export default function TopicDetailPage() {
     try {
       const updated = await api.updateTopic(topicId, { status: topic.status === 'ARCHIVED' ? 'OPEN' : 'ARCHIVED' });
       setTopic(updated);
-    } catch (e: any) { alert(`操作失败: ${e?.message ?? e}`); }
+    } catch (e: any) { showAlert(`操作失败: ${e?.message ?? e}`); }
   }
 
   function handleSplitterMouseDown(e: React.MouseEvent) {
@@ -4551,7 +4557,7 @@ export default function TopicDetailPage() {
                   a.click();
                   URL.revokeObjectURL(url);
                 } catch (e: any) {
-                  alert(`导出失败: ${e?.message ?? e}`);
+                  showAlert(`导出失败: ${e?.message ?? e}`);
                 }
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
                 导出
@@ -4957,6 +4963,14 @@ export default function TopicDetailPage() {
       messageBettorCounts={messageBettorCounts}
     />
 
+    <PromptModal
+      open={alertMessage !== null}
+      title="提示"
+      message={alertMessage ?? ''}
+      confirmText="我知道了"
+      onConfirm={() => setAlertMessage(null)}
+    />
+
     {/* Decoration double-click popup: shows sender info for agree/disagree relations */}
     {decorationPopup && (() => {
       const { messageId, kind, x, y } = decorationPopup;
@@ -5081,3 +5095,4 @@ export default function TopicDetailPage() {
     </>
   );
 }
+

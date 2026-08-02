@@ -1,0 +1,106 @@
+interface PromptModalProps {
+  open: boolean;
+  title: string;
+  message: string;
+  confirmText?: string;
+  confirmDisabled?: boolean;
+  cancelText?: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel?: () => void;
+}
+
+/**
+ * PromptModal - reusable modal for alert/confirm prompts.
+ * If onCancel is provided, it behaves like confirm; otherwise alert.
+ */
+export default function PromptModal({
+  open,
+  title,
+  message,
+  confirmText = '确定',
+  confirmDisabled = false,
+  cancelText = '取消',
+  danger = false,
+  onConfirm,
+  onCancel,
+}: PromptModalProps) {
+  if (!open) return null;
+
+  return (
+    <div
+      role="presentation"
+      onClick={() => onCancel?.()}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 2000,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(460px, 100%)',
+          background: '#1f2937',
+          border: '1px solid #374151',
+          borderRadius: 12,
+          boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
+          color: '#f3f4f6',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid #374151', fontSize: 15, fontWeight: 700 }}>
+          {title}
+        </div>
+
+        <div style={{ padding: '16px', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+          {message}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 8,
+                border: '1px solid #4b5563',
+                background: '#374151',
+                color: '#e5e7eb',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+            >
+              {cancelText}
+            </button>
+          )}
+          <button
+            onClick={onConfirm}
+            disabled={confirmDisabled}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 8,
+              border: '1px solid transparent',
+              background: danger ? '#b91c1c' : '#2563eb',
+              color: '#fff',
+              cursor: confirmDisabled ? 'not-allowed' : 'pointer',
+              fontSize: 13,
+              fontWeight: 600,
+              opacity: confirmDisabled ? 0.6 : 1,
+            }}
+          >
+            {confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

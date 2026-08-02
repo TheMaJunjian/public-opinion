@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User } from '../types';
 import { api } from '../api';
+import { getPrivateKeyForCurrentUser } from '../api/client';
 
 interface AuthContextValue {
   user: User | null;
@@ -36,6 +37,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('user', JSON.stringify(res.user));
     setToken(res.token);
     setUser(res.user);
+    const storedPrivateKey = localStorage.getItem(`privateKey:${res.user.username}`);
+    if (storedPrivateKey) {
+      localStorage.setItem('privateKey', storedPrivateKey);
+    }
   }
 
   async function register(username: string, password: string, publicKey?: string | null) {
@@ -54,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signPayload(payload: string): Promise<string | null> {
     try {
-      const rawKey = localStorage.getItem('privateKey');
+      const rawKey = getPrivateKeyForCurrentUser();
       if (!rawKey) return null;
       const keyData = JSON.parse(rawKey);
       const privateKey = await crypto.subtle.importKey(

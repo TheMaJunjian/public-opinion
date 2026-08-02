@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { storePrivateKeyForUser } from '../api/client';
 
 export default function RegisterPage() {
   const { register } = useAuth();
@@ -13,7 +14,8 @@ export default function RegisterPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!username.trim() || !password) { setError('请填写用户名和密码'); return; }
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || !password) { setError('请填写用户名和密码'); return; }
     if (password !== confirm) { setError('两次密码不一致'); return; }
     if (password.length < 6) { setError('密码长度至少6位'); return; }
     setError('');
@@ -22,11 +24,11 @@ export default function RegisterPage() {
       // Generate Ed25519 keypair for message signing
       const keyPair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
       const jwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-      localStorage.setItem('privateKey', JSON.stringify(jwk));
+      storePrivateKeyForUser(normalizedUsername, jwk);
       const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
       const publicKey = JSON.stringify(pubJwk);
 
-      await register(username.trim(), password, publicKey);
+      await register(normalizedUsername, password, publicKey);
       navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '注册失败，请重试');

@@ -1,4 +1,32 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
+const PRIVATE_KEY_PREFIX = 'privateKey:';
+
+function getCurrentUsername(): string | null {
+  const rawUser = localStorage.getItem('user');
+  if (!rawUser) return null;
+
+  try {
+    const user = JSON.parse(rawUser) as { username?: string };
+    return user.username ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function storePrivateKeyForUser(username: string, keyData: JsonWebKey): void {
+  const serialized = JSON.stringify(keyData);
+  localStorage.setItem(`${PRIVATE_KEY_PREFIX}${username}`, serialized);
+  localStorage.setItem('privateKey', serialized);
+}
+
+export function getPrivateKeyForCurrentUser(): string | null {
+  const username = getCurrentUsername();
+  if (username) {
+    return localStorage.getItem(`${PRIVATE_KEY_PREFIX}${username}`) ?? localStorage.getItem('privateKey');
+  }
+
+  return localStorage.getItem('privateKey');
+}
 
 function getToken(): string | null {
   return localStorage.getItem('token');
@@ -16,7 +44,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // Sign write requests with private key
   if (options.method && options.method !== 'GET') {
     try {
-      const rawKey = localStorage.getItem('privateKey');
+      const rawKey = getPrivateKeyForCurrentUser();
       if (rawKey) {
         const keyData = JSON.parse(rawKey);
         const privateKey = await crypto.subtle.importKey('jwk', keyData, { name: 'Ed25519' }, false, ['sign']);

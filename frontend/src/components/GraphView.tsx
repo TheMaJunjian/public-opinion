@@ -202,7 +202,25 @@ export function renderAnnoNodes(
   messageId: string,
   isFragSel: (id: string, start: number, len: number, text: string) => boolean,
   onFragClick: (id: string, start: number, len: number, text: string) => void,
+  isTargetHintFrag?: (id: string, start: number, len: number, relationType: RelationType) => boolean,
 ): React.ReactNode[] {
+  const selectedStyles = [
+    {
+      bg: "rgba(11,132,255,0.24)",
+      outline: "2px solid rgba(11,132,255,0.95)",
+      ring: "inset 0 0 0 1px rgba(147,197,253,0.7)",
+    },
+    {
+      bg: "rgba(56,189,248,0.28)",
+      outline: "2px dashed rgba(56,189,248,0.95)",
+      ring: "inset 0 0 0 1px rgba(125,211,252,0.78)",
+    },
+    {
+      bg: "rgba(14,165,233,0.32)",
+      outline: "2px dotted rgba(14,165,233,0.98)",
+      ring: "inset 0 0 0 1px rgba(103,232,249,0.86)",
+    },
+  ] as const;
   const result: React.ReactNode[] = [];
   let cursor = from;
   for (const node of nodes) {
@@ -214,27 +232,34 @@ export function renderAnnoNodes(
     const frag = text.slice(node.start, node.end);
     const isAnno = node.relationType === "annotation";
     const selected = isFragSel(messageId, node.start, len, frag);
+    const isTargetHint = !selected && (isTargetHintFrag?.(messageId, node.start, len, node.relationType) ?? false);
     const isInner = depth > 0;
+    const selectedStyle = selectedStyles[Math.min(depth, selectedStyles.length - 1)];
     const bgColor = selected
-      ? "rgba(11,132,255,0.25)"
+      ? selectedStyle.bg
+      : isTargetHint
+        ? (isInner ? "rgba(16,185,129,0.20)" : "rgba(16,185,129,0.12)")
       : isInner
         ? (isAnno ? "rgba(255,220,0,0.30)" : "rgba(80,180,255,0.20)")
         : (isAnno ? "rgba(255,255,0,0.12)" : "rgba(80,180,255,0.08)");
     const outlineStyle = selected
-      ? "2px solid rgba(11,132,255,0.95)"
+      ? selectedStyle.outline
+      : isTargetHint
+        ? "2px dashed rgba(16,185,129,0.95)"
       : isInner
         ? (isAnno ? "2px solid rgba(255,210,0,0.95)" : "2px solid rgba(80,180,255,0.85)")
         : (isAnno ? "1px solid rgba(255,255,0,0.8)" : "1px solid rgba(80,180,255,0.45)");
     const innerContent = node.children.length > 0
-      ? renderAnnoNodes(text, node.children, node.start, node.end, depth + 1, messageId, isFragSel, onFragClick)
+      ? renderAnnoNodes(text, node.children, node.start, node.end, depth + 1, messageId, isFragSel, onFragClick, isTargetHintFrag)
       : text.slice(node.start, node.end);
     result.push(
       <span key={`h-${node.start}-${node.end}`}
         data-rel-anchor={`${node.relationType}::${node.start}:${node.end}`}
         onClick={e => { e.stopPropagation(); onFragClick(messageId, node.start, len, frag); }}
         title="点击：进入文本选择状态并切换选中该片段"
-        style={{whiteSpace:"pre-wrap",cursor:"pointer",position:"relative",zIndex:isInner?1:undefined,
-          backgroundColor:bgColor,outline:outlineStyle,borderRadius:2}}
+        style={{whiteSpace:"pre-wrap",cursor:"pointer",position:"relative",zIndex:isInner?Math.min(9,1+depth):undefined,
+          backgroundColor:bgColor,outline:outlineStyle,borderRadius:2,
+          boxShadow:selected?selectedStyle.ring:(isTargetHint?"inset 0 0 0 1px rgba(110,231,183,0.85)":undefined)}}
       >
         {innerContent}
       </span>
@@ -1825,6 +1850,32 @@ export default function GraphView(props: GraphViewProps) {
     return map;
   }, [edges]);
 
+  const selectedAnnotationRelMsgIds = useMemo(() => {
+    const selected = new Set<string>();
+    if (lastClickedMessageId) selected.add(lastClickedMessageId);
+    for (const u of draftUnits) selected.add(u.messageId);
+    const annotationIds = new Set<string>();
+    for (const relId of selected) {
+      const relType = edgesByRelMsg.get(relId)?.[0]?.relationType
+        ?? (msgMap.get(relId)?.kind === 'relation' ? msgMap.get(relId)?.relationType : undefined);
+      if (relType === 'annotation') annotationIds.add(relId);
+    }
+    return annotationIds;
+  }, [lastClickedMessageId, draftUnits, edgesByRelMsg, msgMap]);
+
+  const annotationTargetFragmentHints = useMemo(() => {
+    const fragmentKeys = new Set<string>();
+    if (selectedAnnotationRelMsgIds.size === 0) return fragmentKeys;
+    for (const e of edges) {
+      if (e.relationType !== 'annotation') continue;
+      if (!selectedAnnotationRelMsgIds.has(e.relationMessageId)) continue;
+      if (selectionIsText(e.to.selection)) {
+        fragmentKeys.add(`${e.to.messageId}::${e.to.selection.start}:${e.to.selection.len}:annotation`);
+      }
+    }
+    return fragmentKeys;
+  }, [edges, selectedAnnotationRelMsgIds]);
+
   const notifyUsersByRelationMsg = useMemo(() => {
     const result = new Map<string, Array<{ id: string; username: string }>>();
     for (const message of messages) {
@@ -2898,7 +2949,22 @@ export default function GraphView(props: GraphViewProps) {
         return {x,y};
       }
 
-      pe.start=snapBound(fromBox,chosenCurve.s); pe.ctrl=chosenCurve.c; pe.end=snapBound(toRect,chosenCurve.e);
+      const chosenS=snapBound(fromBox,chosenCurve.s), chosenE=snapBound(toRect,chosenCurve.e);
+      const clampY=(y:number,box:Rect)=>Math.min(Math.max(y,box.y),box.y+box.height);
+      const dirX=toCenter.x-fromCenter.x, dirY=toCenter.y-fromCenter.y;
+      const preferHorizontalSide=pe.fromCol!==pe.toCol||Math.abs(dirX)>=Math.abs(dirY)*0.7;
+      let finalS=chosenS, finalE=chosenE;
+      if (preferHorizontalSide) {
+        const targetOnLeft=dirX<0||pe.fromCol>pe.toCol;
+        if (targetOnLeft) {
+          finalS={x:fromBox.x,y:clampY(chosenS.y,fromBox)};
+          finalE={x:toRect.x+toRect.width,y:clampY(chosenE.y,toRect)};
+        } else {
+          finalS={x:fromBox.x+fromBox.width,y:clampY(chosenS.y,fromBox)};
+          finalE={x:toRect.x,y:clampY(chosenE.y,toRect)};
+        }
+      }
+      pe.start=finalS; pe.ctrl=chosenCurve.c; pe.end=finalE;
       labelSeeds.push({drawId:pe.drawId,text:pe.edgeLabelText,p0:pe.start,p1:pe.ctrl,p2:pe.end});
     }
 
@@ -2947,7 +3013,17 @@ export default function GraphView(props: GraphViewProps) {
       .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
       .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
     const tree = buildAnnoTree(validItems);
-    const nodes = renderAnnoNodes(text, tree, 0, text.length, 0, message.id, isFragmentSelected, onFragmentAnchorClick);
+    const nodes = renderAnnoNodes(
+      text,
+      tree,
+      0,
+      text.length,
+      0,
+      message.id,
+      isFragmentSelected,
+      onFragmentAnchorClick,
+      (id, start, len, relationType) => annotationTargetFragmentHints.has(`${id}::${start}:${len}:${relationType}`)
+    );
     return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
   }
 

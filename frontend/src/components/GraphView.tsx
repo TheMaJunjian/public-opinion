@@ -3559,9 +3559,9 @@ export default function GraphView(props: GraphViewProps) {
           })}
         </svg>
       )}
-      {/* SVG layer: edge paths (above cards, zIndex:6) */}
+      {/* SVG layer: edge paths and labels (raised above relation overlays to avoid label clipping/occlusion) */}
       {positionedEdges.length>0&&(
-        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
+        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:12,pointerEvents:"none"}}>
           {positionedEdges.map(pe=>{
             const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
@@ -3635,7 +3635,7 @@ export default function GraphView(props: GraphViewProps) {
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
             <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{
                 // Prefer newCorrInfo (this relation IS the replacement) over corrInfo (this relation was corrected)
@@ -3715,7 +3715,7 @@ export default function GraphView(props: GraphViewProps) {
                 onClick={ev=>{ev.stopPropagation();}}
                 onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,relId,kind);}}
                 title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-                style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:7,
+                style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:14,
                   background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                   fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
                   overflow:"hidden"}}>
@@ -3752,7 +3752,7 @@ export default function GraphView(props: GraphViewProps) {
                 title={`标注：${displayLabel}；单击选中，双击展开详情`}
                 style={{position:"absolute",left:decLeft-TAG_HIT_PAD,top:decTop-TAG_HIT_PAD,
                   width:tagW+2*TAG_HIT_PAD,height:TAG_H+2*TAG_HIT_PAD,
-                  zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
+                  zIndex:14,cursor:"pointer",pointerEvents:"auto",background:"transparent",
                   display:"flex",alignItems:"center",justifyContent:"center",
                   padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
@@ -3805,7 +3805,7 @@ export default function GraphView(props: GraphViewProps) {
                   onClick={ev=>{ev.stopPropagation();}}
                   onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,ci.corrRelMsgId,kind);}}
                   title={`${kind==="agree"?"赞同":"反对"}更正：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-                  style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:7,
+                  style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:14,
                     background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
                     fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
                     overflow:"hidden"}}>

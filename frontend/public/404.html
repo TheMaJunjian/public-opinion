@@ -6,6 +6,14 @@
     <title>公论演示版</title>
   </head>
   <body>
-    <p>页面加载中，请稍候。</p>
+    <script>
+      const target = new URL('./index.html', window.location.href);
+      const route = window.location.pathname.replace(/\/+/g, '/');
+      const search = window.location.search || '';
+      if (route && route !== '/404.html') {
+        target.hash = '#' + route + search;
+      }
+      window.location.replace(target.toString());
+    </script>
   </body>
 </html>

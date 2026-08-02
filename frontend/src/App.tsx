@@ -11,7 +11,7 @@ const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
-  const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter;
+  const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
   const routeFallback = (
     <div className="flex h-full items-center justify-center text-sm text-gray-500">
       加载中…

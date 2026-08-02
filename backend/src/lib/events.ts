@@ -47,7 +47,7 @@ export interface MessageCreatedEvent {
   signature?: string | null;
   topicId: string;
   payload: {
-    kind?: 'TEXT' | 'ROUND' | 'GOVERNANCE' | 'CODE' | 'OPERATIONS';
+    kind?: 'TEXT' | 'ROUND' | 'ROUND_RESULT' | 'GOVERNANCE' | 'CODE' | 'OPERATIONS';
     contentType?: 'TEXT' | 'MARKDOWN';
     content?: string;
     quoteSourceId?: string | null;
@@ -450,6 +450,52 @@ async function applyMessageCreated(event: MessageCreatedEvent) {
     return message;
   }
 
+  // ── ROUND_RESULT messages: explicit client-triggered settlement result message ──
+  if (kind === 'ROUND_RESULT') {
+    if (!payload.content) throw new Error('ROUND_RESULT 消息内容不能为空');
+    if (!payload.targetMessageId) throw new Error('ROUND_RESULT 消息必须指定目标消息');
+
+    const targetMsg = await prisma.message.findUnique({
+      where: { id: payload.targetMessageId },
+      select: { id: true },
+    });
+    if (!targetMsg) throw new Error('ROUND_RESULT 目标消息不存在');
+
+    const [message] = await prisma.$transaction([
+      prisma.message.create({
+        data: {
+          topicId,
+          createdById: actorId,
+          kind: 'ROUND_RESULT',
+          contentType: payload.contentType ?? 'TEXT',
+          content: payload.content,
+          targetRefs: [{ messageId: payload.targetMessageId }],
+          relationPayload: {
+            ...(payload.relationPayload ?? {}),
+            settlementType: payload.settlementType ?? (payload.relationPayload?.settlementType as string | undefined) ?? 'TRUTH',
+          },
+        },
+        include: { createdBy: { select: { id: true, username: true } } },
+      }),
+    ]);
+
+    await writeAuditLog({
+      actorId,
+      action: 'MESSAGE_CREATED',
+      entityType: 'Message',
+      entityId: message.id,
+      topicId,
+      summary: '发布结算结果消息',
+      details: {
+        kind: 'ROUND_RESULT',
+        targetMessageId: payload.targetMessageId,
+        settlementType: payload.settlementType ?? (payload.relationPayload?.settlementType as string | undefined) ?? 'TRUTH',
+      },
+    });
+
+    return message;
+  }
+
   // ── TEXT / GOVERNANCE / CODE messages ──
   if (!payload.content) throw new Error(`${kind} 消息内容不能为空`);
   const rule = await prisma.ruleVersion.findFirst({
@@ -787,6 +833,7 @@ async function resolveAnnotationTarget(
 
 async function applyRelationCreated(event: RelationCreatedEvent) {
   const { actorId, topicId, payload } = event;
+  const requestedRelationType = payload.relationType?.toUpperCase();
 
   // Check balance for self-stake (relation-type-specific minimum)
   const rule = await prisma.ruleVersion.findFirst({
@@ -822,7 +869,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
   // ── Transformation: AGREE/DISAGREE on annotations/stances ──
   // When AGREE/DISAGREE targets a RECOMMEND/ARCHIVE/AGREE/DISAGREE relation message,
   // transform to the corresponding type pointing to the original text message.
-  const relType = payload.relationType?.toUpperCase();
+  const relType = requestedRelationType;
   let effectiveRelationType = payload.relationType;
   let effectiveSourceMessageId = payload.sourceMessageId ?? null;
   let effectiveTargetRefs = payload.targetRefs;
@@ -1055,7 +1102,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       log('标注', `${effRelType} msg=${message.id.slice(-6)} target=${textTargetId.slice(-6)} round=${round?.id.slice(-6) ?? 'none'} side=${side} stake=${staked ?? 0}${transformedFrom ? ` from=${transformedFrom}` : ''}${isDedup ? '' : ' NEW'}`);
     }
   } else {
-    // Other relations (including JOIN): PRO on the relation message itself
+    // Other relations (including JOIN): PRO on the relation message itself.
     const round = await ensureVotingRound(message.id, actorId, topicId);
     await autoSelfStake(actorId, topicId, message.id, payload.stakeAmount, 'PRO', round?.id);
   }
@@ -2126,19 +2173,6 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     details: { messageId, roundId: payload.roundId, result, weights, totalPro, totalCon, dust, affectedUsers: affectedUsers.length },
   });
 
-  // ── Phase 6: Create ROUND_RESULT message ──
-  await prisma.message.create({
-    data: {
-      topicId,
-      createdById: actorId,
-      kind: 'ROUND_RESULT',
-      contentType: 'TEXT',
-      content: resultContent,
-      targetRefs: [{ messageId }],
-      relationPayload: { roundId: payload.roundId, result, weights, totalPro, totalCon, settlementType: stype },
-    },
-  });
-
   // ── Governance carryOut: execute proposal action when TRUE ──
   if (result === 'TRUE' && message?.kind === 'GOVERNANCE') {
     const opType = (message.relationPayload as Record<string, unknown> | null)?.operationType as string | undefined;
@@ -2148,6 +2182,8 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   return {
     roundId: payload.roundId,
     messageId,
+    resultContent,
+    settlementType: stype,
     result,
     weights,
     totalPro,

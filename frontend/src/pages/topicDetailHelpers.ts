@@ -140,6 +140,45 @@ function relationTargetRefsSummary(targetRefs: TargetRef[]): string {
   }).join(', ');
 }
 
+export function getAutoClassifyTargetForSettlementMessage(msg: Pick<DemoMessage, 'id' | 'kind'>): TargetRef | null {
+  if (msg.kind === 'round_result') {
+    return { kind: 'message', messageId: msg.id };
+  }
+  return null;
+}
+
+export function getSettlementClassifyJoinTarget(msg: Pick<DemoMessage, 'id' | 'kind'>): TargetRef | null {
+  return getAutoClassifyTargetForSettlementMessage(msg);
+}
+
+export function getRejectedJoinRelationIds(
+  relations: Pick<Relation, 'id' | 'relationType'>[],
+  voteStats: Record<string, { agreeCount: number; disagreeCount: number }> | Map<string, { agreeCount: number; disagreeCount: number }>,
+): string[] {
+  const statsMap = voteStats instanceof Map ? voteStats : new Map(Object.entries(voteStats));
+  return relations
+    .filter(r => {
+      if (r.relationType?.toUpperCase() !== 'JOIN') return false;
+      const stats = statsMap.get(r.id);
+      return !!stats && stats.disagreeCount > stats.agreeCount;
+    })
+    .map(r => r.id);
+}
+
+export function expandTextIdsWithSettlementResults(
+  textIds: Set<string>,
+  messages: Pick<DemoMessage, 'id' | 'kind' | 'settlementTargetId'>[],
+): Set<string> {
+  const expanded = new Set(textIds);
+  for (const msg of messages) {
+    if (msg.kind !== 'round_result') continue;
+    if (msg.settlementTargetId && expanded.has(msg.settlementTargetId)) {
+      expanded.add(msg.id);
+    }
+  }
+  return expanded;
+}
+
 export function buildRelationDemoMessage(relation: Relation): DemoMessage {
   const relType: string = relation.relationType.toLowerCase();
   const label = getRelationLabel(relation.payload);
@@ -230,11 +269,54 @@ export function getRelationTargetIds(targetRefs: TargetRef[]): string[] {
   ));
 }
 
+export function collectContainerVisibleIds(
+  containerId: string,
+  relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'>[],
+  rejectedContainerIds: Set<string> = new Set(),
+  rejectedJoinRelationIds: Set<string> = new Set(),
+): { textIds: Set<string>; relationIds: Set<string> } {
+  const textIds = new Set<string>();
+  const relationIds = new Set<string>();
+  const container = relations.find(r => r.id === containerId);
+  if (!container) return { textIds, relationIds };
+
+  const containerType = container.relationType?.toUpperCase();
+  if (containerType === 'ARRANGE' && container.sourceMessageId) {
+    textIds.add(container.sourceMessageId);
+  }
+
+  for (const ref of container.targetRefs ?? []) {
+    if (ref.kind === 'relation') {
+      relationIds.add(ref.relationId);
+    } else {
+      textIds.add(ref.messageId);
+    }
+  }
+
+  for (const relation of relations) {
+    if (relation.relationType?.toUpperCase() !== 'JOIN') continue;
+    if (relation.sourceMessageId !== containerId) continue;
+    if (rejectedContainerIds.has(relation.id)) continue;
+    if (rejectedContainerIds.has(relation.sourceMessageId)) continue;
+    if (rejectedJoinRelationIds.has(relation.id)) continue;
+    for (const ref of relation.targetRefs ?? []) {
+      if (ref.kind === 'relation') {
+        relationIds.add(ref.relationId);
+      } else {
+        textIds.add(ref.messageId);
+      }
+    }
+  }
+
+  return { textIds, relationIds };
+}
+
 export function collectOwnedByRelation(
   relationId: string,
   relationById: Map<string, Relation>,
   visited = new Set<string>(),
   rejectedContainerIds?: Set<string>,
+  rejectedJoinRelationIds?: Set<string>,
 ): { textIds: Set<string>; relationIds: Set<string> } {
   const textIds = new Set<string>();
   const relationIds = new Set<string>();
@@ -268,10 +350,34 @@ export function collectOwnedByRelation(
         continue;
       }
     }
+    if (rejectedJoinRelationIds && rejectedJoinRelationIds.size > 0 && rejectedJoinRelationIds.has(childRelationId)) {
+      continue;
+    }
 
-    const nested = collectOwnedByRelation(childRelationId, relationById, visited, rejectedContainerIds);
+    const nested = collectOwnedByRelation(childRelationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds);
     nested.textIds.forEach(id => textIds.add(id));
     nested.relationIds.forEach(id => relationIds.add(id));
+  }
+
+  for (const joinRel of relationById.values()) {
+    if (joinRel.id === relationId) continue;
+    if (joinRel.relationType?.toUpperCase() !== 'JOIN') continue;
+    if (joinRel.sourceMessageId !== relationId) continue;
+    if (rejectedContainerIds && rejectedContainerIds.size > 0 && rejectedContainerIds.has(joinRel.id)) continue;
+    if (rejectedJoinRelationIds && rejectedJoinRelationIds.size > 0 && rejectedJoinRelationIds.has(joinRel.id)) continue;
+    for (const targetRef of joinRel.targetRefs ?? []) {
+      if (targetRef.kind === 'message' || targetRef.kind === 'text-fragment') {
+        textIds.add(targetRef.messageId);
+      } else if (targetRef.kind === 'relation') {
+        relationIds.add(targetRef.relationId);
+        const targetRelation = relationById.get(targetRef.relationId);
+        if (targetRelation && (targetRelation.relationType?.toUpperCase() === 'CLASSIFY' || targetRelation.relationType?.toUpperCase() === 'MERGE' || targetRelation.relationType?.toUpperCase() === 'ARRANGE' || targetRelation.relationType?.toUpperCase() === 'SUMMARY')) {
+          const nested = collectOwnedByRelation(targetRef.relationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds);
+          nested.textIds.forEach(id => textIds.add(id));
+          nested.relationIds.forEach(id => relationIds.add(id));
+        }
+      }
+    }
   }
 
   return { textIds, relationIds };
@@ -339,6 +445,7 @@ export function getActiveJoinRelationsForMessage(
   messageId: string,
   relations: Relation[],
   rejectedContainerIds: Set<string>,
+  rejectedJoinRelationIds?: Set<string>,
 ): Relation[] {
   return relations
     .filter(r =>
@@ -346,6 +453,7 @@ export function getActiveJoinRelationsForMessage(
       !!r.sourceMessageId &&
       !rejectedContainerIds.has(r.id) &&
       !rejectedContainerIds.has(r.sourceMessageId) &&
+      !(rejectedJoinRelationIds && rejectedJoinRelationIds.has(r.id)) &&
       (r.targetRefs as TargetRef[]).some(ref =>
         (ref.kind === 'message' || ref.kind === 'text-fragment') &&
         ref.messageId === messageId
@@ -370,8 +478,9 @@ export function resolveMessageCanvas(
   messageId: string,
   relations: Relation[],
   rejectedContainerIds: Set<string>,
+  rejectedJoinRelationIds?: Set<string>,
 ): string | null {
-  const active = getActiveJoinRelationsForMessage(messageId, relations, rejectedContainerIds);
+  const active = getActiveJoinRelationsForMessage(messageId, relations, rejectedContainerIds, rejectedJoinRelationIds);
   if (active.length === 0) return null;
   return active[0].sourceMessageId!;
 }
@@ -384,10 +493,11 @@ export function buildMessageCanvasMap(
   messages: Array<{ id: string; kind: string }>,
   relations: Relation[],
   rejectedContainerIds: Set<string>,
+  rejectedJoinRelationIds?: Set<string>,
 ): Map<string, string | null> {
   const map = new Map<string, string | null>();
   for (const m of messages) {
-    map.set(m.id, resolveMessageCanvas(m.id, relations, rejectedContainerIds));
+    map.set(m.id, resolveMessageCanvas(m.id, relations, rejectedContainerIds, rejectedJoinRelationIds));
   }
   return map;
 }
@@ -402,8 +512,9 @@ export function checkJoinConflict(
   targetContainerId: string,
   relations: Relation[],
   rejectedContainerIds: Set<string>,
+  rejectedJoinRelationIds?: Set<string>,
 ): { ok: boolean; conflictContainerId?: string } {
-  const current = resolveMessageCanvas(messageId, relations, rejectedContainerIds);
+  const current = resolveMessageCanvas(messageId, relations, rejectedContainerIds, rejectedJoinRelationIds);
   if (current === null) return { ok: true };
   if (current === targetContainerId) return { ok: true };
   if (areContainersOnSameChain(current, targetContainerId, relations)) return { ok: true };
@@ -419,8 +530,9 @@ export function checkJoinConflictAfterRemoval(
   containerBeingLeft: string,
   relations: Relation[],
   rejectedContainerIds: Set<string>,
+  rejectedJoinRelationIds?: Set<string>,
 ): { ok: boolean } {
-  const current = resolveMessageCanvas(textMessageId, relations, rejectedContainerIds);
+  const current = resolveMessageCanvas(textMessageId, relations, rejectedContainerIds, rejectedJoinRelationIds);
   if (current === null) return { ok: true };
   // If the message's effective container IS the one being left, it leaves together.
   if (current === containerBeingLeft) return { ok: true };

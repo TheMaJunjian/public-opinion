@@ -385,7 +385,7 @@ export async function getUserMessages(userId: string, params?: { page?: number; 
 }
 
 export async function createMessage(topicId: string, data: {
-  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'OPERATIONS';
+  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'ROUND_RESULT' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
   content?: string;
   stakeAmount?: number;
@@ -634,7 +634,22 @@ export async function closeAndSettle(roundId: string): Promise<SettlementResult>
   round.status = 'SETTLED';
   round.result = result;
   round.closedAt = new Date().toISOString();
-  return { message: '结算完成', roundId, messageId: round.messageId, result, weights, totalPro: weights.TRUE, totalCon: weights.FALSE, affectedUsers: round._count?.votes ?? 0 };
+  const settlementType = round.settlementType ?? 'TRUTH';
+  const settlementLabel = settlementType === 'VALUE' ? '价值仲裁' : '真假仲裁';
+  const resultLabel = result === 'TRUE' ? '赞成胜出' : result === 'FALSE' ? '反对胜出' : '平局';
+  const resultContent = `${settlementLabel}完成：目标消息 ${round.messageId.slice(-8)}；结果：${resultLabel}（${result}）；TRUE 权重 ${weights.TRUE}，FALSE 权重 ${weights.FALSE}`;
+  return {
+    message: '结算完成',
+    roundId,
+    messageId: round.messageId,
+    settlementType,
+    resultContent,
+    result,
+    weights,
+    totalPro: weights.TRUE,
+    totalCon: weights.FALSE,
+    affectedUsers: round._count?.votes ?? 0,
+  };
 }
 
 // ============================================================

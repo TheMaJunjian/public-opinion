@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TargetRef } from '../types';
 import { isContentKind } from '../utils/modelBridge';
+import { collectContainerVisibleIds, collectOwnedByRelation, expandTextIdsWithSettlementResults, getActiveJoinRelationsForMessage, getAutoClassifyTargetForSettlementMessage, getRejectedJoinRelationIds, getSettlementClassifyJoinTarget } from '../pages/topicDetailHelpers';
 
 /**
  * classify-visibility.test.ts
@@ -200,6 +201,33 @@ describe('结算消息（ROUND）独立性', () => {
     expect(visibleIds.has('round-1')).toBe(false);
   });
 
+  it('ROUND_RESULT 在当前分类上下文中应被自动挂载为分类目标', () => {
+    const target = getAutoClassifyTargetForSettlementMessage({ id: 'settle-1', kind: 'round_result' });
+    expect(target).toEqual({ kind: 'message', messageId: 'settle-1' });
+  });
+
+  it('分类通过 JOIN 关系拥有被加入的消息', () => {
+    const relationById = new Map<string, any>([
+      ['classify-1', { id: 'classify-1', relationType: 'CLASSIFY', targetRefs: [] }],
+      ['join-1', { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] }],
+    ]);
+    const owned = collectOwnedByRelation('classify-1', relationById as any);
+    expect(owned.textIds.has('msg-1')).toBe(true);
+  });
+
+  it('结算结果消息会生成用于加入分类的 join 目标', () => {
+    expect(getSettlementClassifyJoinTarget({ id: 'settle-1', kind: 'round_result' } as any)).toEqual({ kind: 'message', messageId: 'settle-1' });
+    expect(getSettlementClassifyJoinTarget({ id: 'round-1', kind: 'round' } as any)).toBeNull();
+  });
+
+  it('结算结果消息会继承目标消息所属分类', () => {
+    const owned = new Set(['msg-1']);
+    const expanded = expandTextIdsWithSettlementResults(owned, [
+      { id: 'settle-1', kind: 'round_result', settlementTargetId: 'msg-1' } as any,
+    ]);
+    expect(expanded.has('settle-1')).toBe(true);
+  });
+
   it('ROUND 可被手动加入分类（在发送画布创建）', () => {
     // 模拟 addTargetToClassifyTopic({ kind: 'message', messageId: 'round-1' })
     const targetRefs: TargetRef[] = [
@@ -245,6 +273,26 @@ describe('消息加入/移出分类', () => {
       { kind: 'message', messageId: 'msg-2' },
     ];
     expect(getTextTargetIds(refs)).toContain('msg-1');
+  });
+
+  it('加入分类的消息会生成可反对的加入记录', () => {
+    const joinIds = getRejectedJoinRelationIds([
+      { id: 'join-1', relationType: 'JOIN' } as any,
+      { id: 'join-2', relationType: 'JOIN' } as any,
+    ], {
+      'join-1': { agreeCount: 0, disagreeCount: 2 },
+      'join-2': { agreeCount: 1, disagreeCount: 0 },
+    });
+    expect(joinIds).toEqual(['join-1']);
+  });
+
+  it('被反对的加入记录不会再把消息挂到分类中', () => {
+    const relations = [
+      { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] } as any,
+    ];
+    const rejectedJoinIds = new Set(['join-1']);
+    const active = getActiveJoinRelationsForMessage('msg-1', relations, new Set(), rejectedJoinIds);
+    expect(active).toEqual([]);
   });
 
   it('移出分类：从 targetRefs 移除 → textIds 不含', () => {
@@ -333,6 +381,20 @@ describe('消息加入/移出分类', () => {
 });
 
 // ========================= 治理消息多目标 =========================
+
+describe('分类视图可见性', () => {
+  it('JOIN 归属的消息应出现在当前分类视图中', () => {
+    const relations = [
+      { id: 'classify-1', relationType: 'CLASSIFY', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+      { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] },
+    ] as any;
+
+    const visible = collectContainerVisibleIds('classify-1', relations, new Set(), new Set());
+
+    expect(visible.textIds.has('msg-1')).toBe(true);
+    expect(visible.textIds.has('msg-2')).toBe(true);
+  });
+});
 
 describe('治理消息（一次发送多个 REFERENCE）', () => {
   it('governance 和多个 REFERENCE 目标都在分类 targetRefs 中', () => {

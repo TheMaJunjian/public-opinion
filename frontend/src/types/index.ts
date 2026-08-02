@@ -467,6 +467,8 @@ export interface SettlementResult {
   message: string;
   roundId: string;
   messageId: string;
+  resultContent?: string;
+  settlementType?: 'TRUTH' | 'VALUE';
   result: 'TRUE' | 'FALSE' | 'UNKNOWN';
   weights: { TRUE: number; FALSE: number; UNKNOWN: number };
   totalPro: number;

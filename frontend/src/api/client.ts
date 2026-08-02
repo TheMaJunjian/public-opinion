@@ -113,7 +113,7 @@ export function getMessages(topicId: string, params?: { page?: number; limit?: n
 }
 
 export function createMessage(topicId: string, data: {
-  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'OPERATIONS';
+  kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'ROUND_RESULT' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
   content?: string;
   stakeAmount?: number;

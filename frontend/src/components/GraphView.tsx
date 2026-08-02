@@ -1741,6 +1741,8 @@ export interface GraphViewProps {
   onSettlementToggleTruth?: (messageId: string) => void;
   /** Phase 3: callback when 💎 value settlement toggle is clicked */
   onSettlementToggleValue?: (messageId: string) => void;
+  /** Topic ID for SettlementPanel message creation */
+  topicId?: string;
   /** Phase 3: currently open settlement message ID (for active state styling) */
   settlementOpenMsgId?: string | null;
   /** Phase 3: currently open settlement type (TRUTH or VALUE) */
@@ -1776,6 +1778,7 @@ export default function GraphView(props: GraphViewProps) {
     stakeCounts,
     onSettlementToggleTruth,
     onSettlementToggleValue,
+    topicId,
     settlementOpenMsgId,
     settlementOpenType,
     onSettlementMessageCreated,
@@ -3519,7 +3522,7 @@ export default function GraphView(props: GraphViewProps) {
           width: 360,
           zIndex: 100,
         }}>
-          <SettlementPanel messageId={settlementOpenMsgId} topicId="" highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
+          <SettlementPanel messageId={settlementOpenMsgId} topicId={topicId ?? ''} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
           <RoundHistory messageId={settlementOpenMsgId} compact />
         </div>
         );

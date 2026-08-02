@@ -33,9 +33,12 @@ import {
   applyTextCorrectionInheritance,
   buildRelationDemoMessage,
   buildRelationPayload,
+  collectContainerVisibleIds,
   collectOwnedByRelation,
   describeUnit,
   expandTextIdsWithCorrections,
+  getRejectedJoinRelationIds,
+  expandTextIdsWithSettlementResults,
   foldUpToWhole,
   generateCorrectionContent,
   getRelationTargetIds,
@@ -346,7 +349,7 @@ export default function TopicDetailPage() {
       const rt = rel.relationType?.toUpperCase();
       if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
       if (rejectedContainerIds.has(rel.id)) continue;
-      const owned = collectOwnedByRelation(rel.id, relById);
+      const owned = collectOwnedByRelation(rel.id, relById, new Set(), undefined, rejectedJoinRelationIds);
       const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
       if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
         tryEnter(rel.id); return;
@@ -440,6 +443,8 @@ export default function TopicDetailPage() {
   // Classify state — independent from the focus system.
   // When non-null, the view is scoped to the CLASSIFY/SUMMARY relation's owned messages.
   const [classifyRelMsgId, setClassifyRelMsgId] = useState<string | null>(null);
+  const isInsideClassify = classifyRelMsgId !== null;
+  const currentClassifyRelMsgId = classifyRelMsgId;
   // Stack-based snapshot store for nested classify enter/exit.
   // Each entry holds the classify id and the snapshot captured before entering it.
   const classifyStackRef = useRef<Array<{ relMsgId: string; snapshot: FocusSnapshot | null }>>([]);
@@ -488,11 +493,27 @@ export default function TopicDetailPage() {
   setMessagesRef.current = setMessages;
   const messagesRef = useRef<DemoMessage[]>([]);
   messagesRef.current = messages;
-  // Phase 6: expose for SettlementPanel direct access
-  useEffect(() => { (window as any).__addSettlementMessage = (m: any) => { setMessagesRef.current((prev: any) => [...prev, {...m, author: m.author || user?.username || ''}]); setTimeout(() => scrollMsgToCenter(m.settlementTargetId ?? m.id), 50); }; return () => { delete (window as any).__addSettlementMessage; }; }, [user]);
 
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+
+  const handleSettlementMessageCreated = useCallback((m: any) => {
+    const normalized = { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' };
+    setMessagesRef.current((prev: any) => {
+      const exists = prev.some((item: DemoMessage) => item.id === normalized.id);
+      return exists ? prev : [...prev, normalized];
+    });
+    if (isInsideClassify && currentClassifyRelMsgId) {
+      void attachMessageToCurrentClassify(normalized.id).catch((error) => {
+        console.warn('结算结果加入当前分类失败', { messageId: normalized.id, error });
+      });
+      setClassifyKey(k => k + 1);
+    }
+    setTimeout(() => scrollMsgToCenter(normalized.settlementTargetId ?? normalized.id), 50);
+  }, [user, isInsideClassify, currentClassifyRelMsgId]);
+
+  // Phase 6: expose for SettlementPanel direct access
+  useEffect(() => { (window as any).__addSettlementMessage = handleSettlementMessageCreated; return () => { delete (window as any).__addSettlementMessage; }; }, [handleSettlementMessageCreated]);
 
   // Scroll to message after data loads and renders (also triggers on focus changes for in-place nav).
   // View-switch decisions (graph→list for hidden messages) are made in the auto-classify
@@ -1013,6 +1034,10 @@ export default function TopicDetailPage() {
     return ids;
   }, [relations, voteStats]);
 
+  const rejectedJoinRelationIds = useMemo(() => {
+    return new Set(getRejectedJoinRelationIds(relations, voteStats));
+  }, [relations, voteStats]);
+
   // Real-time: if the previewed classify becomes active (no longer rejected),
   // exit preview mode so the user gets full interaction capabilities.
   useEffect(() => {
@@ -1053,7 +1078,7 @@ export default function TopicDetailPage() {
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'CLASSIFY') continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), undefined, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
@@ -1068,7 +1093,7 @@ export default function TopicDetailPage() {
     for (const relation of relations) {
       if (relation.relationType !== 'CLASSIFY') continue;
       if (rejectedContainerIds.has(relation.id)) continue;
-      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
@@ -1079,7 +1104,7 @@ export default function TopicDetailPage() {
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'MERGE') continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), undefined, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
@@ -1091,7 +1116,7 @@ export default function TopicDetailPage() {
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'SUMMARY') continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), undefined, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
@@ -1105,7 +1130,7 @@ export default function TopicDetailPage() {
     for (const relation of relations) {
       if (relation.relationType !== 'SUMMARY') continue;
       if (rejectedContainerIds.has(relation.id)) continue;
-      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
@@ -1136,8 +1161,11 @@ export default function TopicDetailPage() {
   // T1 is classified/summarized, the correcting message T2 (and the CORRECT relation
   // message) are automatically treated as part of the same group.
   const activeClassifyOwnershipTextIdsExpanded = useMemo(
-    () => expandTextIdsWithCorrections(activeClassifyOwnership.textIds, edges, msgMap),
-    [activeClassifyOwnership, edges, msgMap]
+    () => {
+      const base = expandTextIdsWithCorrections(activeClassifyOwnership.textIds, edges, msgMap);
+      return expandTextIdsWithSettlementResults(base, messages);
+    },
+    [activeClassifyOwnership, edges, msgMap, messages]
   );
   const activeSummaryOwnershipTextIdsExpanded = useMemo(
     () => expandTextIdsWithCorrections(activeSummaryOwnership.textIds, edges, msgMap),
@@ -1422,6 +1450,16 @@ export default function TopicDetailPage() {
     const topicRelation = relationsRef.current.find(r => r.id === currentClassifyId);
     if (!topicRelation) return;
     const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
+    const exists = existingRefs.some(ref => {
+      if (newTargetRef.kind === 'relation') {
+        return ref.kind === 'relation' && ref.relationId === newTargetRef.relationId;
+      }
+      return (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === newTargetRef.messageId;
+    });
+    if (exists) {
+      onUpdated?.(currentClassifyId);
+      return;
+    }
     const updatedRefs = [...existingRefs, newTargetRef];
 
     // Update targetRefs in-place via PATCH — preserves the relation's ID
@@ -1471,20 +1509,23 @@ export default function TopicDetailPage() {
     const roundId = await appendCreatedRelation(backendRel);
     const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
     if (!isDedup) {
-      // Governance/ops messages are content-kind, not relation-kind.
-      // Add as 'message' target so the sub-canvas finds them in topicTextIds.
       const rt = backendRel.relationType?.toUpperCase();
       const isGovOps = rt === 'PROPOSAL' || rt === 'CODE_CHANGE' || rt === 'OPERATIONS';
-      await addTargetToClassifyTopic(
-        isGovOps
-          ? { kind: 'message', messageId: backendRel.id }
-          : { kind: 'relation', relationId: backendRel.id }
-      );
+      if (isInsideClassify && currentClassifyRelMsgId) {
+        await attachMessageToCurrentClassify(isGovOps ? backendRel.id : backendRel.id);
+      }
     }
     if (roundId) {
-      await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
+      await attachMessageToCurrentClassify(roundId);
     }
     return roundId;
+  }
+
+  async function attachMessageToCurrentClassify(messageId: string) {
+    if (!isInsideClassify || !currentClassifyRelMsgId || !messageId) return;
+    const currentClassifyRel = relationsRef.current.find(r => r.id === currentClassifyRelMsgId);
+    const joinType = (currentClassifyRel?.relationType === 'summary' ? 'SUMMARY' : 'CLASSIFY') as string;
+    await createJoinRelationsForContainer(currentClassifyRelMsgId, joinType, [messageId]);
   }
 
   async function createSettlementRoundForMessage(
@@ -1517,6 +1558,10 @@ export default function TopicDetailPage() {
       settlementTargetId: settleTargetId,
       roundPayload: { settlementType, roundId: (roundMsg as any).relationPayload?.roundId },
     }]);
+    if (isInsideClassify && currentClassifyRelMsgId) {
+      await attachMessageToCurrentClassify(roundMsg.id);
+      setClassifyKey(k => k + 1);
+    }
     scrollMsgToCenter(settleTargetId);
     return roundMsg.id;
   }
@@ -1558,32 +1603,13 @@ export default function TopicDetailPage() {
       if (isInsideClassify) {
         if (currentClassifyRelMsgId) {
           try {
-            // Create a "join" relation: sourceMessageId = container, targetRefs = the new message.
-            const joinType = (currentClassifyRelType === "summary" ? "SUMMARY" : "CLASSIFY") as string;
-            await createJoinRelationsForContainer(currentClassifyRelMsgId, joinType, [msg.id]);
+            // Create a join message on the main canvas that adds the new message
+            // to the current classify. This is the primary ownership action.
+            await attachMessageToCurrentClassify(msg.id);
           } catch (e: any) {
             setSendError(`加入容器记录创建失败: ${e?.message ?? e}`);
             setTimeout(() => setSendError(null), 4000);
           }
-          // Add the message to the container's targetRefs
-          await addTargetToClassifyTopic({ kind: 'message', messageId: msg.id });
-          // Create the classify→message edge for GraphView display.
-          // addTargetToClassifyTopic skips edge creation when isInsideClassify,
-          // so we create it manually here.
-          const edgeRelType = (currentClassifyRelType === "summary" ? "summary" : "classify") as RelationType;
-          const containerAnonSrc = `anon:${currentClassifyRelMsgId}`;
-          setEdges(prev => {
-            const dupKey = `${currentClassifyRelMsgId}::${msg.id}`;
-            if (prev.some(e => `${e.relationMessageId}::${e.to.messageId}` === dupKey)) return prev;
-            return [...prev, {
-              id: nextId("edge"),
-              relationMessageId: currentClassifyRelMsgId,
-              relationType: edgeRelType,
-              from: { messageId: containerAnonSrc, selection: { kind: "whole" as const } },
-              to: { messageId: msg.id, selection: { kind: "whole" as const } },
-              relationLabel: relationTypeName(edgeRelType),
-            }];
-          });
         }
         setClassifyKey(k => k + 1); // force StructureView remount AFTER classify updated
       }
@@ -1610,7 +1636,7 @@ export default function TopicDetailPage() {
             settlementTargetId: msg.id,
             roundPayload: { settlementType: 'TRUTH', roundId: (roundMsg as any).relationPayload?.roundId },
           }]);
-          await addTargetToClassifyTopic({ kind: 'message', messageId: roundMsg.id });
+          await attachMessageToCurrentClassify(roundMsg.id);
           scrollMsgToCenter(msg.id);
         } catch { /* round creation optional */ }
       }
@@ -2223,7 +2249,9 @@ export default function TopicDetailPage() {
           stakeAmount: 1,
         });
         await appendCreatedRelation(joinRel);
-      } catch (e) { debugWarn('join', `FAILED containerId=${containerId.slice(-6)} tgt=${tgtMid.slice(-6)} error=${String(e)}`); }
+      } catch (e) {
+        debugWarn('join', `FAILED containerId=${containerId.slice(-6)} tgt=${tgtMid.slice(-6)} error=${String(e)}`);
+      }
     }
   }
 
@@ -3815,8 +3843,6 @@ export default function TopicDetailPage() {
 
   const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitFocus = focusEntries.length > 0;
-  const isInsideClassify = classifyRelMsgId !== null;
-  const currentClassifyRelMsgId = classifyRelMsgId;
 
   // Track latest classify ID across async supersede calls so sequential
   // addTargetToClassifyTopic calls always target the current classify.
@@ -3926,11 +3952,10 @@ export default function TopicDetailPage() {
     const baseEdges = useFocusWindow ? edgesToShow : edges;
     if (isInsideClassify && currentClassifyRelMsgId) {
       const topicRelation = relationById.get(currentClassifyRelMsgId);
-      const topicTextIds = new Set<string>();
-      const topicRelationIds = new Set<string>();
+      const containerVisible = collectContainerVisibleIds(currentClassifyRelMsgId, relations, rejectedContainerIds, rejectedJoinRelationIds);
+      const topicTextIds = new Set<string>(containerVisible.textIds);
+      const topicRelationIds = new Set<string>(containerVisible.relationIds);
       if (topicRelation) {
-        getTextTargetIds(topicRelation.targetRefs).forEach(id => topicTextIds.add(id));
-        getRelationTargetIds(topicRelation.targetRefs).forEach(id => topicRelationIds.add(id));
         const queue = Array.from(topicRelationIds);
         const visited = new Set<string>();
         while (queue.length > 0) {
@@ -4831,12 +4856,10 @@ export default function TopicDetailPage() {
                   stakeCounts={stakeCounts}
                   onSettlementToggleTruth={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'TRUTH') { closeSettlement(); } else { openSettlement(msgId, 'TRUTH'); } }}
                   onSettlementToggleValue={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'VALUE') { closeSettlement(); } else { openSettlement(msgId, 'VALUE'); } }}
+                  topicId={topicId ?? undefined}
                   settlementOpenMsgId={settlementOpenMsgId}
                   settlementOpenType={settlementOpenType}
-                  onSettlementMessageCreated={(m: any) => {
-                    setMessages(prev => [...prev, { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' }]);
-                    setTimeout(() => scrollMsgToCenter(m.settlementTargetId ?? m.id), 50);
-                  }}
+                  onSettlementMessageCreated={handleSettlementMessageCreated}
                   stanceHighlight={stanceHighlight}
                   settlementEntryHighlight={settlementEntryHighlight}
                   crossClassifyRefs={crossClassifyRefs}

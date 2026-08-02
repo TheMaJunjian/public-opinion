@@ -240,6 +240,17 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
+  it('allows JOIN with sourceMessageId and applies normal staking rules', async () => {
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 100, debtFrozen: false });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 100, locked: 0 });
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({ parameters: { relationTypeMinStake: { JOIN: 3 }, selfStakeOnCreate: 1 } });
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(201);
+  });
+
   it('allows CLASSIFY with relation message targets', async () => {
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
     const res = await request(app)

@@ -59,3 +59,10 @@ cd backend && npm test          # 8 套件 / 139 测试
 | governance | 治理提案 | 黄色卡片 |
 | code | 代码变更 | 青色卡片 |
 | operations | 运营公告 | 青色卡片 |
+
+## 6. 消息创建触发原则
+
+- 所有消息统一由前端用户动作显式触发（点击发送/结算等按钮）
+- 允许一次前端动作按顺序创建多条消息（例如：先结算，再创建结算结果消息）
+- 后端不主动“隐式补发”消息；后端负责校验、记账和状态变更
+- 消息类型不影响触发原则：`normal/relation/round/round_result/governance/code/operations` 均遵循同一规则

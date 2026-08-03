@@ -1285,6 +1285,9 @@ export default function TopicDetailPage() {
   const MAX_LEFT_FLEX = TOTAL_FLEX - MIN_LEFT_FLEX;
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
+  const MIN_RIGHT_PX = 280;
+  const [containerMinWidth, setContainerMinWidth] = useState(1024);
+  const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
   // Ref to track the ID of a newly sent message that should be scrolled into view.
@@ -4455,6 +4458,7 @@ export default function TopicDetailPage() {
 
   function handleSplitterMouseDown(e: React.MouseEvent) {
     e.preventDefault();
+    setSplitterActive(true);
     splitterDragRef.current = { startX: e.clientX, startFlex: leftFlex };
     function onMouseMove(ev: MouseEvent) {
       if (!splitterDragRef.current || !panelContainerRef.current) return;
@@ -4462,9 +4466,19 @@ export default function TopicDetailPage() {
       const containerW = panelContainerRef.current.clientWidth;
       const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
       const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
+      // Auto-grow container width when right panel would be too narrow
+      const rightFlex = TOTAL_FLEX - newLeft;
+      if (rightFlex > 0) {
+        const rightPx = containerW * rightFlex / TOTAL_FLEX - 6;
+        if (rightPx < MIN_RIGHT_PX) {
+          const neededW = Math.ceil((MIN_RIGHT_PX + 6) * TOTAL_FLEX / rightFlex);
+          setContainerMinWidth(prev => Math.max(prev, neededW));
+        }
+      }
       setLeftFlex(newLeft);
     }
     function onMouseUp() {
+      setSplitterActive(false);
       splitterDragRef.current = null;
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
@@ -4475,6 +4489,7 @@ export default function TopicDetailPage() {
 
   function handleSplitterTouchStart(e: React.TouchEvent) {
     e.preventDefault();
+    setSplitterActive(true);
     const touch = e.touches[0];
     if (!touch) return;
     splitterDragRef.current = { startX: touch.clientX, startFlex: leftFlex };
@@ -4486,9 +4501,19 @@ export default function TopicDetailPage() {
       const containerW = panelContainerRef.current.clientWidth;
       const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
       const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
+      // Auto-grow container width when right panel would be too narrow
+      const rightFlex = TOTAL_FLEX - newLeft;
+      if (rightFlex > 0) {
+        const rightPx = containerW * rightFlex / TOTAL_FLEX - 6;
+        if (rightPx < MIN_RIGHT_PX) {
+          const neededW = Math.ceil((MIN_RIGHT_PX + 6) * TOTAL_FLEX / rightFlex);
+          setContainerMinWidth(prev => Math.max(prev, neededW));
+        }
+      }
       setLeftFlex(newLeft);
     }
     function onTouchEnd() {
+      setSplitterActive(false);
       splitterDragRef.current = null;
       document.removeEventListener('touchmove', onTouchMove);
       document.removeEventListener('touchend', onTouchEnd);
@@ -4638,7 +4663,7 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 600px", minHeight: 0 }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 600px", minHeight: 0, minWidth: containerMinWidth }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -4939,14 +4964,32 @@ export default function TopicDetailPage() {
           </div>
         </div>
 
-        {/* Draggable splitter */}
+        {/* Draggable splitter — 12px wide with visible grip handle */}
         <div
           onMouseDown={handleSplitterMouseDown}
           onTouchStart={handleSplitterTouchStart}
-          style={{ width: 6, flexShrink: 0, background: "#2a2a2a", cursor: "col-resize", borderLeft: "1px solid #383838", borderRight: "1px solid #383838", transition: "background 0.15s", touchAction: "none" }}
-          onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#3a3a3a"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
-        />
+          style={{
+            width: 12, flexShrink: 0,
+            background: splitterActive ? "#0b84ff" : "#2a2a2a",
+            cursor: "col-resize",
+            transition: "background 0.15s",
+            touchAction: "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            userSelect: "none",
+          }}
+          onMouseEnter={e => { if (!splitterActive) (e.currentTarget as HTMLDivElement).style.background = "#4a4a4a"; }}
+          onMouseLeave={e => { if (!splitterActive) (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
+        >
+          {/* Grip dots indicator */}
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 3, alignItems: "center",
+            opacity: splitterActive ? 1 : 0.5, transition: "opacity 0.15s",
+          }}>
+            <div style={{ width: 3, height: 3, borderRadius: "50%", background: splitterActive ? "#fff" : "#888" }} />
+            <div style={{ width: 3, height: 3, borderRadius: "50%", background: splitterActive ? "#fff" : "#888" }} />
+            <div style={{ width: 3, height: 3, borderRadius: "50%", background: splitterActive ? "#fff" : "#888" }} />
+          </div>
+        </div>
 
 
         {isPreloaded ? (

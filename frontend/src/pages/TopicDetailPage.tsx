@@ -1284,6 +1284,7 @@ export default function TopicDetailPage() {
   const MIN_LEFT_FLEX = 0.6;
   const MAX_LEFT_FLEX = TOTAL_FLEX - MIN_LEFT_FLEX;
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
+  const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
   // Ref to track the ID of a newly sent message that should be scrolled into view.
@@ -4568,8 +4569,19 @@ export default function TopicDetailPage() {
     <>
     <ErrorBoundary>
     <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
-      <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ padding: headerCollapsed ? "4px 16px" : "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            onClick={() => setHeaderCollapsed(c => !c)}
+            title={headerCollapsed ? "展开工具栏" : "折叠工具栏"}
+            style={{ padding: "2px 6px", borderRadius: 4, border: "1px solid #555", background: "#2a2a2a", color: "#999", fontSize: 12, cursor: "pointer", lineHeight: 1 }}
+          >
+            {headerCollapsed ? "▼" : "▲"}
+          </button>
+          {headerCollapsed ? (
+            <span style={{ fontSize: 12, color: "#888" }}>{topic?.title ?? '公论'}</span>
+          ) : (
+            <>
           {isPreloaded ? (
             <button onClick={() => navigate('/')} style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>
               退出阅览
@@ -4579,8 +4591,10 @@ export default function TopicDetailPage() {
               {topic?.status === 'ARCHIVED' ? '重新开放' : '归档'}
             </button>
           </>)}
+            </>
+          )}
         </div>
-        {!isPreloaded && (
+        {!headerCollapsed && !isPreloaded && (
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (

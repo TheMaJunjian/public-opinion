@@ -21,9 +21,9 @@ export default function App() {
   return (
     <AuthProvider>
       <Router>
-        <div className="h-screen overflow-hidden flex flex-col bg-gray-50">
+        <div className="min-h-screen flex flex-col bg-gray-50">
           <Navbar onOpenViewer={() => setViewerOpen(true)} />
-          <main className="flex-1 min-h-0 overflow-auto">
+          <main className="flex-1">
             <Suspense fallback={routeFallback}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />

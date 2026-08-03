@@ -4500,11 +4500,11 @@ export default function TopicDetailPage() {
   // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
 
   if (loading) {
-    return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
+    return <div style={{ padding: 16, background: "#101010", color: "#eee", minHeight: "100vh" }}>加载中…</div>;
   }
   if (loadError) {
     return (
-      <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>
+      <div style={{ padding: 16, background: "#101010", color: "#eee", minHeight: "100vh" }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
         <pre style={{ whiteSpace: "pre-wrap", color: "#ff8080" }}>{loadError}</pre>
       </div>
@@ -4568,7 +4568,7 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ minHeight: "100vh", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: headerCollapsed ? "4px 16px" : "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button
@@ -4638,8 +4638,8 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 600px", minHeight: 0 }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
@@ -4728,7 +4728,7 @@ export default function TopicDetailPage() {
 
           <div ref={leftPanelRef}
             className={isPreviewMode ? "preview-mode" : ""}
-            style={{ flex: "1 1 auto", overflowX: "hidden", overflowY: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0 }}
+            style={{ flex: "1 1 auto", padding: 8, minHeight: 0 }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

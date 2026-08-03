@@ -4639,7 +4639,7 @@ export default function TopicDetailPage() {
       </div>
 
       <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 600px", minHeight: 0 }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, paddingBottom: 8 }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
@@ -4728,7 +4728,7 @@ export default function TopicDetailPage() {
 
           <div ref={leftPanelRef}
             className={isPreviewMode ? "preview-mode" : ""}
-            style={{ flex: "1 1 auto", padding: 8, minHeight: 0 }}
+            style={{ flex: "1 1 auto", overflowX: "hidden", overflowY: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0 }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

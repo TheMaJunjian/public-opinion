@@ -501,9 +501,11 @@ export function applyReplyLayoutAdjustments(params: {
  * Apply AGREE/DISAGREE column override.
  *
  * Rules:
- *   - AGREE source → same column as target (visually aligned, "I agree")
+ *   - AGREE source → target col - 1 (support source stays on target's left)
  *   - DISAGREE source → target col + 1 (visually contrasted, "I oppose")
- *   - Annotation/reference constraints are respected (source cannot be left of its anno/ref targets)
+ *   - If AGREE target is too far left to host a left-side source, shift target right
+ *     and cascade that shift to right-constrained dependents (anno/ref/notify/reply)
+ *   - Right-side constraints are respected (source cannot be left of its right-constrained targets)
  *   - Pure-stance (anon: source) and relation-message targets are skipped
  */
 export function applyAgreeDisagreeColumnOverride(params: {
@@ -517,23 +519,87 @@ export function applyAgreeDisagreeColumnOverride(params: {
   let maxCol = params.maxCol;
   const normalSet = new Set(normals.map(m => m.id));
 
-  // Pre-compute anno/ref minimum column for each message
-  const annoRefMinCol: Record<string, number> = {};
+  // Pre-compute right-side minimum column for each message.
+  // For x -> y in anno/ref/notify/reply, x must be >= y + 1.
+  const rightMinCol: Record<string, number> = {};
+  const rightSourcesByTarget = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.relationType !== 'annotation' && e.relationType !== 'reference') continue;
+    if (
+      e.relationType !== 'annotation' &&
+      e.relationType !== 'reference' &&
+      e.relationType !== 'notify' &&
+      e.relationType !== 'reply'
+    ) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const need = (col[e.to.messageId] ?? 0) + 1;
-    annoRefMinCol[e.from.messageId] = Math.max(annoRefMinCol[e.from.messageId] ?? 0, need);
+    rightMinCol[e.from.messageId] = Math.max(rightMinCol[e.from.messageId] ?? 0, need);
+    const arr = rightSourcesByTarget.get(e.to.messageId) ?? [];
+    arr.push(e.from.messageId);
+    rightSourcesByTarget.set(e.to.messageId, arr);
   }
+
+  // If a target moves right, all right-constrained sources that point to it
+  // must stay on its right; propagate transitively.
+  const propagateRightDependents = (startTargetIds: string[]) => {
+    const queue = [...startTargetIds];
+    const queued = new Set(queue);
+    let qi = 0;
+    while (qi < queue.length) {
+      const targetId = queue[qi++];
+      const targetCol = col[targetId] ?? 0;
+      const sources = rightSourcesByTarget.get(targetId) ?? [];
+      for (const fromId of sources) {
+        const need = targetCol + 1;
+        if ((col[fromId] ?? 0) < need) {
+          col[fromId] = need;
+          maxCol = Math.max(maxCol, need);
+          if (!queued.has(fromId)) {
+            queued.add(fromId);
+            queue.push(fromId);
+          }
+        }
+      }
+    }
+  };
 
   const stanceEdges = edges.filter(e => e.relationType === 'agree' || e.relationType === 'disagree');
   for (const e of stanceEdges) {
     const fromId = e.from.messageId, toId = e.to.messageId;
     if (!normalSet.has(fromId) || !normalSet.has(toId)) continue;
+
+    if (e.relationType === 'agree') {
+      // AGREE source must stay exactly one column left of target.
+      // If target is too far left (or source has right-min constraints),
+      // move target right first and cascade dependent right-side constraints.
+      const minFrom = rightMinCol[fromId] ?? 0;
+      const requiredTargetCol = minFrom + 1;
+      const currentTargetCol = col[toId] ?? 0;
+      if (currentTargetCol < requiredTargetCol) {
+        col[toId] = requiredTargetCol;
+        maxCol = Math.max(maxCol, requiredTargetCol);
+        propagateRightDependents([toId]);
+      }
+
+      const finalTargetCol = col[toId] ?? 0;
+      const newFromCol = Math.max(0, finalTargetCol - 1);
+      const prevFromCol = col[fromId] ?? 0;
+      col[fromId] = newFromCol;
+      if (newFromCol > prevFromCol) {
+        maxCol = Math.max(maxCol, newFromCol);
+        propagateRightDependents([fromId]);
+      }
+      continue;
+    }
+
+    // DISAGREE source stays one column right of target.
     const tgtCol = col[toId] ?? 0;
-    const desired = e.relationType === 'agree' ? tgtCol : tgtCol + 1;
-    col[fromId] = Math.max(desired, annoRefMinCol[fromId] ?? 0);
+    const desired = tgtCol + 1;
+    const prevFromCol = col[fromId] ?? 0;
+    col[fromId] = Math.max(desired, rightMinCol[fromId] ?? 0);
     maxCol = Math.max(maxCol, col[fromId]);
+    if (col[fromId] > prevFromCol) {
+      propagateRightDependents([fromId]);
+    }
   }
 
   return { col, maxCol };

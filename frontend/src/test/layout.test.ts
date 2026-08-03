@@ -367,7 +367,7 @@ describe('applyReplyLayoutAdjustments', () => {
 // ============================================================
 
 describe('applyAgreeDisagreeColumnOverride', () => {
-  it('places AGREE source in the same column as target', () => {
+  it('places AGREE source one column to the left of target', () => {
     const normals = [makeNormal('a'), makeNormal('b')];
     const baseCol = { a: 2, b: 0 };
     const edges: DemoEdge[] = [
@@ -376,8 +376,8 @@ describe('applyAgreeDisagreeColumnOverride', () => {
     const result = applyAgreeDisagreeColumnOverride({
       normals, edges, col: baseCol, maxCol: 2,
     });
-    // b agrees with a → same column as a (2)
-    expect(result.col['b']).toBe(2);
+    // b agrees with a → one column left of a (1)
+    expect(result.col['b']).toBe(1);
   });
 
   it('places DISAGREE source one column to the right of target', () => {
@@ -393,9 +393,9 @@ describe('applyAgreeDisagreeColumnOverride', () => {
     expect(result.col['b']).toBe(3);
   });
 
-  it('respects annotation/reference minimum column constraints', () => {
+  it('keeps AGREE source on the left while respecting right-side minimum constraints', () => {
     // a←c (annotation), c should be right of a
-    // c agrees with b → normally same column as b, but anno constraint forces right of a
+    // c agrees with b → should be one column left of b while still >= a.col + 1
     const normals = [makeNormal('a'), makeNormal('b'), makeNormal('c')];
     const baseCol = { a: 0, b: 3, c: 1 };
     const edges: DemoEdge[] = [
@@ -405,9 +405,26 @@ describe('applyAgreeDisagreeColumnOverride', () => {
     const result = applyAgreeDisagreeColumnOverride({
       normals, edges, col: baseCol, maxCol: 3,
     });
-    // c agrees with b → wants col 3, but must be ≥ a.col + 1 = 1 due to annotation
-    // Since 3 ≥ 1, it stays at 3
-    expect(result.col['c']).toBe(3);
+    // c agrees with b → col 2 (left of b=3), and still satisfies c >= a+1 (>=1)
+    expect(result.col['c']).toBe(2);
+  });
+
+  it('shifts AGREE target right when target is leftmost and cascades right-side dependents', () => {
+    const normals = [makeNormal('target'), makeNormal('support'), makeNormal('rightDep')];
+    const baseCol = { target: 0, support: 0, rightDep: 1 };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'agree', 'rel-1', 'support', 'target'),
+      makeEdge('e2', 'reference', 'rel-2', 'rightDep', 'target'),
+    ];
+    const result = applyAgreeDisagreeColumnOverride({
+      normals, edges, col: baseCol, maxCol: 1,
+    });
+
+    // target shifts from col 0 -> 1 so support can stay on its left at col 0
+    expect(result.col['target']).toBe(1);
+    expect(result.col['support']).toBe(0);
+    // right-side dependent remains to the right of target (>= target + 1)
+    expect(result.col['rightDep']).toBe(2);
   });
 
   it('skips pure-stance (anon: source) edges', () => {
@@ -666,8 +683,8 @@ describe('Pipeline integration', () => {
     const s3 = applyAgreeDisagreeColumnOverride({
       normals, edges, col: s2.col, maxCol: s2.maxCol,
     });
-    // msg-c agrees with msg-a → same column
-    expect(s3.col['msg-c']).toBe(s3.col['msg-a']);
+    // msg-c agrees with msg-a → one column在左侧
+    expect(s3.col['msg-c']).toBe(Math.max(0, s3.col['msg-a'] - 1));
 
     // Stage 1-④
     const s4 = applyGroupingColumnOverride({
@@ -974,7 +991,7 @@ describe('End-to-end: column pipeline → layout', () => {
   });
 
   it('produces zero-overlap layout from agree column constraints', () => {
-    // b agrees with a → same column
+    // b agrees with a → one column在左侧
     const normals = [
       makeNormal('a', 'alice', '2024-01-01T00:00:00Z'),
       makeNormal('b', 'bob',   '2024-01-01T00:01:00Z'),
@@ -985,11 +1002,9 @@ describe('End-to-end: column pipeline → layout', () => {
     const col = { a: 3, b: 0 };
     const s3 = applyAgreeDisagreeColumnOverride({ normals, edges, col, maxCol: 3 });
     const result = computeSimpleNoOverlapLayout({ normals, colOf: s3.col, maxCol: s3.maxCol });
-    // Both in same column → stacked vertically, no overlap
+    // 不同列，依旧不重叠
     expect(findOverlaps(result.layout)).toHaveLength(0);
-    expect(result.layout['a'].x).toBe(result.layout['b'].x);
-    // b (agrees with a, but created later) should be below a
-    expect(result.layout['b'].y).toBeGreaterThan(result.layout['a'].y);
+    expect(result.layout['b'].x).toBeLessThan(result.layout['a'].x);
   });
 
   it('produces zero-overlap layout from disagree column constraints', () => {
@@ -1012,7 +1027,7 @@ describe('End-to-end: column pipeline → layout', () => {
   it('handles complex multi-relation scenario without overlaps', () => {
     // a, b, c, d in a mixed scenario:
     //   b annotates a → b right of a
-    //   c agrees with a → c same column as a
+    //   c agrees with a → c 在 a 左侧
     //   d disagrees with a → d right of a
     const normals = [
       makeNormal('a', 'alice', '2024-01-01T00:00:00Z'),
@@ -1039,11 +1054,9 @@ describe('End-to-end: column pipeline → layout', () => {
     const overlaps = findOverlaps(result.layout);
     expect(overlaps).toHaveLength(0);
 
-    // a in col 0, b in col ≥ 1 (right of a), c in col 0 (same as a), d in col ≥ 2 (disagree right of a)
+    // a in col 0, b in col ≥ 1 (right of a), c 在 a 左侧, d in col ≥ 2 (disagree right of a)
     expect(result.layout['b'].x).toBeGreaterThan(result.layout['a'].x);
-    expect(result.layout['c'].x).toBe(result.layout['a'].x); // same col
-    // c below a (same column, later time)
-    expect(result.layout['c'].y).toBeGreaterThan(result.layout['a'].y);
+    expect(result.layout['c'].x).toBeLessThan(result.layout['a'].x);
   });
 });
 

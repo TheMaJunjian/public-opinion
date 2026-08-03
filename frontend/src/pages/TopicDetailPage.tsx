@@ -4753,7 +4753,7 @@ export default function TopicDetailPage() {
 
           <div ref={leftPanelRef}
             className={isPreviewMode ? "preview-mode" : ""}
-            style={{ flex: "1 1 auto", overflowX: "hidden", overflowY: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0 }}
+            style={{ flex: "1 1 auto", overflow: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0 }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

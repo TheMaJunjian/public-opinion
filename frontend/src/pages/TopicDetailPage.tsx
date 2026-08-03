@@ -4469,9 +4469,9 @@ export default function TopicDetailPage() {
       // Auto-grow container width when right panel would be too narrow
       const rightFlex = TOTAL_FLEX - newLeft;
       if (rightFlex > 0) {
-        const rightPx = containerW * rightFlex / TOTAL_FLEX - 6;
+        const rightPx = (containerW - 12) * rightFlex / TOTAL_FLEX;
         if (rightPx < MIN_RIGHT_PX) {
-          const neededW = Math.ceil((MIN_RIGHT_PX + 6) * TOTAL_FLEX / rightFlex);
+          const neededW = Math.ceil((MIN_RIGHT_PX) * TOTAL_FLEX / rightFlex + 12);
           setContainerMinWidth(prev => Math.max(prev, neededW));
         }
       }
@@ -4504,9 +4504,9 @@ export default function TopicDetailPage() {
       // Auto-grow container width when right panel would be too narrow
       const rightFlex = TOTAL_FLEX - newLeft;
       if (rightFlex > 0) {
-        const rightPx = containerW * rightFlex / TOTAL_FLEX - 6;
+        const rightPx = (containerW - 12) * rightFlex / TOTAL_FLEX;
         if (rightPx < MIN_RIGHT_PX) {
-          const neededW = Math.ceil((MIN_RIGHT_PX + 6) * TOTAL_FLEX / rightFlex);
+          const neededW = Math.ceil((MIN_RIGHT_PX) * TOTAL_FLEX / rightFlex + 12);
           setContainerMinWidth(prev => Math.max(prev, neededW));
         }
       }

@@ -4472,6 +4472,30 @@ export default function TopicDetailPage() {
     document.addEventListener('mouseup', onMouseUp);
   }
 
+  function handleSplitterTouchStart(e: React.TouchEvent) {
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    splitterDragRef.current = { startX: touch.clientX, startFlex: leftFlex };
+    function onTouchMove(ev: TouchEvent) {
+      if (!splitterDragRef.current || !panelContainerRef.current) return;
+      const t = ev.touches[0];
+      if (!t) return;
+      const dx = t.clientX - splitterDragRef.current.startX;
+      const containerW = panelContainerRef.current.clientWidth;
+      const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
+      const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
+      setLeftFlex(newLeft);
+    }
+    function onTouchEnd() {
+      splitterDragRef.current = null;
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', onTouchEnd);
+    }
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd);
+  }
+
   // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
 
   if (loading) {
@@ -4690,7 +4714,7 @@ export default function TopicDetailPage() {
 
           <div ref={leftPanelRef}
             className={isPreviewMode ? "preview-mode" : ""}
-            style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}
+            style={{ flex: "1 1 auto", overflowX: "hidden", overflowY: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0 }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay
@@ -4904,7 +4928,8 @@ export default function TopicDetailPage() {
         {/* Draggable splitter */}
         <div
           onMouseDown={handleSplitterMouseDown}
-          style={{ width: 6, flexShrink: 0, background: "#2a2a2a", cursor: "col-resize", borderLeft: "1px solid #383838", borderRight: "1px solid #383838", transition: "background 0.15s" }}
+          onTouchStart={handleSplitterTouchStart}
+          style={{ width: 6, flexShrink: 0, background: "#2a2a2a", cursor: "col-resize", borderLeft: "1px solid #383838", borderRight: "1px solid #383838", transition: "background 0.15s", touchAction: "none" }}
           onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#3a3a3a"; }}
           onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
         />

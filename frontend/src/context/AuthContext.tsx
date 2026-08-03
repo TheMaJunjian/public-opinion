@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import type { User } from '../types';
 import { api } from '../api';
 import { getPrivateKeyForCurrentUser } from '../api/client';
+import { signPayloadWithPrivateJwk } from '../utils/signature';
 
 interface AuthContextValue {
   user: User | null;
@@ -61,13 +62,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const rawKey = getPrivateKeyForCurrentUser();
       if (!rawKey) return null;
-      const keyData = JSON.parse(rawKey);
-      const privateKey = await crypto.subtle.importKey(
-        'jwk', keyData, { name: 'Ed25519' }, false, ['sign'],
-      );
-      const encoded = new TextEncoder().encode(payload);
-      const sig = await crypto.subtle.sign('Ed25519', privateKey, encoded);
-      return btoa(String.fromCharCode(...new Uint8Array(sig)));
+      const keyData = JSON.parse(rawKey) as JsonWebKey;
+      return await signPayloadWithPrivateJwk(payload, keyData);
     } catch {
       return null;
     }

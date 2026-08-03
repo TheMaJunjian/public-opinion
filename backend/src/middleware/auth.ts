@@ -1,6 +1,38 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
+type JwkLike = {
+  kty?: string;
+  crv?: string;
+};
+
+type SignatureAlgorithm = {
+  name: string;
+  namedCurve?: string;
+  hash?: string;
+};
+
+function getSignatureVerifyParams(keyData: JwkLike): {
+  importAlgorithm: SignatureAlgorithm;
+  verifyAlgorithm: SignatureAlgorithm;
+} {
+  if (keyData.kty === 'OKP' && keyData.crv === 'Ed25519') {
+    return {
+      importAlgorithm: { name: 'Ed25519' },
+      verifyAlgorithm: { name: 'Ed25519' },
+    };
+  }
+
+  if (keyData.kty === 'EC' && keyData.crv === 'P-256') {
+    return {
+      importAlgorithm: { name: 'ECDSA', namedCurve: 'P-256' },
+      verifyAlgorithm: { name: 'ECDSA', hash: 'SHA-256' },
+    };
+  }
+
+  throw new Error('Unsupported signature key type');
+}
+
 export interface AuthRequest extends Request {
   user?: {
     id: string;
@@ -60,10 +92,11 @@ export async function verifySignature(req: AuthRequest, res: Response, next: Nex
   try {
     const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     const signatureBuf = Buffer.from(signatureBase64, 'base64');
-    const keyData = JSON.parse(publicKey);
-    const pubKey = await crypto.subtle.importKey('jwk', keyData, { name: 'Ed25519' }, false, ['verify']);
+    const keyData = JSON.parse(publicKey) as JwkLike;
+    const params = getSignatureVerifyParams(keyData);
+    const pubKey = await crypto.subtle.importKey('jwk', keyData, params.importAlgorithm as any, false, ['verify']);
     const isValid = await crypto.subtle.verify(
-      { name: 'Ed25519' }, pubKey, signatureBuf, new TextEncoder().encode(rawBody),
+      params.verifyAlgorithm as any, pubKey, signatureBuf, new TextEncoder().encode(rawBody),
     );
     if (!isValid) {
       res.status(401).json({ error: '签名验证失败' });

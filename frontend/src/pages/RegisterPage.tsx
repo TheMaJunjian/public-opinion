@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { storePrivateKeyForUser } from '../api/client';
+import { generateSigningKeyPair } from '../utils/signature';
 
 export default function RegisterPage() {
   const { register } = useAuth();
@@ -21,8 +22,7 @@ export default function RegisterPage() {
     setError('');
     setLoading(true);
     try {
-      // Generate Ed25519 keypair for message signing
-      const keyPair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+      const keyPair = await generateSigningKeyPair();
       const jwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
       storePrivateKeyForUser(normalizedUsername, jwk);
       const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);

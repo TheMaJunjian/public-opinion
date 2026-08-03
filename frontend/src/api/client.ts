@@ -1,3 +1,5 @@
+import { signPayloadWithPrivateJwk } from '../utils/signature';
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
 const PRIVATE_KEY_PREFIX = 'privateKey:';
 
@@ -46,14 +48,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     try {
       const rawKey = getPrivateKeyForCurrentUser();
       if (rawKey) {
-        const keyData = JSON.parse(rawKey);
-        const privateKey = await crypto.subtle.importKey('jwk', keyData, { name: 'Ed25519' }, false, ['sign']);
+        const keyData = JSON.parse(rawKey) as JsonWebKey;
         // express.json() exposes an empty POST body as {}, so sign the same
         // canonical representation that verifySignature() reconstructs.
         const rawBody = typeof options.body === 'string' ? options.body : '{}';
-        const encoded = new TextEncoder().encode(rawBody);
-        const sig = await crypto.subtle.sign('Ed25519', privateKey, encoded);
-        headers['X-Signature'] = btoa(String.fromCharCode(...new Uint8Array(sig)));
+        headers['X-Signature'] = await signPayloadWithPrivateJwk(rawBody, keyData);
       }
     } catch { /* signing best-effort */ }
   }

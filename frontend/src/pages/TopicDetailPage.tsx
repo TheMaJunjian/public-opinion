@@ -1306,16 +1306,46 @@ export default function TopicDetailPage() {
   // Polls via requestAnimationFrame until the card appears in the DOM.
   // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
   const MAX_SCROLL_ATTEMPTS = 60;
+
+  function resolveScrollTargetMessageId(msgId: string): string {
+    const msg = messagesRef.current.find(m => m.id === msgId);
+    // Settlement messages should navigate to their settlement target message.
+    if (msg && (msg.kind === 'round' || msg.kind === 'round_result')) {
+      return msg.settlementTargetId ?? msgId;
+    }
+    // Join messages should navigate to the joined target message.
+    if (msg?.joinInfo?.targetIds?.length) {
+      return msg.joinInfo.targetIds[0] ?? msgId;
+    }
+
+    // Fallback for JOIN relation messages that may not yet carry joinInfo in DemoMessage.
+    const rel = relationsRef.current.find(r => r.id === msgId);
+    if (rel?.relationType?.toUpperCase() === 'JOIN') {
+      const firstTarget = (rel.targetRefs ?? []).find(ref =>
+        (ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation') &&
+        (('messageId' in ref && !!ref.messageId) || ('relationId' in ref && !!ref.relationId))
+      );
+      if (firstTarget) {
+        return firstTarget.kind === 'relation'
+          ? (firstTarget.relationId ?? msgId)
+          : ((firstTarget as { messageId?: string }).messageId ?? msgId);
+      }
+    }
+
+    return msgId;
+  }
+
   function scrollMsgToCenter(msgId: string) {
-    pendingScrollMsgIdRef.current = msgId;
+    const targetId = resolveScrollTargetMessageId(msgId);
+    pendingScrollMsgIdRef.current = targetId;
     let attempts = 0;
     const tryScroll = () => {
       attempts++;
       if (attempts > MAX_SCROLL_ATTEMPTS) { pendingScrollMsgIdRef.current = null; return; }
-      if (pendingScrollMsgIdRef.current !== msgId) return; // superseded by newer message
+      if (pendingScrollMsgIdRef.current !== targetId) return; // superseded by newer message
       const container = leftPanelRef.current;
       if (!container) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
-      const el = container.querySelector(`[data-msgid="${msgId}"]`) as HTMLElement | null;
+      const el = container.querySelector(`[data-msgid="${targetId}"]`) as HTMLElement | null;
       if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       pendingScrollMsgIdRef.current = null;
       const elRect = el.getBoundingClientRect();

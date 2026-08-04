@@ -233,6 +233,10 @@ export async function getUserStances(userId: string, params?: { page?: number; l
       : null;
     const targetMsg = targetMsgId ? messages.find(m => m.id === targetMsgId) : null;
     const topic = topics.find(t => t.id === r.topicId);
+    // Look up actual stake amount from transaction log
+    const txAmount = mockTransactions
+      .filter(t => (t.data as any)?.relationId === r.id)
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
     return {
       kind: 'relation' as const,
       id: r.id,
@@ -240,7 +244,7 @@ export async function getUserStances(userId: string, params?: { page?: number; l
       topicId: r.topicId,
       topicTitle: topic?.title ?? r.topicId,
       type: r.relationType,
-      amount: 10,
+      amount: txAmount || 10,
       targetMessageId: targetMsgId,
       messageKind: targetMsg?.kind ?? 'TEXT',
       targetRelationType: null,
@@ -254,6 +258,10 @@ export async function getUserStances(userId: string, params?: { page?: number; l
     : messages.filter(m => m.createdBy.id === userId);
   const stanceStakes: StanceStake[] = userMsgs.map(m => {
     const topic = topics.find(t => t.id === m.topicId);
+    // Look up actual self-stake amount from transaction log
+    const txAmount = mockTransactions
+      .filter(t => (t.data as any)?.messageId === m.id && (t.data as any)?.reason === 'SELF_STAKE')
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
     return {
       kind: 'stake' as const,
       id: m.id,
@@ -262,7 +270,7 @@ export async function getUserStances(userId: string, params?: { page?: number; l
       messageId: m.id,
       messageKind: m.kind ?? 'TEXT',
       content: m.content,
-      amount: 10,
+      amount: txAmount || 10,
       createdAt: m.createdAt,
     };
   });
@@ -278,6 +286,9 @@ export async function getUserStances(userId: string, params?: { page?: number; l
       ? (r.targetRefs[0] as { messageId: string }).messageId
       : null;
     const topic = topics.find(t => t.id === r.topicId);
+    const txAmount = mockTransactions
+      .filter(t => (t.data as any)?.relationId === r.id)
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
     return {
       kind: 'tag' as const,
       id: r.id,
@@ -289,7 +300,7 @@ export async function getUserStances(userId: string, params?: { page?: number; l
       subType: r.payload?.subType ?? null,
       customLabel: r.payload?.customLabel ?? null,
       targetMessageId: targetMsgId,
-      amount: 5,
+      amount: txAmount || 5,
       createdAt: r.createdAt,
     };
   });
@@ -329,12 +340,15 @@ export async function createMessage(topicId: string, data: {
   messages.push(msg);
   const topic = topics.find(t => t.id === topicId);
   if (topic && topic._count) topic._count.messages++;
-  // Deduct self-stake from available points
+  // Deduct self-stake from available points & add to stake pool
   const selfStake = data.stakeAmount ?? 10;
   if (mockAvailable >= selfStake) {
     mockAvailable -= selfStake;
     mockLocked += selfStake;
     addTransaction('LOCK', -selfStake, { reason: 'SELF_STAKE', messageId: msg.id, topicId });
+    // Author self-stake counts as PRO on the message
+    if (!mockStakes[msg.id]) mockStakes[msg.id] = { pro: 0, con: 0 };
+    mockStakes[msg.id].pro += selfStake;
   }
   return msg;
 }
@@ -365,6 +379,8 @@ export async function createRelation(topicId: string, data: {
   sourceMessageId?: string | null;
   targetRefs: TargetRef[];
   payload?: import('../types').RelationPayload;
+  supersedesRelationId?: string;
+  stakeAmount?: number;
 }) {
   await delay();
   
@@ -375,6 +391,28 @@ export async function createRelation(topicId: string, data: {
     createdAt: new Date().toISOString(), createdBy: mockUser,
   };
   relations.push(rel);
+  // Handle stake for AGREE/DISAGREE relations: deduct points & add to target's pool
+  const rt = data.relationType?.toUpperCase();
+  if ((rt === 'AGREE' || rt === 'DISAGREE') && data.stakeAmount && data.stakeAmount > 0) {
+    if (mockAvailable >= data.stakeAmount) {
+      mockAvailable -= data.stakeAmount;
+      mockLocked += data.stakeAmount;
+      addTransaction('LOCK', -data.stakeAmount, { reason: 'STANCE_STAKE', relationId: rel.id, relationType: rt, topicId });
+      // Add to each target message's stake pool
+      for (const tref of data.targetRefs) {
+        const targetMsgId = (tref.kind === 'message' || tref.kind === 'text-fragment') && 'messageId' in tref
+          ? (tref as { messageId: string }).messageId
+          : tref.kind === 'relation' && 'relationId' in tref
+            ? (tref as { relationId: string }).relationId
+            : null;
+        if (targetMsgId) {
+          if (!mockStakes[targetMsgId]) mockStakes[targetMsgId] = { pro: 0, con: 0 };
+          if (rt === 'AGREE') mockStakes[targetMsgId].pro += data.stakeAmount;
+          else mockStakes[targetMsgId].con += data.stakeAmount;
+        }
+      }
+    }
+  }
   return rel;
 }
 

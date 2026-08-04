@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 interface PromptModalProps {
   open: boolean;
@@ -15,7 +15,8 @@ interface PromptModalProps {
 
 /**
  * PromptModal - reusable modal for alert/confirm prompts.
- * If onCancel is provided, it behaves like confirm; otherwise alert.
+ * Centered by default; if the confirm button would be off-screen,
+ * the overlay auto-scrolls to bring it into the visible area.
  */
 export default function PromptModal({
   open,
@@ -28,12 +29,31 @@ export default function PromptModal({
   onConfirm,
   onCancel,
 }: PromptModalProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const footerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    // Wait for layout, then check if footer is in viewport
+    const timer = setTimeout(() => {
+      const footer = footerRef.current;
+      const overlay = overlayRef.current;
+      if (!footer || !overlay) return;
+      const rect = footer.getBoundingClientRect();
+      const viewH = window.innerHeight;
+      // If footer bottom is below viewport, scroll overlay to show it
+      if (rect.bottom > viewH) {
+        overlay.scrollTop = overlay.scrollHeight;
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [open]);
 
   if (!open) return null;
 
   return createPortal(
     <div
+      ref={overlayRef}
       data-prompt-modal="true"
       role="presentation"
       onClick={() => onCancel?.()}
@@ -43,13 +63,13 @@ export default function PromptModal({
         zIndex: 3000,
         background: 'rgba(0,0,0,0.4)',
         display: 'flex',
-        alignItems: 'flex-end',
+        alignItems: 'center',
         justifyContent: 'center',
         padding: 16,
+        overflow: 'auto',
       }}
     >
       <div
-        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -73,7 +93,7 @@ export default function PromptModal({
           {message}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
+        <div ref={footerRef} style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
           {onCancel && (
             <button
               onClick={onCancel}

@@ -1286,7 +1286,10 @@ export default function TopicDetailPage() {
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const MIN_RIGHT_PX = 280;
-  const [containerMinWidth, setContainerMinWidth] = useState(1024);
+  const [containerMinWidth, setContainerMinWidth] = useState(() => {
+    const saved = localStorage.getItem('topicMinWidth');
+    return saved ? Number(saved) : 1024;
+  });
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
@@ -1304,7 +1307,9 @@ export default function TopicDetailPage() {
   }
 
   // Cleanup on unmount
-  useEffect(() => () => { cancelScrollRafs(); setContainerMinWidth(1024); }, []);
+  useEffect(() => () => { cancelScrollRafs(); }, []);
+  // Persist containerMinWidth to localStorage
+  useEffect(() => { localStorage.setItem('topicMinWidth', String(containerMinWidth)); }, [containerMinWidth]);
 
   // Scroll the left panel canvas so the message with the given ID is centered.
   // Polls via requestAnimationFrame until the card appears in the DOM.

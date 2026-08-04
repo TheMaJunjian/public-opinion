@@ -105,6 +105,26 @@ const REGISTRATION_BONUS = 2000;
 let mockAvailable = REGISTRATION_BONUS;
 let mockLocked = 0;
 
+// Dynamic transaction log for getPointsTransactions
+const mockTransactions: Array<{
+  id: string; type: string; amount: number; balanceAfter: number;
+  createdAt: string; data?: Record<string, unknown> | null;
+}> = [
+  {
+    id: 'pt-1', type: 'MINT', amount: REGISTRATION_BONUS,
+    balanceAfter: REGISTRATION_BONUS,
+    createdAt: new Date().toISOString(),
+    data: { reason: 'REGISTRATION_BONUS' },
+  },
+];
+function addTransaction(type: string, amount: number, data?: Record<string, unknown> | null) {
+  mockTransactions.unshift({
+    id: `pt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type, amount, balanceAfter: mockAvailable,
+    createdAt: new Date().toISOString(), data: data ?? null,
+  });
+}
+
 // Initialize demo token
 mockToken = `mock-token-${mockUser.id}`;
 
@@ -314,6 +334,7 @@ export async function createMessage(topicId: string, data: {
   if (mockAvailable >= selfStake) {
     mockAvailable -= selfStake;
     mockLocked += selfStake;
+    addTransaction('LOCK', -selfStake, { reason: 'SELF_STAKE', messageId: msg.id, topicId });
   }
   return msg;
 }
@@ -411,19 +432,12 @@ export async function getPointsBalance() {
 
 export async function getPointsTransactions(params?: { page?: number; limit?: number }) {
   await delay(50);
-  
+  const page = params?.page ?? 1;
+  const limit = params?.limit ?? 20;
+  const start = (page - 1) * limit;
   return {
-    data: [
-      {
-        id: 'pt-1',
-        type: 'MINT',
-        amount: REGISTRATION_BONUS,
-        balanceAfter: REGISTRATION_BONUS,
-        createdAt: new Date().toISOString(),
-        data: { reason: 'REGISTRATION_BONUS' },
-      },
-    ],
-    pagination: { page: params?.page ?? 1, limit: params?.limit ?? 20, total: 1, totalPages: 1 },
+    data: mockTransactions.slice(start, start + limit),
+    pagination: { page, limit, total: mockTransactions.length, totalPages: Math.ceil(mockTransactions.length / limit) },
   };
 }
 
@@ -461,6 +475,7 @@ export async function placeStake(messageId: string, data: { side: 'PRO' | 'CON';
   mockStakes[messageId][data.side === 'PRO' ? 'pro' : 'con'] += data.amount;
   mockAvailable -= data.amount;
   mockLocked += data.amount;
+  addTransaction('LOCK', -data.amount, { reason: 'STAKE', messageId, side: data.side });
   return {
     message: '押注成功',
     stakeId: `stake-${Date.now()}`,
@@ -546,6 +561,12 @@ export async function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; 
     FALSE: (round.weights?.FALSE ?? 0) + (data.vote === 'FALSE' ? data.amount : 0),
     UNKNOWN: round.weights?.UNKNOWN ?? 0,
   };
+  // Deduct vote amount from available
+  if (mockAvailable >= data.amount) {
+    mockAvailable -= data.amount;
+    mockLocked += data.amount;
+    addTransaction('LOCK', -data.amount, { reason: 'VOTE', roundId, vote: data.vote });
+  }
   return { message: '投票成功', id: genId(), topicId: '', relationType: data.vote === 'TRUE' ? 'AGREE' : 'DISAGREE', sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: round.messageId }], createdAt: new Date().toISOString(), createdBy: mockUser } as Relation & { message: string };
 }
 

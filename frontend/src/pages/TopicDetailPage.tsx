@@ -4956,15 +4956,9 @@ export default function TopicDetailPage() {
                         </>
                       }
                       overlays={settlementOpenMsgId === msg.id ? (
-                        <div data-settlement-panel onClick={(e) => { if (e.target === e.currentTarget) closeSettlement(); }} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "60px 16px 16px", overflow: "auto" }}>
-                          <div style={{ width: "min(460px, 100%)", maxHeight: "calc(100vh - 80px)", overflow: "auto", background: "#1f2937", borderRadius: 12, border: "1px solid #374151", boxShadow: "0 16px 40px rgba(0,0,0,0.45)", padding: 16 }} onClick={e => e.stopPropagation()}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                              <span style={{ fontWeight: 600, color: "#f3f4f6" }}>⚖️ 结算</span>
-                              <button onClick={closeSettlement} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 12 }}>✕</button>
-                            </div>
-                            <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={(nm:any) => (window as any).__addSettlementMessage?.({...nm, kind: nm.kind})} filterSettlementType={settlementOpenType ?? undefined} />
-                            <div style={{ marginTop: 8 }}><RoundHistory messageId={msg.id} compact /></div>
-                          </div>
+                        <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
+                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={(nm:any) => (window as any).__addSettlementMessage?.({...nm, kind: nm.kind})} filterSettlementType={settlementOpenType ?? undefined} />
+                          <div style={{ marginTop: 4 }}><RoundHistory messageId={msg.id} compact /></div>
                         </div>
                       ) : undefined}
                     >

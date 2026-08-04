@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getPointsBalance, getPointsTransactions } from '../api/client';
+import { api } from '../api';
 import type { PointsBalance, PointTransaction } from '../types';
 
 /**
@@ -25,7 +25,7 @@ export default function PointsBadge() {
   const fetchBalance = useCallback(async () => {
     if (!user) return;
     try {
-      const data = await getPointsBalance();
+      const data = await api.getPointsBalance();
       setBalance(data);
       setError(false);
     } catch {
@@ -57,7 +57,7 @@ export default function PointsBadge() {
     const onFlash = async () => {
       if (!user) return;
       try {
-        const res = await getPointsTransactions({ limit: 1 });
+        const res = await api.getPointsTransactions({ limit: 1 });
         const latest = res.data[0];
         if (latest) {
           setFlash(latest.type === 'SETTLEMENT_GAIN' ? 'gain' : latest.type === 'SETTLEMENT_LOSS' ? 'loss' : null);
@@ -91,7 +91,7 @@ export default function PointsBadge() {
     setOpen(true);
     setTxLoading(true);
     try {
-      const res = await getPointsTransactions({ limit: 20 });
+      const res = await api.getPointsTransactions({ limit: 20 });
       setTransactions(res.data);
     } catch {
       // ignore

@@ -24,6 +24,10 @@ import type {
   AuditLogEntry,
   RevenuePoolData,
   RevenueDistributionItem,
+  StanceHistoryResponse,
+  StanceRelation,
+  StanceStake,
+  StanceTag,
 } from '../types';
 
 const delay = (ms = 150) => new Promise(res => setTimeout(res, ms));
@@ -188,6 +192,99 @@ export async function getUserMessages(userId: string, params?: { page?: number; 
   return { data: all.slice((page - 1) * limit, page * limit), pagination: { page, limit, total: all.length, totalPages: Math.ceil(all.length / limit) } };
 }
 
+export async function getUserStances(userId: string, params?: { page?: number; limit?: number; topicId?: string }) {
+  await delay(80);
+  const limit = params?.limit ?? 30;
+  // Derive stance relations from AGREE/DISAGREE relations created by the user
+  const userRelations = relations
+    .filter(r => r.createdBy.id === userId)
+    .filter(r => r.relationType === 'AGREE' || r.relationType === 'DISAGREE');
+  const filteredRels = params?.topicId
+    ? userRelations.filter(r => r.topicId === params.topicId)
+    : userRelations;
+  const stanceRelations: StanceRelation[] = filteredRels.map(r => {
+    const targetMsgId = r.targetRefs[0] && 'messageId' in r.targetRefs[0]
+      ? (r.targetRefs[0] as { messageId: string }).messageId
+      : null;
+    const targetMsg = targetMsgId ? messages.find(m => m.id === targetMsgId) : null;
+    const topic = topics.find(t => t.id === r.topicId);
+    return {
+      kind: 'relation' as const,
+      id: r.id,
+      relationMessageId: r.sourceMessageId ?? r.id,
+      topicId: r.topicId,
+      topicTitle: topic?.title ?? r.topicId,
+      type: r.relationType,
+      amount: 10,
+      targetMessageId: targetMsgId,
+      messageKind: targetMsg?.kind ?? 'TEXT',
+      targetRelationType: null,
+      content: targetMsg?.content ?? '',
+      createdAt: r.createdAt,
+    };
+  });
+  // Derive stance stakes from messages created by the user (self-stake)
+  const userMsgs = params?.topicId
+    ? messages.filter(m => m.createdBy.id === userId && m.topicId === params.topicId)
+    : messages.filter(m => m.createdBy.id === userId);
+  const stanceStakes: StanceStake[] = userMsgs.map(m => {
+    const topic = topics.find(t => t.id === m.topicId);
+    return {
+      kind: 'stake' as const,
+      id: m.id,
+      topicId: m.topicId,
+      topicTitle: topic?.title ?? m.topicId,
+      messageId: m.id,
+      messageKind: m.kind ?? 'TEXT',
+      content: m.content,
+      amount: 10,
+      createdAt: m.createdAt,
+    };
+  });
+  // Tags: RECOMMEND/ARCHIVE/TAG relations created by the user
+  const userTags = relations
+    .filter(r => r.createdBy.id === userId)
+    .filter(r => r.relationType === 'RECOMMEND' || r.relationType === 'ARCHIVE' || r.relationType === 'TAG');
+  const filteredTags = params?.topicId
+    ? userTags.filter(r => r.topicId === params.topicId)
+    : userTags;
+  const stanceTags: StanceTag[] = filteredTags.map(r => {
+    const targetMsgId = r.targetRefs[0] && 'messageId' in r.targetRefs[0]
+      ? (r.targetRefs[0] as { messageId: string }).messageId
+      : null;
+    const topic = topics.find(t => t.id === r.topicId);
+    return {
+      kind: 'tag' as const,
+      id: r.id,
+      relationMessageId: r.sourceMessageId ?? r.id,
+      topicId: r.topicId,
+      topicTitle: topic?.title ?? r.topicId,
+      relationType: r.relationType,
+      label: r.relationType,
+      subType: r.payload?.subType ?? null,
+      customLabel: r.payload?.customLabel ?? null,
+      targetMessageId: targetMsgId,
+      amount: 5,
+      createdAt: r.createdAt,
+    };
+  });
+  return {
+    user: { id: userId },
+    stances: {
+      relations: stanceRelations.slice(0, limit),
+      stakes: stanceStakes.slice(0, limit),
+      tags: stanceTags.slice(0, limit),
+    },
+    pagination: {
+      page: params?.page ?? 1,
+      limit,
+      totalRelations: stanceRelations.length,
+      totalStakes: stanceStakes.length,
+      totalTags: stanceTags.length,
+    },
+  } satisfies StanceHistoryResponse;
+}
+
 export async function createMessage(topicId: string, data: {
   kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'ROUND_RESULT' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
@@ -292,6 +389,12 @@ export async function getPointsBalance() {
   return {
     points: { available: 100, locked: 0 },
     balance: { amount: 100, debtFrozen: false },
+    breakdown: {
+      initialMinted: 100,
+      totalEarned: 0,
+      totalLost: 0,
+      totalProtocolFees: 0,
+    },
   };
 }
 

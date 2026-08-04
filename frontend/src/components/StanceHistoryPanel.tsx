@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getUserStances } from '../api/client';
+import { api } from '../api';
 import type { StanceRelation, StanceStake, StanceTag } from '../types';
 
 interface Props {
@@ -50,7 +50,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     try {
       setLoading(true);
       setError(null);
-      const data = await getUserStances(userId, { topicId, limit: 30 });
+      const data = await api.getUserStances(userId, { topicId, limit: 30 });
       setRelations(data.stances.relations);
       setStakes(data.stances.stakes);
       setTags(data.stances.tags ?? []);

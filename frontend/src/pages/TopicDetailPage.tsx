@@ -1304,7 +1304,7 @@ export default function TopicDetailPage() {
   }
 
   // Cleanup on unmount
-  useEffect(() => () => cancelScrollRafs(), []);
+  useEffect(() => () => { cancelScrollRafs(); setContainerMinWidth(1024); }, []);
 
   // Scroll the left panel canvas so the message with the given ID is centered.
   // Polls via requestAnimationFrame until the card appears in the DOM.

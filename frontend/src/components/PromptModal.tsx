@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 
 interface PromptModalProps {
   open: boolean;
@@ -30,16 +30,6 @@ export default function PromptModal({
 }: PromptModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll dialog to bottom so confirm button is visible
-  useEffect(() => {
-    if (open && dialogRef.current) {
-      const el = dialogRef.current;
-      if (el.scrollHeight > el.clientHeight) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-  }, [open]);
-
   if (!open) return null;
 
   return createPortal(
@@ -53,7 +43,7 @@ export default function PromptModal({
         zIndex: 3000,
         background: 'rgba(0,0,0,0.4)',
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-end',
         justifyContent: 'center',
         padding: 16,
       }}

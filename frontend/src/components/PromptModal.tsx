@@ -38,11 +38,11 @@ export default function PromptModal({
         position: 'fixed',
         inset: 0,
         zIndex: 3000,
-        background: 'transparent',
+        background: 'rgba(0,0,0,0.4)',
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         justifyContent: 'center',
-        padding: 16,
+        padding: '60px 16px 16px',
       }}
     >
       <div
@@ -52,23 +52,26 @@ export default function PromptModal({
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(460px, 100%)',
+          maxHeight: 'calc(100vh - 40px)',
           background: '#1f2937',
           border: '1px solid #374151',
           borderRadius: 12,
           boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
           color: '#f3f4f6',
+          display: 'flex',
+          flexDirection: 'column',
           overflow: 'hidden',
         }}
       >
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #374151', fontSize: 15, fontWeight: 700 }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid #374151', fontSize: 15, fontWeight: 700, flexShrink: 0 }}>
           {title}
         </div>
 
-        <div style={{ padding: '16px', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+        <div style={{ padding: '16px', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflow: 'auto', flex: '1 1 auto' }}>
           {message}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151', flexShrink: 0 }}>
           {onCancel && (
             <button
               onClick={onCancel}

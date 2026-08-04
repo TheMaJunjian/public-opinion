@@ -1286,9 +1286,11 @@ export default function TopicDetailPage() {
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const MIN_RIGHT_PX = 280;
-  const [containerMinWidth, setContainerMinWidth] = useState(() => {
-    const saved = localStorage.getItem('topicMinWidth');
-    return saved ? Number(saved) : 1024;
+  const MAX_RIGHT_PX = 500;
+  const BASE_WIDTH = 1024;
+  const [containerWidth, setContainerWidth] = useState(() => {
+    const saved = localStorage.getItem('topicWidth');
+    return saved ? Number(saved) : BASE_WIDTH;
   });
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1308,8 +1310,8 @@ export default function TopicDetailPage() {
 
   // Cleanup on unmount
   useEffect(() => () => { cancelScrollRafs(); }, []);
-  // Persist containerMinWidth to localStorage
-  useEffect(() => { localStorage.setItem('topicMinWidth', String(containerMinWidth)); }, [containerMinWidth]);
+  // Persist containerWidth to localStorage
+  useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
 
   // Scroll the left panel canvas so the message with the given ID is centered.
   // Polls via requestAnimationFrame until the card appears in the DOM.
@@ -4474,13 +4476,14 @@ export default function TopicDetailPage() {
       const containerW = panelContainerRef.current.clientWidth;
       const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
       const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
-      // Auto-grow container width when right panel would be too narrow
+      // Adjust containerWidth to keep right panel between MIN_RIGHT_PX and MAX_RIGHT_PX
       const rightFlex = TOTAL_FLEX - newLeft;
       if (rightFlex > 0) {
         const rightPx = (containerW - 12) * rightFlex / TOTAL_FLEX;
         if (rightPx < MIN_RIGHT_PX) {
-          const neededW = Math.ceil((MIN_RIGHT_PX) * TOTAL_FLEX / rightFlex + 12);
-          setContainerMinWidth(prev => Math.max(prev, neededW));
+          setContainerWidth(prev => Math.max(prev, Math.ceil(MIN_RIGHT_PX * TOTAL_FLEX / rightFlex + 12)));
+        } else if (rightPx > MAX_RIGHT_PX) {
+          setContainerWidth(prev => Math.max(BASE_WIDTH, Math.min(prev, Math.ceil(MAX_RIGHT_PX * TOTAL_FLEX / rightFlex + 12))));
         }
       }
       setLeftFlex(newLeft);
@@ -4509,13 +4512,14 @@ export default function TopicDetailPage() {
       const containerW = panelContainerRef.current.clientWidth;
       const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
       const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
-      // Auto-grow container width when right panel would be too narrow
+      // Adjust containerWidth to keep right panel between MIN_RIGHT_PX and MAX_RIGHT_PX
       const rightFlex = TOTAL_FLEX - newLeft;
       if (rightFlex > 0) {
         const rightPx = (containerW - 12) * rightFlex / TOTAL_FLEX;
         if (rightPx < MIN_RIGHT_PX) {
-          const neededW = Math.ceil((MIN_RIGHT_PX) * TOTAL_FLEX / rightFlex + 12);
-          setContainerMinWidth(prev => Math.max(prev, neededW));
+          setContainerWidth(prev => Math.max(prev, Math.ceil(MIN_RIGHT_PX * TOTAL_FLEX / rightFlex + 12)));
+        } else if (rightPx > MAX_RIGHT_PX) {
+          setContainerWidth(prev => Math.max(BASE_WIDTH, Math.min(prev, Math.ceil(MAX_RIGHT_PX * TOTAL_FLEX / rightFlex + 12))));
         }
       }
       setLeftFlex(newLeft);
@@ -4601,7 +4605,7 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ minHeight: "100vh", minWidth: containerMinWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ minHeight: "100vh", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: headerCollapsed ? "4px 16px" : "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button
@@ -4671,7 +4675,7 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 600px", minHeight: 0, minWidth: containerMinWidth }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, minHeight: 0, minWidth: containerWidth }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>

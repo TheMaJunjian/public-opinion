@@ -21,7 +21,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Router>
-        <div className="min-h-screen flex flex-col bg-[#101010]">
+        <div className="min-h-screen min-w-fit flex flex-col bg-[#101010]">
           <Navbar onOpenViewer={() => setViewerOpen(true)} />
           <main className="flex-1">
             <Suspense fallback={routeFallback}>

@@ -1606,6 +1606,7 @@ export default function TopicDetailPage() {
   }
 
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
+    if (!user) { navigate('/login', { state: { reason: '发送消息需要登录' } }); return null; }
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
     if (!topicId) return null;
@@ -2063,6 +2064,7 @@ export default function TopicDetailPage() {
   async function handleCreateRelationWithSourcesAndTargets(params: {
     sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }) {
+    if (!user) { navigate('/login', { state: { reason: '发送消息需要登录' } }); return; }
     if (!topicId) return;
     if (!relationType) return;
     const { sources, label } = params;
@@ -2295,6 +2297,7 @@ export default function TopicDetailPage() {
   }
 
   async function handleQuickSendAndRelateFromDraftTargets() {
+    if (!user) { navigate('/login', { state: { reason: '发送消息需要登录' } }); return; }
     const text = newMessageContent.trim();
     // Clear saved text on type switch since user is sending/committing
     savedTextOnTypeSwitchRef.current = "";

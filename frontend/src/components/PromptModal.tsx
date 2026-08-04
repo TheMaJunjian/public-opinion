@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { useEffect, useRef } from 'react';
 
 interface PromptModalProps {
   open: boolean;
@@ -27,6 +28,18 @@ export default function PromptModal({
   onConfirm,
   onCancel,
 }: PromptModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll dialog to bottom so confirm button is visible
+  useEffect(() => {
+    if (open && dialogRef.current) {
+      const el = dialogRef.current;
+      if (el.scrollHeight > el.clientHeight) {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  }, [open]);
+
   if (!open) return null;
 
   return createPortal(
@@ -40,38 +53,37 @@ export default function PromptModal({
         zIndex: 3000,
         background: 'rgba(0,0,0,0.4)',
         display: 'flex',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         justifyContent: 'center',
-        padding: '60px 16px 16px',
+        padding: 16,
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(460px, 100%)',
-          maxHeight: 'calc(100vh - 40px)',
+          maxHeight: 'calc(100vh - 32px)',
           background: '#1f2937',
           border: '1px solid #374151',
           borderRadius: 12,
           boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
           color: '#f3f4f6',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
+          overflow: 'auto',
         }}
       >
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #374151', fontSize: 15, fontWeight: 700, flexShrink: 0 }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid #374151', fontSize: 15, fontWeight: 700 }}>
           {title}
         </div>
 
-        <div style={{ padding: '16px', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', overflow: 'auto', flex: '1 1 auto' }}>
+        <div style={{ padding: '16px', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
           {message}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151', flexShrink: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
           {onCancel && (
             <button
               onClick={onCancel}

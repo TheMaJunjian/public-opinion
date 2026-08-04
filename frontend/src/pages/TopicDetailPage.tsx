@@ -81,7 +81,7 @@ export default function TopicDetailPage() {
   const { topicId } = useParams<{ topicId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   const [topic, setTopic] = useState<Topic | null>(null);
   const [messages, setMessages] = useState<DemoMessage[]>([]);
@@ -923,10 +923,18 @@ export default function TopicDetailPage() {
     return Promise.resolve(null);
   }, [topicId, mergeStakeSnapshot]);
 
-  const createRel = useCallback((topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
+  const createRel = useCallback(async (topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
     const amount = Math.max(relStakeRef.current, 1);
-    return api.createRelation(topicId, { ...data, stakeAmount: amount });
-  }, []);
+    try {
+      return await api.createRelation(topicId, { ...data, stakeAmount: amount });
+    } catch (e: any) {
+      if (/登录|login|token|auth|unauthorized/i.test(e?.message ?? '')) {
+        logout();
+        navigate('/login', { state: { reason: '登录已过期，请重新登录' } });
+      }
+      throw e;
+    }
+  }, [logout, navigate]);
 
   // Listen for relation-created events (triggered after vote creates AGREE/DISAGREE relation)
   useEffect(() => {
@@ -1313,6 +1321,17 @@ export default function TopicDetailPage() {
   // Persist containerWidth to localStorage
   useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
 
+  // Handle auth errors: logout and redirect to login
+  async function handleAuthError(err: unknown) {
+    const msg = (err as any)?.message ?? '';
+    if (/登录|login|token|auth|unauthorized/i.test(msg)) {
+      await logout();
+      navigate('/login', { state: { reason: '登录已过期，请重新登录' } });
+      return true;
+    }
+    return false;
+  }
+
   // Scroll the left panel canvas so the message with the given ID is centered.
   // Polls via requestAnimationFrame until the card appears in the DOM.
   // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
@@ -1684,6 +1703,7 @@ export default function TopicDetailPage() {
       }
       return msg;
     } catch (e: any) {
+      if (await handleAuthError(e)) return null;
       setSendError(e?.message ?? '发送失败');
       setTimeout(() => setSendError(null), 4000);
       return null;

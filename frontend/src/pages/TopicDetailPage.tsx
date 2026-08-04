@@ -1321,10 +1321,21 @@ export default function TopicDetailPage() {
   // Persist containerWidth to localStorage
   useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
 
+  // Check auth before sending: redirect to login if not logged in
+  function requireAuth(): boolean {
+    const token = localStorage.getItem('token');
+    if (!user || !token) {
+      logout();
+      navigate('/login', { state: { reason: '发送消息需要登录' } });
+      return false;
+    }
+    return true;
+  }
+
   // Handle auth errors: logout and redirect to login
   async function handleAuthError(err: unknown) {
     const msg = (err as any)?.message ?? '';
-    if (/登录|login|token|auth|unauthorized/i.test(msg)) {
+    if (/登录|login|token|auth|unauthorized|未认证|请先/i.test(msg)) {
       await logout();
       navigate('/login', { state: { reason: '登录已过期，请重新登录' } });
       return true;
@@ -1627,7 +1638,7 @@ export default function TopicDetailPage() {
   }
 
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
-    if (!user) { navigate('/login', { state: { reason: '发送消息需要登录' } }); return null; }
+    if (!requireAuth()) return null;
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
     if (!topicId) return null;
@@ -2086,7 +2097,7 @@ export default function TopicDetailPage() {
   async function handleCreateRelationWithSourcesAndTargets(params: {
     sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }) {
-    if (!user) { navigate('/login', { state: { reason: '发送消息需要登录' } }); return; }
+    if (!requireAuth()) return;
     if (!topicId) return;
     if (!relationType) return;
     const { sources, label } = params;
@@ -2319,7 +2330,7 @@ export default function TopicDetailPage() {
   }
 
   async function handleQuickSendAndRelateFromDraftTargets() {
-    if (!user) { navigate('/login', { state: { reason: '发送消息需要登录' } }); return; }
+    if (!requireAuth()) return;
     const text = newMessageContent.trim();
     // Clear saved text on type switch since user is sending/committing
     savedTextOnTypeSwitchRef.current = "";
@@ -4557,11 +4568,11 @@ export default function TopicDetailPage() {
   // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
 
   if (loading) {
-    return <div style={{ padding: 16, background: "#101010", color: "#eee", minHeight: "100vh" }}>加载中…</div>;
+    return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
   }
   if (loadError) {
     return (
-      <div style={{ padding: 16, background: "#101010", color: "#eee", minHeight: "100vh" }}>
+      <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
         <pre style={{ whiteSpace: "pre-wrap", color: "#ff8080" }}>{loadError}</pre>
       </div>
@@ -4625,7 +4636,7 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ minHeight: "100vh", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ height: "100%", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: headerCollapsed ? "4px 16px" : "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button
@@ -4695,7 +4706,7 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, minHeight: 0, minWidth: containerWidth }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, minWidth: containerWidth }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>

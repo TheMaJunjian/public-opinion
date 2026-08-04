@@ -93,8 +93,11 @@ const relations: Relation[] = [
 ];
 
 let mockToken: string | null = null;
-let mockUser: User | null = null;
+let mockUser: User = users[0]; // Auto-login as demo user (用户1)
 let nextId = 100;
+
+// Initialize demo token
+mockToken = `mock-token-${mockUser.id}`;
 
 function genId() { return `mock-${++nextId}`; }
 
@@ -124,8 +127,8 @@ export async function login(data: { username: string; password: string }) {
 
 export async function logout() {
   await delay(50);
-  mockToken = null;
-  mockUser = null;
+  mockToken = `mock-token-${users[0].id}`;
+  mockUser = users[0]; // Reset to demo user
   return { message: '已退出登录' };
 }
 
@@ -141,7 +144,7 @@ export async function getTopics(params?: { query?: string; sort?: string; page?:
 
 export async function createTopic(data: { title: string; body?: string }) {
   await delay();
-  if (!mockUser) throw new Error('请先登录');
+  
   const topic: Topic = {
     id: genId(), title: data.title, body: data.body, status: 'OPEN',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -196,7 +199,7 @@ export async function createMessage(topicId: string, data: {
   relationPayload?: Record<string, unknown>;
 }) {
   await delay();
-  if (!mockUser) throw new Error('请先登录');
+  
   const msg: Message = {
     id: genId(), topicId, kind: data.kind ?? 'TEXT', contentType: data.contentType || 'TEXT',
     content: data.content ?? '', createdAt: new Date().toISOString(), createdBy: mockUser,
@@ -235,7 +238,7 @@ export async function createRelation(topicId: string, data: {
   payload?: import('../types').RelationPayload;
 }) {
   await delay();
-  if (!mockUser) throw new Error('请先登录');
+  
   const rel: Relation = {
     id: genId(), topicId, relationType: data.relationType,
     sourceMessageId: data.sourceMessageId ?? null, targetRefs: data.targetRefs,
@@ -252,7 +255,7 @@ export async function updateRelation(topicId: string, relationId: string, data: 
   payload?: RelationPayload;
 }) {
   await delay();
-  if (!mockUser) throw new Error('请先登录');
+  
   const oldIdx = relations.findIndex(r => r.id === relationId && r.topicId === topicId);
   if (oldIdx === -1) throw new Error('关系消息不存在');
   const oldRel = relations[oldIdx];
@@ -272,7 +275,7 @@ export async function updateRelation(topicId: string, relationId: string, data: 
 
 export async function patchRelationTargets(topicId: string, relationId: string, targetRefs: TargetRef[]) {
   await delay();
-  if (!mockUser) throw new Error('请先登录');
+  
   const idx = relations.findIndex(r => r.id === relationId && r.topicId === topicId);
   if (idx === -1) throw new Error('关系消息不存在');
   relations[idx] = { ...relations[idx], targetRefs };
@@ -285,7 +288,7 @@ export async function patchRelationTargets(topicId: string, relationId: string, 
 
 export async function getPointsBalance() {
   await delay(50);
-  if (!mockUser) throw new Error('请先登录');
+  
   return {
     points: { available: 100, locked: 0 },
     balance: { amount: 100, debtFrozen: false },
@@ -294,7 +297,7 @@ export async function getPointsBalance() {
 
 export async function getPointsTransactions(params?: { page?: number; limit?: number }) {
   await delay(50);
-  if (!mockUser) throw new Error('请先登录');
+  
   return {
     data: [
       {
@@ -335,7 +338,7 @@ const mockStakes: Record<string, { pro: number; con: number }> = {};
 
 export async function placeStake(messageId: string, data: { side: 'PRO' | 'CON'; amount: number }) {
   await delay(100);
-  if (!mockUser) throw new Error('请先登录');
+  
   if (!mockStakes[messageId]) mockStakes[messageId] = { pro: 0, con: 0 };
   mockStakes[messageId][data.side === 'PRO' ? 'pro' : 'con'] += data.amount;
   return {
@@ -374,7 +377,7 @@ const mockRounds: SettlementRoundItem[] = [];
 
 export async function createRound(messageId: string, data?: { note?: string; settlementType?: 'TRUTH' | 'VALUE' }) {
   await delay(100);
-  if (!mockUser) throw new Error('请先登录');
+  
   const round: SettlementRoundItem & { roundMessageId: string } = {
     id: genId(),
     roundMessageId: genId(),
@@ -410,7 +413,7 @@ export async function getRoundDetail(roundId: string) {
 
 export async function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; amount: number }) {
   await delay(100);
-  if (!mockUser) throw new Error('请先登录');
+  
   const round = mockRounds.find(r => r.id === roundId);
   if (!round) throw new Error('结算轮次不存在');
   round.votes = [

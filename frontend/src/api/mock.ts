@@ -100,6 +100,11 @@ let mockToken: string | null = null;
 let mockUser: User = users[0]; // Auto-login as demo user (用户1)
 let nextId = 100;
 
+// Mutable balance tracking — matches backend REGISTRATION_BONUS = 2000
+const REGISTRATION_BONUS = 2000;
+let mockAvailable = REGISTRATION_BONUS;
+let mockLocked = 0;
+
 // Initialize demo token
 mockToken = `mock-token-${mockUser.id}`;
 
@@ -304,6 +309,12 @@ export async function createMessage(topicId: string, data: {
   messages.push(msg);
   const topic = topics.find(t => t.id === topicId);
   if (topic && topic._count) topic._count.messages++;
+  // Deduct self-stake from available points
+  const selfStake = data.stakeAmount ?? 10;
+  if (mockAvailable >= selfStake) {
+    mockAvailable -= selfStake;
+    mockLocked += selfStake;
+  }
   return msg;
 }
 
@@ -387,10 +398,10 @@ export async function getPointsBalance() {
   await delay(50);
   
   return {
-    points: { available: 100, locked: 0 },
-    balance: { amount: 100, debtFrozen: false },
+    points: { available: mockAvailable, locked: mockLocked },
+    balance: { amount: mockAvailable + mockLocked, debtFrozen: false },
     breakdown: {
-      initialMinted: 100,
+      initialMinted: REGISTRATION_BONUS,
       totalEarned: 0,
       totalLost: 0,
       totalProtocolFees: 0,
@@ -406,8 +417,8 @@ export async function getPointsTransactions(params?: { page?: number; limit?: nu
       {
         id: 'pt-1',
         type: 'MINT',
-        amount: 100,
-        balanceAfter: 100,
+        amount: REGISTRATION_BONUS,
+        balanceAfter: REGISTRATION_BONUS,
         createdAt: new Date().toISOString(),
         data: { reason: 'REGISTRATION_BONUS' },
       },
@@ -439,19 +450,25 @@ export async function getCurrentRules() {
 
 const mockStakes: Record<string, { pro: number; con: number }> = {};
 
+// Seed initial stakes so demo messages show PRO/CON statistics
+mockStakes['m1'] = { pro: 30, con: 15 };
+mockStakes['m3'] = { pro: 5, con: 20 };
+
 export async function placeStake(messageId: string, data: { side: 'PRO' | 'CON'; amount: number }) {
   await delay(100);
   
   if (!mockStakes[messageId]) mockStakes[messageId] = { pro: 0, con: 0 };
   mockStakes[messageId][data.side === 'PRO' ? 'pro' : 'con'] += data.amount;
+  mockAvailable -= data.amount;
+  mockLocked += data.amount;
   return {
     message: '押注成功',
     stakeId: `stake-${Date.now()}`,
     side: data.side,
     amount: data.amount,
-    newAvailable: 99,
-    newLocked: 1,
-    newBalance: 99,
+    newAvailable: mockAvailable,
+    newLocked: mockLocked,
+    newBalance: mockAvailable,
   };
 }
 

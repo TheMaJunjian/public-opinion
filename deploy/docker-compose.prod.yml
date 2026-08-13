@@ -1,0 +1,50 @@
+# 生产部署：PostgreSQL + 后端 API + Caddy(HTTPS + 前端静态文件)
+# 使用方式见 README/云服务器部署.md
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gonglun
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 deploy/.env.prod 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: gonglun
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gonglun -d gonglun"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://gonglun:${POSTGRES_PASSWORD}@postgres:5432/gonglun
+      PORT: "3000"
+      JWT_SECRET: ${JWT_SECRET:?请在 deploy/.env.prod 中设置 JWT_SECRET}
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?请在 deploy/.env.prod 中设置 DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ../frontend/dist:/srv/frontend:ro
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

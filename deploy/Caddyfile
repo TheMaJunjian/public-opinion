@@ -1,0 +1,20 @@
+# Caddy 反向代理配置
+# - /api/* 和 /api-docs 转发给后端
+# - 其余请求返回前端 SPA 静态文件（/srv/frontend 为 frontend/dist 的挂载）
+{$DOMAIN} {
+    handle /api/* {
+        reverse_proxy api:3000
+    }
+    handle /api-docs* {
+        reverse_proxy api:3000
+    }
+    handle /health {
+        reverse_proxy api:3000
+    }
+    handle {
+        root * /srv/frontend
+        encode gzip
+        try_files {path} /index.html
+        file_server
+    }
+}

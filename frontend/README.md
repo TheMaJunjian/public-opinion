@@ -45,18 +45,6 @@ npm install
 npm run dev
 ```
 
-### 开发（Mock 模式，无需后端）
-
-```bash
-VITE_USE_MOCK=true npm run dev
-# 或在 .env 中设置 VITE_USE_MOCK=true
-```
-
-Mock 模式内置示例：
-- 3 个用户（alice / bob / charlie，密码任意）
-- 3 个分类，含多层 REPLY/AGREE/DISAGREE/CORRECT 关系
-- 分类 t1"人工智能与就业"展示完整的 5 层非线性讨论树
-
 ### 构建
 
 ```bash
@@ -72,7 +60,8 @@ npm run build
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `VITE_API_BASE_URL` | `http://localhost:3000/api` | 后端 API 基础 URL |
-| `VITE_USE_MOCK` | `false` | `true` 时使用内置 Mock 数据 |
+
+> 内置 Mock 数据已移除，前端始终请求真实后端。开发时请先启动后端（见 `README/重启后启动开发环境.md`）。
 
 ---
 
@@ -95,7 +84,7 @@ src/
   api/
     client.ts   # fetch 封装，读取 localStorage token 作为 Bearer
     mock.ts     # Mock 数据（含示例树型讨论）
-    index.ts    # 根据 VITE_USE_MOCK 导出真实或 Mock API
+    index.ts    # API 统一入口（真实后端）
   context/
     AuthContext.tsx    # 用户认证状态（localStorage 持久化）
   utils/

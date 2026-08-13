@@ -1,5 +1,6 @@
+// API 统一入口：所有请求走真实后端 client。
+// Mock 模式已移除（公测使用真实后端 + PostgreSQL）。
 import * as realApi from './client';
-import * as mockApi from './mock';
 
-const useMock = import.meta.env.VITE_USE_MOCK === 'true' || import.meta.env.DEV === false;
-export const api = useMock ? mockApi : realApi;
+export const api = realApi;
+export * from './client';

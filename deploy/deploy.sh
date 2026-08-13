@@ -29,11 +29,11 @@ echo "==> 构建前端"
 
 # 3. 启动服务
 echo "==> 启动容器"
-docker compose --env-file .env.prod up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 # 4. 应用数据库迁移
 echo "==> 执行数据库迁移"
-docker compose --env-file .env.prod exec api npx prisma migrate deploy
+docker compose -f docker-compose.prod.yml --env-file .env.prod exec api npx prisma migrate deploy
 
 # 5. 输出结果
 DOMAIN_VALUE=$(grep '^DOMAIN=' .env.prod | cut -d= -f2)

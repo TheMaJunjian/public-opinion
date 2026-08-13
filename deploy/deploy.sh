@@ -24,7 +24,7 @@ echo "==> 构建前端"
 (
   cd ../frontend
   npm ci
-  VITE_API_BASE_URL=/api VITE_USE_MOCK=false VITE_DEBUG=false npm run build
+  VITE_API_BASE_URL=/api VITE_DEBUG=false npm run build
 )
 
 # 3. 启动服务

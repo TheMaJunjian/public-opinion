@@ -17,6 +17,10 @@ export default function RegisterPage() {
     e.preventDefault();
     const normalizedUsername = username.trim();
     if (!normalizedUsername || !password) { setError('请填写用户名和密码'); return; }
+    if (!/^[a-zA-Z0-9_\u4e00-\u9fa5]{2,30}$/.test(normalizedUsername)) {
+      setError('用户名需为 2-30 位字母、数字、下划线或汉字（不含空格和标点）');
+      return;
+    }
     if (password !== confirm) { setError('两次密码不一致'); return; }
     if (password.length < 6) { setError('密码长度至少6位'); return; }
     setError('');

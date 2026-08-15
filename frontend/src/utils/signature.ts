@@ -49,3 +49,16 @@ export async function signPayloadWithPrivateJwk(payload: string, keyData: JsonWe
   const sig = await crypto.subtle.sign(params.signOrVerifyAlgorithm, privateKey, encoded);
   return btoa(String.fromCharCode(...new Uint8Array(sig)));
 }
+
+export function privateKeyMatchesPublicKey(privateKeyJson: string, publicKeyJson: string): boolean {
+  try {
+    const privateKey = JSON.parse(privateKeyJson) as JsonWebKey;
+    const publicKey = JSON.parse(publicKeyJson) as JsonWebKey;
+    return privateKey.kty === publicKey.kty
+      && privateKey.crv === publicKey.crv
+      && privateKey.x === publicKey.x
+      && (privateKey.kty !== 'EC' || privateKey.y === publicKey.y);
+  } catch {
+    return false;
+  }
+}

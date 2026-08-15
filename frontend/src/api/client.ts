@@ -48,14 +48,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     try {
       const rawKey = getPrivateKeyForCurrentUser();
       if (!rawKey) {
-        if (path !== '/auth/login') throw new Error('本设备缺少签名密钥，请重新登录以绑定当前设备');
+        if (path !== '/auth/login' && path !== '/auth/signing-key') throw new Error('本设备缺少签名密钥，请重新登录以绑定当前设备');
       } else {
         const keyData = JSON.parse(rawKey) as JsonWebKey;
         const rawBody = typeof options.body === 'string' ? options.body : '{}';
         headers['X-Signature'] = await signPayloadWithPrivateJwk(rawBody, keyData);
       }
     } catch (error) {
-      if (path !== '/auth/login') {
+      if (path !== '/auth/login' && path !== '/auth/signing-key') {
         throw error instanceof Error ? error : new Error('签名失败，请重新登录以绑定当前设备');
       }
     }

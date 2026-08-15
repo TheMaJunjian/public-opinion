@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import type { User } from '../types';
 import { api } from '../api';
 import { getPrivateKeyForCurrentUser, storePrivateKeyForUser } from '../api/client';
-import { generateSigningKeyPair, signPayloadWithPrivateJwk } from '../utils/signature';
+import { generateSigningKeyPair, privateKeyMatchesPublicKey, signPayloadWithPrivateJwk } from '../utils/signature';
 
 interface AuthContextValue {
   user: User | null;
@@ -25,9 +25,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
     const storedUser = localStorage.getItem('user');
-    if (storedToken && storedUser) {
+    let tokenExpired = false;
+    if (storedToken) {
+      try {
+        const payload = JSON.parse(atob(storedToken.split('.')[1])) as { exp?: number };
+        tokenExpired = typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now();
+      } catch {
+        tokenExpired = true;
+      }
+    }
+    if (storedToken && storedUser && !tokenExpired) {
       setToken(storedToken);
       setUser(JSON.parse(storedUser));
+    } else if (tokenExpired) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      localStorage.removeItem('privateKey');
     }
     setLoading(false);
   }, []);
@@ -37,7 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let token = res.token;
     let authenticatedUser = res.user;
     const storedPrivateKey = localStorage.getItem(`privateKey:${res.user.username}`);
-    if (storedPrivateKey && res.user.publicKey) {
+    const keyMatches = storedPrivateKey && res.user.publicKey
+      ? privateKeyMatchesPublicKey(storedPrivateKey, res.user.publicKey)
+      : false;
+    if (storedPrivateKey && keyMatches) {
       localStorage.setItem('privateKey', storedPrivateKey);
     } else {
       // A different production origin cannot read the old origin's private key.
@@ -45,10 +61,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const keyPair = await generateSigningKeyPair();
       const privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
       const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-      storePrivateKeyForUser(res.user.username, privateJwk);
+      localStorage.setItem('token', res.token);
+      localStorage.setItem('user', JSON.stringify(res.user));
       const rotated = await api.rotateSigningKey({ password, publicKey: JSON.stringify(publicJwk) });
       token = rotated.token;
       authenticatedUser = rotated.user;
+      storePrivateKeyForUser(res.user.username, privateJwk);
     }
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(authenticatedUser));

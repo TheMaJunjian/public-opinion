@@ -49,7 +49,6 @@ import {
   getRelationTargetIds,
   getTextTargetIds,
   isValidTagLabel,
-  isAppendToExistingClassifyAction,
   mergeUnits,
   nextId,
   resolveMessageCanvas,
@@ -762,16 +761,15 @@ export default function TopicDetailPage() {
       )
     ).length;
   }, [relationType, sourceUnits, targetUnits, draftUnits, relations]);
-  const sourceClassifyCount = sourceUnits.filter(unit =>
-      relations.find(relation => relation.id === unit.messageId)?.relationType?.toUpperCase() === 'CLASSIFY'
-    ).length;
-  const joinOnlyAction = isAppendToExistingClassifyAction({
-    relationType,
-    draftCount: draftUnits.length,
-    targetCount: targetUnits.length,
-    text: newMessageContent,
-    sourceClassifyCount,
-  });
+  const containerRelationTypes = new Set(['CLASSIFY', 'ARRANGE', 'MERGE', 'SUMMARY']);
+  const appendContainerType = (() => {
+    if (!relationType || !containerRelationTypes.has(relationType.toUpperCase())) return null;
+    if (newMessageContent.trim().length > 0 || (draftUnits.length === 0 && targetUnits.length === 0)) return null;
+    if (sourceUnits.length !== 1) return null;
+    const source = relations.find(relation => relation.id === sourceUnits[0].messageId);
+    return source?.relationType?.toUpperCase() === relationType.toUpperCase() ? relationType.toUpperCase() : null;
+  })();
+  const joinOnlyAction = appendContainerType !== null;
   const additionalAgreeTargetIds = useMemo(() => {
     if (relationType !== 'agree' || sourceUnits.length > 0) return [];
     const targets = draftUnits.length > 0 ? draftUnits : targetUnits;
@@ -882,9 +880,13 @@ export default function TopicDetailPage() {
     const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
     if (isDedup) {
       // Update existing relation and message with fresh data (e.g. incremented sendCount)
+      relationsRef.current = relationsRef.current.map(r => r.id === backendRel.id ? backendRel : r);
       setRelations(prev => prev.map(r => r.id === backendRel.id ? backendRel : r));
       setMessages(prev => prev.map(m => m.id === backendRel.id ? buildRelationDemoMessage(backendRel) : m));
     } else {
+      relationsRef.current = relationsRef.current.some(r => r.id === backendRel.id)
+        ? relationsRef.current
+        : [...relationsRef.current, backendRel];
       setRelations(prev => prev.some(r => r.id === backendRel.id) ? prev : [...prev, backendRel]);
       setMessages(prev => prev.some(m => m.id === backendRel.id) ? prev : [...prev, buildRelationDemoMessage(backendRel)]);
     }
@@ -1691,7 +1693,12 @@ export default function TopicDetailPage() {
   async function attachMessageToCurrentClassify(messageId: string) {
     if (!isInsideClassify || !currentClassifyRelMsgId || !messageId) return;
     const currentClassifyRel = relationsRef.current.find(r => r.id === currentClassifyRelMsgId);
-    const joinType = (currentClassifyRel?.relationType === 'summary' ? 'SUMMARY' : 'CLASSIFY') as string;
+    if (!currentClassifyRel) return;
+    const joinType = currentClassifyRel.relationType?.toUpperCase() === 'SUMMARY' ? 'SUMMARY' : 'CLASSIFY';
+
+    // A message sent inside a container is completed by one JOIN request:
+    // source=container, target=message. The backend records the container
+    // target in the same transaction as the JOIN message.
     await createJoinRelationsForContainer(currentClassifyRelMsgId, joinType, [messageId]);
   }
 
@@ -2455,6 +2462,7 @@ export default function TopicDetailPage() {
     _containerType: string,
     targetMids: string[],
   ) {
+    const joinStake = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
     for (const tgtMid of targetMids) {
       try {
         const existingJoin = relationsRef.current.find(relation =>
@@ -2469,16 +2477,37 @@ export default function TopicDetailPage() {
               relationType: 'AGREE',
               targetRefs: [{ kind: 'relation', relationId: existingJoin.id }],
               payload: {},
-              stakeAmount: 1,
+              stakeAmount: joinStake,
             })
           : await api.createRelation(topicId!, {
               relationType: 'JOIN',
               sourceMessageId: containerId,
               targetRefs: [{ kind: 'message', messageId: tgtMid }],
               payload: {},
-              stakeAmount: 1,
+              stakeAmount: joinStake,
             });
         await appendCreatedRelation(relation);
+        if (relation.relationType?.toUpperCase() === 'JOIN') {
+          const source = relationsRef.current.find(item => item.id === containerId);
+          if (source) {
+            const targetRef: TargetRef = { kind: 'message', messageId: tgtMid };
+            const hasTarget = source.targetRefs.some(ref =>
+              ref.kind !== 'relation' && ref.messageId === tgtMid
+            );
+            if (!hasTarget) {
+              const updatedSource = { ...source, targetRefs: [...source.targetRefs, targetRef] };
+              relationsRef.current = relationsRef.current.map(item =>
+                item.id === containerId ? updatedSource : item
+              );
+              setRelations(prev => prev.map(item =>
+                item.id === containerId ? updatedSource : item
+              ));
+              setMessages(prev => prev.map(message =>
+                message.id === containerId ? buildRelationDemoMessage(updatedSource) : message
+              ));
+            }
+          }
+        }
       } catch (e) {
         debugWarn('join', `FAILED containerId=${containerId.slice(-6)} tgt=${tgtMid.slice(-6)} error=${String(e)}`);
         throw e;
@@ -2505,6 +2534,11 @@ export default function TopicDetailPage() {
       errors.push(`文本消息最低押注 10 点（当前 ${stakeAmount}）`);
     }
     if (relationType) {
+      const isContainerRelation = containerRelationTypes.has(relationType.toUpperCase());
+      const hasSelectedSource = sourceUnits.length > 0;
+      if (isContainerRelation && hasSelectedSource && !appendContainerType) {
+        errors.push(`发送${relationTypeName(relationType)}加入消息时，来源必须是对应的${relationTypeName(relationType)}容器`);
+      }
       if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
         const subTypeNote = (subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0))
           ? `（「${subTypeLabel(subType)}」理由要求最低 ${effectiveMinStake} 点）` : '';
@@ -2539,19 +2573,37 @@ export default function TopicDetailPage() {
       return;
     }
 
-    // Adding targets to an existing CLASSIFY uses the selected relation as the
-    // source and the candidate/target collection as its targets. Text input is
-    // irrelevant here; it must not turn this into a new classification.
+    // Adding targets to an existing container uses one JOIN per target.
     if (joinOnlyAction) {
-      const classifySource = sourceUnits
+      const containerSource = sourceUnits
         .map(unit => relationsRef.current.find(relation => relation.id === unit.messageId))
-        .find((relation): relation is Relation => relation?.relationType?.toUpperCase() === 'CLASSIFY');
-      if (!classifySource) {
-        setSendError('追加分类时只能选择一个已有分类作为来源');
+        .find((relation): relation is Relation => relation?.relationType?.toUpperCase() === appendContainerType);
+      if (!containerSource) {
+        setSendError('追加容器内容时只能选择一个同类型容器作为来源');
         return;
       }
       const targetIds = Array.from(new Set(effectiveTargets.map(unit => unit.messageId)));
-      await createJoinRelationsForContainer(classifySource.id, 'CLASSIFY', targetIds);
+      await createJoinRelationsForContainer(containerSource.id, appendContainerType!, targetIds);
+      if (appendContainerType === 'ARRANGE' || appendContainerType === 'MERGE' || appendContainerType === 'SUMMARY') {
+        const isArrangeAppend = appendContainerType === 'ARRANGE';
+        const isMergeAppend = appendContainerType === 'MERGE';
+        const layout = (containerSource.payload as any)?.targetLayout;
+        const edgeLabel = isArrangeAppend
+          ? layout === 'single-row' ? 'arrange-h' : 'arrange-v'
+          : relationTypeName(isMergeAppend ? 'merge' : 'summary');
+        const newEdges = targetIds.map(targetId => ({
+          id: nextId('edge'),
+          relationMessageId: containerSource.id,
+          relationType: (isArrangeAppend ? 'arrange' : isMergeAppend ? 'merge' : 'summary') as RelationType,
+          from: { messageId: `anon:${containerSource.id}`, selection: { kind: 'whole' as const } },
+          to: { messageId: targetId, selection: { kind: 'whole' as const } },
+          relationLabel: edgeLabel,
+        }));
+        setEdges(prev => {
+          const existingKeys = new Set(prev.map(edge => `${edge.relationMessageId}::${edge.to.messageId}`));
+          return [...prev, ...newEdges.filter(edge => !existingKeys.has(`${edge.relationMessageId}::${edge.to.messageId}`))];
+        });
+      }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent(""); setSubType("");
       setRelationType(null); setSecondaryRelationType("none");
@@ -3730,8 +3782,16 @@ export default function TopicDetailPage() {
         ? hasTargetsAvailable
         : newMessageContent.trim().length > 0;
     }
-    if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
-    if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
+    if (isSummaryType) {
+      return joinOnlyAction
+        ? hasTargetsAvailable
+        : hasTargetsAvailable && newMessageContent.trim().length > 0;
+    }
+    if (isMergeType) {
+      return joinOnlyAction
+        ? hasTargetsAvailable
+        : hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
+    }
     if (relationType === 'delegation') {
       if (secondaryRelationType === 'fulfill') {
         return newMessageContent.trim().length > 0 && sourceUnits.length === 0;

@@ -1033,7 +1033,31 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     const note = typeof rpForCreate?.content === 'string' ? rpForCreate.content : '回复通知';
     persistedRelationContent = `${note}\n通知用户：${[...attentionUserIds].map(id => `用户 ${id}`).join('、')}；目标：${targetLabels.join('、')}`;
   }
-  const [message] = await prisma.$transaction([
+  let joinContainerUpdate: { id: string; targetRefs: Prisma.InputJsonValue } | null = null;
+  if (effectiveRelationType.toUpperCase() === 'JOIN' && effectiveSourceMessageId) {
+    const source = await prisma.message.findUnique({
+      where: { id: effectiveSourceMessageId },
+      select: { id: true, relationType: true, targetRefs: true },
+    });
+    const sourceType = source?.relationType?.toUpperCase();
+    if (source && (sourceType === 'CLASSIFY' || sourceType === 'SUMMARY' || sourceType === 'ARRANGE' || sourceType === 'MERGE')) {
+      const sourceRefs = (source.targetRefs as Array<Record<string, unknown>> | null) ?? [];
+      const mergedRefs = [...sourceRefs];
+      for (const targetRef of effectiveTargetRefs as Array<Record<string, unknown>>) {
+        const exists = mergedRefs.some(existing =>
+          existing.kind === targetRef.kind && (
+            targetRef.kind === 'relation'
+              ? existing.relationId === targetRef.relationId
+              : existing.messageId === targetRef.messageId
+          )
+        );
+        if (!exists) mergedRefs.push(targetRef);
+      }
+      joinContainerUpdate = { id: source.id, targetRefs: mergedRefs as Prisma.InputJsonValue };
+    }
+  }
+
+  const transactionOps: Prisma.PrismaPromise<unknown>[] = [
     prisma.message.create({
       data: {
         topicId,
@@ -1048,7 +1072,11 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
-  ]);
+    ...(joinContainerUpdate
+      ? [prisma.message.update({ where: { id: joinContainerUpdate.id }, data: { targetRefs: joinContainerUpdate.targetRefs } })]
+      : []),
+  ];
+  const [message] = await prisma.$transaction(transactionOps) as any[];
 
   log('rel-persist', `CREATED msg=${message.id.slice(-6)} kind=${message.kind} type=${effectiveRelationType} topic=${topicId.slice(-6)}`);
   if (payload.supersedesRelationId) {

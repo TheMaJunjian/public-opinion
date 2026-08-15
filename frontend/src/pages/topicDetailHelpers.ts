@@ -516,19 +516,6 @@ const JOIN_RELATION_TYPES = new Set(['JOIN']);
 
 type JoinRelationRecord = Omit<Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs' | 'createdAt'>, 'createdAt'> & { createdAt?: string; createdBy?: Relation['createdBy'] };
 
-function joinTargetIsStillOwned(joinRelation: JoinRelationRecord, relationById: Map<string, JoinRelationRecord | Relation>): boolean {
-  if (!joinRelation.sourceMessageId) return false;
-  const container = relationById.get(joinRelation.sourceMessageId);
-  if (!container) return true;
-  const directTargets = container.targetRefs as TargetRef[];
-  return (joinRelation.targetRefs as TargetRef[]).every(joinTarget =>
-    directTargets.some(containerTarget =>
-      (joinTarget.kind === 'relation' && containerTarget.kind === 'relation' && joinTarget.relationId === containerTarget.relationId) ||
-      (joinTarget.kind !== 'relation' && containerTarget.kind !== 'relation' && joinTarget.messageId === containerTarget.messageId)
-    )
-  );
-}
-
 function getJoinTargetKey(ref: TargetRef): string {
   return ref.kind === 'relation' ? `relation:${ref.relationId}` : `message:${ref.messageId}`;
 }
@@ -539,14 +526,13 @@ function joinTargetsMessage(joinRelation: JoinRelationRecord, messageId: string)
   );
 }
 
-/** JOIN records whose source container no longer directly targets their member. */
+/** JOIN records whose source container no longer exists. */
 export function getStaleJoinRelationIds(
   relations: JoinRelationRecord[],
 ): string[] {
-  const relationById = new Map(relations.map(relation => [relation.id, relation]));
   const joins = relations.filter(relation => JOIN_RELATION_TYPES.has(relation.relationType?.toUpperCase() ?? ''));
   return joins
-    .filter(join => !joinTargetIsStillOwned(join, relationById))
+    .filter(join => !join.sourceMessageId)
     .map(join => join.id);
 }
 

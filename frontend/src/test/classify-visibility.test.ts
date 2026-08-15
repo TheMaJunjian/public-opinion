@@ -304,24 +304,24 @@ describe('消息加入/移出分类', () => {
     expect(getJoinRelationsForMessage('msg-1', relations).map(r => r.id)).toEqual(['join-new', 'join-old']);
   });
 
-  it('重新分类后旧分类的 JOIN 失效', () => {
+  it('重新分类后由最新 JOIN 决定消息布局', () => {
     const relations = [
       { id: 'classify-b', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [] },
       { id: 'classify-c', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
       { id: 'join-b-msg', relationType: 'JOIN', sourceMessageId: 'classify-b', createdAt: '2026-01-01', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
       { id: 'join-c-msg', relationType: 'JOIN', sourceMessageId: 'classify-c', createdAt: '2026-01-02', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
     ] as any;
-    expect(getStaleJoinRelationIds(relations)).toEqual(['join-b-msg']);
+    expect(getStaleJoinRelationIds(relations)).toEqual([]);
     expect(getActiveJoinRelationsForMessage('msg-1', relations, new Set(), new Set()).map(r => r.id)).toEqual(['join-c-msg']);
   });
 
-  it('来源容器移除目标后 JOIN 立即失效，即使没有新的 JOIN', () => {
+  it('JOIN 不依赖来源容器的 targetRefs 才能生效', () => {
     const relations = [
       { id: 'classify-1', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [] },
       { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-01', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
     ] as any;
-    expect(getStaleJoinRelationIds(relations)).toEqual(['join-1']);
-    expect(getActiveJoinRelationsForMessage('msg-1', relations, new Set(), new Set())).toEqual([]);
+    expect(getStaleJoinRelationIds(relations)).toEqual([]);
+    expect(getActiveJoinRelationsForMessage('msg-1', relations, new Set(), new Set()).map(r => r.id)).toEqual(['join-1']);
   });
 
   it('重新分类后消息不再显示在旧分类中', () => {
@@ -368,7 +368,7 @@ describe('消息加入/移出分类', () => {
     expect(collectOwnedByRelation('classify-c', relationById, new Set(), new Set(), new Set(), preferred).textIds.has('msg-1')).toBe(false);
   });
 
-  it('个人偏好的 JOIN 被反对或失去容器目标后不能继续决定布局', () => {
+  it('个人偏好的 JOIN 被反对后不能继续决定布局', () => {
     const relations = [
       { id: 'classify-1', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [] },
       { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-01', createdBy: { username: 'alice' }, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
@@ -377,7 +377,7 @@ describe('消息加入/移出分类', () => {
     ] as any;
     const preferred = new Map([['msg-1', 'join-1']]);
     expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(['join-1']), preferred)).toEqual(new Set(['join-2']));
-    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(), preferred)).toEqual(new Set(['join-2']));
+    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(), preferred)).toEqual(new Set(['join-1']));
   });
 
   it('嵌套容器目标也只保留一条生效 JOIN', () => {

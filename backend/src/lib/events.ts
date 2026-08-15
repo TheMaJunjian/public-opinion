@@ -1101,6 +1101,24 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       const staked = await autoSelfStake(actorId, topicId, textTargetId, payload.stakeAmount, side, round?.id, 'VALUE');
       log('标注', `${effRelType} msg=${message.id.slice(-6)} target=${textTargetId.slice(-6)} round=${round?.id.slice(-6) ?? 'none'} side=${side} stake=${staked ?? 0}${transformedFrom ? ` from=${transformedFrom}` : ''}${isDedup ? '' : ' NEW'}`);
     }
+  } else if (effRelType === 'DELEGATION' && (persistedPayload as Record<string, unknown> | undefined)?.delegationKind === 'CREATE') {
+    // A delegation escrow is not a truth vote. Keep message cost + reward in its own pool.
+    const relationPayload = persistedPayload as Record<string, unknown> | undefined;
+    const rewardAmount = typeof relationPayload?.rewardAmount === 'number' ? relationPayload.rewardAmount : 0;
+    const messageCost = payload.stakeAmount ?? 0;
+    const escrowAmount = messageCost + rewardAmount;
+    if (escrowAmount > 0) {
+      const result = await executeStake({ userId: actorId, topicId, messageId: message.id, amount: escrowAmount, side: 'PRO', roundId: null, settlementType: 'DELEGATION' });
+      await writeAuditLog({
+        actorId,
+        action: 'STAKE_PLACED',
+        entityType: 'Stake',
+        entityId: result.stakeId,
+        topicId,
+        summary: `委托押金 ${escrowAmount} 点`,
+        details: { messageId: message.id, amount: escrowAmount, messageCost, rewardAmount, settlementType: 'DELEGATION', feeAmount: result.feeAmount },
+      });
+    }
   } else {
     // Other relations (including JOIN): PRO on the relation message itself.
     const round = await ensureVotingRound(message.id, actorId, topicId);
@@ -2163,6 +2181,8 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 
   await prisma.$transaction(ledgerOps);
 
+  const delegationReward = await reconcileDelegationReward(messageId, payload.roundId, topicId);
+
   await writeAuditLog({
     actorId,
     action: 'ROUND_SETTLED',
@@ -2170,7 +2190,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     entityId: payload.roundId,
     topicId,
     summary: `结算完成：${resultLabel}`,
-    details: { messageId, roundId: payload.roundId, result, weights, totalPro, totalCon, dust, affectedUsers: affectedUsers.length },
+    details: { messageId, roundId: payload.roundId, result, weights, totalPro, totalCon, dust, delegationReward, affectedUsers: affectedUsers.length },
   });
 
   // ── Governance carryOut: execute proposal action when TRUE ──
@@ -2189,8 +2209,227 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     totalPro,
     totalCon,
     dust,
+    delegationReward,
     affectedUsers: affectedUsers.length,
   };
+}
+
+/** Re-evaluate a completion and all of its "完成委托" references after one round settles. */
+async function reconcileDelegationReward(settledMessageId: string, roundId: string, topicId: string): Promise<number> {
+  const settledMessage = await prisma.message.findUnique({
+    where: { id: settledMessageId },
+    select: { id: true, relationType: true, relationPayload: true, relSourceId: true, targetRefs: true },
+  });
+  if (!settledMessage) return 0;
+
+  let completionMessageId: string | null = null;
+  if (settledMessage.relationType === 'DELEGATION' &&
+      (settledMessage.relationPayload as Record<string, unknown> | null)?.delegationKind === 'FULFILL') {
+    completionMessageId = settledMessage.id;
+  } else if (settledMessage.relationType === 'REFERENCE' &&
+      (settledMessage.relationPayload as Record<string, unknown> | null)?.label === '完成委托' &&
+      settledMessage.relSourceId) {
+    const source = await prisma.message.findUnique({
+      where: { id: settledMessage.relSourceId },
+      select: { id: true, relationType: true, relationPayload: true },
+    });
+    if (source?.relationType === 'DELEGATION' &&
+        (source.relationPayload as Record<string, unknown> | null)?.delegationKind === 'FULFILL') {
+      completionMessageId = source.id;
+    }
+  }
+  if (!completionMessageId) return 0;
+
+  const completion = await prisma.message.findUnique({
+    where: { id: completionMessageId },
+    select: { targetRefs: true },
+  });
+  const completionTarget = (completion?.targetRefs as Array<{ kind?: string; relationId?: string }> | null)?.[0];
+  const delegationMessageId = completionTarget?.kind === 'relation' ? completionTarget.relationId : null;
+  if (!delegationMessageId) return 0;
+
+  const references = await prisma.message.findMany({
+    where: { relationType: 'REFERENCE', relSourceId: completionMessageId, supersededBy: null },
+    select: { id: true, relationPayload: true, targetRefs: true },
+  });
+  const completionRounds = await prisma.settlementRound.findMany({
+    where: { messageId: completionMessageId, status: 'SETTLED', settlementType: 'TRUTH' },
+    select: { result: true },
+    orderBy: [{ closedAt: 'desc' }, { openedAt: 'desc' }],
+  });
+  const referenceIds = references
+    .filter(reference =>
+      (reference.relationPayload as Record<string, unknown> | null)?.label === '完成委托' &&
+      (reference.targetRefs as Array<{ kind?: string; relationId?: string }> | null)?.some(ref => ref.kind === 'relation' && ref.relationId === delegationMessageId),
+    )
+    .map(reference => reference.id);
+  if (referenceIds.length === 0) return 0;
+
+  const referenceRounds = await prisma.settlementRound.findMany({
+    where: { messageId: { in: referenceIds }, status: 'SETTLED', settlementType: 'TRUTH' },
+    select: { messageId: true, result: true },
+    orderBy: [{ closedAt: 'desc' }, { openedAt: 'desc' }],
+  });
+  const completionIsTrue = completionRounds[0]?.result === 'TRUE';
+  const completionIsFalse = completionRounds[0]?.result === 'FALSE';
+  const latestReferenceResults = new Map<string, string | null>();
+  for (const round of referenceRounds) {
+    if (!latestReferenceResults.has(round.messageId)) latestReferenceResults.set(round.messageId, round.result);
+  }
+  const referenceIsFalse = [...latestReferenceResults.values()].some(result => result === 'FALSE');
+  if (completionIsFalse || referenceIsFalse) {
+    await clawbackDelegationReward(completionMessageId, delegationMessageId, roundId, topicId);
+    return 0;
+  }
+  if (completionIsTrue && [...latestReferenceResults.values()].some(result => result === 'TRUE')) {
+    return settleDelegationReward(completionMessageId, roundId, topicId);
+  }
+  return 0;
+}
+
+/** Pay a completed delegation from the target delegation's still-locked stake pool. */
+async function settleDelegationReward(completionMessageId: string, roundId: string, topicId: string): Promise<number> {
+  const completion = await prisma.message.findUnique({
+    where: { id: completionMessageId },
+    select: { createdById: true, relationType: true, relationPayload: true, targetRefs: true },
+  });
+  const payload = completion?.relationPayload as Record<string, unknown> | null;
+  if (completion?.relationType !== 'DELEGATION' || payload?.delegationKind !== 'FULFILL') return 0;
+  const targetRef = (completion.targetRefs as Array<{ kind?: string; relationId?: string }> | null)?.[0];
+  if (targetRef?.kind !== 'relation' || !targetRef.relationId) return 0;
+
+  const delegationPool = await prisma.betPool.findUnique({
+    where: { messageId_settlementType: { messageId: targetRef.relationId, settlementType: 'DELEGATION' } },
+    select: { lockedPro: true, lockedCon: true },
+  });
+  const poolTotal = (delegationPool?.lockedPro ?? 0) + (delegationPool?.lockedCon ?? 0);
+  if (poolTotal <= 0 || !completion.createdById) return 0;
+  const requested = typeof payload.rewardAmount === 'number'
+    ? payload.rewardAmount
+    : typeof payload.rewardRatio === 'number'
+      ? Math.floor(poolTotal * payload.rewardRatio / 100)
+      : 0;
+  const reward = Math.min(poolTotal, Math.max(0, Math.floor(requested)));
+  if (reward <= 0) return 0;
+
+  const existingRewards = await prisma.ledgerEntry.findMany({
+    where: { messageId: completionMessageId, entryType: 'DELEGATION_REWARD', amount: { gt: 0 } },
+    select: { id: true, roundId: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  const rewardRoundId = existingRewards[existingRewards.length - 1]?.roundId;
+  if (rewardRoundId) {
+    const clawbacks = await prisma.ledgerEntry.findMany({
+      where: { messageId: completionMessageId, entryType: 'DELEGATION_REWARD_CLAWBACK' },
+      select: { data: true },
+    });
+    const wasClawedBack = clawbacks.some(entry =>
+      (entry.data as Record<string, unknown> | null)?.clawedRewardRoundId === rewardRoundId,
+    );
+    if (!wasClawedBack) return 0;
+  }
+
+  const stakes = await prisma.stake.findMany({
+    where: { messageId: targetRef.relationId, settlementType: 'DELEGATION' },
+    select: { userId: true, amount: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  const deductions = new Map<string, number>();
+  let remaining = reward;
+  for (const stake of stakes) {
+    if (remaining <= 0) break;
+    const amount = Math.min(stake.amount, remaining);
+    deductions.set(stake.userId, (deductions.get(stake.userId) ?? 0) + amount);
+    remaining -= amount;
+  }
+  const paid = reward - remaining;
+  if (paid <= 0) return 0;
+
+  const userIds = [...new Set([...deductions.keys(), completion.createdById])];
+  const accounts = new Map<string, { balance: number; available: number; locked: number }>();
+  for (const userId of userIds) {
+    const [balance, account] = await Promise.all([
+      prisma.balance.findUnique({ where: { userId }, select: { balance: true } }),
+      prisma.pointAccount.findUnique({ where: { userId }, select: { available: true, locked: true } }),
+    ]);
+    accounts.set(userId, { balance: balance?.balance ?? 0, available: account?.available ?? 0, locked: account?.locked ?? 0 });
+  }
+  const netBalance = new Map<string, number>();
+  for (const [userId, amount] of deductions) netBalance.set(userId, (netBalance.get(userId) ?? 0) - amount);
+  netBalance.set(completion.createdById, (netBalance.get(completion.createdById) ?? 0) + paid);
+
+  const ops: Prisma.PrismaPromise<unknown>[] = [];
+  for (const userId of userIds) {
+    const deduction = deductions.get(userId) ?? 0;
+    const rewardIn = userId === completion.createdById ? paid : 0;
+    const current = accounts.get(userId)!;
+    const balanceDelta = (netBalance.get(userId) ?? 0);
+    ops.push(
+      prisma.balance.update({ where: { userId }, data: { balance: { increment: balanceDelta }, debtFrozen: current.balance + balanceDelta < 0 } }),
+      prisma.pointAccount.update({ where: { userId }, data: { ...(deduction > 0 ? { locked: { decrement: deduction } } : {}), ...(rewardIn > 0 ? { available: { increment: rewardIn } } : {}) } }),
+      prisma.pointTransaction.create({ data: { userId, type: rewardIn > 0 ? 'TRANSFER' : 'SPEND', amount: balanceDelta, balanceAfter: current.available + (rewardIn > 0 ? rewardIn : 0), data: { delegationReward: true, completionMessageId, delegationMessageId: targetRef.relationId, roundId, topicId } } }),
+      prisma.ledgerEntry.create({ data: { userId, entryType: 'DELEGATION_REWARD', amount: balanceDelta, balanceAfter: current.balance + balanceDelta, roundId, messageId: completionMessageId, data: { delegationReward: true, role: rewardIn > 0 ? 'recipient' : 'source', delegationMessageId: targetRef.relationId, amount: rewardIn || deduction } } }),
+    );
+  }
+  ops.push(prisma.betPool.update({ where: { messageId_settlementType: { messageId: targetRef.relationId, settlementType: 'DELEGATION' } }, data: { lockedPro: { decrement: Math.min(delegationPool?.lockedPro ?? 0, paid) }, lockedCon: { decrement: Math.max(0, paid - Math.min(delegationPool?.lockedPro ?? 0, paid)) } } }));
+  await prisma.$transaction(ops);
+  return paid;
+}
+
+/** Reverse a previously paid delegation reward when a related verdict is FALSE. */
+async function clawbackDelegationReward(completionMessageId: string, delegationMessageId: string, roundId: string, topicId: string): Promise<void> {
+  const rewards = await prisma.ledgerEntry.findMany({
+    where: { messageId: completionMessageId, entryType: 'DELEGATION_REWARD' },
+    select: { userId: true, amount: true, roundId: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  const rewardRoundId = rewards.find(reward => reward.amount > 0)?.roundId;
+  if (!rewardRoundId) return;
+
+  const markers = await prisma.ledgerEntry.findMany({
+    where: { messageId: completionMessageId, entryType: 'DELEGATION_REWARD_CLAWBACK' },
+    select: { data: true },
+  });
+  if (markers.some(marker => (marker.data as Record<string, unknown> | null)?.clawedRewardRoundId === rewardRoundId)) return;
+  const activeRewards = rewards.filter(reward => reward.roundId === rewardRoundId);
+  if (activeRewards.length === 0) return;
+
+  const changes = new Map<string, { balance: number; available: number; locked: number }>();
+  let restored = 0;
+  for (const reward of activeRewards) {
+    const amount = Math.abs(reward.amount);
+    const change = changes.get(reward.userId) ?? { balance: 0, available: 0, locked: 0 };
+    if (reward.amount > 0) {
+      change.balance -= amount;
+      change.available -= amount;
+      restored += amount;
+    } else {
+      change.balance += amount;
+      change.locked += amount;
+    }
+    changes.set(reward.userId, change);
+  }
+  if (restored <= 0) return;
+
+  const ops: Prisma.PrismaPromise<unknown>[] = [];
+  for (const [userId, change] of changes) {
+    const [balance, account] = await Promise.all([
+      prisma.balance.findUnique({ where: { userId }, select: { balance: true } }),
+      prisma.pointAccount.findUnique({ where: { userId }, select: { available: true } }),
+    ]);
+    ops.push(
+      prisma.balance.update({ where: { userId }, data: { balance: { increment: change.balance }, debtFrozen: (balance?.balance ?? 0) + change.balance < 0 } }),
+      prisma.pointAccount.update({ where: { userId }, data: { available: { increment: change.available }, locked: { increment: change.locked } } }),
+      prisma.pointTransaction.create({ data: { userId, type: 'CLAWBACK', amount: change.balance, balanceAfter: (account?.available ?? 0) + change.available, data: { delegationRewardClawback: true, completionMessageId, delegationMessageId, roundId, topicId } } }),
+      prisma.ledgerEntry.create({ data: { userId, entryType: 'DELEGATION_REWARD_CLAWBACK', amount: change.balance, balanceAfter: (balance?.balance ?? 0) + change.balance, roundId, messageId: completionMessageId, data: { delegationRewardClawback: true, delegationMessageId, clawedRewardRoundId: rewardRoundId, restoredLocked: change.locked } } }),
+    );
+  }
+  ops.push(prisma.betPool.upsert({
+    where: { messageId_settlementType: { messageId: delegationMessageId, settlementType: 'DELEGATION' } },
+    create: { messageId: delegationMessageId, settlementType: 'DELEGATION', lockedPro: restored, lockedCon: 0 },
+    update: { lockedPro: { increment: restored } },
+  }));
+  await prisma.$transaction(ops);
 }
 
 /**
@@ -2222,7 +2461,6 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
       amount: { gt: 0 },
     },
   });
-
   const prevStype = prevRound.settlementType ?? 'TRUTH';
 
   // ── Look up original stakes (only those from before previous round ended) ──

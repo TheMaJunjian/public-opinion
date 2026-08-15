@@ -27,6 +27,7 @@ export type RelationType =
   | "attention"
   | "block"
   | "proposal"
+  | "delegation"
   | "code_change"
   | "operations";
 export type SecondaryRelationType = "none" | "question" | "answer";

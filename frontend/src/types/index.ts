@@ -72,6 +72,7 @@ export type RelationType =
   | 'ATTENTION'    // 关注
   | 'BLOCK'        // 拉黑
   | 'OPERATIONS'   // 运营（收入、统计等程序运营信息）
+  | 'DELEGATION'   // 委托（押注作为完成委托的报酬）
   | 'JOIN'         // 加入（内部成员关系记录）
   | string;        // future extensibility
 
@@ -121,6 +122,9 @@ export interface RelationPayload {
   attentionUserIds?: string[];
   notifyUserIds?: string[];
   notifyUsers?: Array<{ id: string; username: string }>;
+  delegationKind?: 'CREATE' | 'FULFILL';
+  rewardAmount?: number;
+  rewardRatio?: number;
 }
 
 export interface Relation {
@@ -227,6 +231,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   ATTENTION:   { kind: 'inline-badge',      label: '关注', color: 'cyan',   formsTrees: false },
   BLOCK:       { kind: 'inline-badge',      label: '拉黑', color: 'red',    formsTrees: false },
   PROPOSAL:    { kind: 'edge-label',        label: '🏛️ 提案', color: 'amber',  formsTrees: false },
+  DELEGATION:  { kind: 'edge-label',        label: '🤝 委托', color: 'green',   formsTrees: false },
   CODE_CHANGE: { kind: 'edge-label',        label: '💻 代码', color: 'teal',  formsTrees: false },
   OPERATIONS:  { kind: 'edge-label',        label: '📊 运营', color: 'cyan',   formsTrees: false },
   JOIN:        { kind: 'edge-label',        label: '加入', color: 'slate',  formsTrees: false, isContainer: false },

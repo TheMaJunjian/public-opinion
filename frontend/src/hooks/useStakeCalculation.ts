@@ -2,6 +2,7 @@ import { useRef, useEffect } from 'react';
 
 interface StakeCalculationDeps {
   relationType: string | null;
+  secondaryRelationType?: string;
   subType: string;
   draftUnits: Array<{ messageId: string }>;
   targetUnits: Array<{ messageId: string }>;
@@ -21,7 +22,7 @@ const SUB_TYPE_MIN_STAKE_FALLBACK: Record<string, number> = { SPAM: 5, OFFTOPIC:
 
 export default function useStakeCalculation(deps: StakeCalculationDeps) {
   const {
-    relationType, subType, draftUnits, targetUnits, newMessageContent,
+    relationType, secondaryRelationType = 'none', subType, draftUnits, targetUnits, newMessageContent,
     stakeAmount, relStakeAmount, relationStakeMap, subTypeStakeMap,
     existingJoinCount = 0, joinOnlyAction = false, additionalAgreeTargetCount = 0,
     onRelStakeChange, stakeDefaultLoaded,
@@ -54,7 +55,7 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
   })();
 
   const isTextInPayload = relationType === 'classify' || relationType === 'summary' || relationType === 'merge'
-    || relationType === 'tag' || relationType === 'proposal' || relationType === 'code_change' || relationType === 'operations';
+    || relationType === 'tag' || relationType === 'proposal' || relationType === 'delegation' || relationType === 'code_change' || relationType === 'operations';
   const hasTextContentForTotal = !isTextInPayload && newMessageContent.trim().length > 0;
 
   const totalConsumption = (() => {
@@ -110,8 +111,16 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
     })() : 0;
     const joinStakeTotal = containerJoinCount * JOIN_STAKE_PER_TARGET;
     const joinFeeTotal = containerJoinCount * protocolFeePerOp;
-    const totalStake = textStake + relStakeTotal + refStakeTotal + joinStakeTotal;
-    const totalProtocolFee = textFee + relFeeTotal + refFeeTotal + joinFeeTotal;
+    const delegationRewardMatch = relationType === 'delegation' && secondaryRelationType === 'create'
+      ? newMessageContent.match(/(?:报酬数量|数量)\s*[=:：]\s*(\d+)/)
+      : null;
+    const delegationRewardStake = delegationRewardMatch ? Number(delegationRewardMatch[1]) : 0;
+    const delegationReferenceStake = relationType === 'delegation' && secondaryRelationType === 'fulfill' && targetUnits.length + draftUnits.length > 0
+      ? (relationStakeMap.current['REFERENCE'] ?? 10)
+      : 0;
+    const delegationReferenceFee = delegationReferenceStake > 0 ? protocolFeePerOp : 0;
+    const totalStake = textStake + relStakeTotal + refStakeTotal + joinStakeTotal + delegationRewardStake + delegationReferenceStake;
+    const totalProtocolFee = textFee + relFeeTotal + refFeeTotal + joinFeeTotal + delegationReferenceFee;
     return {
       stakeTotal: totalStake,
       protocolFeeTotal: totalProtocolFee,
@@ -126,6 +135,9 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
       existingJoinAgreeCount: Math.min(containerJoinCount, existingJoinCount),
       joinStakeTotal,
       joinFeeTotal,
+      delegationRewardStake,
+      delegationReferenceStake,
+      delegationReferenceFee,
       hasText: textStake > 0,
       hasRel: true,
     };

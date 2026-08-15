@@ -436,6 +436,14 @@ export default function TopicDetailPage() {
       setNewMessageContent('收入金额=1000\n来源=服务收入');
     }
   }, [relationType, secondaryRelationType]);
+  useEffect(() => {
+    if (relationType !== 'delegation') return;
+    if (secondaryRelationType === 'create') {
+      setNewMessageContent('报酬数量=100\n委托内容=');
+    } else if (secondaryRelationType === 'fulfill') {
+      setNewMessageContent('分配数量=100\n完成说明=');
+    }
+  }, [relationType, secondaryRelationType]);
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
   const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
   const [targetUnits, setTargetUnits] = useState<UnitSelection[]>([]);
@@ -775,7 +783,7 @@ export default function TopicDetailPage() {
   }, [relationType, sourceUnits.length, draftUnits, targetUnits, relations, rejectedContainerIds]);
 
   const { effectiveMinStake, totalConsumption, stakeFeeAmountRef } = useStakeCalculation({
-    relationType, subType, draftUnits, targetUnits, newMessageContent,
+    relationType, secondaryRelationType, subType, draftUnits, targetUnits, newMessageContent,
     stakeAmount, relStakeAmount, relationStakeMap, subTypeStakeMap,
     existingJoinCount,
     joinOnlyAction,
@@ -2358,7 +2366,9 @@ export default function TopicDetailPage() {
       const refPayload = secondaryRelationType !== "none"
         ? buildRelationPayload({
             relationType: "reference",
-            label: secondaryRelationType === "custom" ? (label || "自定义") : secondaryRelationType,
+            label: secondaryRelationType === "custom"
+              ? (label || "自定义")
+              : secondaryRelationType === "delegation" ? "完成委托" : secondaryRelationType,
           })
         : undefined;
       const refEdgeLabel = secondaryRelationType !== "none"
@@ -2559,7 +2569,7 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if (effectiveTargets.length === 0 && relationType !== "classify" && relationType !== "proposal" && relationType !== "code_change" && relationType !== "operations") return;
+    if (effectiveTargets.length === 0 && relationType !== "classify" && relationType !== "proposal" && relationType !== "code_change" && relationType !== "operations" && !(relationType === 'delegation' && secondaryRelationType === 'create')) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isArrange = relationType === "arrange";
     // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
@@ -3313,6 +3323,76 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // DELEGATION: create a commission or claim completion of one.
+    if (relationType === 'delegation') {
+      const content = newMessageContent.trim();
+      const readField = (labels: string[]): string | null => {
+        for (const field of labels) {
+          const match = content.match(new RegExp(`${field}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'));
+          if (match?.[1]?.trim()) return match[1].trim();
+        }
+        return null;
+      };
+      const isFulfill = secondaryRelationType === 'fulfill';
+      const selectedTargets = effectiveTargets.filter(target => msgMap.get(target.messageId)?.kind === 'relation');
+      const targetRelation = selectedTargets.length === 1
+        ? relations.find(rel => rel.id === selectedTargets[0].messageId)
+        : undefined;
+      const amountText = readField([isFulfill ? '分配数量' : '报酬数量', '数量']);
+      const ratioText = readField([isFulfill ? '分配比例' : '报酬比例', '比例']);
+      const amount = amountText ? Number(amountText) : undefined;
+      const ratio = ratioText ? Number(ratioText.replace(/%$/, '')) : undefined;
+      const validReward = isFulfill
+        ? (amount === undefined) !== (ratio === undefined)
+          && (amount === undefined || (Number.isInteger(amount) && amount > 0))
+          && (ratio === undefined || (Number.isInteger(ratio) && ratio > 0 && ratio <= 100))
+        : amount !== undefined && Number.isInteger(amount) && amount > 0 && ratio === undefined;
+      if (!content || !validReward || (isFulfill && effectiveTargets.length > 0 && (effectiveTargets.length !== 1 || !targetRelation || targetRelation.relationType.toUpperCase() !== 'DELEGATION'))) {
+        setSendError(isFulfill
+          ? '完成委托格式：分配数量=100 或 分配比例=30%（二选一）；完成说明=...（分配字段必须放在第一行）'
+          : '创建委托格式：报酬数量=100；委托内容=...（报酬数量必须放在第一行）');
+        return;
+      }
+      try {
+        const backendRel = await createRel(topicId!, {
+          relationType: 'DELEGATION',
+          sourceMessageId: null,
+          targetRefs: isFulfill && targetRelation
+            ? [unitSelectionToTargetRef({ messageId: targetRelation!.id, selection: { kind: 'whole' } }, msgMap)]
+            : [],
+          payload: buildRelationPayload({
+            relationType: 'DELEGATION', content,
+            delegationKind: isFulfill ? 'FULFILL' : 'CREATE',
+            rewardAmount: amount, rewardRatio: ratio,
+          }),
+        });
+        await registerCreatedRelationInCurrentClassify(backendRel);
+        setRelations(prev => [...prev, backendRel]);
+        if (isFulfill && targetRelation) {
+          const refStake = Math.max(relationStakeMap.current['REFERENCE'] ?? 10, 1);
+          const refRel = await api.createRelation(topicId!, {
+            relationType: 'REFERENCE',
+            sourceMessageId: backendRel.id,
+            targetRefs: [{ kind: 'relation', relationId: targetRelation.id, part: 'whole' }],
+            payload: { label: '完成委托' },
+            stakeAmount: refStake,
+          });
+          await registerCreatedRelationInCurrentClassify(refRel);
+          setRelations(prev => [...prev, refRel]);
+          setEdges(prev => [...prev, {
+            id: nextId('edge'),
+            relationMessageId: refRel.id,
+            relationType: 'reference',
+            from: { messageId: backendRel.id, selection: { kind: 'whole' } },
+            to: { messageId: targetRelation.id, selection: { kind: 'whole' } },
+            relationLabel: '完成委托',
+          } as DemoEdge]);
+        }
+        setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
+      } catch (e: any) { setSendError(`${isFulfill ? '建立完成委托' : '建立委托'}失败：${e?.message ?? e}`); }
+      return;
+    }
+
     // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages.
     if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
       let proposalContent = newMessageContent.trim();
@@ -3618,7 +3698,8 @@ export default function TopicDetailPage() {
     || relationType === "tag"
     || relationType === "arrange"
     || relationType === "reference"
-    || relationType === "proposal";
+    || relationType === "proposal"
+    || relationType === "delegation";
 
   // Send button enabled logic (single button):
   //   - No relation type: just send message → need text
@@ -3650,6 +3731,12 @@ export default function TopicDetailPage() {
     }
     if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
     if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
+    if (relationType === 'delegation') {
+      if (secondaryRelationType === 'fulfill') {
+        return newMessageContent.trim().length > 0 && sourceUnits.length === 0;
+      }
+      return sourceUnits.length === 0 && newMessageContent.trim().length > 0;
+    }
     if (isGovernanceOrOpsType) {
       if (sourceUnits.length > 0) return false;
       // 分配收入：必须完全清空

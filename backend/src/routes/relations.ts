@@ -72,6 +72,9 @@ const createRelationSchema = z.object({
     recipientUserId: z.string().trim().min(1).optional(),
     source: z.string().trim().min(1).max(200).optional(),
     note: z.string().max(2000).optional(),
+    delegationKind: z.enum(['CREATE', 'FULFILL']).optional(),
+    rewardAmount: z.number().int().positive().optional(),
+    rewardRatio: z.number().int().positive().max(100).optional(),
     attentionUserIds: z.array(z.string().min(1)).max(100).optional(),
     notifyUserIds: z.array(z.string().min(1)).max(100).optional(),
   }).strict().optional(),
@@ -97,12 +100,35 @@ const createRelationSchema = z.object({
       path: ['payload', 'title'],
     });
   }
-  if ((data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE' || data.relationType === 'OPERATIONS') && !data.payload?.content) {
+  if ((data.relationType === 'PROPOSAL' || data.relationType === 'DELEGATION' || data.relationType === 'CODE_CHANGE' || data.relationType === 'OPERATIONS') && !data.payload?.content) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: '提案/代码变更/运营关系需要提供内容',
       path: ['payload', 'content'],
     });
+  }
+  if (data.relationType === 'DELEGATION') {
+    const kind = data.payload?.delegationKind;
+    if (!kind) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: '委托关系需要指定是创建委托还是完成委托', path: ['payload', 'delegationKind'] });
+    } else if (kind === 'CREATE') {
+      if (data.targetRefs.length > 0) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: '创建委托不能有目标关系消息', path: ['targetRefs'] });
+      }
+      if (data.payload?.rewardRatio !== undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: '创建委托必须填写固定报酬数量，比例只能用于完成委托', path: ['payload', 'rewardRatio'] });
+      }
+      if (data.payload?.rewardAmount === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: '创建委托需要填写报酬数量', path: ['payload', 'rewardAmount'] });
+      }
+    } else {
+      if (data.targetRefs.length > 1 || (data.targetRefs.length === 1 && data.targetRefs[0]?.kind !== 'relation')) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: '完成委托最多目标一条委托关系消息', path: ['targetRefs'] });
+      }
+      if (data.payload?.rewardAmount !== undefined || data.payload?.rewardRatio !== undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: '完成委托的报酬规则必须继承目标委托', path: ['payload'] });
+      }
+    }
   }
   if (data.relationType === 'NOTIFY' && data.targetRefs.length === 0) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: '通知关系需要至少一个目标消息', path: ['targetRefs'] });
@@ -116,13 +142,13 @@ const createRelationSchema = z.object({
   }
 });
 
-const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'NOTIFY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
-const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'CODE_CHANGE', 'OPERATIONS']);
+const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'NOTIFY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK', 'PROPOSAL', 'DELEGATION', 'CODE_CHANGE', 'OPERATIONS']);
+const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'DELEGATION', 'CODE_CHANGE', 'OPERATIONS']);
 
 // Types that forbid sourceMessageId entirely (must be null)
 const SOURCE_FORBIDDEN_RELATION_TYPES: Record<string, string> = {
   RECOMMEND: '推荐', ARCHIVE: '冷藏', ATTENTION: '关注', BLOCK: '拉黑',
-  PROPOSAL: '提案', CODE_CHANGE: '代码变更', OPERATIONS: '运营',
+  PROPOSAL: '提案', DELEGATION: '委托', CODE_CHANGE: '代码变更', OPERATIONS: '运营',
 };
 // Types that forbid targetRefs entirely (must be empty array)
 const TARGET_FORBIDDEN_RELATION_TYPES: Record<string, string> = {};
@@ -433,6 +459,14 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       }
 
       foundTargetRelations = [...relationById.values()];
+
+      if (data.relationType === 'DELEGATION' && data.payload?.delegationKind === 'FULFILL') {
+        const target = foundTargetRelations.find(rel => rel.id === targetRelationIds[0]);
+        if (!target || target.relationType !== 'DELEGATION') {
+          res.status(400).json({ error: '完成委托的目标必须是委托关系消息' });
+          return;
+        }
+      }
     }
 
     // CLASSIFY, MERGE, and SUMMARY: validate grouping targets.

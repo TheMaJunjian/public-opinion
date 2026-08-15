@@ -7,7 +7,7 @@ import { relationTypeName } from '../components/GraphView';
 export const ALL_RELATION_TYPES: RelationType[] = [
   'annotation', 'reference', 'reply', 'notify', 'agree', 'disagree', 'tag', 'arrange',
   'correct', 'classify', 'merge', 'summary',
-  'proposal', 'code_change', 'operations',
+  'proposal', 'delegation', 'code_change', 'operations',
 ];
 
 export const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
@@ -21,12 +21,15 @@ export function secondaryRelationLabel(t: string): string {
   if (t === 'vertical') return '纵';
   if (t === 'horizontal') return '横';
   if (t === 'evidence') return '证据';
+  if (t === 'delegation') return '完成委托';
   if (t === 'custom') return '自定义';
   if (t === 'recommend' || t === 'archive' || t === 'attention' || t === 'block') return relationTypeName(t as RelationType);
   if (t === '分配收入') return '分配收入';
   if (t === '终止结算') return '终止结算';
   if (t === '充值分账') return '充值分账';
   if (t === '运营收入注入') return '运营收入注入';
+  if (t === 'create') return '创建委托';
+  if (t === 'fulfill') return '完成委托';
   if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
   return t;
 }
@@ -143,6 +146,9 @@ export function buildRelationPayload(params: {
   note?: string;
   attentionUserIds?: string[];
   notifyUserIds?: string[];
+  delegationKind?: RelationPayload['delegationKind'];
+  rewardAmount?: number;
+  rewardRatio?: number;
 }): RelationPayload | undefined {
   const payload: RelationPayload = {};
   if (params.label) payload.label = params.label;
@@ -157,6 +163,9 @@ export function buildRelationPayload(params: {
   if (params.note) payload.note = params.note;
   if (params.attentionUserIds?.length) payload.attentionUserIds = params.attentionUserIds;
   if (params.notifyUserIds?.length) payload.notifyUserIds = params.notifyUserIds;
+  if (params.delegationKind) payload.delegationKind = params.delegationKind;
+  if (params.rewardAmount !== undefined) payload.rewardAmount = params.rewardAmount;
+  if (params.rewardRatio !== undefined) payload.rewardRatio = params.rewardRatio;
   if ((params.relationType.toUpperCase() === 'MERGE' || params.relationType.toUpperCase() === 'SUMMARY') && !payload.targetLayout) {
     payload.targetLayout = 'multi-column';
   }

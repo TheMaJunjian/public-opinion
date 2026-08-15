@@ -262,9 +262,11 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                 : p.relationType === "arrange"
                   ? ["vertical", "horizontal"]
                   : p.relationType === "reference"
-                    ? ["none", "evidence", "custom"]
+                    ? ["none", "evidence", "delegation", "custom"]
                       : p.relationType === "proposal"
                         ? p.proposalSecondaryOptions
+                      : p.relationType === "delegation"
+                        ? ["create", "fulfill"]
                       : p.correctSecondaryOptions;
             return (
               <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
@@ -360,7 +362,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           })()}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {/* Text stake */}
-            {p.hasTextContent && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isArrangeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) && (
+            {p.hasTextContent && p.relationType !== "delegation" && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isArrangeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) && (
               <>
                 <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
                 <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}

@@ -109,7 +109,7 @@ export function register(data: { username: string; password: string; publicKey?:
   });
 }
 
-export function login(data: { username: string; password: string }) {
+export function login(data: { username: string; password: string; publicKey?: string }) {
   return request<{ message: string; token: string; user: import('../types').User & { publicKey?: string | null } }>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),

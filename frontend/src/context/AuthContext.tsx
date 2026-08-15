@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import type { User } from '../types';
 import { api } from '../api';
 import { getDeviceId, getPrivateKeyForCurrentUser, getPrivateKeyForUser, storePrivateKeyForUser } from '../api/client';
-import { generateSigningKeyPair, privateKeyMatchesPublicKey, signPayloadWithPrivateJwk } from '../utils/signature';
+import { generateSigningKeyPair, privateKeyMatchesPublicKey, publicKeyFromPrivateKey, signPayloadWithPrivateJwk } from '../utils/signature';
 
 interface AuthContextValue {
   user: User | null;
@@ -40,8 +40,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (storedToken && storedUser && !tokenExpired) {
       try {
-        setToken(storedToken);
-        setUser(JSON.parse(storedUser));
+        const parsedUser = JSON.parse(storedUser) as { username?: string; publicKey?: string | null };
+        const privateKey = parsedUser.username ? getPrivateKeyForUser(parsedUser.username) : null;
+        const signingKeyReady = Boolean(
+          parsedUser.username
+          && parsedUser.publicKey
+          && privateKey
+          && privateKeyMatchesPublicKey(privateKey, parsedUser.publicKey),
+        );
+        if (!signingKeyReady) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          if (parsedUser.username) {
+            localStorage.removeItem(`privateKey:${getDeviceId()}:${parsedUser.username}`);
+          }
+        } else {
+          setToken(storedToken);
+          setUser(JSON.parse(storedUser));
+        }
       } catch {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
@@ -56,35 +72,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function login(username: string, password: string) {
-    const res = await api.login({ username, password });
-    let authenticatedUser = res.user;
-    let token = res.token;
-    const storedPrivateKey = getPrivateKeyForUser(res.user.username);
-    const keyMatches = storedPrivateKey && res.user.publicKey
-      ? privateKeyMatchesPublicKey(storedPrivateKey, res.user.publicKey)
-      : false;
-    if (!storedPrivateKey || !keyMatches) {
-      const keyPair = await generateSigningKeyPair();
-      const privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-      const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-      localStorage.setItem('token', res.token);
-      localStorage.setItem('user', JSON.stringify(res.user));
+    const storedPrivateKey = getPrivateKeyForUser(username);
+    let privateJwk: JsonWebKey | null = null;
+    let publicKey: string;
+    if (storedPrivateKey) {
       try {
-        const rotated = await api.rotateSigningKey({ password, publicKey: JSON.stringify(publicJwk) });
-        token = rotated.token;
-        authenticatedUser = rotated.user;
-        storePrivateKeyForUser(res.user.username, privateJwk);
-      } catch (error) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        localStorage.removeItem(`privateKey:${getDeviceId()}:${res.user.username}`);
-        throw error;
+        publicKey = publicKeyFromPrivateKey(storedPrivateKey);
+        privateJwk = JSON.parse(storedPrivateKey) as JsonWebKey;
+      } catch {
+        publicKey = '';
       }
+    } else {
+      publicKey = '';
     }
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(authenticatedUser));
-    setToken(token);
-    setUser(authenticatedUser);
+    if (!publicKey) {
+      const keyPair = await generateSigningKeyPair();
+      privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+      const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+      publicKey = JSON.stringify(publicJwk);
+    }
+    const res = await api.login({ username, password, publicKey });
+    if (!privateJwk || !res.user.publicKey || !privateKeyMatchesPublicKey(JSON.stringify(privateJwk), res.user.publicKey)) {
+      throw new Error('设备签名密钥绑定失败，请重新登录');
+    }
+    storePrivateKeyForUser(username, privateJwk);
+    localStorage.setItem('token', res.token);
+    localStorage.setItem('user', JSON.stringify(res.user));
+    setToken(res.token);
+    setUser(res.user);
   }
 
   async function register(username: string, password: string, publicKey?: string | null) {

@@ -23,6 +23,7 @@ const loginSchema = z.object({
   username: z.string().min(1, '请输入用户名'),
   password: z.string().min(1, '请输入密码'),
   deviceId: z.string().min(1).max(200).optional(),
+  publicKey: z.string().min(1).optional(),
 });
 
 const signingKeySchema = z.object({
@@ -55,7 +56,7 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
 // POST /api/auth/login — 用户登录，返回 JWT
 router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { username, password, deviceId: requestedDeviceId } = loginSchema.parse(req.body);
+    const { username, password, deviceId: requestedDeviceId, publicKey: requestedPublicKey } = loginSchema.parse(req.body);
     const deviceId = requestedDeviceId ?? `legacy:${username}`;
     const user = await prisma.user.findUnique({ where: { username } });
 
@@ -76,13 +77,22 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
       return;
     }
 
-    let deviceKey = await prisma.userSigningKey.findUnique({
-      where: { userId_deviceId: { userId: user.id, deviceId } },
-    });
-    if (!deviceKey && user.publicKey) {
-      deviceKey = await prisma.userSigningKey.create({
-        data: { userId: user.id, deviceId, publicKey: user.publicKey },
+    let deviceKey;
+    if (requestedPublicKey) {
+      deviceKey = await prisma.userSigningKey.upsert({
+        where: { userId_deviceId: { userId: user.id, deviceId } },
+        create: { userId: user.id, deviceId, publicKey: requestedPublicKey },
+        update: { publicKey: requestedPublicKey },
       });
+    } else {
+      deviceKey = await prisma.userSigningKey.findUnique({
+        where: { userId_deviceId: { userId: user.id, deviceId } },
+      });
+      if (!deviceKey && user.publicKey) {
+        deviceKey = await prisma.userSigningKey.create({
+          data: { userId: user.id, deviceId, publicKey: user.publicKey },
+        });
+      }
     }
     const publicKey = deviceKey?.publicKey ?? null;
     const token = jwt.sign({ id: user.id, username: user.username, deviceId, publicKey }, secret, {

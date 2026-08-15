@@ -62,3 +62,14 @@ export function privateKeyMatchesPublicKey(privateKeyJson: string, publicKeyJson
     return false;
   }
 }
+
+export function publicKeyFromPrivateKey(privateKeyJson: string): string {
+  const privateKey = JSON.parse(privateKeyJson) as JsonWebKey;
+  const publicKey: JsonWebKey = {
+    kty: privateKey.kty,
+    crv: privateKey.crv,
+    x: privateKey.x,
+  };
+  if (privateKey.y) publicKey.y = privateKey.y;
+  return JSON.stringify(publicKey);
+}

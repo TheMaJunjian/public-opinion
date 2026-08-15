@@ -1008,9 +1008,14 @@ export default function TopicDetailPage() {
     try {
       return await api.createRelation(topicId, { ...data, stakeAmount: amount });
     } catch (e: any) {
-      if (/登录|login|token|auth|unauthorized/i.test(e?.message ?? '')) {
+      const isTokenFailure = e instanceof ApiError && e.status === 401 && (
+        e.code === 'AUTH_TOKEN_MISSING'
+        || e.code === 'AUTH_TOKEN_INVALID'
+        || e.code === 'AUTH_TOKEN_EXPIRED'
+      );
+      if (isTokenFailure) {
         logout();
-        navigate('/login', { state: { reason: '登录已过期，请重新登录' } });
+        navigate('/login', { state: { reason: e.message } });
       }
       throw e;
     }
@@ -1430,7 +1435,7 @@ export default function TopicDetailPage() {
       'AUTH_TOKEN_INVALID',
       'AUTH_TOKEN_EXPIRED',
     ]);
-    if (apiError.status === 401 && (authFailureCodes.has(apiError.code ?? '') || !apiError.code)) {
+    if (apiError.status === 401 && authFailureCodes.has(apiError.code ?? '')) {
       await logout();
       navigate('/login', {
         state: {

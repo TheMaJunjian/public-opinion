@@ -1,8 +1,8 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User } from '../types';
 import { api } from '../api';
-import { getPrivateKeyForCurrentUser } from '../api/client';
-import { signPayloadWithPrivateJwk } from '../utils/signature';
+import { getPrivateKeyForCurrentUser, storePrivateKeyForUser } from '../api/client';
+import { generateSigningKeyPair, signPayloadWithPrivateJwk } from '../utils/signature';
 
 interface AuthContextValue {
   user: User | null;
@@ -34,14 +34,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function login(username: string, password: string) {
     const res = await api.login({ username, password });
-    localStorage.setItem('token', res.token);
-    localStorage.setItem('user', JSON.stringify(res.user));
-    setToken(res.token);
-    setUser(res.user);
+    let token = res.token;
+    let authenticatedUser = res.user;
     const storedPrivateKey = localStorage.getItem(`privateKey:${res.user.username}`);
-    if (storedPrivateKey) {
+    if (storedPrivateKey && res.user.publicKey) {
       localStorage.setItem('privateKey', storedPrivateKey);
+    } else {
+      // A different production origin cannot read the old origin's private key.
+      // Rebind a freshly generated device key after password authentication.
+      const keyPair = await generateSigningKeyPair();
+      const privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+      const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+      storePrivateKeyForUser(res.user.username, privateJwk);
+      const rotated = await api.rotateSigningKey({ password, publicKey: JSON.stringify(publicJwk) });
+      token = rotated.token;
+      authenticatedUser = rotated.user;
     }
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(authenticatedUser));
+    setToken(token);
+    setUser(authenticatedUser);
   }
 
   async function register(username: string, password: string, publicKey?: string | null) {

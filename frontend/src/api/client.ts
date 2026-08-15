@@ -47,14 +47,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (options.method && options.method !== 'GET') {
     try {
       const rawKey = getPrivateKeyForCurrentUser();
-      if (rawKey) {
+      if (!rawKey) {
+        if (path !== '/auth/login') throw new Error('本设备缺少签名密钥，请重新登录以绑定当前设备');
+      } else {
         const keyData = JSON.parse(rawKey) as JsonWebKey;
-        // express.json() exposes an empty POST body as {}, so sign the same
-        // canonical representation that verifySignature() reconstructs.
         const rawBody = typeof options.body === 'string' ? options.body : '{}';
         headers['X-Signature'] = await signPayloadWithPrivateJwk(rawBody, keyData);
       }
-    } catch { /* signing best-effort */ }
+    } catch (error) {
+      if (path !== '/auth/login') {
+        throw error instanceof Error ? error : new Error('签名失败，请重新登录以绑定当前设备');
+      }
+    }
   }
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) {
@@ -81,7 +85,14 @@ export function register(data: { username: string; password: string; publicKey?:
 }
 
 export function login(data: { username: string; password: string }) {
-  return request<{ message: string; token: string; user: import('../types').User }>('/auth/login', {
+  return request<{ message: string; token: string; user: import('../types').User & { publicKey?: string | null } }>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function rotateSigningKey(data: { password: string; publicKey: string }) {
+  return request<{ message: string; token: string; user: import('../types').User & { publicKey?: string | null } }>('/auth/signing-key', {
     method: 'POST',
     body: JSON.stringify(data),
   });

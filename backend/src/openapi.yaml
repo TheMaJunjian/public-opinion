@@ -185,15 +185,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [username, password]
+              required: [username, password, deviceId]
               properties:
                 username:
                   type: string
                 password:
                   type: string
+                deviceId:
+                  type: string
+                  maxLength: 200
             example:
               username: "alice"
               password: "password123"
+              deviceId: "browser-device-id"
       responses:
         '200':
           description: 登录成功，返回 JWT
@@ -211,6 +215,33 @@ paths:
           description: 已登出
         '401':
           description: 未认证
+
+  /auth/signing-key:
+    post:
+      tags: [认证]
+      summary: 更新当前设备签名密钥
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, publicKey, deviceId]
+              properties:
+                password:
+                  type: string
+                publicKey:
+                  type: string
+                deviceId:
+                  type: string
+                  maxLength: 200
+      responses:
+        '200':
+          description: 当前设备签名密钥已更新
+        '401':
+          description: 认证失败或密码错误
 
   /topics:
     get:

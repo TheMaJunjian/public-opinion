@@ -22,11 +22,13 @@ const registerSchema = z.object({
 const loginSchema = z.object({
   username: z.string().min(1, '请输入用户名'),
   password: z.string().min(1, '请输入密码'),
+  deviceId: z.string().min(1).max(200).optional(),
 });
 
 const signingKeySchema = z.object({
   password: z.string().min(1),
   publicKey: z.string().min(1),
+  deviceId: z.string().min(1).max(200),
 });
 
 // POST /api/auth/register — 用户注册
@@ -53,7 +55,8 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
 // POST /api/auth/login — 用户登录，返回 JWT
 router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { username, password } = loginSchema.parse(req.body);
+    const { username, password, deviceId: requestedDeviceId } = loginSchema.parse(req.body);
+    const deviceId = requestedDeviceId ?? `legacy:${username}`;
     const user = await prisma.user.findUnique({ where: { username } });
 
     if (!user) {
@@ -73,14 +76,23 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
       return;
     }
 
-    const token = jwt.sign({ id: user.id, username: user.username, publicKey: user.publicKey ?? null }, secret, {
+    let deviceKey = await prisma.userSigningKey.findUnique({
+      where: { userId_deviceId: { userId: user.id, deviceId } },
+    });
+    if (!deviceKey && user.publicKey) {
+      deviceKey = await prisma.userSigningKey.create({
+        data: { userId: user.id, deviceId, publicKey: user.publicKey },
+      });
+    }
+    const publicKey = deviceKey?.publicKey ?? null;
+    const token = jwt.sign({ id: user.id, username: user.username, deviceId, publicKey }, secret, {
       expiresIn: '7d',
     });
 
     res.json({
       message: '登录成功',
       token,
-      user: { id: user.id, username: user.username, publicKey: user.publicKey },
+      user: { id: user.id, username: user.username, publicKey },
     });
   } catch (err) {
     next(err);
@@ -90,19 +102,27 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
 // POST /api/auth/signing-key — bind a new device key after password authentication.
 router.post('/signing-key', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { password, publicKey } = signingKeySchema.parse(req.body);
+    const { password, publicKey, deviceId } = signingKeySchema.parse(req.body);
+    if (req.user!.deviceId && req.user!.deviceId !== deviceId) {
+      res.status(401).json({ error: '设备令牌不匹配，无法更新签名密钥' });
+      return;
+    }
     const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
     if (!user || !(await bcrypt.compare(password, user.password))) {
       res.status(401).json({ error: '密码错误，无法绑定签名密钥' });
       return;
     }
-    await prisma.user.update({ where: { id: user.id }, data: { publicKey } });
+    await prisma.userSigningKey.upsert({
+      where: { userId_deviceId: { userId: user.id, deviceId } },
+      create: { userId: user.id, deviceId, publicKey },
+      update: { publicKey },
+    });
     const secret = process.env.JWT_SECRET;
     if (!secret) {
       res.status(500).json({ error: '服务器配置错误' });
       return;
     }
-    const token = jwt.sign({ id: user.id, username: user.username, publicKey }, secret, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user.id, username: user.username, deviceId, publicKey }, secret, { expiresIn: '7d' });
     res.json({ message: '签名密钥已更新', token, user: { id: user.id, username: user.username, publicKey } });
   } catch (err) {
     next(err);

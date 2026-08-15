@@ -37,6 +37,7 @@ export interface AuthRequest extends Request {
   user?: {
     id: string;
     username: string;
+    deviceId: string | null;
     publicKey: string | null;
   };
 }
@@ -58,8 +59,13 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
 
   try {
-    const payload = jwt.verify(token, secret) as { id: string; username: string; publicKey: string | null };
-    req.user = { id: payload.id, username: payload.username, publicKey: payload.publicKey ?? null };
+    const payload = jwt.verify(token, secret) as { id: string; username: string; deviceId?: string; publicKey: string | null };
+    req.user = {
+      id: payload.id,
+      username: payload.username,
+      deviceId: payload.deviceId ?? null,
+      publicKey: payload.publicKey ?? null,
+    };
     next();
   } catch {
     res.status(401).json({ error: '令牌无效或已过期' });

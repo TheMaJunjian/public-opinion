@@ -28,15 +28,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let tokenExpired = false;
     if (storedToken) {
       try {
-        const payload = JSON.parse(atob(storedToken.split('.')[1])) as { exp?: number };
+        const tokenParts = storedToken.split('.');
+        if (tokenParts.length !== 3) throw new Error('令牌格式无效');
+        const base64Payload = tokenParts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const paddedPayload = base64Payload.padEnd(Math.ceil(base64Payload.length / 4) * 4, '=');
+        const payload = JSON.parse(atob(paddedPayload)) as { exp?: number };
         tokenExpired = typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now();
       } catch {
         tokenExpired = true;
       }
     }
     if (storedToken && storedUser && !tokenExpired) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
+      try {
+        setToken(storedToken);
+        setUser(JSON.parse(storedUser));
+      } catch {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        localStorage.removeItem('privateKey');
+      }
     } else if (tokenExpired) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
@@ -63,10 +73,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
       localStorage.setItem('token', res.token);
       localStorage.setItem('user', JSON.stringify(res.user));
-      const rotated = await api.rotateSigningKey({ password, publicKey: JSON.stringify(publicJwk) });
-      token = rotated.token;
-      authenticatedUser = rotated.user;
-      storePrivateKeyForUser(res.user.username, privateJwk);
+      try {
+        const rotated = await api.rotateSigningKey({ password, publicKey: JSON.stringify(publicJwk) });
+        token = rotated.token;
+        authenticatedUser = rotated.user;
+        storePrivateKeyForUser(res.user.username, privateJwk);
+      } catch (error) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        localStorage.removeItem('privateKey');
+        throw error;
+      }
     }
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(authenticatedUser));

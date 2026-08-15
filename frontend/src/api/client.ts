@@ -2,6 +2,15 @@ import { signPayloadWithPrivateJwk } from '../utils/signature';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
 const PRIVATE_KEY_PREFIX = 'privateKey:';
+const DEVICE_ID_KEY = 'deviceId';
+
+export function getDeviceId(): string {
+  const existing = localStorage.getItem(DEVICE_ID_KEY);
+  if (existing) return existing;
+  const generated = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(DEVICE_ID_KEY, generated);
+  return generated;
+}
 
 function getCurrentUsername(): string | null {
   const rawUser = localStorage.getItem('user');
@@ -87,14 +96,14 @@ export function register(data: { username: string; password: string; publicKey?:
 export function login(data: { username: string; password: string }) {
   return request<{ message: string; token: string; user: import('../types').User & { publicKey?: string | null } }>('/auth/login', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
 }
 
 export function rotateSigningKey(data: { password: string; publicKey: string }) {
   return request<{ message: string; token: string; user: import('../types').User & { publicKey?: string | null } }>('/auth/signing-key', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
 }
 

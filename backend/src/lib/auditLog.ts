@@ -20,7 +20,7 @@ export interface AuditLogParams {
   topicId?: string | null;
   summary: string;
   details?: Record<string, unknown>;
-  /** Ed25519 signature of the event (verified against User.publicKey) */
+  /** Ed25519 signature of the event (verified against the actor device key) */
   signature?: string | null;
 }
 

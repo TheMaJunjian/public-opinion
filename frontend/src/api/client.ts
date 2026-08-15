@@ -70,16 +70,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }));
+    const err = await res.json().catch(() => ({ message: res.statusText })) as { error?: string; message?: string; code?: string; details?: unknown };
     const details = Array.isArray(err.details)
       ? err.details
           .map((d: { field?: string; message?: string }) => (d.field ? `${d.field}: ${d.message}` : d.message))
           .filter(Boolean)
           .join('；')
       : '';
-    throw new Error(
-      err.error && details ? `${err.error}（${details}）` : err.error || details || err.message || res.statusText
-    );
+    const message = err.error && details ? `${err.error}（${details}）` : err.error || details || err.message || res.statusText;
+    throw new Error(err.code ? `${message} [${err.code}]` : message);
   }
   const data = await res.json();
   return data;

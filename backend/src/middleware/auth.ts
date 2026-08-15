@@ -94,17 +94,17 @@ export async function verifySignature(req: AuthRequest, res: Response, next: Nex
       publicKey = deviceKey?.publicKey ?? null;
     }
   } catch {
-    res.status(401).json({ error: '签名密钥读取失败，请重新登录' });
+    res.status(401).json({ error: '签名密钥读取失败，请重新登录', code: 'SIGNING_KEY_READ_FAILED' });
     return;
   }
   if (!publicKey) {
-    res.status(401).json({ error: '账户未绑定签名密钥，请重新注册' });
+    res.status(401).json({ error: '当前设备未绑定签名密钥，请重新登录绑定设备', code: 'SIGNING_KEY_NOT_FOUND' });
     return;
   }
 
   const signatureBase64 = req.headers['x-signature'] as string | undefined;
   if (!signatureBase64) {
-    res.status(401).json({ error: '缺少 X-Signature 签名头' });
+    res.status(401).json({ error: '请求没有携带设备签名，请重新登录后重试', code: 'SIGNATURE_HEADER_MISSING' });
     return;
   }
 
@@ -118,11 +118,11 @@ export async function verifySignature(req: AuthRequest, res: Response, next: Nex
       params.verifyAlgorithm as any, pubKey, signatureBuf, new TextEncoder().encode(rawBody),
     );
     if (!isValid) {
-      res.status(401).json({ error: '签名验证失败' });
+      res.status(401).json({ error: '设备签名与当前设备公钥不匹配，请退出后重新登录', code: 'SIGNATURE_MISMATCH' });
       return;
     }
     next();
   } catch {
-    res.status(401).json({ error: '签名验证失败' });
+    res.status(401).json({ error: '设备签名格式或密钥类型无效，请退出后重新登录', code: 'SIGNATURE_INVALID' });
   }
 }

@@ -2481,6 +2481,7 @@ export default function TopicDetailPage() {
         await appendCreatedRelation(relation);
       } catch (e) {
         debugWarn('join', `FAILED containerId=${containerId.slice(-6)} tgt=${tgtMid.slice(-6)} error=${String(e)}`);
+        throw e;
       }
     }
   }

@@ -1908,26 +1908,6 @@ export default function TopicDetailPage() {
     if (e.button !== 0) return;
     if (Date.now() - lastDragOrSelectTimeRef.current < 350) return;
     e.stopPropagation();
-    if (joinFilterTargetId && messageId !== joinFilterTargetId) {
-      const joinRelation = relationsRef.current.find(relation =>
-        relation.id === messageId && relation.relationType?.toUpperCase() === 'JOIN'
-      );
-      if (joinRelation) {
-        const isEffective = effectiveJoinRelationIds.has(joinRelation.id);
-        const navigationTarget = messageId;
-        setJoinFilterTargetId(null);
-        setDraftUnits([]);
-        setSourceUnits([]);
-        setTargetUnits([]);
-        setLastClickedMessageId(navigationTarget);
-        setFocusEntries([]);
-        setFocusKey(k => k + 1);
-        restoreNavigationCanvas(isEffective ? null : getNavigationClassifyCanvas(navigationTarget));
-        setAutoClassifyMsgId(null);
-        requestAnimationFrame(() => requestAnimationFrame(() => scrollMsgToCenter(navigationTarget, { resolveTarget: false })));
-        return;
-      }
-    }
     setLastClickedMessageId(messageId);
     const wholeUnit: UnitSelection = { messageId, selection: { kind: "whole" } };
     setDraftUnits(prev => {
@@ -4806,7 +4786,9 @@ export default function TopicDetailPage() {
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
   const handleNavigateToMessage = useCallback((messageId: string) => {
-    const isRenderedOnCurrentCanvas = renderedMessageIdsRef.current.has(messageId);
+    // A temporary JOIN category is a filtered view, not the message's actual
+    // canvas. Resolve navigation from the live relation ownership instead.
+    const isRenderedOnCurrentCanvas = !isTemporaryJoinCategory && renderedMessageIdsRef.current.has(messageId);
     const navigationCanvas = isRenderedOnCurrentCanvas
       ? classifyRelMsgId
       : getNavigationClassifyCanvas(messageId);
@@ -4826,7 +4808,7 @@ export default function TopicDetailPage() {
     // when the target is already on the current canvas (no classifyKey change).
     pendingScrollMsgRef.current = messageId;
     setScrollKey(k => k + 1);
-  }, [classifyRelMsgId, effectiveJoinRelationIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
+  }, [classifyRelMsgId, effectiveJoinRelationIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, isTemporaryJoinCategory]);
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
     e.stopPropagation();

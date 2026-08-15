@@ -332,7 +332,7 @@ function getMergeHeaderWidth(text: string): number {
 function getGroupHeaderRect(frameRect: Rect): Rect {
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y - FRAME_PAD - Math.max(4, Math.round(FRAME_PAD / 2)),
+    y: frameRect.y - GROUP_HEADER_HEIGHT,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
     height: GROUP_HEADER_HEIGHT,
   };
@@ -3406,7 +3406,16 @@ export default function GraphView(props: GraphViewProps) {
                   </div>
                 )}
                 <div style={{flex:1,display:"flex",justifyContent:"flex-end",flexDirection:"column",alignItems:"flex-end"}}>
-                  <span style={{opacity:0.7}}>{msg.id}</span>
+                  {msg.kind === "join" && onNavigateToMessage ? (
+                    <span
+                      data-rel-overlay="true"
+                      onClick={e => { e.stopPropagation(); onNavigateToMessage(msg.id); }}
+                      style={{opacity:0.95,fontFamily:"monospace",fontSize:10,color:"#93c5fd",cursor:"pointer",padding:"1px 4px",borderRadius:3,background:"rgba(59,130,246,0.15)",textDecoration:"underline",textUnderlineOffset:2}}
+                      title={`跳转到加入消息 ${msg.id} 的当前实际位置`}
+                    >{msg.id}</span>
+                  ) : (
+                    <span style={{opacity:0.7}}>{msg.id}</span>
+                  )}
                   {(() => {
                     const sc = stakeCounts?.[msg.id];
                     const truthPro = sc?.truth.pro ?? 0;

@@ -10,7 +10,7 @@ import {
   CARD_W, MIN_CARD_H, GRID_LEFT, GRID_TOP, COL_GAP, ROW_GAP,
   CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H,
 } from '../utils/layout';
-import type { PresentationKind, RelationTargetLayout } from '../types';
+import type { PresentationKind, Relation, RelationTargetLayout } from '../types';
 
 // ========================= Layout types =========================
 
@@ -1818,8 +1818,14 @@ export interface GraphViewProps {
   crossClassifyRefs?: Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>;
   /** 点击跨分类引用标签：选中关系消息 */
   onCrossRefTagClick?: (e: React.MouseEvent, relMsgIds: string[]) => void;
-  /** 点击加入消息卡片上的 ID 标签跳转到对应消息 */
+  /** 点击加入消息标签；incoming 表示“被加入”，outgoing 表示“加入” */
   onNavigateToMessage?: (messageId: string) => void;
+  /** JOIN records grouped by their target message, used by the target filter badge. */
+  joinRelationsByTarget?: Map<string, Relation[]>;
+  /** JOIN records emitted by each container. */
+  joinRelationsBySource?: Map<string, Relation[]>;
+  onJoinFilterClick?: (messageId: string, direction: 'incoming' | 'outgoing') => void;
+  joinStatusByMessage?: Map<string, 'valid' | 'rejected' | 'superseded' | 'container-rejected'>;
   /** DEBUG: callback to report frame/card rectangles */
   onDebugRects?: (text: string) => void;
 }
@@ -1849,6 +1855,10 @@ export default function GraphView(props: GraphViewProps) {
     crossClassifyRefs,
     onCrossRefTagClick,
     onNavigateToMessage,
+    joinRelationsByTarget,
+    joinRelationsBySource,
+    onJoinFilterClick,
+    joinStatusByMessage,
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
@@ -3167,6 +3177,10 @@ export default function GraphView(props: GraphViewProps) {
               return seen.size;
             })();
             const topicTitle = getRelationTitle(msg.relationPayload) || `分类（${targetCount}）`;
+            const relatedJoinRelations = joinRelationsByTarget?.get(msg.id) ?? [];
+            const outgoingJoinRelations = joinRelationsBySource?.get(msg.id) ?? [];
+            const validJoinCount = relatedJoinRelations.filter(join => joinStatusByMessage?.get(join.id) === 'valid').length;
+            const invalidJoinCount = relatedJoinRelations.length - validJoinCount;
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             const isActive = lastClickedMessageId === msg.id;
             const isTopicStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
@@ -3240,6 +3254,24 @@ export default function GraphView(props: GraphViewProps) {
                     <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
                   </div>
                 </div>
+                {outgoingJoinRelations.length > 0 && onJoinFilterClick && (
+                  <button
+                    onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'outgoing'); }}
+                    title="筛选显示该容器发出的全部加入消息"
+                    style={{ alignSelf: 'flex-start', fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(16,185,129,0.14)', color: '#a7f3d0', border: '1px solid rgba(16,185,129,0.4)', cursor: 'pointer' }}
+                  >
+                    加入消息：{outgoingJoinRelations.length} 条
+                  </button>
+                )}
+                {relatedJoinRelations.length > 0 && onJoinFilterClick && (
+                  <button
+                    onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'incoming'); }}
+                    title="筛选显示把此分类加入容器的全部加入消息"
+                    style={{ alignSelf: 'flex-start', fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.14)', color: '#bfdbfe', border: '1px solid rgba(59,130,246,0.4)', cursor: 'pointer' }}
+                  >
+                    被加入消息：{validJoinCount} 条有效{invalidJoinCount > 0 ? `，${invalidJoinCount} 条无效` : ''}
+                  </button>
+                )}
               </div>
             );
           }
@@ -3289,6 +3321,12 @@ export default function GraphView(props: GraphViewProps) {
           })();
           const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
           const kindBg = kindMeta ? kindMeta.bg : undefined;
+          const relatedJoinRelations = joinRelationsByTarget?.get(msg.id) ?? [];
+          const outgoingJoinRelations = joinRelationsBySource?.get(msg.id) ?? [];
+          const joinStatus = joinStatusByMessage?.get(msg.id);
+          const joinIsInvalid = joinStatus === 'rejected' || joinStatus === 'superseded' || joinStatus === 'container-rejected';
+          const validJoinCount = relatedJoinRelations.filter(join => joinStatusByMessage?.get(join.id) === 'valid').length;
+          const invalidJoinCount = relatedJoinRelations.length - validJoinCount;
 
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
@@ -3417,6 +3455,11 @@ export default function GraphView(props: GraphViewProps) {
                   })()}
                 </div>
               </div>
+              {joinStatus && (
+                <div style={{ fontSize: 10, fontWeight: 600, color: joinIsInvalid ? '#fca5a5' : '#86efac', alignSelf: 'flex-start', padding: '1px 6px', borderRadius: 4, background: joinIsInvalid ? 'rgba(239,68,68,0.16)' : 'rgba(34,197,94,0.15)', border: `1px solid ${joinIsInvalid ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.3)'}` }}>
+                  {joinStatus === 'rejected' ? '被反对 · 无效' : joinStatus === 'superseded' ? '已重新分类 · 无效' : joinStatus === 'container-rejected' ? '容器被反对 · 无效' : '有效'}
+                </div>
+              )}
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
               {/* Settlement: content with inline target tag on first line */}
               {(msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
@@ -3468,6 +3511,24 @@ export default function GraphView(props: GraphViewProps) {
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
               </div>
+              )}
+              {outgoingJoinRelations.length > 0 && onJoinFilterClick && (
+                <button
+                  onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'outgoing'); }}
+                  title="筛选显示该容器发出的全部加入消息"
+                  style={{ alignSelf: 'flex-start', fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(16,185,129,0.14)', color: '#a7f3d0', border: '1px solid rgba(16,185,129,0.4)', cursor: 'pointer' }}
+                >
+                  加入消息：{outgoingJoinRelations.length} 条
+                </button>
+              )}
+              {relatedJoinRelations.length > 0 && onJoinFilterClick && (
+                <button
+                  onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'incoming'); }}
+                  title="筛选显示把此消息加入容器的全部加入消息"
+                  style={{ alignSelf: 'flex-start', fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.14)', color: '#bfdbfe', border: '1px solid rgba(59,130,246,0.4)', cursor: 'pointer' }}
+                >
+                  被加入消息：{validJoinCount} 条有效{invalidJoinCount > 0 ? `，${invalidJoinCount} 条无效` : ''}
+                </button>
               )}
               {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
                 <div style={{ marginTop: 6, fontSize: 11, color: '#67e8f9' }}>

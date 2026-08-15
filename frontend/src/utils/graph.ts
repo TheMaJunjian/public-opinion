@@ -199,7 +199,7 @@ export function computeTextHops(
  *   2. A relation is shown only when ALL of its text-message endpoints are visible.
  *      (This includes recursive relations that target relation messages —
  *       those are shown when the text messages on both sides of the chain are visible.)
- *   3. Container-type relations (CLASSIFY, MERGE, SUMMARY) use a two-level visibility
+ *   3. Container-type relations (CLASSIFY, MERGE, SUMMARY, ARRANGE) use a two-level visibility
  *      model: the container card is shown when any target is within range; the
  *      container's children are expanded when maxHops >= 2.
  *
@@ -226,8 +226,8 @@ export function buildFocusSubgraph(
   const visibleRelations = new Set<string>();
   const relMap = new Map<string, Relation>(relations.map(r => [r.id, r]));
 
-  // Container-type relations: CLASSIFY, MERGE, SUMMARY
-  const CONTAINER_TYPES = new Set(['CLASSIFY', 'MERGE', 'SUMMARY']);
+  // All four grouping relations use the same container traversal semantics.
+  const CONTAINER_TYPES = new Set(['CLASSIFY', 'MERGE', 'SUMMARY', 'ARRANGE']);
 
   // First pass: mark relations whose source + all message-targets are visible
   let changed = true;

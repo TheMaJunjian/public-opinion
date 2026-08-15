@@ -10,6 +10,9 @@ interface StakeCalculationDeps {
   relStakeAmount: number | '';
   relationStakeMap: React.MutableRefObject<Record<string, number>>;
   subTypeStakeMap: React.MutableRefObject<Record<string, number>>;
+  existingJoinCount?: number;
+  joinOnlyAction?: boolean;
+  additionalAgreeTargetCount?: number;
   onRelStakeChange: (min: number) => void;
   stakeDefaultLoaded: React.MutableRefObject<boolean>;
 }
@@ -20,12 +23,14 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
   const {
     relationType, subType, draftUnits, targetUnits, newMessageContent,
     stakeAmount, relStakeAmount, relationStakeMap, subTypeStakeMap,
+    existingJoinCount = 0, joinOnlyAction = false, additionalAgreeTargetCount = 0,
     onRelStakeChange, stakeDefaultLoaded,
   } = deps;
 
   const stakeFeeAmountRef = useRef(1);
 
   const effectiveMinStake = (() => {
+    if (joinOnlyAction) return 1;
     const typeMinBase = relationType
       ? (relationStakeMap.current[relationType.toUpperCase()] ?? 10)
       : 10;
@@ -44,7 +49,8 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
   const multiTargetCount = (() => {
     const multiTargetTypes = new Set(['annotation', 'reference', 'reply', 'agree', 'disagree', 'tag']);
     if (!relationType || !multiTargetTypes.has(relationType.toLowerCase())) return 0;
-    return draftUnits.length > 0 ? draftUnits.length : targetUnits.length;
+    const baseCount = draftUnits.length > 0 ? draftUnits.length : targetUnits.length;
+    return baseCount + (relationType === 'agree' ? additionalAgreeTargetCount : 0);
   })();
 
   const isTextInPayload = relationType === 'classify' || relationType === 'summary' || relationType === 'merge'
@@ -58,6 +64,29 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
     if (!relationType) {
       if (textStake > 0) return { stakeTotal: textStake, protocolFeeTotal: textFee, total: textStake + textFee, perStake: textStake, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
       return null;
+    }
+    if (joinOnlyAction) {
+      const baseTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+      const joinCount = new Set(baseTargets.map(unit => unit.messageId)).size;
+      const joinStakeTotal = joinCount;
+      const joinFeeTotal = joinCount * protocolFeePerOp;
+      return {
+        stakeTotal: joinStakeTotal,
+        protocolFeeTotal: joinFeeTotal,
+        total: joinStakeTotal + joinFeeTotal,
+        perStake: 1,
+        textStake: 0,
+        refStakeTotal: 0,
+        refCount: 0,
+        relCount: 0,
+        joinCount,
+        newJoinCount: 0,
+        existingJoinAgreeCount: joinCount,
+        joinStakeTotal,
+        joinFeeTotal,
+        hasText: false,
+        hasRel: false,
+      };
     }
     if (typeof relStakeAmount !== 'number') {
       if (textStake > 0) return { stakeTotal: textStake, protocolFeeTotal: textFee, total: textStake + textFee, perStake: 0, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
@@ -93,6 +122,8 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
       refCount: govRefCount,
       relCount,
       joinCount: containerJoinCount,
+      newJoinCount: Math.max(0, containerJoinCount - existingJoinCount),
+      existingJoinAgreeCount: Math.min(containerJoinCount, existingJoinCount),
       joinStakeTotal,
       joinFeeTotal,
       hasText: textStake > 0,
@@ -103,7 +134,7 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
   useEffect(() => {
     if (!stakeDefaultLoaded.current) return;
     onRelStakeChange(effectiveMinStake);
-  }, [relationType, subType, draftUnits.length, targetUnits.length]);
+  }, [relationType, subType, draftUnits.length, targetUnits.length, joinOnlyAction, additionalAgreeTargetCount]);
 
   return { effectiveMinStake, multiTargetCount, isTextInPayload, hasTextContentForTotal, totalConsumption, stakeFeeAmountRef };
 }

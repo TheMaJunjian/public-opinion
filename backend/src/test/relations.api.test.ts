@@ -31,6 +31,7 @@ jest.mock('../lib/prisma', () => ({
     },
     message: {
       findFirst: jest.fn(),
+      findUnique: jest.fn(),
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn(),
       create: jest.fn(),
@@ -642,6 +643,38 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
       });
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('rel-new');
+  });
+
+  it('turns a duplicate JOIN into AGREE on the existing JOIN', async () => {
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([mockMessage2])
+      .mockResolvedValueOnce([{
+        id: 'join-existing',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      }]);
+    (prisma.$transaction as jest.Mock).mockResolvedValueOnce([{
+      id: 'agree-new',
+      topicId: 'topic-1',
+      relationType: 'AGREE',
+      relSourceId: null,
+      targetRefs: [{ kind: 'relation', relationId: 'join-existing' }],
+      relationPayload: undefined,
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    }]);
+
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'JOIN',
+        sourceMessageId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.relationType).toBe('AGREE');
+    expect(res.body.targetRefs).toEqual([{ kind: 'relation', relationId: 'join-existing' }]);
   });
 
   it('creates a relation with a text-fragment target', async () => {

@@ -17,6 +17,7 @@ import { prisma } from './prisma';
 
 export const CLASSIFY_CROSS_LINK_ERROR = '分类目标与其他文本消息存在非引用关联，无法建立分类关系';
 export const MERGE_CROSS_LINK_ERROR = '归并目标与其他文本消息存在非引用关联，无法建立归并关系';
+export const ARRANGE_CROSS_LINK_ERROR = '排列目标与其他文本消息存在非引用关联，无法建立排列关系';
 export const SUMMARY_CROSS_LINK_ERROR = '总结目标与其他文本消息存在非引用关联，无法建立总结关系';
 export const SUMMARY_TARGET_TYPE_ERROR = '总结关系的目标关系消息只能是排列、归并或分类关系消息';
 
@@ -96,7 +97,7 @@ export function collectSelectedGroupTargetTextIds(params: {
 
 export interface GroupingValidationParams {
   topicId: string;
-  relationType: 'CLASSIFY' | 'MERGE' | 'SUMMARY';
+  relationType: 'CLASSIFY' | 'MERGE' | 'ARRANGE' | 'SUMMARY';
   targetRefs: Array<{ kind: string; messageId?: string; relationId?: string }>;
   targetRelationIds: string[];
   foundTargetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }>;
@@ -108,7 +109,7 @@ export interface GroupingValidationResult {
 }
 
 /**
- * Validate that a CLASSIFY / MERGE / SUMMARY relation does not create
+ * Validate that a CLASSIFY / MERGE / ARRANGE / SUMMARY relation does not create
  * forbidden cross-links with already-classified messages.
  *
  * Performs:
@@ -199,6 +200,7 @@ export async function validateGroupingTargets(
   const crossLinkError =
     relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR
     : relationType === 'MERGE' ? MERGE_CROSS_LINK_ERROR
+    : relationType === 'ARRANGE' ? ARRANGE_CROSS_LINK_ERROR
     : SUMMARY_CROSS_LINK_ERROR;
 
   for (const relMsg of relationMessages) {

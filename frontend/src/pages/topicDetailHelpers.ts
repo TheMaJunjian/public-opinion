@@ -44,6 +44,38 @@ export function isValidTagLabel(label: string | undefined): label is string {
 export const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义' };
 export const SUB_TYPE_OPTIONS = ['', 'SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM'];
 
+export function isAppendToExistingClassifyAction(options: {
+  relationType: string | null;
+  draftCount: number;
+  targetCount: number;
+  text: string;
+  sourceClassifyCount: number;
+}): boolean {
+  return options.relationType === 'classify' &&
+    (options.draftCount > 0 || options.targetCount > 0) &&
+    options.text.trim().length === 0 &&
+    options.sourceClassifyCount === 1;
+}
+
+/** Return rejected container IDs that must also receive AGREE to restore a JOIN. */
+export function getJoinRecoveryTargetIds(
+  targetMessageIds: string[],
+  relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId'>[],
+  rejectedContainerIds: Set<string>,
+): string[] {
+  const targetIdSet = new Set(targetMessageIds);
+  return Array.from(new Set(
+    relations
+      .filter(relation =>
+        targetIdSet.has(relation.id) &&
+        relation.relationType?.toUpperCase() === 'JOIN' &&
+        !!relation.sourceMessageId &&
+        rejectedContainerIds.has(relation.sourceMessageId)
+      )
+      .map(relation => relation.sourceMessageId!)
+  ));
+}
+
 export function subTypeLabel(st: string) {
   return SUB_TYPE_LABELS[st] ?? st;
 }
@@ -269,14 +301,37 @@ export function getRelationTargetIds(targetRefs: TargetRef[]): string[] {
   ));
 }
 
+function targetIsOwnedByContainer(
+  containerId: string,
+  targetRef: TargetRef,
+  relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'>[],
+  effectiveJoinRelationIds: Set<string>,
+): boolean {
+  const matchingJoins = relations.filter(relation =>
+    relation.relationType?.toUpperCase() === 'JOIN' &&
+    (relation.targetRefs ?? []).some(candidate =>
+      candidate.kind === targetRef.kind &&
+      (candidate.kind === 'relation'
+        ? targetRef.kind === 'relation' && candidate.relationId === targetRef.relationId
+        : targetRef.kind !== 'relation' && candidate.messageId === targetRef.messageId)
+    )
+  );
+  if (matchingJoins.length === 0) return true;
+  return matchingJoins.some(join =>
+    join.sourceMessageId === containerId && effectiveJoinRelationIds.has(join.id)
+  );
+}
+
 export function collectContainerVisibleIds(
   containerId: string,
   relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'>[],
   rejectedContainerIds: Set<string> = new Set(),
   rejectedJoinRelationIds: Set<string> = new Set(),
+  userPreferredJoinByTarget?: ReadonlyMap<string, string>,
 ): { textIds: Set<string>; relationIds: Set<string> } {
   const textIds = new Set<string>();
   const relationIds = new Set<string>();
+  const effectiveJoinRelationIds = getEffectiveJoinRelationIds([...relations], rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
   const container = relations.find(r => r.id === containerId);
   if (!container) return { textIds, relationIds };
 
@@ -286,6 +341,7 @@ export function collectContainerVisibleIds(
   }
 
   for (const ref of container.targetRefs ?? []) {
+    if (!targetIsOwnedByContainer(containerId, ref, relations, effectiveJoinRelationIds)) continue;
     if (ref.kind === 'relation') {
       relationIds.add(ref.relationId);
     } else {
@@ -299,6 +355,7 @@ export function collectContainerVisibleIds(
     if (rejectedContainerIds.has(relation.id)) continue;
     if (rejectedContainerIds.has(relation.sourceMessageId)) continue;
     if (rejectedJoinRelationIds.has(relation.id)) continue;
+    if (!effectiveJoinRelationIds.has(relation.id)) continue;
     for (const ref of relation.targetRefs ?? []) {
       if (ref.kind === 'relation') {
         relationIds.add(ref.relationId);
@@ -317,6 +374,7 @@ export function collectOwnedByRelation(
   visited = new Set<string>(),
   rejectedContainerIds?: Set<string>,
   rejectedJoinRelationIds?: Set<string>,
+  userPreferredJoinByTarget?: ReadonlyMap<string, string>,
 ): { textIds: Set<string>; relationIds: Set<string> } {
   const textIds = new Set<string>();
   const relationIds = new Set<string>();
@@ -324,8 +382,13 @@ export function collectOwnedByRelation(
   visited.add(relationId);
   const relation = relationById.get(relationId);
   if (!relation) return { textIds, relationIds };
+  const effectiveJoinRelationIds = getEffectiveJoinRelationIds([...relationById.values()], rejectedContainerIds ?? new Set(), rejectedJoinRelationIds ?? new Set(), userPreferredJoinByTarget);
 
-  for (const textId of getTextTargetIds(relation.targetRefs)) textIds.add(textId);
+  for (const targetRef of relation.targetRefs ?? []) {
+    if (!targetIsOwnedByContainer(relationId, targetRef, [...relationById.values()], effectiveJoinRelationIds)) continue;
+    if (targetRef.kind === 'relation') relationIds.add(targetRef.relationId);
+    else textIds.add(targetRef.messageId);
+  }
   const relType = relation.relationType.toUpperCase();
   if (relType === 'ARRANGE' && relation.sourceMessageId) {
     textIds.add(relation.sourceMessageId);
@@ -354,7 +417,7 @@ export function collectOwnedByRelation(
       continue;
     }
 
-    const nested = collectOwnedByRelation(childRelationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds);
+    const nested = collectOwnedByRelation(childRelationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
     nested.textIds.forEach(id => textIds.add(id));
     nested.relationIds.forEach(id => relationIds.add(id));
   }
@@ -365,6 +428,7 @@ export function collectOwnedByRelation(
     if (joinRel.sourceMessageId !== relationId) continue;
     if (rejectedContainerIds && rejectedContainerIds.size > 0 && rejectedContainerIds.has(joinRel.id)) continue;
     if (rejectedJoinRelationIds && rejectedJoinRelationIds.size > 0 && rejectedJoinRelationIds.has(joinRel.id)) continue;
+    if (!effectiveJoinRelationIds.has(joinRel.id)) continue;
     for (const targetRef of joinRel.targetRefs ?? []) {
       if (targetRef.kind === 'message' || targetRef.kind === 'text-fragment') {
         textIds.add(targetRef.messageId);
@@ -372,7 +436,7 @@ export function collectOwnedByRelation(
         relationIds.add(targetRef.relationId);
         const targetRelation = relationById.get(targetRef.relationId);
         if (targetRelation && (targetRelation.relationType?.toUpperCase() === 'CLASSIFY' || targetRelation.relationType?.toUpperCase() === 'MERGE' || targetRelation.relationType?.toUpperCase() === 'ARRANGE' || targetRelation.relationType?.toUpperCase() === 'SUMMARY')) {
-          const nested = collectOwnedByRelation(targetRef.relationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds);
+          const nested = collectOwnedByRelation(targetRef.relationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
           nested.textIds.forEach(id => textIds.add(id));
           nested.relationIds.forEach(id => relationIds.add(id));
         }
@@ -441,12 +505,49 @@ export function areContainersOnSameChain(
  */
 const JOIN_RELATION_TYPES = new Set(['JOIN']);
 
+type JoinRelationRecord = Omit<Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs' | 'createdAt'>, 'createdAt'> & { createdAt?: string; createdBy?: Relation['createdBy'] };
+
+function joinTargetIsStillOwned(joinRelation: JoinRelationRecord, relationById: Map<string, JoinRelationRecord | Relation>): boolean {
+  if (!joinRelation.sourceMessageId) return false;
+  const container = relationById.get(joinRelation.sourceMessageId);
+  if (!container) return true;
+  const directTargets = container.targetRefs as TargetRef[];
+  return (joinRelation.targetRefs as TargetRef[]).every(joinTarget =>
+    directTargets.some(containerTarget =>
+      (joinTarget.kind === 'relation' && containerTarget.kind === 'relation' && joinTarget.relationId === containerTarget.relationId) ||
+      (joinTarget.kind !== 'relation' && containerTarget.kind !== 'relation' && joinTarget.messageId === containerTarget.messageId)
+    )
+  );
+}
+
+function getJoinTargetKey(ref: TargetRef): string {
+  return ref.kind === 'relation' ? `relation:${ref.relationId}` : `message:${ref.messageId}`;
+}
+
+function joinTargetsMessage(joinRelation: JoinRelationRecord, messageId: string): boolean {
+  return (joinRelation.targetRefs as TargetRef[]).some(ref =>
+    (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === messageId
+  );
+}
+
+/** JOIN records whose source container no longer directly targets their member. */
+export function getStaleJoinRelationIds(
+  relations: JoinRelationRecord[],
+): string[] {
+  const relationById = new Map(relations.map(relation => [relation.id, relation]));
+  const joins = relations.filter(relation => JOIN_RELATION_TYPES.has(relation.relationType?.toUpperCase() ?? ''));
+  return joins
+    .filter(join => !joinTargetIsStillOwned(join, relationById))
+    .map(join => join.id);
+}
+
 export function getActiveJoinRelationsForMessage(
   messageId: string,
-  relations: Relation[],
+  relations: JoinRelationRecord[],
   rejectedContainerIds: Set<string>,
   rejectedJoinRelationIds?: Set<string>,
-): Relation[] {
+): JoinRelationRecord[] {
+  const staleJoinRelationIds = new Set(getStaleJoinRelationIds(relations));
   return relations
     .filter(r =>
       JOIN_RELATION_TYPES.has(r.relationType) &&
@@ -454,14 +555,129 @@ export function getActiveJoinRelationsForMessage(
       !rejectedContainerIds.has(r.id) &&
       !rejectedContainerIds.has(r.sourceMessageId) &&
       !(rejectedJoinRelationIds && rejectedJoinRelationIds.has(r.id)) &&
-      (r.targetRefs as TargetRef[]).some(ref =>
-        (ref.kind === 'message' || ref.kind === 'text-fragment') &&
-        ref.messageId === messageId
-      )
+      !staleJoinRelationIds.has(r.id) &&
+      joinTargetsMessage(r, messageId)
     )
     .sort((a, b) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
+    )
+    .slice(0, 1);
+}
+
+/** Return the single effective JOIN for every message target. */
+export function getEffectiveJoinRelationIds(
+  relations: JoinRelationRecord[],
+  rejectedContainerIds: Set<string>,
+  rejectedJoinRelationIds: Set<string>,
+  userPreferredJoinByTarget?: ReadonlyMap<string, string>,
+): Set<string> {
+  const staleJoinRelationIds = new Set(getStaleJoinRelationIds(relations));
+  const targetKeys = new Set<string>();
+  for (const relation of relations) {
+    if (relation.relationType?.toUpperCase() !== 'JOIN') continue;
+    for (const ref of relation.targetRefs as TargetRef[]) {
+      targetKeys.add(getJoinTargetKey(ref));
+    }
+  }
+  const effective = new Set<string>();
+  for (const targetKey of targetKeys) {
+    const targetId = targetKey.startsWith('message:') ? targetKey.slice('message:'.length) : null;
+    const userPreferredJoinId = targetId ? userPreferredJoinByTarget?.get(targetId) : undefined;
+    const userPreferredJoin = userPreferredJoinId
+      ? relations.find(relation =>
+        relation.id === userPreferredJoinId &&
+        relation.relationType?.toUpperCase() === 'JOIN' &&
+        !!relation.sourceMessageId &&
+        !rejectedContainerIds.has(relation.id) &&
+        !rejectedJoinRelationIds.has(relation.id) &&
+        !staleJoinRelationIds.has(relation.id) &&
+        !rejectedContainerIds.has(relation.sourceMessageId) &&
+        (relation.targetRefs as TargetRef[]).some(ref => getJoinTargetKey(ref) === targetKey)
+      )
+      : undefined;
+    const join = userPreferredJoin ?? relations
+      .filter(relation =>
+        relation.relationType?.toUpperCase() === 'JOIN' &&
+        !!relation.sourceMessageId &&
+        !rejectedContainerIds.has(relation.id) &&
+        !rejectedJoinRelationIds.has(relation.id) &&
+        !staleJoinRelationIds.has(relation.id) &&
+        !rejectedContainerIds.has(relation.sourceMessageId) &&
+        (relation.targetRefs as TargetRef[]).some(ref => getJoinTargetKey(ref) === targetKey)
+      )
+      .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())[0];
+    if (join) effective.add(join.id);
+  }
+  return effective;
+}
+
+/** Keep container frame edges only for their currently effective JOIN members. */
+export function filterContainerEdgesByEffectiveJoins(
+  edges: DemoEdge[],
+  relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'>[],
+  effectiveJoinRelationIds: Set<string>,
+): DemoEdge[] {
+  const containerTypes = new Set(['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE']);
+  return edges.filter(edge => {
+    if (!containerTypes.has(edge.relationType.toUpperCase())) return true;
+    return relations.some(relation =>
+      relation.relationType?.toUpperCase() === 'JOIN' &&
+      relation.sourceMessageId === edge.relationMessageId &&
+      effectiveJoinRelationIds.has(relation.id) &&
+      (relation.targetRefs as TargetRef[]).some(ref =>
+        (ref.kind === 'relation' && ref.relationId === edge.to.messageId) ||
+        (ref.kind !== 'relation' && ref.messageId === edge.to.messageId)
+      )
     );
+  });
+}
+
+/** Return the latest JOIN action for each target in the current user's view. */
+export function getUserPreferredJoinByTarget(
+  relations: JoinRelationRecord[],
+  activeStanceMap: ReadonlyMap<string, { relMsgId: string; type: 'agree' | 'disagree' }>,
+  username: string | null,
+): Map<string, string> {
+  const preferred = new Map<string, { relationId: string; time: number }>();
+  const joins = relations.filter(relation => relation.relationType?.toUpperCase() === 'JOIN');
+  const consider = (targetId: string, relationId: string, time: number) => {
+    const current = preferred.get(targetId);
+    if (!current || time > current.time) preferred.set(targetId, { relationId, time });
+  };
+  if (username) {
+    for (const join of joins) {
+      if (join.createdBy?.username !== username) continue;
+      const time = new Date(join.createdAt ?? 0).getTime();
+      for (const ref of join.targetRefs as TargetRef[]) {
+        if (ref.kind === 'message' || ref.kind === 'text-fragment') consider(ref.messageId, join.id, time);
+      }
+    }
+  }
+  for (const [targetRelationId, stance] of activeStanceMap) {
+    if (stance.type !== 'agree') continue;
+    const join = joins.find(relation => relation.id === targetRelationId);
+    const agree = relations.find(relation => relation.id === stance.relMsgId);
+    if (!join || !agree) continue;
+    const time = new Date(agree.createdAt ?? 0).getTime();
+    for (const ref of join.targetRefs as TargetRef[]) {
+      if (ref.kind === 'message' || ref.kind === 'text-fragment') consider(ref.messageId, join.id, time);
+    }
+  }
+  return new Map(Array.from(preferred, ([targetId, value]) => [targetId, value.relationId]));
+}
+
+/** Get every JOIN record directly targeting a message or container relation. */
+export function getJoinRelationsForMessage(messageId: string, relations: Relation[]): Relation[] {
+  return relations
+    .filter(r =>
+      r.relationType?.toUpperCase() === 'JOIN' &&
+      !!r.sourceMessageId &&
+      (r.targetRefs as TargetRef[]).some(ref =>
+        (ref.kind === 'relation' && ref.relationId === messageId) ||
+        (ref.kind !== 'relation' && ref.messageId === messageId)
+      )
+    )
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 /**

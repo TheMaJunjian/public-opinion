@@ -218,7 +218,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
   CORRECT:     { kind: 'correction-badge',  label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
-  ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true   },
+  ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true,  isContainer: true  },
   CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true,   isContainer: true  },
   MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true,   isContainer: true  },
   SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true, isContainer: true  },

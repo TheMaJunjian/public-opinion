@@ -262,13 +262,12 @@ describe('applyContainerExpansion', () => {
     expect(dist.has('b')).toBe(true);
   });
 
-  it('does NOT treat ARRANGE as container', () => {
+  it('handles ARRANGE containers the same as other container types', () => {
     const dist = new Map<string, number>([['a', 0]]);
     const edges: DemoEdge[] = [
       makeEdge('e1', 'arrange1', 'arrange', 'anon:arrange1', 'a'),
     ];
     applyContainerExpansion(dist, edges, 1);
-    // ARRANGE is not a container type
-    expect(dist.has('arrange1')).toBe(false);
+    expect(dist.has('arrange1')).toBe(true);
   });
 });

@@ -438,7 +438,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
     // CLASSIFY, MERGE, and SUMMARY: validate grouping targets.
     // SUMMARY target-type check and cross-link BFS are delegated to the
     // crossLinkValidator module to keep the route handler lean.
-    if (data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'SUMMARY') {
+    if (data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'ARRANGE' || data.relationType === 'SUMMARY') {
       const validationResult = await validateGroupingTargets({
         topicId,
         relationType: data.relationType,
@@ -456,6 +456,36 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       (data.relationType === 'MERGE' || data.relationType === 'SUMMARY') && !data.payload?.targetLayout
         ? { ...data.payload, targetLayout: 'multi-column' as const }
         : data.payload;
+
+    // A container/member pair has one canonical JOIN record. Re-adding the
+    // same target must support that record instead of creating a duplicate
+    // membership record that could compete in the JOIN stack.
+    let relationTypeToCreate = data.relationType;
+    let targetRefsToCreate = data.targetRefs;
+    if (data.relationType === 'JOIN' && data.targetRefs.length === 1) {
+      const targetRef = data.targetRefs[0];
+      const existingJoins = await prisma.message.findMany({
+        where: {
+          topicId,
+          kind: 'RELATION',
+          relationType: 'JOIN',
+          relSourceId: data.sourceMessageId ?? null,
+          supersededBy: null,
+        },
+        select: { id: true, targetRefs: true },
+      });
+      const sameTarget = existingJoins.find(join => {
+        const existingTarget = (join.targetRefs as Array<Record<string, unknown>> | null)?.[0];
+        if (!existingTarget || existingTarget.kind !== targetRef.kind) return false;
+        return targetRef.kind === 'relation'
+          ? existingTarget.relationId === targetRef.relationId
+          : existingTarget.messageId === targetRef.messageId;
+      });
+      if (sameTarget) {
+        relationTypeToCreate = 'AGREE';
+        targetRefsToCreate = [{ kind: 'relation', relationId: sameTarget.id }];
+      }
+    }
 
     if (data.relationType === 'PROPOSAL' && data.payload?.operationType === 'RECHARGE') {
       const recipientUserId = data.payload.recipientUserId;
@@ -506,7 +536,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
     // Apply the event — state write + audit log on critical path.
     // PROPOSAL / CODE_CHANGE / OPERATIONS: create a GOVERNANCE / CODE / OPERATIONS
     // message (with relation fields) instead of a RELATION message.
-    const isGovernanceRelation = data.relationType === 'PROPOSAL' || data.relationType === 'CODE_CHANGE' || data.relationType === 'OPERATIONS';
+    const isGovernanceRelation = relationTypeToCreate === 'PROPOSAL' || relationTypeToCreate === 'CODE_CHANGE' || relationTypeToCreate === 'OPERATIONS';
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let message: any;
@@ -523,9 +553,9 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
           content: (relationPayload as Record<string, unknown>)?.content as string ?? '',
           contentType: 'MARKDOWN' as const,
           stakeAmount: data.stakeAmount,
-          relationType: data.relationType,
+          relationType: relationTypeToCreate,
           sourceMessageId: data.sourceMessageId ?? null,
-          targetRefs: data.targetRefs,
+          targetRefs: targetRefsToCreate,
           relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
         },
       });
@@ -535,9 +565,9 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         actorId: req.user!.id,
         topicId,
         payload: {
-          relationType: data.relationType,
+          relationType: relationTypeToCreate,
           sourceMessageId: data.sourceMessageId ?? null,
-          targetRefs: data.targetRefs,
+          targetRefs: targetRefsToCreate,
           relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
           supersedesRelationId: data.supersedesRelationId ?? null,
           stakeAmount: data.stakeAmount,
@@ -545,7 +575,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       });
     }
 
-    log('rel-create', `POST type=${data.relationType} msg=${message.id.slice(-6)} kind=${message.kind}`);
+    log('rel-create', `POST type=${relationTypeToCreate} msg=${message.id.slice(-6)} kind=${message.kind}`);
     // Return in the Relation API shape expected by the frontend.
     res.status(201).json({
       id: message.id,

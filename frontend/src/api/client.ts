@@ -4,6 +4,20 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api
 const PRIVATE_KEY_PREFIX = 'privateKey:';
 const DEVICE_ID_KEY = 'deviceId';
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly path: string;
+
+  constructor(message: string, details: { status: number; code?: string; path: string }) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = details.status;
+    this.code = details.code;
+    this.path = details.path;
+  }
+}
+
 export function getDeviceId(): string {
   const existing = localStorage.getItem(DEVICE_ID_KEY);
   if (existing) return existing;
@@ -78,7 +92,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
           .join('；')
       : '';
     const message = err.error && details ? `${err.error}（${details}）` : err.error || details || err.message || res.statusText;
-    throw new Error(err.code ? `${message} [${err.code}]` : message);
+    throw new ApiError(err.code ? `${message} [${err.code}]` : message, {
+      status: res.status,
+      code: err.code,
+      path,
+    });
   }
   const data = await res.json();
   return data;

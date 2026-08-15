@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
+import { debugLog } from '../lib/logger';
 
 type JwkLike = {
   kty?: string;
@@ -47,7 +48,8 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: '未提供认证令牌' });
+    debugLog('Auth', `FAIL code=AUTH_TOKEN_MISSING method=${req.method} path=${req.originalUrl}`);
+    res.status(401).json({ error: '未提供认证令牌', code: 'AUTH_TOKEN_MISSING' });
     return;
   }
 
@@ -55,6 +57,7 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   const secret = process.env.JWT_SECRET;
 
   if (!secret) {
+    debugLog('Auth', `FAIL code=JWT_SECRET_MISSING method=${req.method} path=${req.originalUrl}`);
     res.status(500).json({ error: '服务器配置错误：缺少 JWT_SECRET' });
     return;
   }
@@ -68,13 +71,19 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
       publicKey: payload.publicKey ?? null,
     };
     next();
-  } catch {
-    res.status(401).json({ error: '令牌无效或已过期' });
+  } catch (error) {
+    const reason = error instanceof jwt.TokenExpiredError ? 'expired' : error instanceof jwt.JsonWebTokenError ? 'invalid' : 'verify_failed';
+    debugLog('Auth', `FAIL code=AUTH_TOKEN_${reason.toUpperCase()} method=${req.method} path=${req.originalUrl}`);
+    res.status(401).json({
+      error: reason === 'expired' ? '登录令牌已过期，请重新登录' : '登录令牌无效，请重新登录',
+      code: reason === 'expired' ? 'AUTH_TOKEN_EXPIRED' : 'AUTH_TOKEN_INVALID',
+    });
   }
 }
 
 export async function verifySignature(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   if (!req.user) {
+    debugLog('Auth', `FAIL code=AUTH_USER_MISSING method=${req.method} path=${req.originalUrl}`);
     res.status(401).json({ error: '未认证' });
     return;
   }
@@ -94,16 +103,19 @@ export async function verifySignature(req: AuthRequest, res: Response, next: Nex
       publicKey = deviceKey?.publicKey ?? null;
     }
   } catch {
+    debugLog('Auth', `FAIL code=SIGNING_KEY_READ_FAILED user=${req.user.id} device=${req.user.deviceId ?? 'none'} method=${req.method} path=${req.originalUrl}`);
     res.status(401).json({ error: '签名密钥读取失败，请重新登录', code: 'SIGNING_KEY_READ_FAILED' });
     return;
   }
   if (!publicKey) {
+    debugLog('Auth', `FAIL code=SIGNING_KEY_NOT_FOUND user=${req.user.id} device=${req.user.deviceId ?? 'none'} method=${req.method} path=${req.originalUrl}`);
     res.status(401).json({ error: '当前设备未绑定签名密钥，请重新登录绑定设备', code: 'SIGNING_KEY_NOT_FOUND' });
     return;
   }
 
   const signatureBase64 = req.headers['x-signature'] as string | undefined;
   if (!signatureBase64) {
+    debugLog('Auth', `FAIL code=SIGNATURE_HEADER_MISSING user=${req.user.id} device=${req.user.deviceId ?? 'none'} method=${req.method} path=${req.originalUrl}`);
     res.status(401).json({ error: '请求没有携带设备签名，请重新登录后重试', code: 'SIGNATURE_HEADER_MISSING' });
     return;
   }
@@ -118,11 +130,13 @@ export async function verifySignature(req: AuthRequest, res: Response, next: Nex
       params.verifyAlgorithm as any, pubKey, signatureBuf, new TextEncoder().encode(rawBody),
     );
     if (!isValid) {
+      debugLog('Auth', `FAIL code=SIGNATURE_MISMATCH user=${req.user.id} device=${req.user.deviceId ?? 'none'} method=${req.method} path=${req.originalUrl}`);
       res.status(401).json({ error: '设备签名与当前设备公钥不匹配，请退出后重新登录', code: 'SIGNATURE_MISMATCH' });
       return;
     }
     next();
-  } catch {
+  } catch (error) {
+    debugLog('Auth', `FAIL code=SIGNATURE_INVALID user=${req.user.id} device=${req.user.deviceId ?? 'none'} method=${req.method} path=${req.originalUrl} reason=${error instanceof Error ? error.message : 'unknown'}`);
     res.status(401).json({ error: '设备签名格式或密钥类型无效，请退出后重新登录', code: 'SIGNATURE_INVALID' });
   }
 }

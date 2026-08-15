@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import type { ExportData } from '../api/client';
+import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
 import type {
@@ -1424,10 +1424,19 @@ export default function TopicDetailPage() {
 
   // Handle auth errors: logout and redirect to login
   async function handleAuthError(err: unknown) {
-    const msg = (err as any)?.message ?? '';
-    if (/登录|login|token|auth|unauthorized|未认证|请先/i.test(msg)) {
+    const apiError = err as { status?: number; code?: string; message?: string };
+    const authFailureCodes = new Set([
+      'AUTH_TOKEN_MISSING',
+      'AUTH_TOKEN_INVALID',
+      'AUTH_TOKEN_EXPIRED',
+    ]);
+    if (apiError.status === 401 && (authFailureCodes.has(apiError.code ?? '') || !apiError.code)) {
       await logout();
-      navigate('/login', { state: { reason: '登录已过期，请重新登录' } });
+      navigate('/login', {
+        state: {
+          reason: `认证失败：${apiError.message ?? '登录令牌无效或已过期'}。请求接口：${(err as any)?.path ?? '未知'}`,
+        },
+      });
       return true;
     }
     return false;
@@ -1818,7 +1827,10 @@ export default function TopicDetailPage() {
       return msg;
     } catch (e: any) {
       if (await handleAuthError(e)) return null;
-      setSendError(e?.message ?? '发送失败');
+      const detail = e instanceof ApiError
+        ? `${e.message}（HTTP ${e.status}，接口 ${e.path}${e.code ? `，错误码 ${e.code}` : ''}）`
+        : (e?.message ?? '发送失败');
+      setSendError(detail);
       setTimeout(() => setSendError(null), 4000);
       return null;
     }

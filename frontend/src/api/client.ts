@@ -31,6 +31,10 @@ export function storePrivateKeyForUser(username: string, keyData: JsonWebKey): v
 
 export function getPrivateKeyForCurrentUser(): string | null {
   const username = getCurrentUsername();
+  return username ? getPrivateKeyForUser(username) : null;
+}
+
+export function getPrivateKeyForUser(username: string): string | null {
   if (username) {
     return localStorage.getItem(`${PRIVATE_KEY_PREFIX}${getDeviceId()}:${username}`);
   }
@@ -52,20 +56,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`;
   }
   // Sign write requests with private key
-  if (options.method && options.method !== 'GET') {
+  const isAuthBootstrap = ['/auth/login', '/auth/register', '/auth/signing-key'].includes(path);
+  if (options.method && options.method !== 'GET' && !isAuthBootstrap) {
     try {
       const rawKey = getPrivateKeyForCurrentUser();
-      if (!rawKey) {
-        if (path !== '/auth/login' && path !== '/auth/register' && path !== '/auth/signing-key') throw new Error('本设备缺少签名密钥，请重新登录以绑定当前设备');
-      } else {
-        const keyData = JSON.parse(rawKey) as JsonWebKey;
-        const rawBody = typeof options.body === 'string' ? options.body : '{}';
-        headers['X-Signature'] = await signPayloadWithPrivateJwk(rawBody, keyData);
-      }
+      if (!rawKey) throw new Error('本设备缺少签名密钥，请重新登录以绑定当前设备');
+      const keyData = JSON.parse(rawKey) as JsonWebKey;
+      const rawBody = typeof options.body === 'string' ? options.body : '{}';
+      headers['X-Signature'] = await signPayloadWithPrivateJwk(rawBody, keyData);
     } catch (error) {
-      if (path !== '/auth/login' && path !== '/auth/register' && path !== '/auth/signing-key') {
-        throw error instanceof Error ? error : new Error('签名失败，请重新登录以绑定当前设备');
-      }
+      throw error instanceof Error ? error : new Error('签名失败，请重新登录以绑定当前设备');
     }
   }
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });

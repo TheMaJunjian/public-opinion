@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User } from '../types';
 import { api } from '../api';
-import { getDeviceId, getPrivateKeyForCurrentUser, storePrivateKeyForUser } from '../api/client';
+import { getDeviceId, getPrivateKeyForCurrentUser, getPrivateKeyForUser, storePrivateKeyForUser } from '../api/client';
 import { generateSigningKeyPair, privateKeyMatchesPublicKey, signPayloadWithPrivateJwk } from '../utils/signature';
 
 interface AuthContextValue {
@@ -57,15 +57,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function login(username: string, password: string) {
     const res = await api.login({ username, password });
-    let token = res.token;
     let authenticatedUser = res.user;
-    const storedPrivateKey = getPrivateKeyForCurrentUser();
+    let token = res.token;
+    const storedPrivateKey = getPrivateKeyForUser(res.user.username);
     const keyMatches = storedPrivateKey && res.user.publicKey
       ? privateKeyMatchesPublicKey(storedPrivateKey, res.user.publicKey)
       : false;
     if (!storedPrivateKey || !keyMatches) {
-      // A different production origin cannot read the old origin's private key.
-      // Rebind a freshly generated device key after password authentication.
       const keyPair = await generateSigningKeyPair();
       const privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
       const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);

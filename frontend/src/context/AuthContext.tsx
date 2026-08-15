@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User } from '../types';
 import { api } from '../api';
-import { getPrivateKeyForCurrentUser, storePrivateKeyForUser } from '../api/client';
+import { getDeviceId, getPrivateKeyForCurrentUser, storePrivateKeyForUser } from '../api/client';
 import { generateSigningKeyPair, privateKeyMatchesPublicKey, signPayloadWithPrivateJwk } from '../utils/signature';
 
 interface AuthContextValue {
@@ -59,13 +59,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await api.login({ username, password });
     let token = res.token;
     let authenticatedUser = res.user;
-    const storedPrivateKey = localStorage.getItem(`privateKey:${res.user.username}`);
+    const storedPrivateKey = getPrivateKeyForCurrentUser();
     const keyMatches = storedPrivateKey && res.user.publicKey
       ? privateKeyMatchesPublicKey(storedPrivateKey, res.user.publicKey)
       : false;
-    if (storedPrivateKey && keyMatches) {
-      localStorage.setItem('privateKey', storedPrivateKey);
-    } else {
+    if (!storedPrivateKey || !keyMatches) {
       // A different production origin cannot read the old origin's private key.
       // Rebind a freshly generated device key after password authentication.
       const keyPair = await generateSigningKeyPair();
@@ -81,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
-        localStorage.removeItem('privateKey');
+        localStorage.removeItem(`privateKey:${getDeviceId()}:${res.user.username}`);
         throw error;
       }
     }
@@ -100,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try { await api.logout(); } catch { /* ignore */ }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    localStorage.removeItem('privateKey');
+    if (user) localStorage.removeItem(`privateKey:${getDeviceId()}:${user.username}`);
     setToken(null);
     setUser(null);
   }

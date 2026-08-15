@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { prisma } from '../lib/prisma';
 
 type JwkLike = {
   kty?: string;
@@ -83,7 +84,19 @@ export async function verifySignature(req: AuthRequest, res: Response, next: Nex
     return;
   }
 
-  const publicKey = req.user.publicKey;
+  let publicKey = req.user.publicKey;
+  try {
+    if (req.user.deviceId) {
+      const deviceKey = await prisma.userSigningKey.findUnique({
+        where: { userId_deviceId: { userId: req.user.id, deviceId: req.user.deviceId } },
+        select: { publicKey: true },
+      });
+      publicKey = deviceKey?.publicKey ?? null;
+    }
+  } catch {
+    res.status(401).json({ error: '签名密钥读取失败，请重新登录' });
+    return;
+  }
   if (!publicKey) {
     res.status(401).json({ error: '账户未绑定签名密钥，请重新注册' });
     return;

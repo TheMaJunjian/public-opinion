@@ -31,17 +31,17 @@ export default function Navbar({ onOpenViewer, onOpenTutorial }: NavbarProps) {
         >
           阅览
         </button>
-        <button
-          onClick={onOpenTutorial}
-          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
-          title="打开教程"
-        >
-          教程
-        </button>
       </div>
       <div className="flex items-center gap-4">
         {user ? (
           <>
+            <button
+              onClick={onOpenTutorial}
+              className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+              title="打开教程"
+            >
+              教程
+            </button>
             <PointsBadge />
             <span className="text-indigo-200 text-sm">
               {user.username}
@@ -55,6 +55,13 @@ export default function Navbar({ onOpenViewer, onOpenTutorial }: NavbarProps) {
           </>
         ) : (
           <>
+            <button
+              onClick={onOpenTutorial}
+              className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+              title="打开教程"
+            >
+              教程
+            </button>
             <Link to="/login" className="hover:text-indigo-200 text-sm font-medium transition-colors">
               登录
             </Link>

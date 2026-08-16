@@ -18,7 +18,7 @@ type Props = {
 function getPopupPosition(x: number, y: number) {
   const popupW = Math.min(700, window.innerWidth - 32);
   const left = Math.min(Math.max(x - popupW / 2, 8), window.innerWidth - popupW - 8);
-  const top = Math.min(y + 8, window.innerHeight - 400);
+  const top = Math.max(8, Math.min(y + 8, window.innerHeight - 80));
   return { popupW, left, top };
 }
 
@@ -153,9 +153,12 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
   return (
     <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)' }}
       onClick={onClose}>
-      <div style={{ position: 'fixed', left: popup.x, top: popup.y, zIndex: 201, background: '#1e1e1e',
-        border: '1px solid #555', borderRadius: 8, padding: 16, minWidth: 320, maxWidth: 600, maxHeight: '80vh',
-        overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' }}
+      <div style={(() => {
+        const { left, top } = getPopupPosition(popup.x, popup.y);
+        return { position: 'fixed' as const, left, top, zIndex: 201, background: '#1e1e1e',
+          border: '1px solid #555', borderRadius: 8, padding: 16, minWidth: 320, maxWidth: 600, maxHeight: '80vh',
+          overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' };
+      })()}
         onClick={e => e.stopPropagation()}>
         <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>
           {relationTypeName(relType)}对比：{popup.relMsgId}

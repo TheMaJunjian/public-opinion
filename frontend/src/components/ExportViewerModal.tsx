@@ -1,6 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ExportData } from '../api/client';
+import PopupOverlay from './PopupOverlay';
 
 const LAST_EXPORT_KEY = 'lastExportData';
 
@@ -15,6 +16,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   const [processing, setProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   // Reset state on every open
@@ -98,15 +100,16 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   if (!open) return null;
 
   return (
-    <div
+    <PopupOverlay
+      contentRef={dialogRef}
+      zIndex={1000}
+      background="rgba(0,0,0,0.85)"
       style={{
-        position: 'fixed', inset: 0, zIndex: 1000,
-        background: 'rgba(0,0,0,0.85)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div style={{
+      <div ref={dialogRef} style={{
         width: '90vw', maxWidth: 500,
         background: '#101010', borderRadius: 12, border: '1px solid #333',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
@@ -199,6 +202,6 @@ export default function ExportViewerModal({ open, onClose }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </PopupOverlay>
   );
 }

@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Relation } from '../types';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 import { isContentKind } from '../utils/modelBridge';
+import PopupOverlay from './PopupOverlay';
 
 type UserSortKey =
   | 'rechargeIncome'
@@ -98,6 +99,7 @@ export default function LeaderboardModal({
   const [messageMinTruthSample, setMessageMinTruthSample] = useState(0);
   const [userKeyword, setUserKeyword] = useState('');
   const [messageKeyword, setMessageKeyword] = useState('');
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const applyDir = (value: number, dir: 'desc' | 'asc'): number => {
     return dir === 'desc' ? value : -value;
@@ -347,22 +349,22 @@ export default function LeaderboardModal({
   if (!open) return null;
 
   return (
-    <div
+    <PopupOverlay
+      contentRef={dialogRef}
+      zIndex={1500}
+      background="rgba(0,0,0,0.65)"
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 1500,
-        background: 'rgba(0,0,0,0.65)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         padding: 16,
       }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
+        ref={dialogRef}
         style={{
           width: 'min(980px, 100%)',
           maxHeight: '82vh',
@@ -593,6 +595,6 @@ export default function LeaderboardModal({
           </>
         )}
       </div>
-    </div>
+    </PopupOverlay>
   );
 }

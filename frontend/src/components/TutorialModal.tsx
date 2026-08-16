@@ -1,3 +1,6 @@
+import { useRef } from 'react';
+import PopupOverlay from './PopupOverlay';
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -6,16 +9,25 @@ interface Props {
 export default function TutorialModal({ open, onClose }: Props) {
   if (!open) return null;
 
+  return <TutorialModalContent onClose={onClose} />;
+}
+
+function TutorialModalContent({ onClose }: { onClose: () => void }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+
   return (
-    <div
+    <PopupOverlay
+      contentRef={contentRef}
+      zIndex={1000}
+      background="rgba(0,0,0,0.85)"
       style={{
-        position: 'fixed', inset: 0, zIndex: 1000,
-        background: 'rgba(0,0,0,0.85)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 12, boxSizing: 'border-box', overflow: 'auto',
       }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div style={{
+      <div ref={contentRef}
+      style={{
         width: '90vw', maxWidth: 500, minHeight: 280,
         background: '#101010', borderRadius: 12, border: '1px solid #333',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
@@ -106,6 +118,6 @@ export default function TutorialModal({ open, onClose }: Props) {
           </section>
         </div>
       </div>
-    </div>
+    </PopupOverlay>
   );
 }

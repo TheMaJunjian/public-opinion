@@ -1,6 +1,8 @@
+import { useRef } from 'react';
 import type { DemoEdge, DemoMessage, RelationType } from '../utils/modelBridge';
 import { relationTypeName } from './GraphView';
 import { computeCharDiff, renderDiffParts, type DiffPart } from './CharDiffText';
+import PopupOverlay from './PopupOverlay';
 
 type ComparisonPopupState = {
   relMsgId: string;
@@ -15,14 +17,8 @@ type Props = {
   onClose: () => void;
 };
 
-function getPopupPosition(x: number, y: number) {
-  const popupW = Math.min(700, window.innerWidth - 32);
-  const left = Math.min(Math.max(x - popupW / 2, 8), window.innerWidth - popupW - 8);
-  const top = Math.max(8, Math.min(y + 8, window.innerHeight - 80));
-  return { popupW, left, top };
-}
-
 export default function CorrectionComparisonPopup({ popup, messages, edges, onClose }: Props) {
+  const contentRef = useRef<HTMLDivElement>(null);
   const msgMap = new Map(messages.map(m => [m.id, m]));
   const relEdges = edges.filter(e => e.relationMessageId === popup.relMsgId);
   const sourceMsg = relEdges[0] && !relEdges[0].from.messageId.startsWith('anon:')
@@ -49,12 +45,10 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
       const newSrc = newSrcRaw.startsWith('anon:') ? null : newSrcRaw;
       const oldTargetStr = Array.from(new Set(oldRelEdges.map(e => e.to.messageId))).join(',');
       const newTargetStr = Array.from(new Set(newRelEdges.map(e => e.to.messageId))).join(',');
-      const { popupW, left, top } = getPopupPosition(popup.x, popup.y);
       return (
-        <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)' }}
-          onClick={onClose}>
-          <div style={{ position: 'fixed', left, top, zIndex: 201, background: '#1e1e1e',
-            border: '1px solid #555', borderRadius: 8, padding: 16, width: popupW, maxHeight: '80vh',
+        <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
+          <div ref={contentRef} style={{ background: '#1e1e1e',
+            border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
             overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比（关系消息）</div>
@@ -88,7 +82,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
             </div>
             <CloseRow onClose={onClose} />
           </div>
-        </div>
+        </PopupOverlay>
       );
     }
 
@@ -126,12 +120,10 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
       } else {
         ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
       }
-      const { popupW, left, top } = getPopupPosition(popup.x, popup.y);
       return (
-        <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)' }}
-          onClick={onClose}>
-          <div style={{ position: 'fixed', left, top, zIndex: 201, background: '#1e1e1e',
-            border: '1px solid #555', borderRadius: 8, padding: 16, width: popupW, maxHeight: '80vh',
+        <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
+          <div ref={contentRef} style={{ background: '#1e1e1e',
+            border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
             overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
@@ -145,20 +137,16 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
             </div>
             <CloseRow onClose={onClose} />
           </div>
-        </div>
+        </PopupOverlay>
       );
     }
   }
 
   return (
-    <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)' }}
-      onClick={onClose}>
-      <div style={(() => {
-        const { left, top } = getPopupPosition(popup.x, popup.y);
-        return { position: 'fixed' as const, left, top, zIndex: 201, background: '#1e1e1e',
-          border: '1px solid #555', borderRadius: 8, padding: 16, minWidth: 320, maxWidth: 600, maxHeight: '80vh',
-          overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' };
-      })()}
+    <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
+      <div ref={contentRef} style={{ background: '#1e1e1e',
+        border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(600px, calc(100vw - 32px))', maxHeight: '80vh',
+        overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' }}
         onClick={e => e.stopPropagation()}>
         <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>
           {relationTypeName(relType)}对比：{popup.relMsgId}
@@ -171,7 +159,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
         </div>
         <CloseRow onClose={onClose} />
       </div>
-    </div>
+    </PopupOverlay>
   );
 }
 

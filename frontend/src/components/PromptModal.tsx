@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
+import PopupOverlay from './PopupOverlay';
 
 interface PromptModalProps {
   open: boolean;
@@ -53,20 +54,18 @@ export default function PromptModal({
   if (!open) return null;
 
   return createPortal(
-    <div
-      data-prompt-modal="true"
-      role="presentation"
-      onClick={() => onCancel?.()}
+    <PopupOverlay
+      contentRef={dialogRef}
+      zIndex={3000}
+      background="rgba(0,0,0,0.4)"
+      dataPromptModal
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 3000,
-        background: 'rgba(0,0,0,0.4)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         padding: 16,
       }}
+      onClick={() => onCancel?.()}
     >
       <div
         ref={dialogRef}
@@ -130,7 +129,7 @@ export default function PromptModal({
           </button>
         </div>
       </div>
-    </div>,
+    </PopupOverlay>,
     document.body,
   );
 }

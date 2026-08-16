@@ -36,9 +36,9 @@ export default function TutorialModal({ open, onClose }: Props) {
         }}>
           <section>
             <h2 style={{ margin: '0 0 6px', color: '#fff', fontSize: 15 }}>发送按钮可以点击时，世界已经准备好聆听你的声音。</h2>
-            <h2 style={{ margin: '0 0 6px', color: '#fff', fontSize: 15 }}>开始使用</h2>
+            <h2 style={{ margin: '0 0 6px', color: '#fff', fontSize: 15 }}>对世界作出指示</h2>
             <ol style={{ margin: 0, paddingLeft: 20 }}>
-              <li>登录后即可参与讨论，对世界作出指示。</li>
+              <li>登录后即可参与讨论。</li>
               <li>左侧为消息显示视图，右侧为消息操作面板。</li>
               <li>登录后建议点击过滤按钮，屏蔽结算消息，屏蔽加入消息。</li>
               <li>阅览导出的 JSON 文件不需要登录，但阅览模式无法发送消息。</li>

@@ -8,9 +8,11 @@ const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const TopicDetailPage = lazy(() => import('./pages/TopicDetailPage'));
 const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
+const TutorialModal = lazy(() => import('./components/TutorialModal'));
 
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
   const routeFallback = (
     <div className="flex h-full items-center justify-center text-sm text-gray-500">
@@ -22,7 +24,10 @@ export default function App() {
     <AuthProvider>
       <Router>
         <div className="h-screen min-w-fit flex flex-col bg-[#101010]">
-          <Navbar onOpenViewer={() => setViewerOpen(true)} />
+          <Navbar
+            onOpenViewer={() => setViewerOpen(true)}
+            onOpenTutorial={() => setTutorialOpen(true)}
+          />
           <main className="flex-1">
             <Suspense fallback={routeFallback}>
               <Routes>
@@ -39,6 +44,14 @@ export default function App() {
                 key="open"
                 open={viewerOpen}
                 onClose={() => setViewerOpen(false)}
+              />
+            </Suspense>
+          )}
+          {tutorialOpen && (
+            <Suspense fallback={null}>
+              <TutorialModal
+                open={tutorialOpen}
+                onClose={() => setTutorialOpen(false)}
               />
             </Suspense>
           )}

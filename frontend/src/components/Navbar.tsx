@@ -4,10 +4,11 @@ import PointsBadge from './PointsBadge';
 
 interface NavbarProps {
   onOpenViewer?: () => void;
+  onOpenTutorial?: () => void;
 }
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
-export default function Navbar({ onOpenViewer }: NavbarProps) {
+export default function Navbar({ onOpenViewer, onOpenTutorial }: NavbarProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -29,6 +30,13 @@ export default function Navbar({ onOpenViewer }: NavbarProps) {
           title="阅览导出的消息文本"
         >
           阅览
+        </button>
+        <button
+          onClick={onOpenTutorial}
+          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+          title="打开教程"
+        >
+          教程
         </button>
       </div>
       <div className="flex items-center gap-4">

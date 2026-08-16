@@ -148,7 +148,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
       )}
       <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
-          <div style={{ fontWeight: 600 }}>候选区（Draft）</div>
+          <div style={{ fontWeight: 600 }}>选择暂存区</div>
           <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
             <button onClick={p.clearDraftAll} disabled={p.draftUnits.length === 0 && !p.activeTextSelectId}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.draftUnits.length === 0 && !p.activeTextSelectId ? "#333" : "#444", color: p.draftUnits.length === 0 && !p.activeTextSelectId ? "#777" : "#fff", cursor: p.draftUnits.length === 0 && !p.activeTextSelectId ? "default" : "pointer" }}>
@@ -168,11 +168,11 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>焦点距离（hop）：{p.focusHop}</div>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>焦点范围：{p.focusHop}</div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={() => p.setFocusHop(h => Math.max(0, h - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
             <button onClick={() => p.setFocusHop(h => Math.min(8, h + 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>+</button>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>（可设置 hop，默认 1，最大 8）</div>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>（数值越大，显示的关联消息越多；默认 1，最大 8）</div>
           </div>
         </div>
 
@@ -253,7 +253,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
 
       {p.user && (
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontWeight: 600 }}>关系标签与消息文本</div>
+          <div style={{ fontWeight: 600 }}>输入框（消息与关系设置）</div>
           {p.hasSecondaryRelationSelector && (() => {
             const opts = p.relationType === "reply"
               ? ["none", "question", "answer"]

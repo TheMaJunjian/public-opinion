@@ -5138,7 +5138,7 @@ export default function TopicDetailPage() {
               </div>
             </div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>
-              {viewMode === "list" ? "线性视图：支持自由换行内容；双击 normal 进入文本选择模式；可点击高亮片段切换选中。" : "结构图：注释/引用 source 自动推到 target 右侧列（规则1）；label避让文字；高亮片段可点击。"}
+              {viewMode === "list" ? "线性视图：按线性结构查看消息。" : "结构图：按非线性结构查看消息。"}
             </div>
           </div>
           {(isInsideClassify || isTemporaryJoinCategory) && (

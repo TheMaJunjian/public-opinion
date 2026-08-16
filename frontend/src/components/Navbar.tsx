@@ -23,15 +23,13 @@ export default function Navbar({ onOpenViewer }: NavbarProps) {
           <span className="text-xl font-bold tracking-widest">公论</span>
           <span className="text-xs text-indigo-300 tracking-wide">一切记录在案，是非自有公论</span>
         </Link>
-        {user && (
-          <button
-            onClick={onOpenViewer}
-            className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
-            title="阅览导出的消息文本"
-          >
-            阅览
-          </button>
-        )}
+        <button
+          onClick={onOpenViewer}
+          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+          title="阅览导出的消息文本"
+        >
+          阅览
+        </button>
       </div>
       <div className="flex items-center gap-4">
         {user ? (

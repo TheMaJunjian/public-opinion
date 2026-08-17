@@ -15,7 +15,7 @@ const registerSchema = z.object({
     .min(2, '用户名至少 2 个字符')
     .max(30, '用户名最多 30 个字符')
     .regex(/^[a-zA-Z0-9_\u4e00-\u9fa5]+$/, '用户名只能包含字母、数字、下划线或汉字'),
-  password: z.string().min(6, '密码至少 6 个字符').max(100, '密码最多 100 个字符'),
+  password: z.string().max(100, '密码最多 100 个字符'),
   publicKey: z.string().nullable().optional(),
 });
 

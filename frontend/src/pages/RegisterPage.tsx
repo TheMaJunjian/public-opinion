@@ -9,7 +9,6 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -21,8 +20,7 @@ export default function RegisterPage() {
       setError('用户名需为 2-30 位字母、数字、下划线或汉字（不含空格和标点）');
       return;
     }
-    if (password !== confirm) { setError('两次密码不一致'); return; }
-    if (password.length < 6) { setError('密码长度至少6位'); return; }
+    if (password.length > 100) { setError('密码最多100位'); return; }
     setError('');
     setLoading(true);
     try {
@@ -60,7 +58,7 @@ export default function RegisterPage() {
               autoComplete="username"
               value={username}
               onChange={e => setUsername(e.target.value)}
-              placeholder="请输入用户名"
+              placeholder="2-30位字母、数字、下划线或汉字"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             />
           </div>
@@ -68,19 +66,10 @@ export default function RegisterPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
             <input
               type="password"
+              maxLength={100}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              placeholder="至少6位"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">确认密码</label>
-            <input
-              type="password"
-              value={confirm}
-              onChange={e => setConfirm(e.target.value)}
-              placeholder="再次输入密码"
+              placeholder="请输入密码（最多100位）"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             />
           </div>

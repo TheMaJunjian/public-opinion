@@ -64,6 +64,7 @@ const createRelationSchema = z.object({
     title: z.string().trim().min(1).max(200).optional(),
     targetLayout: z.enum(['single-column', 'multi-column', 'single-row']).optional(),
     content: z.string().trim().min(1).max(50000).optional(),
+    correctionContent: z.string().max(50000).optional(),
     subType: z.enum(['SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM']).optional(),
     customLabel: z.string().trim().min(1).max(20).optional(),
     operationType: z.string().trim().min(1).max(80).optional(),
@@ -140,10 +141,41 @@ const createRelationSchema = z.object({
       path: ['targetRefs'],
     });
   }
+  if (data.relationType === 'CORRECT') {
+    if (data.sourceMessageId !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '更正关系不能有来源消息',
+        path: ['sourceMessageId'],
+      });
+    }
+    if (data.targetRefs.length !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '更正关系必须且只能有一个目标',
+        path: ['targetRefs'],
+      });
+    }
+    if (data.targetRefs[0]?.kind !== 'text-fragment') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '更正关系只能针对消息片段，不能针对整个消息',
+        path: ['targetRefs'],
+      });
+    }
+    if (data.payload?.correctionContent === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '更正关系需要提供替换内容（可以为空，表示删除）',
+        path: ['payload', 'correctionContent'],
+      });
+    }
+  }
 });
 
 const SOURCE_OPTIONAL_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'ARRANGE', 'CORRECT', 'REPLY', 'NOTIFY', 'TAG', 'CLASSIFY', 'MERGE', 'SUMMARY', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK', 'PROPOSAL', 'DELEGATION', 'CODE_CHANGE', 'OPERATIONS']);
 const TARGET_OPTIONAL_RELATION_TYPES = new Set(['CLASSIFY', 'PROPOSAL', 'DELEGATION', 'CODE_CHANGE', 'OPERATIONS']);
+const DECORATION_RELATION_TYPES = new Set(['AGREE', 'DISAGREE', 'TAG', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
 
 // Types that forbid sourceMessageId entirely (must be null)
 const SOURCE_FORBIDDEN_RELATION_TYPES: Record<string, string> = {
@@ -370,14 +402,19 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       res.status(400).json({ error: '至少需要一个目标引用' });
       return;
     }
-    // sourceMessageId can reference ANY message in this topic (TEXT or RELATION kind),
-    // because relation messages are also messages — a single unified table lookup suffices.
     if (data.sourceMessageId) {
       const sourceMessage = await prisma.message.findFirst({
         where: { id: data.sourceMessageId, topicId },
       });
       if (!sourceMessage) {
         res.status(404).json({ error: '来源消息不存在或不属于该分类' });
+        return;
+      }
+      if (data.relationType === 'JOIN' && (
+        sourceMessage.kind !== 'RELATION'
+        || !['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE'].includes(sourceMessage.relationType ?? '')
+      )) {
+        res.status(400).json({ error: '加入消息的来源必须是分类、总结、排列或归并容器消息' });
         return;
       }
     }
@@ -405,11 +442,31 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       const uniqueMessageIds = [...new Set(targetMessageIds)];
       const foundMessages = await prisma.message.findMany({
         where: { id: { in: uniqueMessageIds }, topicId },
-        select: { id: true },
+        select: { id: true, kind: true, relationType: true },
       });
       if (foundMessages.length !== uniqueMessageIds.length) {
         res.status(404).json({ error: '部分目标消息不存在或不属于该分类' });
         return;
+      }
+      if (data.relationType === 'CORRECT') {
+        const correctableRelationTypes = new Set(['CLASSIFY', 'SUMMARY', 'PROPOSAL', 'DELEGATION', 'CODE_CHANGE', 'OPERATIONS']);
+        const invalidMessage = foundMessages.find(message =>
+          message.kind !== 'TEXT'
+          && !(message.kind === 'RELATION' && correctableRelationTypes.has(message.relationType ?? ''))
+        );
+        if (invalidMessage) {
+          res.status(400).json({ error: '更正关系只能指向文本消息或允许更正的关系消息' });
+          return;
+        }
+      }
+      if (data.relationType === 'JOIN') {
+        const invalidTarget = foundMessages.find(message =>
+          message.kind === 'RELATION' && DECORATION_RELATION_TYPES.has(message.relationType ?? '')
+        );
+        if (invalidTarget) {
+          res.status(400).json({ error: '加入消息的目标不能是绑定在其他消息上的装饰关系消息' });
+          return;
+        }
       }
     }
 
@@ -418,7 +475,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
     if (targetRelationIds.length > 0) {
       const uniqueRelationIds = [...new Set(targetRelationIds)];
       const directTargetRelations = await prisma.message.findMany({
-        where: { id: { in: uniqueRelationIds }, topicId, kind: { in: ['RELATION', 'GOVERNANCE', 'CODE'] } },
+        where: { id: { in: uniqueRelationIds }, topicId, kind: { in: ['RELATION', 'GOVERNANCE', 'CODE', 'OPERATIONS'] } },
         select: { id: true, relationType: true, targetRefs: true },
       });
       if (directTargetRelations.length !== uniqueRelationIds.length) {
@@ -459,6 +516,22 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       }
 
       foundTargetRelations = [...relationById.values()];
+
+      if (data.relationType === 'CORRECT') {
+        const correctableRelationTypes = new Set(['CLASSIFY', 'SUMMARY', 'PROPOSAL', 'DELEGATION', 'CODE_CHANGE', 'OPERATIONS']);
+        const target = foundTargetRelations.find(relation => relation.id === targetRelationIds[0]);
+        if (!target || !correctableRelationTypes.has(target.relationType ?? '')) {
+          res.status(400).json({ error: '更正关系只能指向分类、总结、提案、委托、代码或运营消息' });
+          return;
+        }
+      }
+      if (data.relationType === 'JOIN') {
+        const invalidTarget = directTargetRelations.find(relation => DECORATION_RELATION_TYPES.has(relation.relationType ?? ''));
+        if (invalidTarget) {
+          res.status(400).json({ error: '加入消息的目标不能是绑定在其他消息上的装饰关系消息' });
+          return;
+        }
+      }
 
       if (data.relationType === 'DELEGATION' && data.payload?.delegationKind === 'FULFILL') {
         const target = foundTargetRelations.find(rel => rel.id === targetRelationIds[0]);

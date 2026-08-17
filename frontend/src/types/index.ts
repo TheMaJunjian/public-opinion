@@ -125,6 +125,8 @@ export interface RelationPayload {
   delegationKind?: 'CREATE' | 'FULFILL';
   rewardAmount?: number;
   rewardRatio?: number;
+  /** CORRECT stores the complete replacement content directly on the correction relation. */
+  correctionContent?: string;
 }
 
 export interface Relation {

@@ -1,4 +1,5 @@
 import type { DemoEdge, DemoMessage, RelationType, UnitSelection } from '../utils/modelBridge';
+import { computeCharDiff } from '../components/CharDiffText';
 import { isContentKind, unitSelectionToTargetRef } from '../utils/modelBridge';
 import type { Relation, RelationPayload, TargetRef } from '../types';
 import { getRelationLabel, getRelationTitle } from '../types';
@@ -138,6 +139,7 @@ export function buildRelationPayload(params: {
   title?: string;
   targetLayout?: RelationPayload['targetLayout'];
   content?: string;
+  correctionContent?: string;
   operationType?: string;
   amount?: number;
   revenuePoolShare?: number;
@@ -155,6 +157,7 @@ export function buildRelationPayload(params: {
   if (params.title) payload.title = params.title;
   if (params.targetLayout) payload.targetLayout = params.targetLayout;
   if (params.content) payload.content = params.content;
+  if (params.correctionContent) payload.correctionContent = params.correctionContent;
   if (params.operationType) payload.operationType = params.operationType;
   if (params.amount !== undefined) payload.amount = params.amount;
   if (params.revenuePoolShare !== undefined) payload.revenuePoolShare = params.revenuePoolShare;
@@ -804,7 +807,10 @@ export function generateCorrectionContent(
   if (uniqueTargetMids.length !== 1) return null;
   const targetMid = uniqueTargetMids[0];
   const targetMsg = msgMap.get(targetMid);
-  if (!targetMsg || targetMsg.kind !== 'normal') return null;
+  const correctableRelationTypes = new Set(['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations']);
+  const canCorrectTarget = targetMsg?.kind === 'normal'
+    || (targetMsg?.kind === 'relation' && correctableRelationTypes.has(targetMsg.relationType ?? ''));
+  if (!targetMsg || !canCorrectTarget) return null;
 
   const textFragments = targetUnits
     .filter(u => u.selection.kind === 'text')
@@ -820,6 +826,17 @@ export function generateCorrectionContent(
   }
 
   return replacementText;
+}
+
+export function getCorrectionChangeSummary(original: string, corrected: string): {
+  removed: string;
+  added: string;
+} {
+  const { origParts, nextParts } = computeCharDiff(original, corrected);
+  return {
+    removed: origParts.filter(part => part.type === 'del').map(part => part.text).join(''),
+    added: nextParts.filter(part => part.type === 'ins').map(part => part.text).join(''),
+  };
 }
 
 function buildTextCorrectionReplacementMap(

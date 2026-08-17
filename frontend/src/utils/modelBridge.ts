@@ -61,6 +61,14 @@ export type DemoMessage = {
   };
 };
 
+export type CorrectionVersion = {
+  correctionId: string;
+  targetId: string;
+  content: string;
+  valid: boolean;
+  createdAt: string;
+};
+
 export type DemoEdge = {
   id: string;
   relationMessageId: string;
@@ -204,6 +212,8 @@ export function convertMessagesToDemoModel(
             .filter(r => r.kind === 'message' || r.kind === 'text-fragment')
             .map(r => (r as { messageId: string }).messageId),
         };
+      } else if (relType === 'correct') {
+        content = rel.payload?.correctionContent ?? '';
       } else if (relType === 'classify') {
         content = `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'tag' && tagLabel) {
@@ -327,6 +337,38 @@ export function convertMessagesToDemoModel(
   demoMessages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return { messages: demoMessages, edges: demoEdges };
+}
+
+/** Resolve the latest valid CORRECT version for each target message. */
+export function computeCorrectionVersions(
+  messages: DemoMessage[],
+  edges: DemoEdge[],
+  invalidCorrectionIds: Set<string> = new Set(),
+): Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }> {
+  const msgMap = new Map(messages.map(message => [message.id, message]));
+  const result = new Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>();
+  for (const edge of edges) {
+    if (edge.relationType !== 'correct') continue;
+    const correction = msgMap.get(edge.relationMessageId);
+    const target = msgMap.get(edge.to.messageId);
+    if (!correction || !target) continue;
+    const content = correction.relationPayload?.correctionContent ?? correction.content;
+    const version: CorrectionVersion = {
+      correctionId: correction.id,
+      targetId: edge.to.messageId,
+      content,
+      valid: !invalidCorrectionIds.has(correction.id),
+      createdAt: correction.createdAt,
+    };
+    const entry = result.get(edge.to.messageId) ?? { versions: [] };
+    if (!entry.versions.some(item => item.correctionId === version.correctionId)) entry.versions.push(version);
+    result.set(edge.to.messageId, entry);
+  }
+  for (const entry of result.values()) {
+    entry.versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    entry.current = [...entry.versions].reverse().find(version => version.valid);
+  }
+  return result;
 }
 
 /**

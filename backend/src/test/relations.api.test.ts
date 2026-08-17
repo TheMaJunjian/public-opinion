@@ -245,11 +245,28 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 100, debtFrozen: false });
     (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 100, locked: 0 });
     (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({ parameters: { relationTypeMinStake: { JOIN: 3 }, selfStakeOnCreate: 1 } });
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ relationType: 'JOIN', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+      .send({ relationType: 'JOIN', sourceMessageId: 'rel-container', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(201);
+  });
+
+  it('rejects JOIN targeting a decoration relation message', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    (prisma.message.findMany as jest.Mock).mockResolvedValueOnce([{
+      id: 'rel-decoration', topicId: 'topic-1', kind: 'RELATION', relationType: 'CORRECT',
+    }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'rel-container', targetRefs: [{ kind: 'message', messageId: 'rel-decoration' }] });
+    expect(res.status).toBe(400);
   });
 
   it('allows CLASSIFY with relation message targets', async () => {
@@ -646,6 +663,9 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
   });
 
   it('turns a duplicate JOIN into AGREE on the existing JOIN', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])
       .mockResolvedValueOnce([{
@@ -668,7 +688,7 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({
         relationType: 'JOIN',
-        sourceMessageId: 'msg-1',
+        sourceMessageId: 'rel-container',
         targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
       });
 
@@ -916,16 +936,44 @@ describe('POST /api/topics/:topicId/relations — CORRECT single-target validati
     ]);
   });
 
-  it('allows CORRECT with single target', async () => {
+  it('allows CORRECT with a selected text fragment', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({
         relationType: 'CORRECT',
-        sourceMessageId: 'msg-1',
-        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+        payload: { correctionContent: 'Corrected world' },
       });
     expect(res.status).toBe(201);
+  });
+
+  it('allows an empty replacement to delete the selected fragment', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+        payload: { correctionContent: '' },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects CORRECT targeting the whole message', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { correctionContent: 'Corrected world' },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.details.some((d: any) => d.message.includes('消息片段'))).toBe(true);
   });
 
   it('rejects CORRECT with multiple targets', async () => {
@@ -934,24 +982,29 @@ describe('POST /api/topics/:topicId/relations — CORRECT single-target validati
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({
         relationType: 'CORRECT',
-        sourceMessageId: 'msg-1',
-        targetRefs: [{ kind: 'message', messageId: 'msg-2' }, { kind: 'message', messageId: 'msg-1' }],
+        sourceMessageId: null,
+        targetRefs: [
+          { kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' },
+          { kind: 'text-fragment', messageId: 'msg-1', text: 'Hello', hash: 'hash-hello' },
+        ],
+        payload: { correctionContent: 'Corrected content' },
       });
     expect(res.status).toBe(400);
     expect(res.body.details.some((d: any) => d.message.includes('更正'))).toBe(true);
   });
 
-  it('allows CORRECT targeting a relation message', async () => {
+  it('rejects CORRECT targeting a non-correctable relation message', async () => {
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({
         relationType: 'CORRECT',
-        sourceMessageId: 'msg-1',
+        sourceMessageId: null,
         targetRefs: [{ kind: 'relation', relationId: 'rel-1' }],
+        payload: { correctionContent: 'Corrected relation content' },
       });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
   });
 });
 

@@ -29,6 +29,35 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
 
   if (relType === 'correct' && targetMsgs.length > 0) {
     const origMsg = targetMsgs[0];
+    const correctionContent = relEdges[0] && msgMap.get(popup.relMsgId)?.relationPayload?.correctionContent;
+
+    if (correctionContent !== undefined) {
+      const textEdge = relEdges.find(edge => edge.to.selection.kind === 'text');
+      const selected = textEdge?.to.selection.kind === 'text' ? textEdge.to.selection.text : origMsg.content;
+      const replacement = correctionContent;
+      return (
+        <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
+          <div ref={contentRef} style={{ background: '#1e1e1e',
+            border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
+            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <MessageDiffColumn title="原文片段" message={origMsg} border="#554" background="#211e14">
+                <span style={{ color: '#ff9944', fontWeight: 700 }}>{selected}</span>
+              </MessageDiffColumn>
+              <MessageDiffColumn title="更正内容" message={msgMap.get(popup.relMsgId) ?? origMsg} border="#255" background="#14201e">
+                <span style={{ color: replacement.length === 0 ? '#ff9944' : '#44ddaa', fontWeight: 700 }}>
+                  {replacement.length === 0 ? '（删除）' : replacement}
+                </span>
+              </MessageDiffColumn>
+            </div>
+            <CloseRow onClose={onClose} />
+          </div>
+        </PopupOverlay>
+      );
+    }
 
     if (origMsg.kind === 'relation') {
       const oldRelEdges = edges.filter(e => e.relationMessageId === origMsg.id);
@@ -49,7 +78,8 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
         <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
           <div ref={contentRef} style={{ background: '#1e1e1e',
             border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
-            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' }}
+            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比（关系消息）</div>
             <div style={{ display: 'flex', gap: 10 }}>
@@ -124,7 +154,8 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
         <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
           <div ref={contentRef} style={{ background: '#1e1e1e',
             border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
-            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' }}
+            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
@@ -146,7 +177,8 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
     <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
       <div ref={contentRef} style={{ background: '#1e1e1e',
         border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(600px, calc(100vw - 32px))', maxHeight: '80vh',
-        overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee' }}
+        overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
         onClick={e => e.stopPropagation()}>
         <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>
           {relationTypeName(relType)}对比：{popup.relMsgId}

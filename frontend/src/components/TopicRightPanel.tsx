@@ -108,6 +108,7 @@ interface TopicRightPanelProps {
   effectiveMinStake: number;
   singleButtonEnabled: boolean;
   singleButtonLabel: string;
+  sendValidationLabel: string | null;
   totalConsumption: any;
   stakeFeeAmountRef: React.MutableRefObject<number>;
   subTypeStakeMap: React.MutableRefObject<Record<string, number>>;
@@ -138,6 +139,7 @@ interface TopicRightPanelProps {
 export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
   const navigate = useNavigate();
+  const showContributionControls = p.singleButtonEnabled && !p.isPreviewMode;
 
   return (
     <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
@@ -361,10 +363,19 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
             );
           })()}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {showContributionControls && <>
             {/* Text stake */}
             {p.hasTextContent && p.relationType !== "delegation" && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isArrangeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) && (
               <>
                 <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
+                <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
+                  onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
+                  style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
+              </>
+            )}
+            {!p.hasTextContent && !p.relationType && (
+              <>
+                <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
                 <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
                   onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
                   style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
@@ -380,15 +391,6 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                 {p.subType && p.subTypeStakeMap.current[p.subType] && p.subTypeStakeMap.current[p.subType] > (p.relationStakeMap.current[(p.relationType ?? '').toUpperCase()] ?? 0) && (
                   <span style={{ fontSize: 10, color: "#f59e0b" }}>（「{p.subTypeLabel(p.subType)}」最低 {p.subTypeStakeMap.current[p.subType]} 点）</span>
                 )}
-              </>
-            )}
-            {/* Default: plain text message */}
-            {!p.hasTextContent && !p.relationType && (
-              <>
-                <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
-                <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
-                  onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
-                  style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
               </>
             )}
             <span style={{ fontSize: 11, color: "#666" }}>点 / {p.availablePoints}</span>
@@ -410,14 +412,18 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                 </span>
               </span>
             )}
+            </>}
             <button onClick={p.handleQuickSendAndRelateFromDraftTargets} disabled={p.isPreviewMode || !p.singleButtonEnabled}
               style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: (p.singleButtonEnabled && !p.isPreviewMode) ? "#0b84ff" : "#333", color: (p.singleButtonEnabled && !p.isPreviewMode) ? "#fff" : "#777", cursor: (p.singleButtonEnabled && !p.isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
               发送
             </button>
-            <span style={{ fontSize: 11, opacity: p.singleButtonEnabled ? 0.9 : 0.5, color: p.singleButtonEnabled ? "#cce4ff" : "#999" }}>
+            <span style={{ fontSize: 11, color: "#fff" }}>
               {p.singleButtonLabel}
             </span>
           </div>
+          {p.sendValidationLabel && (
+            <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>
+          )}
           {p.sendError && (
             <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>
           )}

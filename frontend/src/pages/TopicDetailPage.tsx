@@ -3,7 +3,7 @@ import { useParams, useSearchParams, useLocation, useNavigate } from 'react-rout
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeCorrectionVersions, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType, MessageKind,
@@ -102,6 +102,10 @@ export default function TopicDetailPage() {
   const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
   const [messageBettorCounts, setMessageBettorCounts] = useState<Record<string, number>>({});
   const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
+  const correctionVersions = useMemo(() => {
+    const invalidCorrectionIds = computeUserSuppressedRelIds(edges, messages, user?.username ?? null);
+    return computeCorrectionVersions(messages, edges, invalidCorrectionIds);
+  }, [messages, edges, user?.username]);
   const [isPreloaded, setIsPreloaded] = useState(false);
 
   // ── Preloaded data (from export viewer) ──
@@ -505,6 +509,7 @@ export default function TopicDetailPage() {
   const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: false, hideJoin: false });
   const [joinFilterTargetId, setJoinFilterTargetId] = useState<string | null>(null);
   const [joinFilterDirection, setJoinFilterDirection] = useState<'incoming' | 'outgoing'>('incoming');
+  const [correctionFilterTargetId, setCorrectionFilterTargetId] = useState<string | null>(null);
   const setMessagesRef = useRef(setMessages);
   setMessagesRef.current = setMessages;
   const messagesRef = useRef<DemoMessage[]>([]);
@@ -1504,9 +1509,8 @@ export default function TopicDetailPage() {
       const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
       container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
       container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
-      // Keep the browser's nearest scroll ancestor in sync for absolutely
-      // positioned GraphView cards and nested layout changes.
-      el.scrollIntoView({ block: 'center', inline: 'center' });
+      // The left panel is the actual message viewport. Avoid scrollIntoView here:
+      // it may scroll the page or an outer ancestor instead of this panel.
     };
     cancelScrollRafs();
     scrollRafRef.current = requestAnimationFrame(tryScroll);
@@ -1930,7 +1934,27 @@ export default function TopicDetailPage() {
       // Use msg.relationType directly — more reliable than relationTypeByRelMsgId
       // which depends on edges and can be stale after ErrorBoundary recovery.
       const relType = m.relationType;
+      if (relType === "correct") {
+        if (viewMode === "list") {
+          setComparisonPopup({ relMsgId: messageId, x: e.clientX, y: e.clientY });
+          return;
+        }
+        const targetId = edges.find(edge => edge.relationMessageId === messageId)?.to.messageId;
+        if (targetId) {
+          setJoinFilterTargetId(null);
+          setCorrectionFilterTargetId(targetId);
+          setViewMode("list");
+        }
+        return;
+      }
       if (relType === "classify" || relType === "summary") {
+        if (relationType === "correct") {
+          // In correction mode, the container card is the selectable text target;
+          // do not navigate away from the current canvas.
+          if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+          else setActiveTextSelectId(messageId);
+          return;
+        }
         // Always clear any text selection before entering classification to prevent
         // the browser's native double-click text selection from persisting into the new view.
         setActiveTextSelectId(null);
@@ -1988,7 +2012,10 @@ export default function TopicDetailPage() {
   function handleTextMouseUp(e: React.MouseEvent, messageId: string) {
     if (!activeTextSelectId || activeTextSelectId !== messageId) return;
     const m = msgMap.get(messageId);
-    if (!m || m.kind !== "normal") return;
+    const correctableRelationTypes = new Set(['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations']);
+    const canSelectCorrectionText = m?.kind === 'normal'
+      || (m?.kind === 'relation' && correctableRelationTypes.has(m.relationType ?? ''));
+    if (!m || !canSelectCorrectionText) return;
     const container = e.currentTarget as HTMLElement;
     const frag = getSelectionFragment(container);
     clearBrowserSelection();
@@ -2459,6 +2486,14 @@ export default function TopicDetailPage() {
     _containerType: string,
     targetMids: string[],
   ) {
+    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
+    const invalidTarget = targetMids
+      .map(id => msgMap.get(id))
+      .find(message => message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? ''));
+    if (invalidTarget) {
+      setSendError('加入消息的目标不能是绑定在其他消息上的装饰关系消息');
+      return false;
+    }
     const joinStake = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
     for (const tgtMid of targetMids) {
       try {
@@ -2510,10 +2545,12 @@ export default function TopicDetailPage() {
         throw e;
       }
     }
+    return true;
   }
 
   async function handleQuickSendAndRelateFromDraftTargets() {
     if (!requireAuth()) return;
+    if (!singleButtonEnabled) return;
     const text = newMessageContent.trim();
     // Clear saved text on type switch since user is sending/committing
     savedTextOnTypeSwitchRef.current = "";
@@ -2534,7 +2571,8 @@ export default function TopicDetailPage() {
       const isContainerRelation = containerRelationTypes.has(relationType.toUpperCase());
       const hasSelectedSource = sourceUnits.length > 0;
       if (isContainerRelation && hasSelectedSource && !appendContainerType) {
-        errors.push(`发送${relationTypeName(relationType)}加入消息时，来源必须是对应的${relationTypeName(relationType)}容器`);
+        setSendError('加入消息的来源必须是当前关系类型对应的容器消息，目标消息来自当前选择');
+        return;
       }
       if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
         const subTypeNote = (subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0))
@@ -2562,7 +2600,8 @@ export default function TopicDetailPage() {
     }
     setSendError(null);
 
-    // No relation type selected: just send a plain message
+    // With no relation selected, the composer sends a standalone text message.
+    // CORRECT uses its own branch below and never creates a replacement text message.
     if (relationType === null) {
       if (text.length === 0) return;
       await handleSendMessageOnly(text);
@@ -2580,7 +2619,8 @@ export default function TopicDetailPage() {
         return;
       }
       const targetIds = Array.from(new Set(effectiveTargets.map(unit => unit.messageId)));
-      await createJoinRelationsForContainer(containerSource.id, appendContainerType!, targetIds);
+      const joinCreated = await createJoinRelationsForContainer(containerSource.id, appendContainerType!, targetIds);
+      if (!joinCreated) return;
       if (appendContainerType === 'ARRANGE' || appendContainerType === 'MERGE' || appendContainerType === 'SUMMARY') {
         const isArrangeAppend = appendContainerType === 'ARRANGE';
         const isMergeAppend = appendContainerType === 'MERGE';
@@ -2697,6 +2737,36 @@ export default function TopicDetailPage() {
     // Relation target with CORRECT: no text, no source — create null-source relation
     const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
     const hasSecSelector = relationType === "correct" && hasDraftRelTarget;
+    if (relationType === 'correct' && !hasDraftRelTarget && effectiveTargets.length === 1 && text.length > 0) {
+      const correctedContent = generateCorrectionContent(effectiveTargets, text, msgMap);
+      if (correctedContent == null) {
+        setSendError('更正只能针对一条文本消息或其片段');
+        return;
+      }
+      try {
+        const backendRel = await createRel(topicId!, {
+          relationType: 'CORRECT',
+          sourceMessageId: null,
+          targetRefs: [unitSelectionToTargetRef(effectiveTargets[0], msgMap)],
+          payload: { correctionContent: correctedContent },
+        });
+        await registerCreatedRelationInCurrentClassify(backendRel);
+        setEdges(prev => [...prev, {
+          id: nextId('edge'),
+          relationMessageId: backendRel.id,
+          relationType: 'correct',
+          from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
+          to: { ...effectiveTargets[0] },
+          relationLabel: relationTypeName('correct'),
+        }]);
+      } catch (e: any) {
+        showAlert(`建立更正关系失败: ${e?.message ?? e}`);
+        return;
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
+      return;
+    }
     if (hasSecSelector) {
       if (text.length > 0 || sourceUnits.length > 0) return; // validation: state must be clean
 
@@ -3735,16 +3805,98 @@ export default function TopicDetailPage() {
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
   const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
+  const effectiveTargetUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
+  const hasInvalidCorrectTarget = relationType === 'correct' && (
+    sourceUnits.length > 0
+    || effectiveTargetUnits.length !== 1
+    || effectiveTargetUnits[0].selection.kind !== 'text'
+    || !isContentKind(msgMap.get(effectiveTargetUnits[0].messageId)?.kind ?? 'normal')
+  );
+  const hasInvalidContainerSource = relationType !== null
+    && containerRelationTypes.has(relationType.toUpperCase())
+    && sourceUnits.length > 0
+    && !appendContainerType;
+  const hasInvalidJoinTarget = joinOnlyAction && effectiveTargetUnits.some(unit => {
+    const message = msgMap.get(unit.messageId);
+    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
+    return message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? '');
+  });
+  const targetTextIdsForValidation = getGroupedTargetTextMessageIds(effectiveTargetUnits);
+  const hasCrossLinkValidationError = (isClassifyType || isSummaryType || isMergeType)
+    && hasTargetsAvailable
+    && hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIdsForValidation);
+  const hasOrphanContainerLabel = (isClassifyType || isSummaryType || isMergeType)
+    && effectiveTargetUnits.some(unit => {
+      const targetMessage = msgMap.get(unit.messageId);
+      if (targetMessage && isContentKind(targetMessage.kind)) return false;
+      const targetType = relationTypeByRelMsgId.get(unit.messageId);
+      if (!targetType || ['classify', 'merge', 'arrange', 'summary'].includes(targetType)) return false;
+      const targetRelation = relationById.get(unit.messageId);
+      const targetRefs = (targetRelation?.targetRefs ?? []) as TargetRef[];
+      return !targetRefs.some(ref =>
+        (ref.kind === 'message' || ref.kind === 'text-fragment')
+        && ref.messageId
+        && targetTextIdsForValidation.includes(ref.messageId)
+      );
+    });
+  const hasClassifyCycle = relationType === 'classify' && isInsideClassify && (() => {
+    const ancestorIds = new Set<string>();
+    if (currentClassifyRelMsgId) ancestorIds.add(currentClassifyRelMsgId);
+    for (const entry of classifyStackRef.current) ancestorIds.add(entry.relMsgId);
+    return getClassifyTargetRefs(effectiveTargetUnits).some(ref =>
+      ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+    );
+  })();
+  const hasInvalidDelegationFormat = relationType === 'delegation' && (() => {
+    const content = newMessageContent.trim();
+    const isFulfill = secondaryRelationType === 'fulfill';
+    const readField = (labels: string[]): string | null => {
+      for (const field of labels) {
+        const match = content.match(new RegExp(`${field}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'));
+        if (match?.[1]?.trim()) return match[1].trim();
+      }
+      return null;
+    };
+    const amountText = readField([isFulfill ? '分配数量' : '报酬数量', '数量']);
+    const ratioText = readField([isFulfill ? '分配比例' : '报酬比例', '比例']);
+    const amount = amountText ? Number(amountText) : undefined;
+    const ratio = ratioText ? Number(ratioText.replace(/%$/, '')) : undefined;
+    const validReward = isFulfill
+      ? (amount === undefined) !== (ratio === undefined)
+        && (amount === undefined || (Number.isInteger(amount) && amount > 0))
+        && (ratio === undefined || (Number.isInteger(ratio) && ratio > 0 && ratio <= 100))
+      : amount !== undefined && Number.isInteger(amount) && amount > 0 && ratio === undefined;
+    const selectedTargets = effectiveTargetUnits.filter(target => msgMap.get(target.messageId)?.kind === 'relation');
+    const targetRelation = selectedTargets.length === 1
+      ? relations.find(rel => rel.id === selectedTargets[0].messageId)
+      : undefined;
+    return !content || !validReward || (isFulfill && effectiveTargetUnits.length > 0
+      && (effectiveTargetUnits.length !== 1 || !targetRelation || targetRelation.relationType.toUpperCase() !== 'DELEGATION'));
+  })();
+  const hasInvalidProposalFormat = relationType === 'proposal' && (() => {
+    const content = newMessageContent.trim();
+    const read = (labels: string[]): string | undefined => labels
+      .map(label => content.match(new RegExp(`${label}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'))?.[1]?.trim())
+      .find(Boolean);
+    if (secondaryRelationType === '充值分账') {
+      const amount = Number(read(['充值总额', '总额', 'amount']));
+      const share = Number(read(['收入池分成', '分成', 'revenuePoolShare']));
+      return !Number.isInteger(amount) || amount <= 0 || !Number.isInteger(share) || share < 0 || share > amount || !read(['指定用户', 'recipientUserId']);
+    }
+    if (secondaryRelationType === '运营收入注入') {
+      const amount = Number(read(['收入金额', '金额', 'amount']));
+      return !Number.isInteger(amount) || amount <= 0 || !read(['来源', 'source']);
+    }
+    return false;
+  })();
   const composerRefreshKey = `${relationType ?? "plain"}::${secondaryRelationType}::${draftUnits.length === 0 ? "draft-empty" : "draft-has"}::${targetUnits.length === 0 ? "target-empty" : "target-has"}::${sourceUnits.length === 0 ? "source-empty" : "source-has"}::${draftHasRelationTarget ? "draft-rel" : "draft-text"}`;
 
   // Additional relation selector:
   // - REPLY: always available (none/question/answer)
-  // - CORRECT: only when targeting relation messages
   // - TAG: always available (none/recommend/archive/existing-tag shortcuts)
   // - ARRANGE: always available (vertical/horizontal)
   const hasSecondaryRelationSelector =
     relationType === "reply"
-    || (relationType === "correct" && draftHasRelationTarget)
     || relationType === "tag"
     || relationType === "arrange"
     || relationType === "reference"
@@ -3767,10 +3919,7 @@ export default function TopicDetailPage() {
     if (totalConsumption && totalConsumption.total > availablePoints) return false;
     // Ambiguous: both draft and target non-empty — force user to clear one
     if (draftUnits.length > 0 && targetUnits.length > 0) return false;
-    // CORRECT targeting a relation message: special mode (no text, no source, use secondary selector)
-    if (draftHasRelationTarget && relationType === "correct") {
-      return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
-    }
+    if (hasInvalidCorrectTarget || hasInvalidContainerSource || hasInvalidJoinTarget || hasCrossLinkValidationError || hasOrphanContainerLabel || hasClassifyCycle || hasInvalidDelegationFormat || hasInvalidProposalFormat) return false;
     if (isClassifyType) {
       const hasExistingClassifySource = sourceUnits.some(unit =>
         relations.find(relation => relation.id === unit.messageId)?.relationType?.toUpperCase() === 'CLASSIFY'
@@ -3834,35 +3983,6 @@ export default function TopicDetailPage() {
       return "仅发送这条消息（未选择关系类型）";
     }
     const typeName = relationTypeName(relationType);
-    // Ambiguous: both draft and target non-empty
-    if (draftUnits.length > 0 && targetUnits.length > 0) {
-      return "候选区和目标集合不可同时非空，请清空一边";
-    }
-    // Check for subType minimum stake requirement
-    if (!joinOnlyAction && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
-      const st = subType ? subTypeLabel(subType) : null;
-      const note = st ? `（「${st}」理由要求最低 ${effectiveMinStake} 点）` : `（最低 ${effectiveMinStake} 点）`;
-      return `贡献点不足${note}，当前 ${relStakeAmount} 点`;
-    }
-    if (totalConsumption && totalConsumption.total > availablePoints) {
-      const parts: string[] = [];
-      if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
-      if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
-      if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
-      if ((totalConsumption as any).joinCount > 0) {
-        const newCount = (totalConsumption as any).newJoinCount ?? (totalConsumption as any).joinCount;
-        const agreeCount = (totalConsumption as any).existingJoinAgreeCount ?? 0;
-        parts.push(`加入 ${((totalConsumption as any).joinStakeTotal ?? 0) + ((totalConsumption as any).joinFeeTotal ?? 0)}（新建 ${newCount}，赞同已有 ${agreeCount}）`);
-      }
-      if (totalConsumption.protocolFeeTotal > 0) parts.push(`协议费 ${totalConsumption.protocolFeeTotal}`);
-      return `贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`;
-    }
-    if (draftHasRelationTarget && relationType === "correct") {
-      if (newMessageContent.trim().length > 0) return `请清空文本输入框（更正关系目标为关系消息时不应有文本）`;
-      if (sourceUnits.length > 0) return `请清空来源集合（更正关系目标为关系消息时来源必须为空）`;
-      const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
-      return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
-    }
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
       const existingClassifySource = sourceUnits.some(unit =>
@@ -3961,6 +4081,30 @@ export default function TopicDetailPage() {
     if (!hasTargetsAvailable) return "请在画布中选择目标消息";
     if (newMessageContent.trim().length === 0) return "请输入消息内容（将作为来源）";
     return `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`;
+  })();
+
+  const sendValidationLabel = (() => {
+    if (singleButtonEnabled) return null;
+    if (relationType === null && !hasTextContent) return "请输入消息内容后发送";
+    if (draftUnits.length > 0 && targetUnits.length > 0) return "候选区和目标集合不能同时有内容，请清空其中一方";
+    if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
+    if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
+    if (hasInvalidCorrectTarget) return "更正关系只能选择一条普通消息片段";
+    if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
+    if (hasInvalidJoinTarget) return "加入容器的目标不能是装饰关系消息";
+    if (hasCrossLinkValidationError) return "目标与已分类消息存在非引用关联，无法建立关系";
+    if (hasOrphanContainerLabel) return "选中的关系标签不属于当前目标集合";
+    if (hasClassifyCycle) return "不能将当前分类或其上级分类作为新分类的目标";
+    if (hasInvalidDelegationFormat) return secondaryRelationType === 'fulfill'
+      ? "完成委托格式无效，请填写分配数量或分配比例，并选择一条委托关系"
+      : "创建委托格式无效，请填写报酬数量和委托内容";
+    if (hasInvalidProposalFormat) return secondaryRelationType === '充值分账'
+      ? "充值分账格式无效，请填写充值总额、收入池分成和指定用户"
+      : "运营收入提案格式无效，请填写收入金额和来源";
+    if (relationType === 'tag' && secondaryRelationType === 'none') return "请先选择推荐、冷藏或已有标签";
+    if (!hasTargetsAvailable && relationType !== null && !isClassifyType && !isGovernanceOrOpsType) return "请先选择目标消息";
+    if (relationType !== null && !hasTextContent && !isAgreeDisagreeType && !isArrangeType && !isMergeType && !isTagWithQuickAnnotate && !isTagWithInlineBadge) return "请输入消息内容";
+    return null;
   })();
 
   // Secondary relation options for CORRECT type: relations of the same PresentationKind as the targeted relation message, plus "none".
@@ -4824,6 +4968,12 @@ export default function TopicDetailPage() {
           .map(ed => ed.relationMessageId)
       ));
       setTagPopup({ messageId: targetMid, tagLabel: typeName, relMsgIds: allRelMsgIds, x: e.clientX, y: e.clientY, subDetails: detail?.subDetails });
+    } else if (relType === 'correct') {
+      const targetId = relEdges[0]?.to.messageId;
+      if (!targetId) return;
+      setJoinFilterTargetId(null);
+      setCorrectionFilterTargetId(targetId);
+      setViewMode("list");
     } else {
       // Correction badge and other inline badges: show comparison popup
       setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
@@ -4929,11 +5079,15 @@ export default function TopicDetailPage() {
   }
 
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
+  const messagesWithCorrections = messagesToRender.map(message => {
+    const correction = correctionVersions.get(message.id)?.current;
+    return correction ? { ...message, content: correction.content } : message;
+  });
   // Phase 6: Apply clean mode filter (multi-dimensional rules via useCleanView)
   const messagesToRenderClean = cleanVisibleIds
-    ? messagesToRender.filter(m =>
+    ? messagesWithCorrections.filter(m =>
         cleanVisibleIds.visibleTextIds.has(m.id) || cleanVisibleIds.visibleRelIds.has(m.id))
-    : messagesToRender;
+    : messagesWithCorrections;
   // Message type filter: hide settlement/join messages
   const typeFilteredMessages = applyMessageFilter(messagesToRenderClean, msgFilter);
   const temporaryJoinViewIds = joinFilterTargetId
@@ -4942,10 +5096,21 @@ export default function TopicDetailPage() {
       : (joinRelationsByTarget.get(joinFilterTargetId) ?? [])
     ).map(join => join.id))
     : null;
+  const correctionTemporaryViewIds = correctionFilterTargetId
+    ? new Set(
+        edges
+          .filter(edge => edge.relationType === 'correct' && edge.to.messageId === correctionFilterTargetId)
+          .map(edge => edge.relationMessageId),
+      )
+    : null;
   // JOIN records can belong to different containers and therefore be absent
   // from the current canvas. Build this temporary category from the full
   // message map and show JOIN records only, not the target message itself.
-  const messagesToRenderFiltered = temporaryJoinViewIds
+  const messagesToRenderFiltered = correctionTemporaryViewIds
+    ? Array.from(correctionTemporaryViewIds)
+        .map(id => msgMap.get(id))
+        .filter((message): message is DemoMessage => Boolean(message))
+    : temporaryJoinViewIds
     ? Array.from(temporaryJoinViewIds)
         .map(id => msgMap.get(id))
         .filter((message): message is DemoMessage => Boolean(message))
@@ -4964,7 +5129,9 @@ export default function TopicDetailPage() {
   // Filter edges based on current user's DISAGREE stances on relation messages.
   // When the user disagrees with a relation message, all edges produced by that
   // relation are suppressed from this user's view (per-user branch semantics).
-  const temporaryEdgesToRender = temporaryJoinViewIds
+  const temporaryEdgesToRender = correctionTemporaryViewIds
+    ? rawEdgesToRender.filter(edge => correctionTemporaryViewIds.has(edge.relationMessageId))
+    : temporaryJoinViewIds
     ? rawEdgesToRender.filter(edge => temporaryJoinViewIds.has(edge.relationMessageId))
     : rawEdgesToRender;
   const edgesToRender = computeUserFilteredEdges(temporaryEdgesToRender, messages, user?.username ?? null);
@@ -4973,7 +5140,17 @@ export default function TopicDetailPage() {
   // with visual indicators (empty frame, preview mode, etc.) instead.
   const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
   // Graph messages: no suppression hiding needed — all messages visible.
-  const graphMessagesFinal = messagesToRenderFiltered;
+  const graphMessagesFinal = messagesToRenderFiltered.map(message => {
+    const correction = correctionVersions.get(message.id)?.current;
+    return correction ? { ...message, content: correction.content } : message;
+  });
+  const invalidCorrectionIds = (() => {
+    const ids = new Set<string>();
+    for (const entry of correctionVersions.values()) {
+      for (const version of entry.versions) if (!version.valid) ids.add(version.correctionId);
+    }
+    return ids;
+  })();
 
   // Which agree/disagree decoration badges are currently selected (via draftUnits)
   const selectedDecorations = (() => {
@@ -5043,7 +5220,7 @@ export default function TopicDetailPage() {
               const isDeselecting = relationType === rt;
               const newType = isDeselecting ? null : rt;
               // Types that generally don't use the text input (user-to-message relations)
-              const isTextLessType = (t: string | null) => t === "tag" || t === "merge" || (t === "correct" && draftHasRelationTarget);
+              const isTextLessType = (t: string | null) => t === "tag" || t === "merge";
               const wasTextLess = isTextLessType(relationType);
               const willBeTextLess = isTextLessType(newType);
               // Save and clear when switching TO a text-less type
@@ -5141,20 +5318,24 @@ export default function TopicDetailPage() {
               {viewMode === "list" ? "线性视图：按线性结构查看消息。" : "结构图：按非线性结构查看消息。"}
             </div>
           </div>
-          {(isInsideClassify || isTemporaryJoinCategory) && (
+          {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null) && (
             <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
               <div style={{ border: "1px solid #334155", borderRadius: 10, padding: "8px 10px", background: "linear-gradient(180deg, #162036 0%, #0f172a 100%)", color: "#e2e8f0", boxShadow: "0 6px 16px rgba(0,0,0,0.25)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (topicFocusTitle || classifyKindLabel)}
+                      {correctionFilterTargetId !== null
+                        ? `更正记录临时分类（${correctionTemporaryViewIds?.size ?? 0}）`
+                        : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (topicFocusTitle || classifyKindLabel)}
                     </div>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
-                      {isTemporaryJoinCategory ? "临时" : "进行中"}
+                      {correctionFilterTargetId !== null || isTemporaryJoinCategory ? "临时" : "进行中"}
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    {isTemporaryJoinCategory ? (
+                    {correctionFilterTargetId !== null ? (
+                      <span>目标消息 {correctionFilterTargetId} 的全部更正消息</span>
+                    ) : isTemporaryJoinCategory ? (
                       <span>目标消息 {joinFilterTargetId} 的全部加入记录</span>
                     ) : (
                       <>
@@ -5165,8 +5346,8 @@ export default function TopicDetailPage() {
                     )}
                   </div>
                 </div>
-                <button onClick={() => isTemporaryJoinCategory ? setJoinFilterTargetId(null) : exitClassifyTopic()} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
-                  {isTemporaryJoinCategory ? "退出临时分类" : classifyExitLabel}
+                <button onClick={() => correctionFilterTargetId !== null ? setCorrectionFilterTargetId(null) : isTemporaryJoinCategory ? setJoinFilterTargetId(null) : exitClassifyTopic()} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
+                  {correctionFilterTargetId !== null || isTemporaryJoinCategory ? "退出临时分类" : classifyExitLabel}
                 </button>
               </div>
             </div>
@@ -5251,6 +5432,17 @@ export default function TopicDetailPage() {
                   const isTruthOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'TRUTH';
                   const isValueOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'VALUE';
                   const hasCustomContent = isContentKind(msg.kind) && msg.kind !== 'round' && msg.kind !== 'round_result';
+                  const correctionTargetEdge = msg.relationType === 'correct'
+                    ? edges.find(edge => edge.relationMessageId === msg.id)
+                    : undefined;
+                  const correctionTarget = correctionTargetEdge ? msgMap.get(correctionTargetEdge.to.messageId) : undefined;
+                  const correctionTargetOriginal = correctionTarget
+                    ? messages.find(message => message.id === correctionTarget.id) ?? correctionTarget
+                    : undefined;
+                  const correctionContent = msg.relationPayload?.correctionContent ?? msg.content;
+                  const correctionTargetText = correctionTargetEdge?.to.selection.kind === 'text'
+                    ? correctionTargetEdge.to.selection.text
+                    : correctionTargetOriginal?.content ?? '';
 
                   return (
                     <MessageCard
@@ -5265,6 +5457,16 @@ export default function TopicDetailPage() {
                         <>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
                           <div style={{ display: "flex", gap: 4, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
+                            {correctionFilterTargetId !== null && msg.relationType === 'correct' && correctionTarget && (
+                              <button
+                                type="button"
+                                onClick={event => { event.stopPropagation(); handleNavigateToMessage(correctionTarget.id); }}
+                                title={`跳转到更正目标 ${correctionTarget.id}`}
+                                style={{ padding: '1px 6px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 10 }}
+                              >
+                                目标 · {correctionTarget.id}
+                              </button>
+                            )}
                             {showTruthProCon && (
                               <span style={{ color: "#a5b4fc" }} title="真假仲裁">
                                 ⚖️{truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
@@ -5370,7 +5572,31 @@ export default function TopicDetailPage() {
                         </div>
                       ) : undefined}
                     >
-                      {hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
+                      {msg.relationType === 'correct' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div style={{ fontSize: 12, color: '#fbbf24' }}>
+                            ✏ {msg.author} 更正了消息
+                            {correctionTarget && (
+                              <button
+                                type="button"
+                                onClick={event => { event.stopPropagation(); handleNavigateToMessage(correctionTarget.id); }}
+                                style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 11 }}
+                                title={`跳转到目标消息 ${correctionTarget.id}`}
+                              >
+                                目标消息 · {correctionTarget.id}
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px' }}>
+                            <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>具体更改</div>
+                            <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
+                              {correctionContent.length === 0
+                                ? `删除「${correctionTargetText}」`
+                                : `将「${correctionTargetText}」修改为「${correctionContent}」`}
+                            </div>
+                          </div>
+                        </div>
+                      ) : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
                     </MessageCard>
                   );
                 })}
@@ -5378,7 +5604,7 @@ export default function TopicDetailPage() {
             ) : (
               <GraphView
                   key={`gv-${classifyKey}-${focusKey}`}
-                  messages={graphMessagesFinal} edges={edgesToRender} draftUnits={draftUnits}
+                  messages={graphMessagesFinal} edges={edgesToRender} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
                   onTextMouseUp={handleTextMouseUp} onEdgeLabelSingleClick={handleEdgeLabelSingleClick}
@@ -5529,6 +5755,7 @@ export default function TopicDetailPage() {
           effectiveMinStake={effectiveMinStake}
           singleButtonEnabled={singleButtonEnabled}
           singleButtonLabel={singleButtonLabel}
+          sendValidationLabel={sendValidationLabel}
           totalConsumption={totalConsumption}
           stakeFeeAmountRef={stakeFeeAmountRef}
           subTypeStakeMap={subTypeStakeMap}

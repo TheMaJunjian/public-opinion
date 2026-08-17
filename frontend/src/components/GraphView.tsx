@@ -1749,6 +1749,7 @@ function computeLabelPlacementsAlongCurve(params: { seeds: LabelSeed[]; forbidde
 export interface GraphViewProps {
   messages: DemoMessage[];
   edges: DemoEdge[];
+  invalidCorrectionIds?: Set<string>;
   draftUnits: UnitSelection[];
   activeTextSelectId: string | null;
   lastClickedMessageId: string | null;
@@ -1832,7 +1833,7 @@ export interface GraphViewProps {
 
 export default function GraphView(props: GraphViewProps) {
   const {
-    messages, edges, draftUnits, activeTextSelectId, lastClickedMessageId,
+    messages, edges, invalidCorrectionIds, draftUnits, activeTextSelectId, lastClickedMessageId,
     onMessageClick, onMessageDoubleClick, onTextMouseUp,
     onEdgeLabelSingleClick, onEdgeLabelDoubleClick,
     onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
@@ -2021,27 +2022,21 @@ export default function GraphView(props: GraphViewProps) {
   // Only hide when the CORRECT relation has a non-anon source — if there is no replacement
   // (secondary type = "none", anon: source), the original remains visible with a correction badge.
   const correctedTargetMsgIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const e of edges) {
-      if (e.relationType === 'correct' && !e.from.messageId.startsWith('anon:')) {
-        ids.add(e.to.messageId);
-      }
-    }
-    return ids;
+    // CORRECT is a version relation. The original target card remains visible;
+    // its projected content is supplied by the parent view model.
+    return new Set<string>();
   }, [edges]);
 
-  // Map: source normal-message ID → [{relMsgId, targetMsgId}] for CORRECT relations.
-  // Used to render the correction badge inline in the source card header.
-  const correctionsBySourceMsgId = useMemo(() => {
+  // Map: target message ID → CORRECT revision records. The target card remains
+  // the canonical card; each revision is only a version badge on that card.
+  const correctionsByTargetMsgId = useMemo(() => {
     const map = new Map<string, Array<{relMsgId: string; targetMsgId: string}>>();
     for (const e of edges) {
       if (e.relationType !== 'correct') continue;
-      if (e.from.messageId.startsWith('anon:')) continue;
-      const srcId = e.from.messageId;
-      if (msgMap.get(srcId)?.kind !== 'normal') continue;
-      const arr = map.get(srcId) ?? [];
+      const targetId = e.to.messageId;
+      const arr = map.get(targetId) ?? [];
       arr.push({ relMsgId: e.relationMessageId, targetMsgId: e.to.messageId });
-      map.set(srcId, arr);
+      map.set(targetId, arr);
     }
     return map;
   }, [edges, msgMap]);
@@ -2052,10 +2047,10 @@ export default function GraphView(props: GraphViewProps) {
   const hiddenCorrectedTargetIds = useMemo(() => {
     const ids = new Set<string>();
     for (const id of correctedTargetMsgIds) {
-      if (!correctionsBySourceMsgId.has(id)) ids.add(id);
+      if (!correctionsByTargetMsgId.has(id)) ids.add(id);
     }
     return ids;
-  }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
+  }, [correctedTargetMsgIds, correctionsByTargetMsgId]);
 
   // Summary-target IDs: all text-message targets of SUMMARY relations.
   // These are hidden in the non-linear view — the summary card replaces them.
@@ -3277,8 +3272,11 @@ export default function GraphView(props: GraphViewProps) {
           }
 
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
-          const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
-          const corrBadges = correctionsBySourceMsgId.get(msg.id) ?? [];
+          const isCorrectableRelation = msg.kind === 'relation'
+            && ['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations'].includes(msg.relationType ?? '');
+          const isText=activeTextSelectId===msg.id&&(msg.kind==="normal" || isCorrectableRelation);
+          const corrBadges = correctionsByTargetMsgId.get(msg.id) ?? [];
+          const validCorrectionCount = corrBadges.filter(b => !invalidCorrectionIds?.has(b.relMsgId)).length;
 
           // Phase 5: Stance path highlighting
           const isStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
@@ -3376,7 +3374,7 @@ export default function GraphView(props: GraphViewProps) {
                               cursor:"pointer",pointerEvents:"auto",
                               border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                               whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                            ✏更正
+                            ✏更正 {corrBadges.length}/{validCorrectionCount}
                           </div>
                           {corrDec && corrDec.agreeCount>0 && (
                             <div data-rel-overlay="true"

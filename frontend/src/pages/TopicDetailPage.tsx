@@ -506,7 +506,7 @@ export default function TopicDetailPage() {
   }, [clearCleanFilters, searchParams, setSearchParams]);
   const contentMsgCount = useMemo(() => messages.filter(m => isContentKind(m.kind)).length, [messages]);
   // Message type filter: hide settlement / join messages
-  const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: false, hideJoin: false });
+  const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: true, hideJoin: true });
   const [joinFilterTargetId, setJoinFilterTargetId] = useState<string | null>(null);
   const [joinFilterDirection, setJoinFilterDirection] = useState<'incoming' | 'outgoing'>('incoming');
   const [correctionFilterTargetId, setCorrectionFilterTargetId] = useState<string | null>(null);

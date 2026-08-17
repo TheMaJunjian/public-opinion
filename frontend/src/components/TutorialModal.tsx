@@ -52,8 +52,6 @@ function TutorialModalContent({ onClose }: { onClose: () => void }) {
             <ol style={{ margin: 0, paddingLeft: 20 }}>
               <li>登录后即可参与讨论。</li>
               <li>左侧为消息显示视图，右侧为消息操作面板。</li>
-              <li>登录后建议点击过滤按钮，屏蔽结算消息，屏蔽加入消息。</li>
-              <li>阅览导出的 JSON 文件不需要登录，但阅览模式无法发送消息。</li>
             </ol>
           </section>
 

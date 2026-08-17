@@ -48,7 +48,7 @@ export default function MessageFilterPanel({
       {/* Toggle 按钮 */}
       <button
         onClick={() => setOpen(prev => !prev)}
-        title="消息过滤：屏蔽结算/加入消息"
+        title="清爽视图：快速屏蔽结算/加入消息"
         style={{
           padding: '4px 10px',
           borderRadius: 4,
@@ -60,7 +60,7 @@ export default function MessageFilterPanel({
           fontWeight: hasActive ? 600 : 400,
         }}
       >
-        {hasActive ? '🔍 过滤中' : '过滤'}
+        {hasActive ? '🧹 清爽' : '清爽视图'}
       </button>
 
       {/* 下拉面板 */}
@@ -81,7 +81,7 @@ export default function MessageFilterPanel({
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: '#e2e8f0' }}>
-            🔍 消息过滤
+            🧹 清爽视图
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -107,9 +107,6 @@ export default function MessageFilterPanel({
                 style={{ accentColor: '#a78bfa' }}
               />
               <span>屏蔽结算消息</span>
-              <span style={{ fontSize: 11, color: '#64748b', marginLeft: 'auto' }}>
-                round / round_result
-              </span>
             </label>
 
             {/* 加入消息开关 */}
@@ -134,9 +131,6 @@ export default function MessageFilterPanel({
                 style={{ accentColor: '#a78bfa' }}
               />
               <span>屏蔽加入消息</span>
-              <span style={{ fontSize: 11, color: '#64748b', marginLeft: 'auto' }}>
-                join
-              </span>
             </label>
           </div>
 

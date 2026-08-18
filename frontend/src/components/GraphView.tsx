@@ -3970,7 +3970,7 @@ export default function GraphView(props: GraphViewProps) {
           const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft,height:bb.height+padY*2};
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
-            <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+            <div key={`hit-${pe.drawId}`} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{

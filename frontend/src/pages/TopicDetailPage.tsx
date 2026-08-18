@@ -4990,6 +4990,15 @@ export default function TopicDetailPage() {
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
   const handleNavigateToMessage = useCallback((messageId: string) => {
+    const targetMessage = messagesRef.current.find(message => message.id === messageId);
+    const targetRelation = relationsRef.current.find(relation => relation.id === messageId);
+    const isJoinMessage = targetMessage?.joinInfo?.targetIds?.length
+      || targetMessage?.relationType?.toUpperCase() === 'JOIN'
+      || targetRelation?.relationType?.toUpperCase() === 'JOIN';
+    const isSettlementMessage = targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result';
+    if (cleanMode && (isJoinMessage || isSettlementMessage)) {
+      clearCleanView();
+    }
     // A temporary JOIN category is a filtered view, not the message's actual
     // canvas. Resolve navigation from the live relation ownership instead.
     const isRenderedOnCurrentCanvas = !isTemporaryJoinCategory && renderedMessageIdsRef.current.has(messageId);
@@ -5012,7 +5021,7 @@ export default function TopicDetailPage() {
     // when the target is already on the current canvas (no classifyKey change).
     pendingScrollMsgRef.current = messageId;
     setScrollKey(k => k + 1);
-  }, [classifyRelMsgId, effectiveJoinRelationIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, isTemporaryJoinCategory]);
+  }, [classifyRelMsgId, effectiveJoinRelationIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, isTemporaryJoinCategory, cleanMode, clearCleanView]);
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
     e.stopPropagation();

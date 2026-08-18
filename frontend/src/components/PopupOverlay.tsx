@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 
 const EDGE_ARROW_COUNT = 25;
@@ -44,9 +44,31 @@ export default function PopupOverlay({
   onClick,
 }: PopupOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState(() => ({
+    left: window.visualViewport?.offsetLeft ?? 0,
+    top: window.visualViewport?.offsetTop ?? 0,
+    width: window.visualViewport?.width ?? window.innerWidth,
+    height: window.visualViewport?.height ?? window.innerHeight,
+  }));
 
-  const overlayWidth = overlayRef.current?.clientWidth ?? window.innerWidth;
-  const overlayHeight = overlayRef.current?.clientHeight ?? window.innerHeight;
+  useEffect(() => {
+    const updateViewport = () => setViewport({
+      left: window.visualViewport?.offsetLeft ?? 0,
+      top: window.visualViewport?.offsetTop ?? 0,
+      width: window.visualViewport?.width ?? window.innerWidth,
+      height: window.visualViewport?.height ?? window.innerHeight,
+    });
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener('resize', updateViewport);
+    window.addEventListener('resize', updateViewport);
+    return () => {
+      visualViewport?.removeEventListener('resize', updateViewport);
+      window.removeEventListener('resize', updateViewport);
+    };
+  }, []);
+
+  const overlayWidth = viewport.width;
+  const overlayHeight = viewport.height;
   const center = { x: overlayWidth / 2, y: overlayHeight / 2 };
 
   return createPortal((
@@ -55,7 +77,8 @@ export default function PopupOverlay({
       data-prompt-modal={dataPromptModal ? 'true' : undefined}
       ref={overlayRef}
       style={{
-        position: 'fixed', inset: 0, zIndex,
+        position: 'fixed', left: viewport.left, top: viewport.top,
+        width: viewport.width, height: viewport.height, zIndex,
         background,
         ...style,
       }}

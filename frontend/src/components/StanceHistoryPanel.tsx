@@ -33,6 +33,8 @@ const RELATION_TYPE_LABEL: Record<string, string> = {
 
 type TabKey = 'relations' | 'stakes' | 'tags';
 
+const STANCE_PAGE_SIZE = 50;
+
 /**
  * StanceHistoryPanel — 用户表态历史面板
  * 站队（赞同/反对/赞同自己） + 立场（发消息消耗的贡献点） + 表态（标注）
@@ -50,10 +52,22 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     try {
       setLoading(true);
       setError(null);
-      const data = await api.getUserStances(userId, { topicId, limit: 30 });
-      setRelations(data.stances.relations);
-      setStakes(data.stances.stakes);
-      setTags(data.stances.tags ?? []);
+      const firstPage = await api.getUserStances(userId, { topicId, page: 1, limit: STANCE_PAGE_SIZE });
+      const pageCount = Math.max(
+        1,
+        Math.ceil(firstPage.pagination.totalRelations / STANCE_PAGE_SIZE),
+        Math.ceil(firstPage.pagination.totalStakes / STANCE_PAGE_SIZE),
+        Math.ceil(firstPage.pagination.totalTags / STANCE_PAGE_SIZE),
+      );
+      const remainingPages = await Promise.all(
+        Array.from({ length: pageCount - 1 }, (_, index) =>
+          api.getUserStances(userId, { topicId, page: index + 2, limit: STANCE_PAGE_SIZE })
+        )
+      );
+      const pages = [firstPage, ...remainingPages];
+      setRelations(pages.flatMap(page => page.stances.relations));
+      setStakes(pages.flatMap(page => page.stances.stakes));
+      setTags(pages.flatMap(page => page.stances.tags ?? []));
     } catch (e: unknown) {
       setError((e as Error)?.message ?? '加载失败');
     } finally {

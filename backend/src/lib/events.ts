@@ -814,6 +814,16 @@ async function resolveAnnotationTarget(
     };
   }
 
+  // READ/UNREAD is a per-user reading state. Opposing a READ annotation
+  // explicitly publishes UNREAD; opposing an UNREAD annotation keeps it UNREAD.
+  if (targetRelType === 'READ' || targetRelType === 'UNREAD') {
+    return {
+      relationType: targetRelType === 'READ' && isDisagree ? 'UNREAD' : targetRelType,
+      targetTextId: origTextId,
+      settlementType: 'TRUTH',
+    };
+  }
+
   // ── Stance layer: AGREE / DISAGREE ──
   if (targetRelType === 'AGREE' || targetRelType === 'DISAGREE') {
     // AGREE on AGREE → AGREE, DISAGREE on AGREE → DISAGREE
@@ -1108,7 +1118,9 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
 
   // Auto-stake based on effective relation type
   const effRelType = effectiveRelationType.toUpperCase();
-  if (effRelType === 'AGREE' || effRelType === 'DISAGREE') {
+  if (effRelType === 'READ' || effRelType === 'UNREAD') {
+    await executeProtocolFee({ userId: actorId, topicId, messageId: message.id });
+  } else if (effRelType === 'AGREE' || effRelType === 'DISAGREE') {
     const side = effRelType === 'AGREE' ? 'PRO' as const : 'CON' as const;
     const targets = effectiveTargetRefs as Array<{ kind?: string; messageId?: string; relationId?: string }>;
     for (const ref of targets) {
@@ -1473,6 +1485,32 @@ async function applyPointTransferred(event: PointTransferredEvent) {
 }
 
 // ── Stake Handlers (Phase 2) ─────────────────────────────────
+
+async function executeProtocolFee(params: { userId: string; topicId: string; messageId: string }) {
+  const { userId, topicId, messageId } = params;
+  const [balance, account, rule] = await Promise.all([
+    prisma.balance.findUnique({ where: { userId } }),
+    prisma.pointAccount.findUnique({ where: { userId } }),
+    prisma.ruleVersion.findFirst({ where: { status: 'ACTIVE' }, orderBy: { version: 'desc' }, select: { parameters: true } }),
+  ]);
+  if (!balance || !account) throw new Error('Account not found');
+  if (balance.debtFrozen) throw new Error('账户负债冻结，无法执行此操作。');
+  const feeAmount = (rule?.parameters as Record<string, unknown> | null)?.stakeFeeAmount as number | undefined ?? 1;
+  if (feeAmount <= 0) throw new Error('已读标注协议费配置无效');
+  if (account.available < feeAmount) throw new Error(`贡献点余额不足：已读标注需要协议费 ${feeAmount} 点`);
+  const newAvailable = account.available - feeAmount;
+  const newBalance = balance.balance - feeAmount;
+  await prisma.$transaction([
+    prisma.pointAccount.update({ where: { userId }, data: { available: newAvailable } }),
+    prisma.balance.update({ where: { userId }, data: { balance: newBalance, debtFrozen: newBalance < 0 } }),
+    prisma.pointTransaction.create({ data: { userId, type: 'PROTOCOL_FEE', amount: -feeAmount, balanceAfter: newAvailable, data: { source: 'READ_STATUS', messageId, topicId, fee: feeAmount } } }),
+    prisma.ledgerEntry.create({ data: { userId, entryType: 'STAKE_LOCK', amount: -feeAmount, balanceAfter: newBalance, messageId, data: { protocolFee: true, source: 'READ_STATUS' } } }),
+  ]);
+  const pool = await prisma.revenuePool.findFirst();
+  if (pool) await prisma.revenuePool.update({ where: { id: pool.id }, data: { totalReceived: { increment: feeAmount }, balance: { increment: feeAmount } } });
+  else await prisma.revenuePool.create({ data: { totalReceived: feeAmount, balance: feeAmount } });
+  await writeAuditLog({ actorId: userId, action: 'REVENUE_RECEIVED', entityType: 'RevenuePool', entityId: pool?.id ?? 'revenue-pool', topicId, summary: `已读状态协议费入池 ${feeAmount} 点`, details: { amount: feeAmount, source: 'READ_STATUS', messageId } });
+}
 
 /**
  * Shared internal stake execution — reusable by both the STAKE_PLACED event handler

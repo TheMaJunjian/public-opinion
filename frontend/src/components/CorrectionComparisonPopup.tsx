@@ -32,9 +32,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
     const correctionContent = relEdges[0] && msgMap.get(popup.relMsgId)?.relationPayload?.correctionContent;
 
     if (correctionContent !== undefined) {
-      const textEdge = relEdges.find(edge => edge.to.selection.kind === 'text');
-      const selected = textEdge?.to.selection.kind === 'text' ? textEdge.to.selection.text : origMsg.content;
-      const replacement = correctionContent;
+      const { origParts, nextParts } = computeCharDiff(origMsg.content, correctionContent);
       return (
         <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
           <div ref={contentRef} style={{ background: '#1e1e1e',
@@ -44,13 +42,11 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <MessageDiffColumn title="原文片段" message={origMsg} border="#554" background="#211e14">
-                <span style={{ color: '#ff9944', fontWeight: 700 }}>{selected}</span>
+              <MessageDiffColumn title="原文" message={origMsg} border="#554" background="#211e14">
+                {renderDiffParts(origParts, 'orig')}
               </MessageDiffColumn>
               <MessageDiffColumn title="更正内容" message={msgMap.get(popup.relMsgId) ?? origMsg} border="#255" background="#14201e">
-                <span style={{ color: replacement.length === 0 ? '#ff9944' : '#44ddaa', fontWeight: 700 }}>
-                  {replacement.length === 0 ? '（删除）' : replacement}
-                </span>
+                {renderDiffParts(nextParts, 'next')}
               </MessageDiffColumn>
             </div>
             <CloseRow onClose={onClose} />

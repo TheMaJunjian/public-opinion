@@ -31,6 +31,7 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
   const stakeFeeAmountRef = useRef(1);
 
   const effectiveMinStake = (() => {
+    if (relationType === 'tag' && (secondaryRelationType === 'read' || secondaryRelationType === 'unread')) return 0;
     if (joinOnlyAction) return 1;
     const typeMinBase = relationType
       ? (relationStakeMap.current[relationType.toUpperCase()] ?? 10)
@@ -65,6 +66,9 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
     if (!relationType) {
       if (textStake > 0) return { stakeTotal: textStake, protocolFeeTotal: textFee, total: textStake + textFee, perStake: textStake, textStake, relCount: 0, joinCount: 0, hasText: true, hasRel: false };
       return null;
+    }
+    if (relationType === 'tag' && (secondaryRelationType === 'read' || secondaryRelationType === 'unread')) {
+      return { stakeTotal: 0, protocolFeeTotal: protocolFeePerOp, total: protocolFeePerOp, perStake: 0, textStake: 0, relCount: 0, joinCount: 0, hasText: false, hasRel: false };
     }
     if (joinOnlyAction) {
       const baseTargets = draftUnits.length > 0 ? draftUnits : targetUnits;

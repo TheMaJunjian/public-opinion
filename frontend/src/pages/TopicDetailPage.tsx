@@ -1137,6 +1137,23 @@ export default function TopicDetailPage() {
     return map;
   }, [relations]);
 
+  const readStatusByMessageId = useMemo(() => {
+    const latest = new Map<string, { type: 'READ' | 'UNREAD'; createdAt: string }>();
+    if (!user?.id) return new Map<string, 'READ' | 'UNREAD'>();
+    for (const relation of relations) {
+      const type = relation.relationType?.toUpperCase();
+      if ((type !== 'READ' && type !== 'UNREAD') || relation.createdBy.id !== user.id) continue;
+      for (const target of relation.targetRefs) {
+        if (target.kind !== 'message' && target.kind !== 'text-fragment') continue;
+        const previous = latest.get(target.messageId);
+        if (!previous || new Date(relation.createdAt).getTime() >= new Date(previous.createdAt).getTime()) {
+          latest.set(target.messageId, { type, createdAt: relation.createdAt });
+        }
+      }
+    }
+    return new Map([...latest].map(([id, value]) => [id, value.type]));
+  }, [relations, user?.id]);
+
   const joinStatusByMessage = useMemo(() => {
     const map = new Map<string, 'valid'>();
     for (const relation of relations) {
@@ -2246,10 +2263,12 @@ export default function TopicDetailPage() {
     if (!topicId) return null;
     const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
     try {
-      const payload: Record<string, unknown> = { relationType: 'TAG', label: tagLabel };
+      const isReadStatus = secondaryRelationType === 'read' || secondaryRelationType === 'unread';
+      const statusType = secondaryRelationType.toUpperCase();
+      const payload: Record<string, unknown> = { relationType: isReadStatus ? statusType : 'TAG', label: tagLabel };
       if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = (customLabel || newMessageContent).trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
       const backendRel = await createRel(topicId, {
-        relationType: 'TAG',
+        relationType: isReadStatus ? statusType : 'TAG',
         sourceMessageId: null,
         targetRefs: [backendTargetRef],
         payload: buildRelationPayload(payload as unknown as Parameters<typeof buildRelationPayload>[0]),
@@ -2257,7 +2276,7 @@ export default function TopicDetailPage() {
       const relId = backendRel.id;
       await registerCreatedRelationInCurrentClassify(backendRel);
       const anonSrcId = `anon:${relId}`;
-      return { id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge;
+      return { id: nextId("edge"), relationMessageId: relId, relationType: isReadStatus ? secondaryRelationType : "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: isReadStatus ? secondaryRelationType : tagLabel } as DemoEdge;
     } catch (e: any) {
       showAlert(`建立标注关系失败: ${e?.message ?? e}`);
       return null;
@@ -2486,7 +2505,7 @@ export default function TopicDetailPage() {
     _containerType: string,
     targetMids: string[],
   ) {
-    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
+    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'READ', 'UNREAD', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
     const invalidTarget = targetMids
       .map(id => msgMap.get(id))
       .find(message => message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? ''));
@@ -3818,7 +3837,7 @@ export default function TopicDetailPage() {
     && !appendContainerType;
   const hasInvalidJoinTarget = joinOnlyAction && effectiveTargetUnits.some(unit => {
     const message = msgMap.get(unit.messageId);
-    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
+    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'READ', 'UNREAD', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
     return message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? '');
   });
   const targetTextIdsForValidation = getGroupedTargetTextMessageIds(effectiveTargetUnits);
@@ -4101,7 +4120,7 @@ export default function TopicDetailPage() {
     if (hasInvalidProposalFormat) return secondaryRelationType === '充值分账'
       ? "充值分账格式无效，请填写充值总额、收入池分成和指定用户"
       : "运营收入提案格式无效，请填写收入金额和来源";
-    if (relationType === 'tag' && secondaryRelationType === 'none') return "请先选择推荐、冷藏或已有标签";
+    if (relationType === 'tag' && secondaryRelationType === 'none') return "请先选择推荐、冷藏、已读、未读或已有标签";
     if (!hasTargetsAvailable && relationType !== null && !isClassifyType && !isGovernanceOrOpsType) return "请先选择目标消息";
     if (relationType !== null && !hasTextContent && !isAgreeDisagreeType && !isArrangeType && !isMergeType && !isTagWithQuickAnnotate && !isTagWithInlineBadge) return "请输入消息内容";
     return null;
@@ -4137,7 +4156,7 @@ export default function TopicDetailPage() {
         }
       }
     }
-    return ['recommend', 'archive', 'attention', 'block', ...Array.from(existingTagLabels)];
+    return ['read', 'unread', 'recommend', 'archive', 'attention', 'block', ...Array.from(existingTagLabels)];
   }, [relationType, draftUnits, targetUnits, edges]);
 
   const proposalSecondaryOptions = useMemo((): string[] => {
@@ -5421,6 +5440,7 @@ export default function TopicDetailPage() {
                     settlementTargetContent: targetMsg?.content ?? '',
                     isValueSettlement: (msg as any).roundPayload?.settlementType === 'VALUE',
                     lastClickedMsgId: lastClickedMessageId,
+                    readStatus: readStatusByMessageId.get(msg.id),
                   };
                   const sc = stakeCounts[msg.id];
                   const truthPro = sc?.truth.pro ?? 0;
@@ -5439,10 +5459,34 @@ export default function TopicDetailPage() {
                   const correctionTargetOriginal = correctionTarget
                     ? messages.find(message => message.id === correctionTarget.id) ?? correctionTarget
                     : undefined;
-                  const correctionContent = msg.relationPayload?.correctionContent ?? msg.content;
+                  const correctionSourceEdge = correctionTargetEdge && !correctionTargetEdge.from.messageId.startsWith('anon:')
+                    ? correctionTargetEdge
+                    : undefined;
+                  const correctionSource = correctionSourceEdge ? msgMap.get(correctionSourceEdge.from.messageId) : undefined;
+                  const correctionContent = msg.relationPayload?.correctionContent ?? correctionSource?.content ?? msg.content;
                   const correctionTargetText = correctionTargetEdge?.to.selection.kind === 'text'
                     ? correctionTargetEdge.to.selection.text
                     : correctionTargetOriginal?.content ?? '';
+                  const correctionTargetOccurrence = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetOriginal
+                    ? correctionTargetOriginal.content
+                      .slice(0, correctionTargetEdge.to.selection.start)
+                      .split(correctionTargetText)
+                      .length
+                    : undefined;
+                  const correctionTargetLabel = correctionTargetOccurrence && correctionTargetText.length > 0
+                    ? `第${correctionTargetOccurrence}处「${correctionTargetText}」`
+                    : `「${correctionTargetText}」`;
+                  const correctionReplacement = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetOriginal
+                    ? (() => {
+                      const selection = correctionTargetEdge.to.selection;
+                      const suffixLength = correctionTargetOriginal.content.length - selection.start - selection.len;
+                      const replacementEnd = correctionContent.length - suffixLength;
+                      return selection.start >= 0 && selection.len >= 0 && suffixLength >= 0 &&
+                        replacementEnd >= selection.start && replacementEnd <= correctionContent.length
+                        ? correctionContent.slice(selection.start, replacementEnd)
+                        : correctionContent;
+                    })()
+                    : correctionContent;
 
                   return (
                     <MessageCard
@@ -5591,8 +5635,8 @@ export default function TopicDetailPage() {
                             <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>具体更改</div>
                             <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
                               {correctionContent.length === 0
-                                ? `删除「${correctionTargetText}」`
-                                : `将「${correctionTargetText}」修改为「${correctionContent}」`}
+                                ? `删除${correctionTargetLabel}`
+                                : `将${correctionTargetLabel}修改为「${correctionReplacement}」`}
                             </div>
                           </div>
                         </div>

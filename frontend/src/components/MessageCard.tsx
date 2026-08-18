@@ -17,6 +17,7 @@ export interface MessageCardContext {
   settlementTargetContent?: string;
   isValueSettlement?: boolean;
   lastClickedMsgId?: string | null;
+  readStatus?: 'READ' | 'UNREAD';
 }
 
 export interface MessageCardProps {
@@ -62,6 +63,7 @@ export default function MessageCard({
     relType,
     settlementTargetId, settlementTargetContent, isValueSettlement,
     lastClickedMsgId,
+    readStatus,
   } = ctx;
 
   const bk = (msg as any).backendKind as string | undefined;
@@ -99,6 +101,7 @@ export default function MessageCard({
           : isTopicMsg ? '0 2px 8px rgba(0,0,0,0.15)' : undefined,
         outline: lastClickedMsgId === msg.id ? '1px dashed #0b84ff' : 'none',
         userSelect: isActiveText ? 'text' : 'auto',
+        opacity: readStatus === 'READ' ? 0.72 : 1,
       }}
     >
       {/* Header */}
@@ -132,6 +135,11 @@ export default function MessageCard({
           {headerExtra}
         </span>
       </div>
+      {readStatus && (
+        <div title={readStatus === 'READ' ? '已读' : '未读'} style={{ position: 'absolute', right: 8, bottom: 6, fontSize: 13, color: readStatus === 'READ' ? '#86efac' : '#fca5a5' }}>
+          {readStatus === 'READ' ? '✓' : '○'}
+        </div>
+      )}
 
       {/* Badges (external) or built-in relation type badge */}
       {badges != null ? badges : (

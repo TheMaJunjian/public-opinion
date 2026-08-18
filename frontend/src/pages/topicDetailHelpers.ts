@@ -11,6 +11,8 @@ export const ALL_RELATION_TYPES: RelationType[] = [
   'proposal', 'delegation', 'code_change', 'operations',
 ];
 
+export const READ_STATUS_RELATION_TYPES = new Set(['read', 'unread']);
+
 export const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
 export const CLASSIFY_TARGET_HINT = '文本消息、排列关系消息、分类消息或归并关系消息';
 
@@ -19,6 +21,8 @@ export function secondaryRelationLabel(t: string): string {
   if (t === 'question') return '疑问';
   if (t === 'answer') return '回答';
   if (t === 'notify') return '通知';
+  if (t === 'read') return '已读';
+  if (t === 'unread') return '未读';
   if (t === 'vertical') return '纵';
   if (t === 'horizontal') return '横';
   if (t === 'evidence') return '证据';

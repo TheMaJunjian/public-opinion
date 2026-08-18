@@ -61,6 +61,8 @@ export type RelationType =
   | 'AGREE'        // 赞同（有文本时视为支持）
   | 'DISAGREE'     // 反对（有文本时视为反驳）
   | 'TAG'          // 标注（消息旁的装饰标签）
+  | 'READ'         // 已读标注（仅协议费）
+  | 'UNREAD'       // 未读标注（仅协议费）
   | 'NOTIFY'       // 回复通知
   | 'CORRECT'      // 更正
   | 'ARRANGE'      // 排列（边框包裹目标消息；payload.targetLayout 控制横/纵排列）
@@ -223,6 +225,8 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   AGREE:       { kind: 'decoration',        label: '赞同', color: 'green',  stanceEffect: 'support' },
   DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
+  READ:        { kind: 'decoration',        label: '已读', color: 'green', formsTrees: false },
+  UNREAD:      { kind: 'decoration',        label: '未读', color: 'red', formsTrees: false },
   CORRECT:     { kind: 'correction-badge',  label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
   ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true,  isContainer: true  },
   CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true,   isContainer: true  },

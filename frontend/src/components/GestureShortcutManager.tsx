@@ -112,6 +112,7 @@ function getSymbolLines(symbol: ShortcutSymbol, direction: GestureDirection, sid
 export default function GestureShortcutManager({ onConfirm }: Props) {
   const pointsRef = useRef<GesturePoint[]>([]);
   const pointerIdRef = useRef<number | null>(null);
+  const pointerCaptureTargetRef = useRef<Element | null>(null);
   const scrollTargetRef = useRef<HTMLElement | null>(null);
   const pendingPositionRef = useRef<GesturePosition | null>(null);
   const pendingCancelOriginRef = useRef<GesturePosition | null>(null);
@@ -179,6 +180,14 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         pointsRef.current = [];
         return;
       }
+      if (event.pointerType === 'touch' && event.target instanceof Element) {
+        try {
+          event.target.setPointerCapture(event.pointerId);
+          pointerCaptureTargetRef.current = event.target;
+        } catch {
+          pointerCaptureTargetRef.current = null;
+        }
+      }
       pointerIdRef.current = event.pointerId;
       scrollTargetRef.current = findScrollTarget(event.target);
       pointsRef.current = [{ x: event.clientX, y: event.clientY }];
@@ -196,6 +205,10 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         }
       }
       if (event.pointerId !== pointerIdRef.current) return;
+      if (event.pointerType === 'touch' && pointsRef.current.length >= 2) {
+        const first = pointsRef.current[0];
+        if (Math.hypot(event.clientX - first.x, event.clientY - first.y) >= 8) event.preventDefault();
+      }
       pointsRef.current.push({ x: event.clientX, y: event.clientY });
     };
 
@@ -208,6 +221,10 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       pointerIdRef.current = null;
       scrollTargetRef.current = null;
       pointsRef.current = [];
+      if (pointerCaptureTargetRef.current?.hasPointerCapture(event.pointerId)) {
+        pointerCaptureTargetRef.current.releasePointerCapture(event.pointerId);
+      }
+      pointerCaptureTargetRef.current = null;
       if (cancelCandidate?.pointerId === event.pointerId) {
         const movement = Math.hypot(
           event.clientX - cancelCandidate.startX,
@@ -227,6 +244,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
 
       const match = recognizeGesture(points);
       if (!match) return;
+      window.getSelection()?.removeAllRanges();
       const bounds = points.reduce((result, point) => ({
         minX: Math.min(result.minX, point.x),
         maxX: Math.max(result.maxX, point.x),
@@ -266,19 +284,20 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       scrollTargetRef.current = null;
       cancelCandidateRef.current = null;
       pointsRef.current = [];
+      pointerCaptureTargetRef.current = null;
       clearPending();
     };
 
     const onKeyDown = () => clearPending(true);
 
     document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('pointermove', onPointerMove, true);
+    document.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
     document.addEventListener('pointerup', onPointerUp, true);
     document.addEventListener('pointercancel', onCancel, true);
     document.addEventListener('keydown', onKeyDown, true);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('pointermove', onPointerMove, true);
+      document.removeEventListener('pointermove', onPointerMove, { capture: true });
       document.removeEventListener('pointerup', onPointerUp, true);
       document.removeEventListener('pointercancel', onCancel, true);
       document.removeEventListener('keydown', onKeyDown, true);

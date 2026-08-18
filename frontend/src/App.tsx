@@ -15,14 +15,16 @@ const TutorialModal = lazy(() => import('./components/TutorialModal'));
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [interfaceZoom, setInterfaceZoom] = useState(1);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
   const handleGestureConfirm = (direction: GestureDirection, target: HTMLElement | null, symbol: ShortcutSymbol) => {
     if (symbol === 'zoom-in' || symbol === 'zoom-out') {
-      const currentZoom = Number.parseFloat(document.documentElement.style.zoom || '1');
-      const nextZoom = symbol === 'zoom-in'
-        ? Math.min(1.5, currentZoom + 0.1)
-        : Math.max(0.7, currentZoom - 0.1);
-      document.documentElement.style.zoom = nextZoom.toFixed(2);
+      setInterfaceZoom(currentZoom => {
+        const nextZoom = symbol === 'zoom-in'
+          ? Math.min(1.5, currentZoom + 0.1)
+          : Math.max(0.7, currentZoom - 0.1);
+        return Number(nextZoom.toFixed(2));
+      });
       return;
     }
     if (symbol === 'confirm') {
@@ -58,13 +60,21 @@ export default function App() {
   return (
     <AuthProvider>
       <Router>
-        <div className="h-screen min-w-fit flex flex-col bg-[#101010]">
+        <div
+          className="h-screen min-w-fit flex flex-col bg-[#101010]"
+          style={{
+            transform: `scale(${interfaceZoom})`,
+            transformOrigin: 'top left',
+            width: `${100 / interfaceZoom}%`,
+            minHeight: `${100 / interfaceZoom}vh`,
+          }}
+        >
           <GestureShortcutManager onConfirm={handleGestureConfirm} />
           <Navbar
             onOpenViewer={() => setViewerOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
           />
-          <main className="flex-1 min-h-0">
+          <main className="flex-1">
             <Suspense fallback={routeFallback}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />

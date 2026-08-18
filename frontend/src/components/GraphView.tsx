@@ -2272,7 +2272,12 @@ export default function GraphView(props: GraphViewProps) {
         const el = ent.target as HTMLElement;
         const id = el.getAttribute("data-msgid");
         if (!id) continue;
-        next[id] = Math.ceil(el.getBoundingClientRect().height);
+        const canvasEl = canvasRef.current;
+        const canvasRect = canvasEl?.getBoundingClientRect();
+        const scaleY = canvasEl && canvasEl.offsetHeight > 0 && canvasRect
+          ? canvasRect.height / canvasEl.offsetHeight
+          : 1;
+        next[id] = Math.ceil(el.getBoundingClientRect().height / scaleY);
       }
       if (!Object.keys(next).length) return;
       setMeasuredHeights(prev => {
@@ -2288,6 +2293,14 @@ export default function GraphView(props: GraphViewProps) {
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
     const canvasRect = canvasEl.getBoundingClientRect();
+    const scaleX = canvasEl.offsetWidth > 0 ? canvasRect.width / canvasEl.offsetWidth : 1;
+    const scaleY = canvasEl.offsetHeight > 0 ? canvasRect.height / canvasEl.offsetHeight : 1;
+    const toCanvasRect = (rect: DOMRect): Rect => ({
+      x: (rect.left - canvasRect.left) / scaleX,
+      y: (rect.top - canvasRect.top) / scaleY,
+      width: rect.width / scaleX,
+      height: rect.height / scaleY,
+    });
     const normalSet = new Set(normalIds);
 
     function endpointBoxForNormal(id: string): {box:LayoutBox;col:number}|null {
@@ -2301,7 +2314,7 @@ export default function GraphView(props: GraphViewProps) {
         // After a focus-mode transition, stale refs to unmounted cards may return
         // zero-area rects, which would place edges at (0,0) making them invisible.
         if (r.width > 1 && r.height > 1) {
-          return { box:{x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height}, col:colOf[id]??0 };
+          return { box:toCanvasRect(r), col:colOf[id]??0 };
         }
       }
       const box = layout[id]; if (!box) return null;
@@ -2313,20 +2326,20 @@ export default function GraphView(props: GraphViewProps) {
       const header=headerRefs.current[m.id], content=contentRefs.current[m.id];
       if (!header||!content) {
         const el=cardRefs.current[m.id];
-        if (el) for (const r of Array.from(el.getClientRects())) globalForbiddenRects.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+        if (el) for (const r of Array.from(el.getClientRects())) globalForbiddenRects.push(toCanvasRect(r));
         continue;
       }
       for (const ref of [...Array.from(header.getClientRects()),...Array.from(content.getClientRects())])
-        globalForbiddenRects.push({x:ref.left-canvasRect.left,y:ref.top-canvasRect.top,width:ref.width,height:ref.height});
+        globalForbiddenRects.push(toCanvasRect(ref));
     }
 
     function getMessageRects(messageId: string): Rect[] {
       const res: Rect[] = [];
       const header=headerRefs.current[messageId], content=contentRefs.current[messageId];
       for (const el of [header,content].filter(Boolean) as HTMLElement[])
-        for (const r of Array.from(el.getClientRects())) res.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+        for (const r of Array.from(el.getClientRects())) res.push(toCanvasRect(r));
       const cardEl=cardRefs.current[messageId];
-      if (cardEl) for (const r of Array.from(cardEl.getClientRects())) res.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+      if (cardEl) for (const r of Array.from(cardEl.getClientRects())) res.push(toCanvasRect(r));
       else { const l=layout[messageId]; if (l) res.push({x:l.x,y:l.y,width:l.width,height:l.height}); }
       return res;
     }
@@ -2957,7 +2970,10 @@ export default function GraphView(props: GraphViewProps) {
         const container=contentRefs.current[toId]!;
         const start=e.to.selection.start, end=start+e.to.selection.len;
         const span=container.querySelector(`[data-rel-anchor="${e.relationType}::${start}:${end}"]`) as HTMLSpanElement|null;
-        if (span) { const r=span.getBoundingClientRect(); fragRectCanvas=new DOMRect(r.left-canvasRect.left,r.top-canvasRect.top,r.width,r.height); }
+        if (span) {
+          const r = toCanvasRect(span.getBoundingClientRect());
+          fragRectCanvas = new DOMRect(r.x, r.y, r.width, r.height);
+        }
       }
 
       rawEdges.push({
@@ -3092,11 +3108,18 @@ export default function GraphView(props: GraphViewProps) {
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
     const canvasRect=canvasEl.getBoundingClientRect();
+    const scaleX = canvasEl.offsetWidth > 0 ? canvasRect.width / canvasEl.offsetWidth : 1;
+    const scaleY = canvasEl.offsetHeight > 0 ? canvasRect.height / canvasEl.offsetHeight : 1;
     const next: Record<string,LabelBbox>={};
     for (const pe of positionedEdges) {
       const t=textRefs.current[pe.drawId]; if (!t) continue;
       const r=t.getBoundingClientRect();
-      next[pe.drawId]={x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height};
+      next[pe.drawId]={
+        x:(r.left-canvasRect.left)/scaleX,
+        y:(r.top-canvasRect.top)/scaleY,
+        width:r.width/scaleX,
+        height:r.height/scaleY,
+      };
     }
     // Use a functional update with a stability check to avoid infinite re-render cycles:
     // the main useEffect now depends on labelBboxes, so we must not update state when the

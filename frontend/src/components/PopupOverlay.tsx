@@ -1,11 +1,16 @@
 import { createPortal } from 'react-dom';
-import { useRef } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 
 const EDGE_ARROW_COUNT = 25;
 const GUIDE_EDGE_INSET = 12;
 
-function PulseGuide({ start, end, index }: { start: { x: number; y: number }; end: { x: number; y: number }; index: number }) {
+interface Point {
+  x: number;
+  y: number;
+}
+
+function PulseGuide({ start, end, index }: { start: Point; end: Point; index: number }) {
   const deltaX = end.x - start.x;
   const deltaY = end.y - start.y;
   const length = Math.max(12, Math.hypot(deltaX, deltaY));
@@ -37,6 +42,7 @@ interface PopupOverlayProps {
 
 export default function PopupOverlay({
   children,
+  contentRef,
   zIndex,
   background,
   style,
@@ -44,10 +50,41 @@ export default function PopupOverlay({
   onClick,
 }: PopupOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const [overlaySize, setOverlaySize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [contentCenter, setContentCenter] = useState<Point | null>(null);
 
-  const overlayWidth = window.innerWidth;
-  const overlayHeight = window.innerHeight;
-  const center = { x: overlayWidth / 2, y: overlayHeight / 2 };
+  useLayoutEffect(() => {
+    const updateGeometry = () => {
+      const overlay = overlayRef.current;
+      const content = contentRef.current;
+      if (!overlay) return;
+      const overlayBounds = overlay.getBoundingClientRect();
+      setOverlaySize({ width: overlay.clientWidth, height: overlay.clientHeight });
+      if (content) {
+        const contentBounds = content.getBoundingClientRect();
+        setContentCenter({
+          x: (contentBounds.left + contentBounds.right) / 2 - overlayBounds.left,
+          y: (contentBounds.top + contentBounds.bottom) / 2 - overlayBounds.top,
+        });
+      }
+    };
+
+    updateGeometry();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateGeometry);
+    if (observer && overlayRef.current) observer.observe(overlayRef.current);
+    if (observer && contentRef.current) observer.observe(contentRef.current);
+    window.addEventListener('resize', updateGeometry);
+    window.visualViewport?.addEventListener('resize', updateGeometry);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateGeometry);
+      window.visualViewport?.removeEventListener('resize', updateGeometry);
+    };
+  }, [children, contentRef]);
+
+  const overlayWidth = overlaySize.width;
+  const overlayHeight = overlaySize.height;
+  const center = contentCenter ?? { x: overlayWidth / 2, y: overlayHeight / 2 };
 
   return createPortal((
     <div

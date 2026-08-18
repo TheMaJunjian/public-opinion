@@ -46,10 +46,14 @@ export default function PopupOverlay({
 }: PopupOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const [geometry, setGeometry] = useState(() => ({
-    width: window.visualViewport?.width ?? window.innerWidth,
-    height: window.visualViewport?.height ?? window.innerHeight,
-    centerX: (window.visualViewport?.width ?? window.innerWidth) / 2,
-    centerY: (window.visualViewport?.height ?? window.innerHeight) / 2,
+    left: window.visualViewport?.offsetLeft ?? 0,
+    top: window.visualViewport?.offsetTop ?? 0,
+    viewportWidth: window.visualViewport?.width ?? window.innerWidth,
+    viewportHeight: window.visualViewport?.height ?? window.innerHeight,
+    overlayWidth: window.innerWidth,
+    overlayHeight: window.innerHeight,
+    centerX: (window.visualViewport?.offsetLeft ?? 0) + (window.visualViewport?.width ?? window.innerWidth) / 2,
+    centerY: (window.visualViewport?.offsetTop ?? 0) + (window.visualViewport?.height ?? window.innerHeight) / 2,
   }));
 
   useLayoutEffect(() => {
@@ -57,17 +61,27 @@ export default function PopupOverlay({
       const overlay = overlayRef.current;
       const content = contentRef.current;
       const viewport = window.visualViewport;
+      const left = viewport?.offsetLeft ?? 0;
+      const top = viewport?.offsetTop ?? 0;
       const width = viewport?.width ?? window.innerWidth;
       const height = viewport?.height ?? window.innerHeight;
       if (!overlay || !content) {
-        setGeometry({ width, height, centerX: width / 2, centerY: height / 2 });
+        setGeometry({
+          left, top, viewportWidth: width, viewportHeight: height,
+          overlayWidth: window.innerWidth, overlayHeight: window.innerHeight,
+          centerX: left + width / 2, centerY: top + height / 2,
+        });
         return;
       }
       const overlayBounds = overlay.getBoundingClientRect();
       const contentBounds = content.getBoundingClientRect();
       setGeometry({
-        width: Math.max(width, overlay.clientWidth, window.innerWidth),
-        height: Math.max(height, overlay.clientHeight, window.innerHeight),
+        left,
+        top,
+        viewportWidth: width,
+        viewportHeight: height,
+        overlayWidth: Math.max(overlay.clientWidth, window.innerWidth),
+        overlayHeight: Math.max(overlay.clientHeight, window.innerHeight),
         centerX: (contentBounds.left + contentBounds.right) / 2 - overlayBounds.left,
         centerY: (contentBounds.top + contentBounds.bottom) / 2 - overlayBounds.top,
       });
@@ -87,7 +101,7 @@ export default function PopupOverlay({
     };
   }, [children, contentRef]);
 
-  const { width: overlayWidth, height: overlayHeight } = geometry;
+  const { overlayWidth, overlayHeight } = geometry;
   const center = { x: geometry.centerX, y: geometry.centerY };
 
   return createPortal((
@@ -100,7 +114,6 @@ export default function PopupOverlay({
         width: '100dvw', height: '100dvh', minWidth: '100vw', minHeight: '100vh',
         boxSizing: 'border-box', zIndex,
         background,
-        ...style,
       }}
       onClick={onClick}
     >
@@ -126,9 +139,22 @@ export default function PopupOverlay({
               start={{ x: overlayWidth - GUIDE_EDGE_INSET, y: ratio * overlayHeight }} end={center} />;
           })}
       </div>
-      {children}
+      <div
+        data-popup-content-layer="true"
+        style={{
+          position: 'absolute',
+          left: geometry.left,
+          top: geometry.top,
+          width: geometry.viewportWidth,
+          height: geometry.viewportHeight,
+          ...style,
+        }}
+        onClick={onClick}
+      >
+        {children}
+      </div>
       <style>{`
-        [data-popup-overlay="true"] > :not([aria-hidden="true"]):not(style) {
+        [data-popup-content-layer="true"] {
           position: relative;
           z-index: 2;
         }

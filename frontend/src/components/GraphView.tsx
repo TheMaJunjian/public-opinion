@@ -3348,7 +3348,7 @@ export default function GraphView(props: GraphViewProps) {
 
 
   return (
-    <div ref={canvasRef} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
+    <div ref={canvasRef} data-jump-canvas="true" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
         {normals.map(msg=>{
@@ -4082,7 +4082,7 @@ export default function GraphView(props: GraphViewProps) {
             const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
             const isTagSel=relMsgIds.some(id=>isRelWholeSel(id));
             items.push(
-              <div key={`reltag-${relMsgIds[0]}`} data-rel-overlay="true"
+              <div key={`reltag-${relMsgIds[0]}`} data-msgid={relId} data-jump-msgids={[relId, ...relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,relMsgIds);}}
                 title={`标注：${displayLabel}；单击选中，双击展开详情`}
@@ -4475,7 +4475,7 @@ export default function GraphView(props: GraphViewProps) {
           const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
           const isTagSel=relMsgIds.some(id=>isRelWholeSel(id));
           nodes.push(
-            <div key={`sftag-${relMsgIds[0]}`} data-rel-overlay="true"
+            <div key={`sftag-${relMsgIds[0]}`} data-msgid={sf.relMsgId} data-jump-msgids={[sf.relMsgId, ...relMsgIds].join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               title={`标注：${displayLabel}；单击选中，双击展开详情`}
@@ -4552,7 +4552,7 @@ export default function GraphView(props: GraphViewProps) {
           if (!tagIconRelMsgId) return (
             <React.Fragment key={`tag-${_mid}-${group.label}`}>
               <div
-                data-rel-overlay="true"
+                data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
@@ -4575,7 +4575,7 @@ export default function GraphView(props: GraphViewProps) {
           return (
             <React.Fragment key={`tag-${_mid}-${group.label}`}>
               <div
-                data-rel-overlay="true"
+                data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}

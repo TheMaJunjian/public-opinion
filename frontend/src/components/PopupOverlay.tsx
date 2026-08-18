@@ -5,7 +5,7 @@ import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 const EDGE_ARROW_COUNT = 25;
 const GUIDE_EDGE_INSET = 12;
 
-function PulseGuide({ start, end, index }: { start: { x: number; y: number }; end: { x: number; y: number }; index: number }) {
+export function PulseGuide({ start, end, index }: { start: { x: number; y: number }; end: { x: number; y: number }; index: number }) {
   const deltaX = end.x - start.x;
   const deltaY = end.y - start.y;
   const length = Math.max(12, Math.hypot(deltaX, deltaY));
@@ -23,6 +23,117 @@ function PulseGuide({ start, end, index }: { start: { x: number; y: number }; en
       position: 'absolute', left: start.x, top: start.y, width: length, height: 2,
       transform: `rotate(${angle}deg)`, transformOrigin: '0 50%', ...lineStyle,
     }} />;
+}
+
+export function MessageJumpOverlay({
+  targetElement,
+  visualRoot,
+  targetRect,
+  visualRect,
+}: {
+  targetElement: HTMLElement;
+  visualRoot?: HTMLElement | null;
+  targetRect: DOMRect;
+  visualRect?: DOMRect;
+}) {
+  const contentLayerRef = useRef<HTMLDivElement>(null);
+  const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+  const targetCenter = {
+    x: targetRect.left + targetRect.width / 2,
+    y: targetRect.top + targetRect.height / 2,
+  };
+
+  useLayoutEffect(() => {
+    const layer = contentLayerRef.current;
+    if (!layer || !targetElement.isConnected) return;
+    const source = visualRoot ?? targetElement;
+    const clone = source.cloneNode(true) as HTMLElement;
+    const sourceRect = source.getBoundingClientRect();
+    const originalVisibility = source.style.visibility;
+    source.style.visibility = 'hidden';
+    const frame = document.createElement('div');
+    const clipRect = visualRect ?? targetRect;
+    Object.assign(frame.style, {
+      position: 'fixed',
+      left: `${clipRect.left}px`,
+      top: `${clipRect.top}px`,
+      width: `${clipRect.width}px`,
+      height: `${clipRect.height}px`,
+      overflow: 'hidden',
+      zIndex: '2',
+      pointerEvents: 'none',
+    });
+    Object.assign(clone.style, visualRoot ? {
+      position: 'absolute',
+      left: `${sourceRect.left - clipRect.left}px`,
+      top: `${sourceRect.top - clipRect.top}px`,
+      width: `${sourceRect.width}px`,
+      height: `${sourceRect.height}px`,
+      margin: '0',
+      transform: 'none',
+      pointerEvents: 'none',
+    } : {
+      position: 'absolute',
+      left: `${targetRect.left - clipRect.left}px`,
+      top: `${targetRect.top - clipRect.top}px`,
+      width: `${targetRect.width}px`,
+      height: `${targetRect.height}px`,
+      boxSizing: 'border-box',
+      margin: '0',
+      transform: 'none',
+      pointerEvents: 'none',
+    });
+    frame.appendChild(clone);
+    layer.appendChild(frame);
+    return () => {
+      frame.remove();
+      source.style.visibility = originalVisibility;
+    };
+  }, [targetElement, visualRoot, targetRect, visualRect]);
+
+  return createPortal((
+    <div
+      aria-hidden="true"
+      style={{
+        position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
+        width: '100dvw', height: '100dvh', minWidth: '100vw', minHeight: '100vh',
+        boxSizing: 'border-box', zIndex: 190,
+        background: 'rgba(0,0,0,0.6)',
+        animation: 'message-jump-overlay-fade 2s ease-out both',
+        pointerEvents: 'none',
+      }}
+    >
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
+        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
+          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
+          return <PulseGuide key={`top-${index}`} index={index}
+            start={{ x: ratio * viewportWidth, y: GUIDE_EDGE_INSET }} end={targetCenter} />;
+        })}
+        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
+          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
+          return <PulseGuide key={`bottom-${index}`} index={index}
+            start={{ x: ratio * viewportWidth, y: viewportHeight - GUIDE_EDGE_INSET }} end={targetCenter} />;
+        })}
+        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
+          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
+          return <PulseGuide key={`left-${index}`} index={index}
+            start={{ x: GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
+        })}
+        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
+          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
+          return <PulseGuide key={`right-${index}`} index={index}
+            start={{ x: viewportWidth - GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
+        })}
+      </div>
+      <div ref={contentLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 2 }} />
+      <style>{`@keyframes message-jump-overlay-fade {
+        0%, 12% { opacity: 0; }
+        22%, 82% { opacity: 1; }
+        100% { opacity: 0; }
+      }`}</style>
+    </div>
+  ), document.body);
 }
 
 interface PopupOverlayProps {

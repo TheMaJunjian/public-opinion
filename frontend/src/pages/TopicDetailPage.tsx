@@ -18,6 +18,7 @@ import RoundHistory from '../components/RoundHistory';
 import TopicRightPanel from '../components/TopicRightPanel';
 import LeaderboardModal from '../components/LeaderboardModal';
 import PromptModal from '../components/PromptModal';
+import { MessageJumpOverlay } from '../components/PopupOverlay';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
@@ -548,6 +549,11 @@ export default function TopicDetailPage() {
       pendingScrollMsgRef.current = null;
     }
   }, [loading, messages, classifyKey, focusKey, scrollKey, viewMode]);
+
+  useEffect(() => () => {
+    if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+    if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+  }, []);
   const [focusHop, setFocusHop] = useState<number>(1);
   // Popup state for decoration double-click (shows sender info)
   const [decorationPopup, setDecorationPopup] = useState<{
@@ -1398,6 +1404,9 @@ export default function TopicDetailPage() {
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
+  const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
+  const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messagePulseRafRef = useRef<number | null>(null);
   // Saved scroll positions for each view mode, so switching modes does not reset to top.
   const viewModeScrollRef = useRef<{ graph: { top: number; left: number } | null; list: { top: number; left: number } | null }>({ graph: null, list: null });
   const prevFocusLenRef = useRef(0);
@@ -1474,6 +1483,34 @@ export default function TopicDetailPage() {
   // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
   const MAX_SCROLL_ATTEMPTS = 60;
 
+  function showMessagePulse(targetId: string, element: HTMLElement) {
+    if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+    if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+    messagePulseRafRef.current = requestAnimationFrame(() => {
+      messagePulseRafRef.current = null;
+      if (!element.isConnected) return;
+      const targetRects = Array.from(leftPanelRef.current?.querySelectorAll(
+        `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
+      ) ?? [])
+        .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
+        .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
+      const rect = targetRects.reduce((bounds, candidateRect) => {
+        const left = Math.min(bounds.left, candidateRect.left);
+        const top = Math.min(bounds.top, candidateRect.top);
+        const right = Math.max(bounds.right, candidateRect.right);
+        const bottom = Math.max(bounds.bottom, candidateRect.bottom);
+        return new DOMRect(left, top, right - left, bottom - top);
+      }, element.getBoundingClientRect());
+      const visualRoot = element.closest('[data-jump-canvas]') as HTMLElement | null;
+      const visualRect = rect;
+      setMessagePulse({ element, rect, visualRoot, visualRect });
+      messagePulseTimerRef.current = setTimeout(() => {
+        setMessagePulse(null);
+        messagePulseTimerRef.current = null;
+      }, 2000);
+    });
+  }
+
   function resolveScrollTargetMessageId(msgId: string): string {
     const msg = messagesRef.current.find(m => m.id === msgId);
     // Settlement messages should navigate to their settlement target message.
@@ -1512,7 +1549,9 @@ export default function TopicDetailPage() {
       if (pendingScrollMsgIdRef.current !== targetId) return; // superseded by newer message
       const container = leftPanelRef.current;
       if (!container) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
-      const candidates = Array.from(container.querySelectorAll(`[data-msgid="${targetId}"]`)) as HTMLElement[];
+      const candidates = Array.from(container.querySelectorAll(
+        `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
+      )) as HTMLElement[];
       const el = candidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? candidates[0] ?? null;
       if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const elRect = el.getBoundingClientRect();
@@ -1526,6 +1565,8 @@ export default function TopicDetailPage() {
       const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
       container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
       container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
+      // Re-read the target after scrolling so the overlay clone uses viewport coordinates.
+      showMessagePulse(targetId, el);
       // The left panel is the actual message viewport. Avoid scrollIntoView here:
       // it may scroll the page or an outer ancestor instead of this panel.
     };
@@ -5374,13 +5415,14 @@ export default function TopicDetailPage() {
 
           <div ref={leftPanelRef}
             className={isPreviewMode ? "preview-mode" : ""}
-            style={{ flex: "1 1 auto", overflow: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0 }}
+            style={{ flex: "1 1 auto", overflow: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0, position: "relative" }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay
               if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
               handleCanvasBlankClick();
             }}>
+            {messagePulse && <MessageJumpOverlay targetElement={messagePulse.element} visualRoot={messagePulse.visualRoot} targetRect={messagePulse.rect} visualRect={messagePulse.visualRect} />}
             {messagesToRenderFiltered.length === 0 ? (
               <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>

@@ -1,8 +1,33 @@
 #!/usr/bin/env bash
-# 一键部署脚本：生成密钥 → 构建前端 → 启动容器 → 执行数据库迁移
+# 一键部署脚本：更新代码 → 生成密钥 → 构建前端 → 启动容器 → 执行数据库迁移
 # 在服务器上运行：bash deploy/deploy.sh
+# 跳过代码更新：bash deploy/deploy.sh --no-pull
 set -euo pipefail
-cd "$(dirname "$0")"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+UPDATE_CODE=true
+
+case "${1:-}" in
+  '') ;;
+  --no-pull|-n) UPDATE_CODE=false ;;
+  *)
+    echo "用法：bash deploy/deploy.sh [--no-pull|-n]"
+    exit 2
+    ;;
+esac
+
+cd "$REPO_ROOT"
+
+# 默认从当前分支更新代码；--no-pull 用于服务器暂时离线或需要部署当前代码时跳过。
+if [ "$UPDATE_CODE" = true ]; then
+  echo "==> 更新代码"
+  git pull --ff-only
+else
+  echo "==> 跳过代码更新"
+fi
+
+cd "$SCRIPT_DIR"
 
 # 1. 首次运行时生成 deploy/.env.prod（域名 + 随机密钥）
 if [ ! -f .env.prod ]; then

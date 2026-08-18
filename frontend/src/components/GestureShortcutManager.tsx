@@ -9,6 +9,24 @@ const CONFIRM_DELAY = 900;
 const MIN_SAMPLES = 3;
 const CANCEL_DISTANCE = 12;
 
+function shouldBlockTouchScroll(points: GesturePoint[], current: GesturePoint) {
+  if (points.length < 2) return false;
+  const start = points[0];
+  const deltaX = current.x - start.x;
+  const deltaY = current.y - start.y;
+  const absoluteX = Math.abs(deltaX);
+  const absoluteY = Math.abs(deltaY);
+  const distance = Math.hypot(deltaX, deltaY);
+  if (distance < 24) return false;
+  const angle = Math.atan2(absoluteY, absoluteX) * (180 / Math.PI);
+  const diagonal = angle >= 20 && angle <= 70;
+  const pathDistance = points.slice(1).reduce((total, point, index) => (
+    total + Math.hypot(point.x - points[index].x, point.y - points[index].y)
+  ), 0) + Math.hypot(current.x - points[points.length - 1].x, current.y - points[points.length - 1].y);
+  const turning = pathDistance / Math.max(distance, 1) > 1.18;
+  return diagonal || turning;
+}
+
 const directionActions: Record<GestureDirection, string> = {
   up: '当前界面向上滚动',
   down: '当前界面向下滚动',
@@ -207,7 +225,9 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       if (event.pointerId !== pointerIdRef.current) return;
       if (event.pointerType === 'touch' && pointsRef.current.length >= 2) {
         const first = pointsRef.current[0];
-        if (Math.hypot(event.clientX - first.x, event.clientY - first.y) >= 8) event.preventDefault();
+        const current = { x: event.clientX, y: event.clientY };
+        if (Math.hypot(event.clientX - first.x, event.clientY - first.y) >= 8
+          && shouldBlockTouchScroll(pointsRef.current, current)) event.preventDefault();
       }
       pointsRef.current.push({ x: event.clientX, y: event.clientY });
     };

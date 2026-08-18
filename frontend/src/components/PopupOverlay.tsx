@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { useRef } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 
@@ -48,7 +49,7 @@ export default function PopupOverlay({
   const overlayHeight = overlayRef.current?.clientHeight ?? window.innerHeight;
   const center = { x: overlayWidth / 2, y: overlayHeight / 2 };
 
-  return (
+  return createPortal((
     <div
       data-popup-overlay="true"
       data-prompt-modal={dataPromptModal ? 'true' : undefined}
@@ -94,5 +95,5 @@ export default function PopupOverlay({
         }
       `}</style>
     </div>
-  );
+  ), document.body);
 }

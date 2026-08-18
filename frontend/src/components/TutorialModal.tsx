@@ -56,18 +56,6 @@ function TutorialModalContent({ onClose }: { onClose: () => void }) {
           </section>
 
           <section style={{ marginTop: 16 }}>
-            <h2 style={{ margin: '0 0 6px', color: '#fff', fontSize: 15 }}>快捷符</h2>
-            <ol style={{ margin: 0, paddingLeft: 20 }}>
-              <li>在非按钮、输入框和链接区域，用鼠标或手指一笔画出带半个箭头的方向符号。</li>
-              <li>上滑、下滑、左滑、右滑分别滚动当前界面的上、下、左、右滚动条。</li>
-              <li>识别后会先显示待确认提示；短时间内没有其他操作，系统才会自动执行。</li>
-              <li>如果识别错误，在提示期间进行点击、滑动或键盘操作即可取消。</li>
-              <li><code>&gt;</code>：放大界面；<code>&lt;</code>：缩小界面。</li>
-              <li><code>✓</code> 或 <code>\</code>：确认当前可确认操作；<code>/</code>：取消或关闭。</li>
-            </ol>
-          </section>
-
-          <section style={{ marginTop: 16 }}>
             <h2 style={{ margin: '0 0 6px', color: '#fff', fontSize: 15 }}>发送文本消息</h2>
             <ol style={{ margin: 0, paddingLeft: 20 }}>
               <li>在“输入框（消息与关系设置）”中填写内容。</li>

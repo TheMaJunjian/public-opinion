@@ -5185,7 +5185,7 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ height: "100%", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ height: "100%", minWidth: containerWidth, minHeight: 0, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: headerCollapsed ? "4px 16px" : "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button
@@ -5255,8 +5255,8 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, minWidth: containerWidth }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, minWidth: containerWidth, minHeight: 0 }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>

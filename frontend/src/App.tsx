@@ -64,7 +64,7 @@ export default function App() {
             onOpenViewer={() => setViewerOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
           />
-          <main className="flex-1">
+          <main className="flex-1 min-h-0">
             <Suspense fallback={routeFallback}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />

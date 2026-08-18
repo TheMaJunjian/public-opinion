@@ -142,7 +142,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
   const showContributionControls = p.singleButtonEnabled && !p.isPreviewMode;
 
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0, minHeight: 0, boxSizing: "border-box" }}>
       {p.isPreviewMode && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
           ⚠ 预览模式 — 该分类已被反对，无法发送消息或修改

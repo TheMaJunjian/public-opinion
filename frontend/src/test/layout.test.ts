@@ -327,6 +327,90 @@ describe('applyReplyLayoutAdjustments', () => {
     expect(result.col['c']).toBeGreaterThanOrEqual(1);
   });
 
+  it('places a direct reply to the right of its target', () => {
+    const normals = [
+      makeNormal('b', 'user2', '2024-01-01T00:00:00Z'),
+      makeNormal('a', 'user1', '2024-01-01T00:01:00Z'),
+    ];
+    const result = applyReplyLayoutAdjustments({
+      normals,
+      edges: [makeEdge('e1', 'reply', 'rel-1', 'a', 'b')],
+      baseCol: { a: 0, b: 0 },
+      baseMaxCol: 0,
+      relIds: new Set(),
+    });
+
+    expect(result.col['a']).toBe(result.col['b'] + 1);
+  });
+
+  it('keeps a same-author reply in its author lane across a reply chain', () => {
+    const normals = [
+      makeNormal('a', 'user1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'user2', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'user1', '2024-01-01T00:02:00Z'),
+    ];
+    const result = applyReplyLayoutAdjustments({
+      normals,
+      edges: [
+        makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+        makeEdge('e2', 'reply', 'rel-2', 'c', 'b'),
+      ],
+      baseCol: { a: 0, b: 0, c: 0 },
+      baseMaxCol: 0,
+      relIds: new Set(),
+    });
+
+    expect(result.col['b']).toBe(result.col['a'] + 1);
+    expect(result.col['c']).toBe(result.col['a']);
+    expect(result.col['c']).not.toBe(result.col['b'] + 1);
+  });
+
+  it('does not push a two-way reply cycle rightward during grouping convergence', () => {
+    const normals = [
+      makeNormal('a', 'user1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'user2', '2024-01-01T00:01:00Z'),
+    ];
+    const edges = [
+      makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+      makeEdge('e2', 'reply', 'rel-2', 'a', 'b'),
+    ];
+    const reply = applyReplyLayoutAdjustments({
+      normals, edges, baseCol: { a: 0, b: 0 }, baseMaxCol: 0, relIds: new Set(),
+    });
+    const grouped = applyGroupingColumnOverride({
+      normals, edges, col: reply.col, maxCol: reply.maxCol,
+    });
+
+    expect(Math.abs(reply.col['a'] - reply.col['b'])).toBe(1);
+    expect(Math.max(reply.col['a'], reply.col['b'])).toBe(1);
+    expect(grouped.col).toEqual(reply.col);
+  });
+
+  it('lays out a cross-author reply chain as A/B/C = col0/col1/col0', () => {
+    const normals = [
+      makeNormal('a', 'user1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'user2', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'user1', '2024-01-01T00:02:00Z'),
+    ];
+    const edges = [
+      makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+      makeEdge('e2', 'reply', 'rel-2', 'c', 'b'),
+    ];
+    const stage1 = applyReplyLayoutAdjustments({
+      normals, edges, baseCol: { a: 0, b: 0, c: 0 }, baseMaxCol: 0, relIds: new Set(),
+    });
+    const stage2 = applyGroupingColumnOverride({
+      normals, edges, col: stage1.col, maxCol: stage1.maxCol,
+    });
+    const positioned = computeSimpleNoOverlapLayout({
+      normals, colOf: stage2.col, maxCol: stage2.maxCol,
+    });
+
+    expect(stage2.col).toMatchObject({ a: 0, b: 1, c: 0 });
+    expect(positioned.layout.c.y).toBeGreaterThan(positioned.layout.a.y);
+    expect(positioned.layout.b.y).toBe(positioned.layout.a.y);
+  });
+
   it('does not affect non-reply edges', () => {
     const normals = [makeNormal('a'), makeNormal('b')];
     const baseCol = { a: 0, b: 0 };

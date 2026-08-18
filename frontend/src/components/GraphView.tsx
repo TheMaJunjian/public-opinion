@@ -751,28 +751,142 @@ function applyFrameAvoidanceReservations(params: {
   const nextLayout: Record<string, LayoutBox> = {};
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
 
-  // Push cards that overlap merge frames below them (safety net for collision avoidance).
-  for (const reservation of params.reservations) {
-    if (!reservation.headerTopPad) continue; // only merge frames
-    const frameBottom = reservation.rect.y + reservation.rect.height;
+  // Rebuild the reservation from the current member positions.  Earlier frame
+  // avoidance may have moved a card that also belongs to a later frame, so the
+  // later frame must be checked against its updated bounds.
+  function currentReservationRect(reservation: FrameAvoidanceReservation): Rect {
+    const boxes = [...reservation.cardIds]
+      .map(id => nextLayout[id])
+      .filter((box): box is LayoutBox => Boolean(box));
+    const union = unionBoxes(boxes);
+    if (!union) return reservation.rect;
+    const headerTopPad = reservation.headerTopPad ?? 0;
+    return {
+      x: union.x - FRAME_PAD,
+      y: union.y - FRAME_PAD - headerTopPad,
+      width: union.width + FRAME_PAD * 2,
+      height: union.height + FRAME_PAD * 2 + headerTopPad,
+    };
+  }
 
-    // Collect overlapping cards not in this merge frame, sorted by original y
+  const protectedCardIds = new Set<string>();
+  for (const reservation of params.reservations) {
+    for (const id of reservation.cardIds) protectedCardIds.add(id);
+  }
+
+  // Re-check every unprotected card after each upstream movement. This keeps
+  // the cascade live instead of waiting until all frame reservations have run.
+  function resolveGlobalCardCollisions() {
+    const createdAt = (id: string) => {
+      const value = new Date(params.msgMap.get(id)?.createdAt ?? 0).getTime();
+      return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+    };
+    const shiftColumnFrom = (anchor: LayoutBox, fromY: number, delta: number) => {
+      if (delta <= 0) return;
+      for (const [id, box] of Object.entries(nextLayout)) {
+        if (protectedCardIds.has(id)) continue;
+        // Layout columns share the same x coordinate. Keep the whole affected
+        // column segment together instead of distorting individual card gaps.
+        if (box.x !== anchor.x || box.y < fromY) continue;
+        nextLayout[id] = { ...box, y: box.y + delta };
+      }
+    };
+
+    for (let pass = 0; pass < 100; pass++) {
+      let changed = false;
+      const cards = Object.entries(nextLayout)
+        .filter(([id]) => !protectedCardIds.has(id))
+        .sort(([aId, a], [bId, b]) =>
+          a.x - b.x || createdAt(aId) - createdAt(bId) || a.y - b.y
+        );
+      for (let i = 0; i < cards.length; i++) {
+        const [, current] = cards[i];
+        let requiredY = current.y;
+        for (let j = 0; j < i; j++) {
+          const [, previous] = cards[j];
+          if (current.x + current.width <= previous.x || previous.x + previous.width <= current.x) continue;
+          if (requiredY < previous.y + previous.height + ROW_GAP) {
+            requiredY = previous.y + previous.height + ROW_GAP;
+          }
+        }
+        if (requiredY !== current.y) {
+          const delta = requiredY - current.y;
+          shiftColumnFrom(current, current.y, delta);
+          const id = cards[i][0];
+          cards[i] = [id, nextLayout[id]];
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+  }
+
+  function compactUnprotectedColumns() {
+    const createdAt = (id: string) => {
+      const value = new Date(params.msgMap.get(id)?.createdAt ?? 0).getTime();
+      return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+    };
+    const columns = new Map<number, string[]>();
+    for (const [id, box] of Object.entries(nextLayout)) {
+      if (protectedCardIds.has(id)) continue;
+      const ids = columns.get(box.x) ?? [];
+      ids.push(id);
+      columns.set(box.x, ids);
+    }
+    for (const [x, ids] of columns) {
+      ids.sort((a, b) => createdAt(a) - createdAt(b) || (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+      let cursor = GRID_TOP;
+      for (const id of ids) {
+        const box = nextLayout[id];
+        if (!box) continue;
+        let nextY = Math.max(GRID_TOP, cursor);
+        // Frames are fixed obstacles for this external column. Compact upward
+        // until the card would intersect one, then continue below that frame.
+        for (const reservation of params.reservations) {
+          const rect = currentReservationRect(reservation);
+          if (x + box.width <= rect.x || rect.x + rect.width <= x) continue;
+          if (nextY + box.height <= rect.y || nextY >= rect.y + rect.height) continue;
+          nextY = rect.y + rect.height + ROW_GAP;
+        }
+        nextLayout[id] = { ...box, y: nextY };
+        cursor = nextY + box.height + ROW_GAP;
+      }
+    }
+  }
+
+  // Push cards that overlap each frame below it.  Process every frame, not
+  // only MERGE frames: ARRANGE/CLASSIFY/SUMMARY frames are also atomic visual
+  // units and their movement must cascade to unrelated cards below them.
+  for (const reservation of params.reservations) {
+    const rect = currentReservationRect(reservation);
+    const frameBottom = rect.y + rect.height;
+
+    // Collect all horizontally overlapping cards not in this frame, sorted by
+    // their current y.  Keeping cards below the frame in the sequence makes a
+    // moved card push its own followers instead of creating a second overlap.
     const toPush: { id: string; box: LayoutBox }[] = [];
     for (const [id, box] of Object.entries(nextLayout)) {
-      if (reservation.cardIds.has(id)) continue; // skip cards inside this merge frame
-      if (box.x + box.width <= reservation.rect.x || reservation.rect.x + reservation.rect.width <= box.x) continue;
-      if (box.y + box.height <= reservation.rect.y) continue;
-      if (box.y >= frameBottom + ROW_GAP) continue;
+      if (reservation.cardIds.has(id)) continue;
+      if (box.x + box.width <= rect.x || rect.x + rect.width <= box.x) continue;
+      if (box.y + box.height <= rect.y) continue;
       toPush.push({ id, box });
     }
     toPush.sort((a, b) => a.box.y - b.box.y);
 
     let pushY = frameBottom + ROW_GAP;
     for (const { id, box } of toPush) {
-      nextLayout[id] = { ...box, y: pushY };
-      pushY += box.height + ROW_GAP;
+      const nextY = Math.max(box.y, pushY);
+      nextLayout[id] = { ...box, y: nextY };
+      pushY = nextY + box.height + ROW_GAP;
     }
+
+    resolveGlobalCardCollisions();
   }
+
+  // First compact gaps created by one-way frame avoidance, then re-run the
+  // downward cascade because compaction may meet another card or frame.
+  compactUnprotectedColumns();
+  resolveGlobalCardCollisions();
 
   let maxBottom = GRID_TOP;
   for (const box of Object.values(nextLayout)) maxBottom = Math.max(maxBottom, box.y + box.height);
@@ -952,11 +1066,11 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
   }
 
   // Propagate right-shift constraints after reply placement.
-  // If a target moved right, sources that point to it via
-  // annotation/reference/notify/reply must remain at least target+1.
+  // Annotation/reference/notify sources must remain at least target+1;
+  // reply edges do not cascade so same-author reply chains can return to one lane.
   const sourcesByTarget = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.relationType !== "annotation" && e.relationType !== "reference" && e.relationType !== "notify" && e.relationType !== "reply") continue;
+    if (e.relationType !== "annotation" && e.relationType !== "reference" && e.relationType !== "notify") continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const arr = sourcesByTarget.get(e.to.messageId) ?? [];
     arr.push(e.from.messageId);
@@ -1063,7 +1177,48 @@ export function applyGroupingColumnOverride(params: {
     col,
     groupSourceToTarget,
   });
-  return { col: converged.col, maxCol: converged.maxCol, groupSourceToTarget };
+
+  // Restore reply author lanes after structural convergence. Explicit grouping
+  // and non-reply right-side constraints keep their higher priority.
+  const replySources = new Set<string>();
+  const replyTargetsBySource = new Map<string, number[]>();
+  for (const e of edges) {
+    if (e.relationType !== 'reply' || !normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    replySources.add(e.from.messageId);
+    const targets = replyTargetsBySource.get(e.from.messageId) ?? [];
+    targets.push(converged.col[e.to.messageId] ?? 0);
+    replyTargetsBySource.set(e.from.messageId, targets);
+  }
+  const authorColumns = new Map<string, number[]>();
+  for (const message of normals) {
+    const columns = authorColumns.get(message.author) ?? [];
+    columns.push(converged.col[message.id] ?? 0);
+    authorColumns.set(message.author, columns);
+  }
+  const authorLane = (columns: number[]): number => {
+    const counts = new Map<number, number>();
+    for (const column of columns) counts.set(column, (counts.get(column) ?? 0) + 1);
+    let best = columns[0] ?? 0;
+    for (const [column, count] of counts) {
+      if (count > (counts.get(best) ?? 0) || (count === (counts.get(best) ?? 0) && column < best)) best = column;
+    }
+    return best;
+  };
+  for (const message of normals) {
+    if (!replySources.has(message.id) || groupSourceToTarget.has(message.id)) continue;
+    const targetColumns = replyTargetsBySource.get(message.id) ?? [];
+    const forbidden = new Set(targetColumns);
+    const lane = authorLane(authorColumns.get(message.author) ?? [0]);
+    if (forbidden.has(lane)) continue;
+    let preferred = lane;
+    while (forbidden.has(preferred)) preferred++;
+    const minColumn = edges
+      .filter(e => (e.relationType === 'annotation' || e.relationType === 'reference' || e.relationType === 'notify') && e.from.messageId === message.id && normalSet.has(e.to.messageId))
+      .reduce((min, e) => Math.max(min, (converged.col[e.to.messageId] ?? 0) + 1), 0);
+    converged.col[message.id] = Math.max(preferred, minColumn);
+  }
+  const maxCol = Math.max(0, ...Object.values(converged.col));
+  return { col: converged.col, maxCol, groupSourceToTarget };
 }
 
 /**
@@ -1633,6 +1788,17 @@ function computeNoOverlapLayout(params: {
     return y;
   }
 
+  // A frame is one layout unit.  Anchor it to the leftmost column occupied by
+  // its visible members instead of always starting at column zero; otherwise a
+  // frame member constrained to the right of an external card leaves the frame
+  // behind that card while only its contents appear to move right.
+  function frameAnchorCol(block: FrameBlock): number {
+    const memberCols = [...block.cardIds]
+      .map(id => colOf[id])
+      .filter((column): column is number => column !== undefined);
+    return memberCols.length > 0 ? Math.min(...memberCols) : 0;
+  }
+
   for (const item of items2) {
     if (item.kind === 'card') {
       const m = item.msg;
@@ -1645,8 +1811,12 @@ function computeNoOverlapLayout(params: {
       maxBottom = Math.max(maxBottom, y + h);
     } else {
       const fb = item.block;
-      const frameX = colX(0); // 18
-      const frameY = findY2(frameX, CARD_W + FRAME_PAD_X * 2);
+      const frameX = colX(frameAnchorCol(fb));
+      // Measure the frame before choosing its Y position.  A fixed card-width
+      // estimate lets wide frames overlap cards that were placed earlier in
+      // the same horizontal band.
+      const measuredFrame = layoutFrameBlock(fb, frameX, GRID_TOP);
+      const frameY = findY2(frameX, measuredFrame.rect.width);
       const result2 = layoutFrameBlock(fb, frameX, frameY);
       placedRects2.push(result2.rect);
       frameRectMap.set(fb.relMsgId, result2.rect);
@@ -2850,8 +3020,18 @@ export default function GraphView(props: GraphViewProps) {
 
     for (const e of edges) {
       const fromMsg=msgMap.get(e.from.messageId);
-      if (!fromMsg || (!isContentKind(fromMsg.kind) && !relationCardMsgIds.has(fromMsg.id))) continue;
-      const fromEp=endpointBoxForNormal(fromMsg.id); if (!fromEp) continue;
+      if (!fromMsg) continue;
+      // Container relations are rendered as frames rather than cards.  They can
+      // still be the source of an edge relation (for example REPLY), so use the
+      // frame bounds as their visual endpoint.
+      const fromFrameRect = fromMsg.kind === "relation"
+        ? (frameByRelMsgId.get(fromMsg.id) ?? groupFrameByRelMsgId.get(fromMsg.id))
+        : undefined;
+      if (!isContentKind(fromMsg.kind) && !relationCardMsgIds.has(fromMsg.id) && !fromFrameRect) continue;
+      const fromEp=endpointBoxForNormal(fromMsg.id);
+      const fromBox = fromEp?.box ?? fromFrameRect;
+      if (!fromBox) continue;
+      const fromCol = fromEp?.col ?? colOf[fromMsg.id] ?? colOf[e.to.messageId] ?? 0;
       const fromAuthor=fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);
 
@@ -2875,7 +3055,7 @@ export default function GraphView(props: GraphViewProps) {
           const toEpN=endpointBoxForNormal(targetMid); if (!toEpN) continue;
           rawEdges.push({
             drawId:e.id,edge:e,fromAuthor,
-            fromBox:fromEp.box,toBox:toEpN.box,fromCol:fromEp.col,toCol:toEpN.col,
+            fromBox,toBox:toEpN.box,fromCol,toCol:toEpN.col,
             fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
             start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
           });
@@ -2897,8 +3077,8 @@ export default function GraphView(props: GraphViewProps) {
           if (frameRect) {
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:{x:frameRect.x,y:frameRect.y,width:frameRect.width,height:frameRect.height},
-              fromCol:fromEp.col,toCol:fromEp.col,
+              fromBox,toBox:{x:frameRect.x,y:frameRect.y,width:frameRect.width,height:frameRect.height},
+              fromCol,toCol:fromCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2912,8 +3092,8 @@ export default function GraphView(props: GraphViewProps) {
           if (tagInfo) {
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:{x:tagInfo.rect.x,y:tagInfo.rect.y,width:tagInfo.rect.width,height:tagInfo.rect.height},
-              fromCol:fromEp.col,toCol:fromEp.col,
+              fromBox,toBox:{x:tagInfo.rect.x,y:tagInfo.rect.y,width:tagInfo.rect.width,height:tagInfo.rect.height},
+              fromCol,toCol:fromCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2929,11 +3109,11 @@ export default function GraphView(props: GraphViewProps) {
             // Use the column of the decorated message for proper edge routing
             const decoratedMid = targetRelEdges[0]?.to.messageId ?? "";
             const toCol = msgMap.get(decoratedMid)?.kind === "relation"
-              ? fromEp.col  // nested relation target — fall back to source col
-              : (colOf[decoratedMid] ?? fromEp.col);
+              ? fromCol  // nested relation target — fall back to source col
+              : (colOf[decoratedMid] ?? fromCol);
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:visualBox,fromCol:fromEp.col,toCol,
+              fromBox,toBox:visualBox,fromCol,toCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2951,9 +3131,9 @@ export default function GraphView(props: GraphViewProps) {
           if (visualBox) {
             rawEdges.push({
               drawId:`${e.id}__toRel__${relId}`,edge:e,fromAuthor,
-              fromBox:fromEp.box,
+              fromBox,
               toBox:{x:visualBox.x,y:visualBox.y,width:visualBox.width,height:visualBox.height},
-              fromCol:fromEp.col,toCol:fromEp.col,
+              fromCol,toCol:fromCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2977,7 +3157,7 @@ export default function GraphView(props: GraphViewProps) {
       }
 
       rawEdges.push({
-        drawId:e.id,edge:e,fromAuthor,fromBox:fromEp.box,toBox:toEp.box,fromCol:fromEp.col,toCol:toEp.col,
+        drawId:e.id,edge:e,fromAuthor,fromBox,toBox:toEp.box,fromCol,toCol:toEp.col,
         fragRectCanvas,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
         start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
       });

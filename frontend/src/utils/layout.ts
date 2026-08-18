@@ -78,7 +78,7 @@ function isCorrectionBadgeRel(relType: string): boolean {
  *
  * Priority model:
  *   1) Messages linked by groupSourceToTarget stay in the same column.
- *   2) annotation/reference/notify/reply keep source >= target + 1.
+ *   2) annotation/reference/notify keep source >= target + 1.
  *
  * When an edge's source and target are already in the same grouping component,
  * its right-of constraint is skipped as contradictory.
@@ -132,8 +132,7 @@ export function convergeGroupingAndRightConstraints(params: {
     const isRightConstraint =
       e.relationType === 'annotation' ||
       e.relationType === 'reference' ||
-      e.relationType === 'notify' ||
-      e.relationType === 'reply';
+      e.relationType === 'notify';
     if (!isRightConstraint) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     if (find(e.from.messageId) === find(e.to.messageId)) continue;
@@ -451,11 +450,12 @@ export function applyReplyLayoutAdjustments(params: {
     authorPrevLane[fromMsg.author] = bestC;
   }
 
-  // If a reply source moved right, any source that targets it via
-  // anno/ref/reply must also stay to its right.
+  // If an annotation or reference source moved right, dependent sources must
+  // also stay to its right. Reply edges intentionally do not cascade here:
+  // a later reply by the same author may return to that author's lane.
   const sourcesByTarget = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.relationType !== 'annotation' && e.relationType !== 'reference' && e.relationType !== 'reply') continue;
+    if (e.relationType !== 'annotation' && e.relationType !== 'reference') continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const arr = sourcesByTarget.get(e.to.messageId) ?? [];
     arr.push(e.from.messageId);
@@ -697,7 +697,49 @@ export function applyGroupingColumnOverride(params: {
     col,
     groupSourceToTarget,
   });
-  return { col: converged.col, maxCol: converged.maxCol, groupSourceToTarget };
+
+  // A later grouping pass may have pushed a reply source along the edge chain.
+  // Restore the author's lane after structural convergence, while preserving
+  // explicit grouping and non-reply right-side constraints.
+  const replySources = new Set<string>();
+  const replyTargetsBySource = new Map<string, number[]>();
+  for (const e of edges) {
+    if (e.relationType !== 'reply' || !normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    replySources.add(e.from.messageId);
+    const targets = replyTargetsBySource.get(e.from.messageId) ?? [];
+    targets.push(converged.col[e.to.messageId] ?? 0);
+    replyTargetsBySource.set(e.from.messageId, targets);
+  }
+  const authorColumns = new Map<string, number[]>();
+  for (const message of normals) {
+    const columns = authorColumns.get(message.author) ?? [];
+    columns.push(converged.col[message.id] ?? 0);
+    authorColumns.set(message.author, columns);
+  }
+  const authorLane = (columns: number[]): number => {
+    const counts = new Map<number, number>();
+    for (const column of columns) counts.set(column, (counts.get(column) ?? 0) + 1);
+    let best = columns[0] ?? 0;
+    for (const [column, count] of counts) {
+      if (count > (counts.get(best) ?? 0) || (count === (counts.get(best) ?? 0) && column < best)) best = column;
+    }
+    return best;
+  };
+  for (const message of normals) {
+    if (!replySources.has(message.id) || groupSourceToTarget.has(message.id)) continue;
+    const targetColumns = replyTargetsBySource.get(message.id) ?? [];
+    const forbidden = new Set(targetColumns);
+    const lane = authorLane(authorColumns.get(message.author) ?? [0]);
+    if (forbidden.has(lane)) continue;
+    let preferred = lane;
+    while (forbidden.has(preferred)) preferred++;
+    const minColumn = edges
+      .filter(e => (e.relationType === 'annotation' || e.relationType === 'reference' || e.relationType === 'notify') && e.from.messageId === message.id && normalSet.has(e.to.messageId))
+      .reduce((min, e) => Math.max(min, (converged.col[e.to.messageId] ?? 0) + 1), 0);
+    converged.col[message.id] = Math.max(preferred, minColumn);
+  }
+  const maxCol = Math.max(0, ...Object.values(converged.col));
+  return { col: converged.col, maxCol, groupSourceToTarget };
 }
 
 // ============================================================

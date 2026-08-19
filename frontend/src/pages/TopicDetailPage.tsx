@@ -5057,7 +5057,7 @@ export default function TopicDetailPage() {
       relationsRef.current,
       edgesRef.current,
     );
-    const dependencyIds = isTemporaryJoinCategory && targetMessage?.kind === 'join'
+    const dependencyIds = isSpecialTarget
       ? new Set([messageId])
       : allDependencyIds;
     const navigationFilterState = navigationVisibilityRef.current;

@@ -52,7 +52,6 @@ import {
   isValidTagLabel,
   mergeUnits,
   nextId,
-  resolveMessageCanvas,
   replyAdditionalLabel,
   secondaryRelationLabel,
   selKey,
@@ -65,6 +64,57 @@ import {
 // ========================= TopicDetailPage =========================
 
 type ViewMode = "list" | "graph";
+
+function collectNavigationDisplayDependencies(
+  messageId: string,
+  messages: DemoMessage[],
+  relations: Relation[],
+  edges: DemoEdge[],
+): Set<string> {
+  const relationById = new Map(relations.map(relation => [relation.id, relation]));
+  const dependencyIds = new Set<string>();
+  const pendingIds = [messageId];
+
+  while (pendingIds.length > 0) {
+    const currentId = pendingIds.pop()!;
+    if (dependencyIds.has(currentId)) continue;
+    dependencyIds.add(currentId);
+
+    for (const edge of edges) {
+      if (edge.relationMessageId === currentId) {
+        if (!edge.from.messageId.startsWith('anon:')) pendingIds.push(edge.from.messageId);
+        if (!edge.to.messageId.startsWith('anon:')) pendingIds.push(edge.to.messageId);
+      }
+    }
+
+    const relation = relationById.get(currentId);
+    if (relation) {
+      if (relation.sourceMessageId) pendingIds.push(relation.sourceMessageId);
+      for (const ref of relation.targetRefs ?? []) {
+        pendingIds.push(ref.kind === 'relation' ? ref.relationId : ref.messageId);
+      }
+    }
+
+    // JOIN and settlement records can affect whether the current message is
+    // included in its owning presentation, even though they do not always
+    // produce a visible edge of their own.
+    for (const candidate of relations) {
+      if (candidate.relationType?.toUpperCase() === 'JOIN' && candidate.targetRefs.some(ref =>
+        (ref.kind === 'relation' ? ref.relationId : ref.messageId) === currentId,
+      )) {
+        pendingIds.push(candidate.id);
+      }
+    }
+    for (const candidate of messages) {
+      if ((candidate.kind === 'round' || candidate.kind === 'round_result')
+        && candidate.settlementTargetId === currentId) {
+        pendingIds.push(candidate.id);
+      }
+    }
+  }
+
+  return dependencyIds;
+}
 
 type FocusSnapshot = {
   leftScroll: { top: number; left: number } | null;
@@ -516,6 +566,14 @@ export default function TopicDetailPage() {
   const messagesRef = useRef<DemoMessage[]>([]);
   messagesRef.current = messages;
   const renderedMessageIdsRef = useRef<Set<string>>(new Set());
+  const renderedRelationIdsRef = useRef<Set<string>>(new Set());
+  const navigationVisibilityRef = useRef<{
+    cleanMode: boolean;
+    cleanVisibleIds: { visibleTextIds: Set<string>; visibleRelIds: Set<string> } | null;
+    msgFilter: MessageFilterSettings;
+  }>({ cleanMode: false, cleanVisibleIds: null, msgFilter });
+  navigationVisibilityRef.current = { cleanMode, cleanVisibleIds, msgFilter };
+  const pendingScrollDependencyIdsRef = useRef<string[]>([]);
 
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
@@ -545,7 +603,9 @@ export default function TopicDetailPage() {
     if (!loading && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
       // A pending navigation may target a JOIN record itself. Do not resolve
       // it to the joined target; the JOIN card is the requested destination.
-      scrollMsgToCenter(pendingScrollMsgRef.current, { resolveTarget: false });
+      const dependencyIds = pendingScrollDependencyIdsRef.current;
+      pendingScrollDependencyIdsRef.current = [];
+      scrollMsgToCenter(pendingScrollMsgRef.current, { resolveTarget: false, dependencyIds });
       pendingScrollMsgRef.current = null;
     }
   }, [loading, messages, classifyKey, focusKey, scrollKey, viewMode]);
@@ -1507,7 +1567,7 @@ export default function TopicDetailPage() {
       messagePulseTimerRef.current = setTimeout(() => {
         setMessagePulse(null);
         messagePulseTimerRef.current = null;
-      }, 2000);
+      }, 500);
     });
   }
 
@@ -1539,19 +1599,39 @@ export default function TopicDetailPage() {
     return msgId;
   }
 
-  function scrollMsgToCenter(msgId: string, options?: { resolveTarget?: boolean }) {
+  function findMessageElements(container: HTMLElement, messageId: string): HTMLElement[] {
+    return Array.from(container.querySelectorAll('[data-msgid], [data-jump-msgids]'))
+      .filter(node => {
+        const element = node as HTMLElement;
+        const directId = element.getAttribute('data-msgid');
+        const jumpIds = element.getAttribute('data-jump-msgids')?.split(/\s+/) ?? [];
+        return directId === messageId || jumpIds.includes(messageId);
+      }) as HTMLElement[];
+  }
+
+  function scrollMsgToCenter(msgId: string, options?: { resolveTarget?: boolean; dependencyIds?: string[] }) {
     const targetId = options?.resolveTarget === false ? msgId : resolveScrollTargetMessageId(msgId);
+    const dependencyIds = options?.dependencyIds ?? [];
     pendingScrollMsgIdRef.current = targetId;
     let attempts = 0;
     const tryScroll = () => {
       attempts++;
-      if (attempts > MAX_SCROLL_ATTEMPTS) { pendingScrollMsgIdRef.current = null; return; }
+      if (attempts > MAX_SCROLL_ATTEMPTS) {
+        pendingScrollMsgIdRef.current = null;
+        pendingScrollDependencyIdsRef.current = [];
+        return;
+      }
       if (pendingScrollMsgIdRef.current !== targetId) return; // superseded by newer message
       const container = leftPanelRef.current;
       if (!container) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
-      const candidates = Array.from(container.querySelectorAll(
-        `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
-      )) as HTMLElement[];
+      const dependencyReady = dependencyIds.every(dependencyId =>
+        findMessageElements(container, dependencyId).some(element => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }),
+      );
+      if (!dependencyReady) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
+      const candidates = findMessageElements(container, targetId);
       const el = candidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? candidates[0] ?? null;
       if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const elRect = el.getBoundingClientRect();
@@ -1941,29 +2021,6 @@ export default function TopicDetailPage() {
     const dx = Math.abs(md.x - e.clientX), dy = Math.abs(md.y - e.clientY);
     const moved = dx > 6 || dy > 6;
     if (moved) { lastDragOrSelectTimeRef.current = Date.now(); undoRecentClickActionsForMessage(messageId); }
-  }
-
-  function getNavigationClassifyCanvas(messageId: string): string | null {
-    const preferredJoinId = userPreferredJoinByTarget.get(messageId);
-    const preferredJoin = preferredJoinId
-      ? relationsRef.current.find(relation =>
-          relation.id === preferredJoinId &&
-          relation.relationType?.toUpperCase() === 'JOIN' &&
-          effectiveJoinRelationIds.has(relation.id)
-        )
-      : undefined;
-    const canvasId = preferredJoin?.sourceMessageId ?? resolveMessageCanvas(messageId, relationsRef.current, rejectedContainerIds, rejectedJoinRelationIds);
-    if (!canvasId || rejectedContainerIds.has(canvasId)) return null;
-    const canvas = relationsRef.current.find(item => item.id === canvasId);
-    const canvasType = canvas?.relationType?.toUpperCase();
-    return canvasType === 'CLASSIFY' || canvasType === 'SUMMARY' ? canvasId : null;
-  }
-
-  function restoreNavigationCanvas(canvasId: string | null) {
-    classifyStackRef.current = [];
-    setClassifyRelMsgId(canvasId);
-    setClassifyKey(k => k + 1);
-    setPreviewClassifyId(null);
   }
 
   function handleMessageClick(e: React.MouseEvent, messageId: string) {
@@ -4991,37 +5048,99 @@ export default function TopicDetailPage() {
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
   const handleNavigateToMessage = useCallback((messageId: string) => {
     const targetMessage = messagesRef.current.find(message => message.id === messageId);
-    const targetRelation = relationsRef.current.find(relation => relation.id === messageId);
-    const isJoinMessage = targetMessage?.joinInfo?.targetIds?.length
-      || targetMessage?.relationType?.toUpperCase() === 'JOIN'
-      || targetRelation?.relationType?.toUpperCase() === 'JOIN';
-    const isSettlementMessage = targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result';
-    if (cleanMode && (isJoinMessage || isSettlementMessage)) {
-      clearCleanView();
+    const isSpecialTarget = targetMessage?.kind === 'join'
+      || targetMessage?.kind === 'round'
+      || targetMessage?.kind === 'round_result';
+    const allDependencyIds = collectNavigationDisplayDependencies(
+      messageId,
+      messagesRef.current,
+      relationsRef.current,
+      edgesRef.current,
+    );
+    const dependencyIds = isTemporaryJoinCategory && targetMessage?.kind === 'join'
+      ? new Set([messageId])
+      : allDependencyIds;
+    const navigationFilterState = navigationVisibilityRef.current;
+    const targetEndpointIds = new Set(Array.from(dependencyIds).filter(id => id !== messageId));
+    const isRenderedDependency = (dependencyId: string) =>
+      renderedMessageIdsRef.current.has(dependencyId)
+      || renderedRelationIdsRef.current.has(dependencyId);
+    let cleanFilteredDependencyIds = navigationFilterState.cleanMode && navigationFilterState.cleanVisibleIds
+      ? Array.from(dependencyIds).filter(dependencyId => {
+          const dependency = messagesRef.current.find(message => message.id === dependencyId);
+          if (!dependency) return false;
+          return dependency.kind === 'relation'
+            ? !navigationFilterState.cleanVisibleIds!.visibleRelIds.has(dependencyId)
+            : !navigationFilterState.cleanVisibleIds!.visibleTextIds.has(dependencyId);
+        })
+      : [];
+    let typeFilteredDependencyIds = Array.from(dependencyIds).filter(dependencyId => {
+      const dependency = messagesRef.current.find(message => message.id === dependencyId);
+      if (!dependency) return false;
+      return (navigationFilterState.msgFilter.hideJoin && dependency.kind === 'join')
+        || (navigationFilterState.msgFilter.hideSettlement
+          && (dependency.kind === 'round' || dependency.kind === 'round_result'));
+    });
+    const targetCleanFiltered = cleanFilteredDependencyIds.includes(messageId);
+    const targetTypeFiltered = typeFilteredDependencyIds.includes(messageId);
+    const canAutoClearTargetFilters = isSpecialTarget && (targetCleanFiltered || targetTypeFiltered);
+    if (canAutoClearTargetFilters) {
+      if (targetCleanFiltered) {
+        clearCleanView();
+        cleanFilteredDependencyIds = cleanFilteredDependencyIds.filter(id => id !== messageId);
+      }
+      if (targetTypeFiltered) {
+        setMsgFilter(previous => ({
+          ...previous,
+          hideJoin: targetMessage?.kind === 'join' ? false : previous.hideJoin,
+          hideSettlement: targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result'
+            ? false
+            : previous.hideSettlement,
+        }));
+        typeFilteredDependencyIds = typeFilteredDependencyIds.filter(id => id !== messageId);
+      }
     }
-    // A temporary JOIN category is a filtered view, not the message's actual
-    // canvas. Resolve navigation from the live relation ownership instead.
-    const isRenderedOnCurrentCanvas = !isTemporaryJoinCategory && renderedMessageIdsRef.current.has(messageId);
-    const navigationCanvas = isRenderedOnCurrentCanvas
-      ? classifyRelMsgId
-      : getNavigationClassifyCanvas(messageId);
+    const missingDataDependencyIds = Array.from(dependencyIds).filter(dependencyId =>
+      !messagesRef.current.some(message => message.id === dependencyId)
+      && !relationsRef.current.some(relation => relation.id === dependencyId));
+    const notRenderedDependencyIds = Array.from(dependencyIds).filter(dependencyId =>
+      dependencyId !== messageId
+      && !missingDataDependencyIds.includes(dependencyId)
+      && !isRenderedDependency(dependencyId));
+    const unavailableReasons: string[] = [];
+    if (cleanFilteredDependencyIds.length > 0) {
+      unavailableReasons.push(`清爽视图过滤了 ${cleanFilteredDependencyIds.length} 个依赖消息`);
+    }
+    if (typeFilteredDependencyIds.length > 0) {
+      unavailableReasons.push(`消息类型过滤了 ${typeFilteredDependencyIds.length} 个依赖消息`);
+    }
+    if (missingDataDependencyIds.length > 0) {
+      unavailableReasons.push(`缺少 ${missingDataDependencyIds.length} 个消息或关系数据`);
+    }
+    if (notRenderedDependencyIds.length > 0) {
+      unavailableReasons.push(`当前画布未显示 ${notRenderedDependencyIds.length} 个目标或依赖消息`);
+    }
+    if (unavailableReasons.length > 0) {
+      debugWarn('navigate', `blocked target=${messageId} clean=[${cleanFilteredDependencyIds.join(',')}] type=[${typeFilteredDependencyIds.join(',')}] missing=[${missingDataDependencyIds.join(',')}] canvas=[${notRenderedDependencyIds.join(',')}]`);
+      showAlert(`无法跳转：${unavailableReasons.join('；')}。请先调整过滤条件或切换到能显示目标消息的画布。`);
+      pendingScrollDependencyIdsRef.current = [];
+      pendingScrollMsgRef.current = null;
+      return;
+    }
     setJoinFilterTargetId(null);
     setFocusEntries([]);
     setFocusKey(k => k + 1);
-    restoreNavigationCanvas(navigationCanvas);
     // Clear candidates and select the target message as whole
     setDraftUnits([{ messageId, selection: { kind: 'whole' as const } }]);
     setSourceUnits([]);
     setTargetUnits([]);
     setLastClickedMessageId(messageId);
-    // Only use auto-classify for messages whose canvas cannot be resolved by
-    // active JOIN ownership (for example a container relation itself).
-    setAutoClassifyMsgId(navigationCanvas ? null : messageId);
     // Scroll after canvas switch; bump scrollKey so the scroll effect re-triggers even
     // when the target is already on the current canvas (no classifyKey change).
+    pendingScrollDependencyIdsRef.current = Array.from(new Set([messageId, ...targetEndpointIds]));
     pendingScrollMsgRef.current = messageId;
     setScrollKey(k => k + 1);
-  }, [classifyRelMsgId, effectiveJoinRelationIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, isTemporaryJoinCategory, cleanMode, clearCleanView]);
+  }, [classifyRelMsgId, cleanMode, msgFilter, isTemporaryJoinCategory, clearCleanView, showAlert]);
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
     e.stopPropagation();
@@ -5204,6 +5323,7 @@ export default function TopicDetailPage() {
     ? rawEdgesToRender.filter(edge => temporaryJoinViewIds.has(edge.relationMessageId))
     : rawEdgesToRender;
   const edgesToRender = computeUserFilteredEdges(temporaryEdgesToRender, messages, user?.username ?? null);
+  renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
   // Suppressed relation IDs: used only for "你已反对" visual label in list view.
   // No longer hides messages from graph view — opposed content is shown
   // with visual indicators (empty frame, preview mode, etc.) instead.

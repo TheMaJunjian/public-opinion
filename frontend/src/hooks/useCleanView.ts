@@ -166,13 +166,24 @@ export function useCleanView({ messages, edges, stakeCounts, tagCounts }: UseCle
       if (passes) visibleTextIds.add(m.id);
     }
 
-    // Step 2: 纳入两端文本都可见的关系消息
+    // Step 2: 纳入端点都可见的关系消息。
+    // 关系消息也可以引用另一条关系消息，不能只检查 visibleTextIds；
+    // 用固定点迭代把 relation -> relation 的显示依赖闭包算出来。
     const visibleRelIds = new Set<string>();
-    for (const e of edges) {
-      const fromOk = e.from.messageId.startsWith('anon:') || visibleTextIds.has(e.from.messageId);
-      const toOk = visibleTextIds.has(e.to.messageId);
-      if (fromOk && toOk) {
-        visibleRelIds.add(e.relationMessageId);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const e of edges) {
+        const endpointVisible = (messageId: string, allowAnonymous: boolean) =>
+          (allowAnonymous && messageId.startsWith('anon:'))
+          || visibleTextIds.has(messageId)
+          || visibleRelIds.has(messageId);
+        const fromOk = endpointVisible(e.from.messageId, true);
+        const toOk = endpointVisible(e.to.messageId, false);
+        if (fromOk && toOk && !visibleRelIds.has(e.relationMessageId)) {
+          visibleRelIds.add(e.relationMessageId);
+          changed = true;
+        }
       }
     }
 

@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import { GestureDirection, GesturePoint, GestureSide, ShortcutSymbol, recognizeGesture } from '../utils/gestureShortcut';
 
@@ -39,10 +40,11 @@ const shortcutActions: Record<ShortcutSymbol, string> = {
   'scroll-left': directionActions.left, 'scroll-right': directionActions.right,
   'zoom-in': '放大界面', 'zoom-out': '缩小界面',
   confirm: '确认当前可确认操作', 'open-input': '打开快捷符输入蒙版', cancel: '取消或关闭',
+  'close-input': '关闭快捷符输入蒙版',
 };
 
 const shortcutGuide: ShortcutSymbol[] = [
-  'open-input', 'confirm', 'cancel', 'zoom-in', 'zoom-out',
+  'open-input', 'close-input', 'confirm', 'cancel', 'zoom-in', 'zoom-out',
   'scroll-up', 'scroll-down', 'scroll-left', 'scroll-right',
 ];
 
@@ -111,6 +113,11 @@ function getSymbolLines(symbol: ShortcutSymbol, direction: GestureDirection, sid
   if (symbol === 'cancel') return [
     { x1: 20, y1: 52, x2: 76, y2: 12 },
   ];
+  if (symbol === 'close-input') return [
+    { x1: 78, y1: 16, x2: 18, y2: 48 },
+    { x1: 18, y1: 48, x2: 18, y2: 16 },
+    { x1: 18, y1: 16, x2: 78, y2: 48 },
+  ];
   const negative = side === 'negative';
   if (direction === 'right') return [
     { x1: 12, y1: 32, x2: 84, y2: 32 },
@@ -168,6 +175,10 @@ function ShortcutSymbolImage({
 export default function GestureShortcutManager({ onConfirm }: Props) {
   const pointsRef = useRef<GesturePoint[]>([]);
   const pointerIdRef = useRef<number | null>(null);
+  const suppressedPointerIdRef = useRef<number | null>(null);
+  const suppressClickRef = useRef(false);
+  const allowActionClickRef = useRef(false);
+  const actionDispatchingRef = useRef(false);
   const pointerCaptureTargetRef = useRef<Element | null>(null);
   const scrollTargetRef = useRef<HTMLElement | null>(null);
   const pendingPositionRef = useRef<GesturePosition | null>(null);
@@ -198,7 +209,13 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
     const action = pendingActionRef.current;
     if (!action || action.token !== actionTokenRef.current) return;
     pendingActionRef.current = null;
+    allowActionClickRef.current = true;
+    actionDispatchingRef.current = true;
     onConfirmRef.current(action.direction, action.target, action.symbol);
+    shortcutInputOpenRef.current = true;
+    setShortcutInputOpen(true);
+    actionDispatchingRef.current = false;
+    allowActionClickRef.current = false;
   }, [pendingDirection]);
 
   useEffect(() => {
@@ -231,26 +248,30 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.isPrimary === false) return;
-      if (shortcutInputOpenRef.current && !(event.target instanceof Element
-        && event.target.closest('[data-shortcut-input-mask="true"]'))) {
-        closeShortcutInput();
-        pointerIdRef.current = event.pointerId;
-        pointsRef.current = [];
-        setInputPoints([]);
+      if (actionDispatchingRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
         return;
+      }
+      if (shortcutInputOpenRef.current) {
+        const inputMask = event.target instanceof Element
+          ? event.target.closest('[data-shortcut-input-mask="true"]')
+          : null;
+        if (!inputMask) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
       }
       if (shortcutInputOpenRef.current && event.pointerType === 'mouse' && event.button !== 0) return;
       if (shortcutInputOpenRef.current) {
         setInputPoints([{ x: event.clientX, y: event.clientY }]);
       }
-      if (pendingPositionRef.current) {
+      if (!shortcutInputOpenRef.current && pendingPositionRef.current) {
         cancelCandidateRef.current = {
           pointerId: event.pointerId,
           startX: event.clientX,
           startY: event.clientY,
           position: pendingPositionRef.current,
         };
-        clearPending();
       } else {
         cancelCandidateRef.current = null;
       }
@@ -273,6 +294,10 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      if (shortcutInputOpenRef.current && event.pointerId === pointerIdRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
       if (pointerIdRef.current === null && pendingCancelOriginRef.current && pendingPositionRef.current) {
         const movement = Math.hypot(
           event.clientX - pendingCancelOriginRef.current.x,
@@ -296,6 +321,18 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      if (shortcutInputOpenRef.current && event.pointerId === pointerIdRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      if (event.pointerId === suppressedPointerIdRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        suppressedPointerIdRef.current = null;
+        pointerIdRef.current = null;
+        pointsRef.current = [];
+        return;
+      }
       if (event.pointerId !== pointerIdRef.current) return;
       const cancelCandidate = cancelCandidateRef.current;
       cancelCandidateRef.current = null;
@@ -305,7 +342,6 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       scrollTargetRef.current = null;
       pointsRef.current = [];
       if (!shortcutInputOpenRef.current) setInputPoints([]);
-        if (!shortcutInputOpenRef.current) setInputPoints([]);
       if (pointerCaptureTargetRef.current?.hasPointerCapture(event.pointerId)) {
         pointerCaptureTargetRef.current.releasePointerCapture(event.pointerId);
       }
@@ -316,6 +352,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
           event.clientY - cancelCandidate.startY,
         );
         if (movement === 0 || movement >= CANCEL_DISTANCE) {
+          clearPending();
           if (cancelledTimerRef.current !== null) window.clearTimeout(cancelledTimerRef.current);
           setCancelledPosition(cancelCandidate.position);
           cancelledTimerRef.current = window.setTimeout(() => {
@@ -330,8 +367,6 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       const match = recognizeGesture(points);
       if (!match) {
         if (shortcutInputOpenRef.current) {
-          shortcutInputOpenRef.current = false;
-          setShortcutInputOpen(false);
           setInputPoints([]);
           setShortcutFailurePosition({ x: event.clientX, y: event.clientY });
           window.setTimeout(() => setShortcutFailurePosition(null), 1400);
@@ -339,23 +374,49 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         return;
       }
       if (!shortcutInputOpenRef.current && match.symbol !== 'open-input') return;
-      if (shortcutInputOpenRef.current && match.symbol === 'open-input') return;
+      if (shortcutInputOpenRef.current && (match.symbol === 'open-input' || match.symbol === 'close-input')) {
+        if (match.symbol === 'close-input') closeShortcutInput();
+        setInputPoints([]);
+        return;
+      }
       window.getSelection()?.removeAllRanges();
-      const bounds = points.reduce((result, point) => ({
-        minX: Math.min(result.minX, point.x),
-        maxX: Math.max(result.maxX, point.x),
-        minY: Math.min(result.minY, point.y),
-        maxY: Math.max(result.maxY, point.y),
-      }), { minX: points[0].x, maxX: points[0].x, minY: points[0].y, maxY: points[0].y });
       const position = {
-        x: Math.max(72, Math.min(window.innerWidth - 72, (bounds.minX + bounds.maxX) / 2)),
-        y: Math.max(36, Math.min(window.innerHeight - 36, (bounds.minY + bounds.maxY) / 2)),
+        x: Math.max(180, Math.min(window.innerWidth - 180, points[points.length - 1].x)),
+        y: Math.max(120, Math.min(window.innerHeight - 120, points[points.length - 1].y)),
       };
       const inputWasOpen = shortcutInputOpenRef.current;
       if (inputWasOpen) {
-        shortcutInputOpenRef.current = false;
-        setShortcutInputOpen(false);
         setInputPoints([]);
+        if (cancelledTimerRef.current !== null) window.clearTimeout(cancelledTimerRef.current);
+        cancelledTimerRef.current = null;
+        setCancelledPosition(null);
+        const actionToken = actionTokenRef.current + 1;
+        actionTokenRef.current = actionToken;
+        setPendingDirection(match.direction);
+        setPendingSide(match.side);
+        setPendingSymbol(match.symbol);
+        setPendingPosition(position);
+        pendingPositionRef.current = position;
+        pendingCancelOriginRef.current = { x: points[points.length - 1].x, y: points[points.length - 1].y };
+        pendingTimerRef.current = window.setTimeout(() => {
+          if (actionToken !== actionTokenRef.current) return;
+          pendingTimerRef.current = null;
+          pendingActionRef.current = { token: actionToken, direction: match.direction, target: scrollTarget, symbol: match.symbol };
+          setPendingDirection(null);
+          setPendingSide(null);
+          setPendingSymbol(null);
+          setPendingPosition(null);
+          pendingPositionRef.current = null;
+          pendingCancelOriginRef.current = null;
+        }, CONFIRM_DELAY);
+        return;
+      }
+      if (match.symbol === 'open-input') {
+        setShortcutInputPosition(position);
+        shortcutInputOpenRef.current = true;
+        setShortcutInputOpen(true);
+        setInputPoints([]);
+        return;
       }
       if (cancelledTimerRef.current !== null) window.clearTimeout(cancelledTimerRef.current);
       cancelledTimerRef.current = null;
@@ -371,23 +432,6 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       pendingTimerRef.current = window.setTimeout(() => {
         if (actionToken !== actionTokenRef.current) return;
         pendingTimerRef.current = null;
-        if (match.symbol === 'open-input' && !inputWasOpen) {
-          setShortcutInputPosition(position);
-          shortcutInputOpenRef.current = true;
-          setShortcutInputOpen(true);
-          setPendingDirection(null);
-          setPendingSide(null);
-          setPendingSymbol(null);
-          setPendingPosition(null);
-          pendingPositionRef.current = null;
-          pendingCancelOriginRef.current = null;
-          return;
-        }
-        if (shortcutInputOpenRef.current) {
-          shortcutInputOpenRef.current = false;
-          setShortcutInputOpen(false);
-          setInputPoints([]);
-        }
         pendingActionRef.current = { token: actionToken, direction: match.direction, target: scrollTarget, symbol: match.symbol };
         setPendingDirection(null);
         setPendingSide(null);
@@ -398,36 +442,63 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       }, CONFIRM_DELAY);
     };
 
+    const onClick = (event: MouseEvent) => {
+      if (actionDispatchingRef.current || allowActionClickRef.current) {
+        allowActionClickRef.current = false;
+        return;
+      }
+      if (shortcutInputOpenRef.current && event.target instanceof Element
+        && event.target.closest('[data-shortcut-input-mask="true"]')) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (!suppressClickRef.current) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressClickRef.current = false;
+    };
+
     const onCancel = () => {
+      if (actionDispatchingRef.current) return;
+      if (shortcutInputOpenRef.current) {
+        pointerIdRef.current = null;
+        pointsRef.current = [];
+        setInputPoints([]);
+        return;
+      }
       pointerIdRef.current = null;
       scrollTargetRef.current = null;
       cancelCandidateRef.current = null;
       pointsRef.current = [];
       pointerCaptureTargetRef.current = null;
       clearPending();
+      suppressedPointerIdRef.current = null;
+      suppressClickRef.current = false;
+      allowActionClickRef.current = false;
+      actionDispatchingRef.current = false;
       shortcutInputOpenRef.current = false;
       setShortcutInputOpen(false);
       setInputPoints([]);
     };
 
     const onKeyDown = () => {
-      if (shortcutInputOpenRef.current) {
-        closeShortcutInput();
-      } else {
-        clearPending(true);
-      }
+      if (actionDispatchingRef.current) return;
+      if (!shortcutInputOpenRef.current) clearPending(true);
     };
 
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
     document.addEventListener('pointerup', onPointerUp, true);
     document.addEventListener('pointercancel', onCancel, true);
+    document.addEventListener('click', onClick, true);
     document.addEventListener('keydown', onKeyDown, true);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('pointermove', onPointerMove, { capture: true });
       document.removeEventListener('pointerup', onPointerUp, true);
       document.removeEventListener('pointercancel', onCancel, true);
+      document.removeEventListener('click', onClick, true);
       document.removeEventListener('keydown', onKeyDown, true);
       if (cancelledTimerRef.current !== null) window.clearTimeout(cancelledTimerRef.current);
       clearPending();
@@ -438,48 +509,57 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
   }, []);
 
   if (shortcutInputOpen) {
-    return (
+    return createPortal((
       <div
         role="dialog"
         aria-modal="true"
         aria-label="快捷符输入蒙版"
         style={{
-          position: 'fixed', inset: 0, zIndex: 2999,
+          position: 'fixed', inset: 0, zIndex: 2147483000,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0, 0, 0, 0.58)', pointerEvents: 'none',
-            userSelect: 'none',
+          pointerEvents: 'none', userSelect: 'none',
         }}
       >
+        <div
+          aria-hidden="true"
+          style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 2147483002 }}
+        >
           <svg
             aria-hidden="true"
             viewBox={`0 0 ${window.innerWidth} ${window.innerHeight}`}
             preserveAspectRatio="none"
-            style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+            style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
           >
             {inputPoints.length > 1 && (
-              <polyline
-                points={inputPoints.map(point => `${point.x},${point.y}`).join(' ')}
-                fill="none"
-                stroke="#67e8f9"
-                strokeWidth="6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ filter: 'drop-shadow(0 0 4px rgba(103,232,249,0.95))' }}
-              />
+              <>
+                <polyline
+                  points={inputPoints.map(point => `${point.x},${point.y}`).join(' ')}
+                  fill="none" stroke="#ffffff" strokeWidth="11" opacity="0.95"
+                  strokeLinecap="round" strokeLinejoin="round"
+                />
+                <polyline
+                  points={inputPoints.map(point => `${point.x},${point.y}`).join(' ')}
+                  fill="none" stroke="#22d3ee" strokeWidth="6"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  style={{ filter: 'drop-shadow(0 0 5px rgba(34,211,238,0.95))' }}
+                />
+              </>
             )}
           </svg>
+        </div>
         <div
           data-shortcut-input-mask="true"
           style={{
             width: 'min(360px, calc(100vw - 32px))', minHeight: 220,
             padding: '18px 20px', boxSizing: 'border-box',
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
-            background: 'rgba(20, 20, 20, 0.97)', border: '1px solid #facc15', borderRadius: 10,
+            background: 'rgba(20, 20, 20, 0.94)', border: '1px solid #facc15', borderRadius: 10,
             color: '#fff', boxShadow: '0 12px 40px rgba(0,0,0,0.5)', pointerEvents: 'auto',
             touchAction: 'none', userSelect: 'none', position: 'absolute',
             left: shortcutInputPosition?.x ?? window.innerWidth / 2,
             top: shortcutInputPosition?.y ?? window.innerHeight / 2,
             transform: 'translate(-50%, -50%)',
+            zIndex: 2147483001,
           }}
         >
           <div style={{ fontSize: 16, fontWeight: 600 }}>快捷符输入</div>
@@ -495,24 +575,73 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             }}
           >
             {shortcutGuide.map(symbol => (
-              <div key={symbol} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div key={symbol} style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}>
                 <ShortcutSymbolImage symbol={symbol} bothSides />
                 <span style={{ textAlign: 'right' }}>{shortcutActions[symbol]}</span>
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 4, color: '#fca5a5', fontSize: 12 }}>
-            蒙版外操作可关闭输入
-          </div>
         </div>
+        {pendingDirection && pendingSide && pendingSymbol && pendingPosition && (
+          <div
+            data-shortcut-input-mask="true"
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'fixed', left: pendingPosition.x, top: pendingPosition.y,
+              transform: 'translate(-50%, -50%)', zIndex: 2147483003, pointerEvents: 'none',
+              padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
+              border: '1px solid #666', color: '#fff', fontSize: 13,
+              boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
+            }}
+          >
+            <div>识别结果：</div>
+            <ShortcutSymbolImage symbol={pendingSymbol} side={pendingSide} width={96} height={64} />
+            <div>快捷操作：{shortcutActions[pendingSymbol]}</div>
+            <div style={{ marginTop: 2, color: '#cbd5e1' }}>无操作将执行</div>
+            <div style={{ color: '#fca5a5' }}>其他操作将取消</div>
+          </div>
+        )}
+        {cancelledPosition && !pendingDirection && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'fixed', left: cancelledPosition.x, top: cancelledPosition.y,
+              transform: 'translate(-50%, -50%)', zIndex: 2147483004, pointerEvents: 'none',
+              padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
+              border: '1px solid #f87171', color: '#fecaca', fontSize: 13,
+              boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
+            }}
+          >
+            快捷操作已取消
+          </div>
+        )}
+        {shortcutFailurePosition && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'fixed', left: shortcutFailurePosition.x, top: shortcutFailurePosition.y,
+              transform: 'translate(-50%, -50%)', zIndex: 2147483005, pointerEvents: 'none',
+              padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
+              border: '1px solid #f87171', color: '#fecaca', fontSize: 13,
+              boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
+            }}
+          >
+            快捷符识别失败
+          </div>
+        )}
       </div>
-    );
+    ), document.body);
   }
 
   if (!pendingDirection || !pendingSide || !pendingSymbol || !pendingPosition) {
     if (!cancelledPosition && !shortcutFailurePosition) return null;
     const statusPosition = shortcutFailurePosition ?? cancelledPosition!;
-    return (
+    return createPortal((
       <div
         role="status"
         aria-live="polite"
@@ -526,9 +655,9 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       >
         {shortcutFailurePosition ? '快捷符识别失败' : '快捷符操作已取消'}
       </div>
-    );
+    ), document.body);
   }
-  return (
+  return createPortal((
     <div
       role="status"
       aria-live="polite"
@@ -546,5 +675,5 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       <div style={{ marginTop: 2, color: '#cbd5e1' }}>无操作将执行</div>
       <div style={{ color: '#fca5a5' }}>其他操作将取消</div>
     </div>
-  );
+  ), document.body);
 }

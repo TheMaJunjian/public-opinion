@@ -96,6 +96,7 @@ export default function PromptModal({
         <div ref={footerRef} style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
           {onCancel && (
             <button
+              data-shortcut-cancel="true"
               onClick={onCancel}
               style={{
                 padding: '6px 14px',
@@ -111,6 +112,7 @@ export default function PromptModal({
             </button>
           )}
           <button
+            data-shortcut-confirm="true"
             onClick={onConfirm}
             disabled={confirmDisabled}
             style={{

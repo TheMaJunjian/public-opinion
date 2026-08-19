@@ -41,6 +41,7 @@ describe('recognizeGesture', () => {
     ['cancel', [{ x: 20, y: 80 }, { x: 50, y: 42 }, { x: 80, y: 20 }]],
     ['confirm', [{ x: 80, y: 80 }, { x: 50, y: 42 }, { x: 20, y: 20 }]],
     ['cancel', [{ x: 80, y: 20 }, { x: 50, y: 42 }, { x: 20, y: 80 }]],
+    ['close-input', [{ x: 80, y: 20 }, { x: 20, y: 80 }, { x: 20, y: 20 }, { x: 80, y: 80 }]],
     ['confirm', [{ x: 20, y: 20 }, { x: 35, y: 31 }, { x: 50, y: 42 }, { x: 65, y: 54 }, { x: 80, y: 80 }]],
     ['cancel', [{ x: 20, y: 80 }, { x: 35, y: 69 }, { x: 50, y: 58 }, { x: 65, y: 46 }, { x: 80, y: 20 }]],
   ])('recognizes %s shortcut symbols', (symbol, points) => {

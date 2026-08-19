@@ -37,7 +37,7 @@ function TutorialModalContent({ onClose }: { onClose: () => void }) {
           background: '#181818', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <div style={{ fontWeight: 600, fontSize: 16 }}>教程</div>
-          <button onClick={onClose} style={{
+          <button data-shortcut-cancel="true" onClick={onClose} style={{
             padding: '4px 10px', borderRadius: 4, fontSize: 13, cursor: 'pointer',
             background: '#333', color: '#fff', border: '1px solid #666',
           }}>✕</button>

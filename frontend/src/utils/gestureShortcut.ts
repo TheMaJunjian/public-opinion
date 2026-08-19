@@ -1,6 +1,6 @@
 export type GestureDirection = 'up' | 'down' | 'left' | 'right';
 export type GestureSide = 'negative' | 'positive';
-export type ShortcutSymbol = 'scroll-up' | 'scroll-down' | 'scroll-left' | 'scroll-right' | 'zoom-in' | 'zoom-out' | 'confirm' | 'open-input' | 'cancel';
+export type ShortcutSymbol = 'scroll-up' | 'scroll-down' | 'scroll-left' | 'scroll-right' | 'zoom-in' | 'zoom-out' | 'confirm' | 'open-input' | 'cancel' | 'close-input';
 
 export interface GesturePoint { x: number; y: number; }
 
@@ -80,6 +80,30 @@ function recognizeShapeShortcut(points: GesturePoint[], totalDistance: number): 
     (end.x - start.x) * (start.y - point.y) - (start.x - point.x) * (end.y - start.y),
   ) / directDistance));
   const isStraightDiagonal = isDiagonal && maxLineDeviation <= Math.max(8, directDistance * 0.18);
+
+  const lowerLeftIndex = points.findIndex(point => point.x <= minX + width * 0.3
+    && point.y >= minY + height * 0.65);
+  const upperLeftIndex = points.findIndex((point, index) => index > lowerLeftIndex
+    && point.x <= minX + width * 0.3
+    && point.y <= minY + height * 0.35);
+  const isOneStrokeCross = points.length >= 4 && width >= 32 && height >= 32
+    && start.x > minX + 12 && end.x > minX + 12
+    && start.y < minY + height * 0.35
+    && end.y > minY + height * 0.65
+    && lowerLeftIndex > 0
+    && upperLeftIndex > lowerLeftIndex
+    && points.slice(upperLeftIndex + 1).some(point => point.x >= minX + width * 0.65
+      && point.y >= minY + height * 0.65)
+    && directDistance / totalDistance <= 0.6;
+
+  if (isOneStrokeCross) {
+    return {
+      direction: end.y >= start.y ? 'down' : 'up',
+      side: 'negative',
+      symbol: 'close-input',
+      confidence: 0.85,
+    };
+  }
 
   if (isStraightDiagonal) {
     const isBackslash = (end.x - start.x) * (end.y - start.y) > 0;

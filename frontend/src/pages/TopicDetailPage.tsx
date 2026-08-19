@@ -1561,7 +1561,9 @@ export default function TopicDetailPage() {
         const bottom = Math.max(bounds.bottom, candidateRect.bottom);
         return new DOMRect(left, top, right - left, bottom - top);
       }, element.getBoundingClientRect());
-      const visualRoot = element.closest('[data-jump-canvas]') as HTMLElement | null;
+      const visualRoot = element.hasAttribute('data-rel-overlay')
+        ? element.closest('[data-jump-canvas]') as HTMLElement | null
+        : null;
       const visualRect = rect;
       setMessagePulse({ element, rect, visualRoot, visualRect });
       messagePulseTimerRef.current = setTimeout(() => {
@@ -1624,6 +1626,18 @@ export default function TopicDetailPage() {
       if (pendingScrollMsgIdRef.current !== targetId) return; // superseded by newer message
       const container = leftPanelRef.current;
       if (!container) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
+      const containerRect = container.getBoundingClientRect();
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const containerOutsideViewport = containerRect.bottom <= 0
+        || containerRect.top >= viewportHeight
+        || containerRect.right <= 0
+        || containerRect.left >= viewportWidth;
+      if (containerOutsideViewport) {
+        container.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        scrollRafRef.current = requestAnimationFrame(tryScroll);
+        return;
+      }
       const dependencyReady = dependencyIds.every(dependencyId =>
         findMessageElements(container, dependencyId).some(element => {
           const rect = element.getBoundingClientRect();
@@ -1640,15 +1654,33 @@ export default function TopicDetailPage() {
         return;
       }
       pendingScrollMsgIdRef.current = null;
-      const containerRect = container.getBoundingClientRect();
       const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
       const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
       container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
       container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
-      // Re-read the target after scrolling so the overlay clone uses viewport coordinates.
-      showMessagePulse(targetId, el);
-      // The left panel is the actual message viewport. Avoid scrollIntoView here:
-      // it may scroll the page or an outer ancestor instead of this panel.
+      // The left panel may itself be only partly visible in the browser viewport.
+      // Re-read after the inner scroll, then move the outer page if the target is
+      // still outside the actual viewport before creating the jump overlay.
+      requestAnimationFrame(() => {
+        if (!el.isConnected) return;
+        const currentRect = el.getBoundingClientRect();
+        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        const targetOutsideViewport = currentRect.bottom <= 0
+          || currentRect.top >= viewportHeight
+          || currentRect.right <= 0
+          || currentRect.left >= viewportWidth;
+        if (targetOutsideViewport) {
+          el.scrollIntoView({ block: 'center', inline: 'nearest' });
+          requestAnimationFrame(() => {
+            if (el.isConnected) showMessagePulse(targetId, el);
+          });
+          return;
+        }
+        showMessagePulse(targetId, el);
+      });
+      // The left panel handles the inner scroll; the target scrollIntoView above
+      // handles the outer page when the panel itself is outside the viewport.
     };
     cancelScrollRafs();
     scrollRafRef.current = requestAnimationFrame(tryScroll);

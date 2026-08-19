@@ -37,6 +37,7 @@ export function MessageJumpOverlay({
   visualRect?: DOMRect;
 }) {
   const contentLayerRef = useRef<HTMLDivElement>(null);
+  const [cloneReady, setCloneReady] = useState(false);
   const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
   const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
   const targetCenter = {
@@ -51,7 +52,6 @@ export function MessageJumpOverlay({
     const clone = source.cloneNode(true) as HTMLElement;
     const sourceRect = source.getBoundingClientRect();
     const originalVisibility = source.style.visibility;
-    source.style.visibility = 'hidden';
     const frame = document.createElement('div');
     const clipRect = visualRect ?? targetRect;
     Object.assign(frame.style, {
@@ -86,9 +86,12 @@ export function MessageJumpOverlay({
     });
     frame.appendChild(clone);
     layer.appendChild(frame);
+    source.style.visibility = 'hidden';
+    setCloneReady(true);
     return () => {
       frame.remove();
       source.style.visibility = originalVisibility;
+      setCloneReady(false);
     };
   }, [targetElement, visualRoot, targetRect, visualRect]);
 
@@ -99,8 +102,7 @@ export function MessageJumpOverlay({
         position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
         width: '100dvw', height: '100dvh', minWidth: '100vw', minHeight: '100vh',
         boxSizing: 'border-box', zIndex: 190,
-        background: 'rgba(0,0,0,0.6)',
-        animation: 'message-jump-overlay-fade 2s ease-out both',
+        background: cloneReady ? 'rgba(0,0,0,0.42)' : 'transparent',
         pointerEvents: 'none',
       }}
     >
@@ -127,11 +129,6 @@ export function MessageJumpOverlay({
         })}
       </div>
       <div ref={contentLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 2 }} />
-      <style>{`@keyframes message-jump-overlay-fade {
-        0%, 12% { opacity: 0; }
-        22%, 82% { opacity: 1; }
-        100% { opacity: 0; }
-      }`}</style>
     </div>
   ), document.body);
 }

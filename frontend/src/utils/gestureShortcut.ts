@@ -1,6 +1,6 @@
 export type GestureDirection = 'up' | 'down' | 'left' | 'right';
 export type GestureSide = 'negative' | 'positive';
-export type ShortcutSymbol = 'scroll-up' | 'scroll-down' | 'scroll-left' | 'scroll-right' | 'zoom-in' | 'zoom-out' | 'confirm' | 'cancel';
+export type ShortcutSymbol = 'scroll-up' | 'scroll-down' | 'scroll-left' | 'scroll-right' | 'zoom-in' | 'zoom-out' | 'confirm' | 'open-input' | 'cancel';
 
 export interface GesturePoint { x: number; y: number; }
 
@@ -131,7 +131,7 @@ function recognizeShapeShortcut(points: GesturePoint[], totalDistance: number): 
       && firstLeg / secondLeg >= 0.45 && secondLeg / firstLeg >= 0.45
       && isDiagonalLeg(start, pivot) && isDiagonalLeg(pivot, end)
       && pivot.x > start.x && pivot.x < end.x) {
-      return { direction: 'down', side: 'negative', symbol: 'confirm', confidence: 0.75 };
+      return { direction: 'down', side: 'negative', symbol: 'open-input', confidence: 0.75 };
     }
   }
   return null;

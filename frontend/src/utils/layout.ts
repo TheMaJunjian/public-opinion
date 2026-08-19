@@ -1024,9 +1024,10 @@ export function compactAnnoRefClusters(params: {
   colOf: Record<string, number>;
   edges: DemoEdge[];
   allFrameRects: Record<string, Rect>;
+  frameMemberIds?: Set<string>;
   canvasHeight: number;
 }): { layout: Record<string, LayoutBox>; canvasHeight: number } {
-  const { normals, colOf, edges, allFrameRects } = params;
+  const { normals, colOf, edges, allFrameRects, frameMemberIds = new Set<string>() } = params;
   const nextLayout: Record<string, LayoutBox> = {};
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
 
@@ -1045,7 +1046,9 @@ export function compactAnnoRefClusters(params: {
     const tgtIsFrame = !!allFrameRects[e.to.messageId];
     if (!tgtIsNormal && !tgtIsFrame) continue;
 
-    // Skip sources inside frames — frame internal layout takes precedence
+    // Skip sources inside frames — frame membership is authoritative even if
+    // a transient layout pass has placed the card outside the frame rect.
+    if (frameMemberIds.has(e.from.messageId)) continue;
     const srcBox = nextLayout[e.from.messageId];
     if (srcBox) {
       let insideFrame = false;

@@ -805,6 +805,12 @@ function applyFrameAvoidanceReservations(params: {
             requiredY = previous.y + previous.height + ROW_GAP;
           }
         }
+        for (const reservation of params.reservations) {
+          const rect = currentReservationRect(reservation);
+          if (current.x + current.width <= rect.x || rect.x + rect.width <= current.x) continue;
+          if (requiredY + current.height <= rect.y || requiredY >= rect.y + rect.height) continue;
+          requiredY = Math.max(requiredY, rect.y + rect.height + ROW_GAP);
+        }
         if (requiredY !== current.y) {
           const delta = requiredY - current.y;
           shiftColumnFrom(current, current.y, delta);
@@ -836,8 +842,8 @@ function applyFrameAvoidanceReservations(params: {
         const box = nextLayout[id];
         if (!box) continue;
         let nextY = Math.max(GRID_TOP, cursor);
-        // Frames are fixed obstacles for this external column. Compact upward
-        // until the card would intersect one, then continue below that frame.
+        // A frame is one opaque layout unit. Its complete rect, rather than
+        // its individual members, reserves the vertical slot for outsiders.
         for (const reservation of params.reservations) {
           const rect = currentReservationRect(reservation);
           if (x + box.width <= rect.x || rect.x + rect.width <= x) continue;
@@ -850,16 +856,15 @@ function applyFrameAvoidanceReservations(params: {
     }
   }
 
-  // Push cards that overlap each frame below it.  Process every frame, not
-  // only MERGE frames: ARRANGE/CLASSIFY/SUMMARY frames are also atomic visual
-  // units and their movement must cascade to unrelated cards below them.
+  // Treat every frame as an opaque layout unit. Only cards outside the frame
+  // are candidates for movement; members move only with their own frame.
   for (const reservation of params.reservations) {
     const rect = currentReservationRect(reservation);
     const frameBottom = rect.y + rect.height;
 
-    // Collect all horizontally overlapping cards not in this frame, sorted by
-    // their current y.  Keeping cards below the frame in the sequence makes a
-    // moved card push its own followers instead of creating a second overlap.
+    // Collect all horizontally overlapping external cards, sorted by their
+    // current y. Keeping cards below the frame in the sequence makes a moved
+    // card push its own followers instead of creating a second overlap.
     const toPush: { id: string; box: LayoutBox }[] = [];
     for (const [id, box] of Object.entries(nextLayout)) {
       if (reservation.cardIds.has(id)) continue;
@@ -2301,34 +2306,146 @@ export default function GraphView(props: GraphViewProps) {
 
   // Compact: shift anno/ref source clusters toward their targets
   const { layout: compactedLayout, canvasHeight: compactedCanvasHeight } = useMemo(
-    () => compactAnnoRefClusters({ layout: pass2Layout, normals, colOf, edges, allFrameRects: { ...baseFrameRects, ...pass1FrameRects }, canvasHeight: pass2CanvasHeight }),
-    [pass2Layout, normals, colOf, edges, baseFrameRects, pass1FrameRects, pass2CanvasHeight]
+    () => compactAnnoRefClusters({
+      layout: pass2Layout,
+      normals,
+      colOf,
+      edges,
+      allFrameRects: { ...baseFrameRects, ...pass1FrameRects },
+      frameMemberIds: new Set(frameBlocks.flatMap(frame => [...frame.cardIds])),
+      canvasHeight: pass2CanvasHeight,
+    }),
+    [pass2Layout, normals, colOf, edges, baseFrameRects, pass1FrameRects, frameBlocks, pass2CanvasHeight]
+  );
+
+  const expandFrameRectsToMembers = (sourceRects: Record<string, Rect>, currentLayout: Record<string, LayoutBox>) => {
+    const next = { ...sourceRects };
+    const normalIds = new Set(normals.map(message => message.id));
+    for (const frame of frameBlocks) {
+      const rect = next[frame.relMsgId];
+      if (!rect) continue;
+      let left = rect.x;
+      let top = rect.y;
+      let right = rect.x + rect.width;
+      let bottom = rect.y + rect.height;
+      for (const memberId of frame.cardIds) {
+        if (!normalIds.has(memberId)) continue;
+        const member = currentLayout[memberId];
+        if (!member) continue;
+        left = Math.min(left, member.x - FRAME_PAD_X);
+        top = Math.min(top, member.y - FRAME_PAD_Y);
+        right = Math.max(right, member.x + member.width + FRAME_PAD_X);
+        bottom = Math.max(bottom, member.y + member.height + FRAME_PAD_Y);
+      }
+      next[frame.relMsgId] = { x: left, y: top, width: right - left, height: bottom - top };
+    }
+    return next;
+  };
+
+  const expandedFrameRects = useMemo(
+    () => expandFrameRectsToMembers(baseFrameRects, compactedLayout),
+    [baseFrameRects, compactedLayout, frameBlocks, normals]
   );
 
   // Frame avoidance — safety net ensuring frames don't overlap with cards below
   const frameAvoidanceReservations = useMemo(
-    () => buildFrameAvoidanceReservations({ edges, layout: compactedLayout, msgMap, relationCardMsgIds, frameRects: baseFrameRects }),
-    [edges, compactedLayout, msgMap, relationCardMsgIds, baseFrameRects]
+    () => {
+      const reservations = buildFrameAvoidanceReservations({
+        edges,
+        layout: compactedLayout,
+        msgMap,
+        relationCardMsgIds,
+        frameRects: expandedFrameRects,
+      });
+      const frameMembersById = new Map(frameBlocks.map(frame => [frame.relMsgId, frame.cardIds]));
+      const normalized = reservations.map(reservation => {
+        const members = frameMembersById.get(reservation.relMsgId);
+        if (!members) return reservation;
+        return {
+          ...reservation,
+          // frameBlocks is the same authoritative membership used by the
+          // recursive layout. Do not let edge-derived membership classify an
+          // external card as protected from frame avoidance.
+          cardIds: new Set([...members].filter(id => id in compactedLayout)),
+        };
+      });
+      const reservedIds = new Set(normalized.map(reservation => reservation.relMsgId));
+      // buildFrameAvoidanceReservations intentionally understands presentation
+      // kinds, while buildFrameBlocks also supports unknown custom relation
+      // types as frames. Add those frame units here so custom frames reserve
+      // their complete rectangle for external cards as well.
+      for (const frame of frameBlocks) {
+        if (reservedIds.has(frame.relMsgId)) continue;
+        const rect = expandedFrameRects[frame.relMsgId];
+        if (!rect) continue;
+        normalized.push({
+          relMsgId: frame.relMsgId,
+          cardIds: new Set([...frame.cardIds].filter(id => id in compactedLayout)),
+          rect,
+        });
+      }
+      normalized.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+      return normalized;
+    },
+    [edges, compactedLayout, msgMap, relationCardMsgIds, expandedFrameRects, frameBlocks]
   );
   const { layout, canvasHeight } = useMemo(
-    () => applyFrameAvoidanceReservations({
-      layout: compactedLayout,
-      normals,
-      colOf,
-      reservations: frameAvoidanceReservations,
-      minCanvasHeight: compactedCanvasHeight,
-      msgMap,
-      edgesByRelMsg,
-      relationCardMsgIds,
-    }),
-    [compactedLayout, normals, colOf, frameAvoidanceReservations, compactedCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds]
+    () => {
+      // A member can grow after entering text-selection mode. Re-run the
+      // external layout after the frame rect is expanded from that member;
+      // one pass is insufficient because the expanded frame is itself the
+      // obstacle that determines the next card positions.
+      let currentLayout = compactedLayout;
+      let currentReservations = frameAvoidanceReservations;
+      let currentCanvasHeight = compactedCanvasHeight;
+      for (let pass = 0; pass < 3; pass++) {
+        const result = applyFrameAvoidanceReservations({
+          layout: currentLayout,
+          normals,
+          colOf,
+          reservations: currentReservations,
+          minCanvasHeight: currentCanvasHeight,
+          msgMap,
+          edgesByRelMsg,
+          relationCardMsgIds,
+        });
+        currentLayout = result.layout;
+        currentCanvasHeight = result.canvasHeight;
+        const settledFrameRects = expandFrameRectsToMembers(baseFrameRects, currentLayout);
+        currentReservations = buildFrameAvoidanceReservations({
+          edges,
+          layout: currentLayout,
+          msgMap,
+          relationCardMsgIds,
+          frameRects: settledFrameRects,
+        });
+        const frameMembersById = new Map(frameBlocks.map(frame => [frame.relMsgId, frame.cardIds]));
+        currentReservations = currentReservations.map(reservation => ({
+          ...reservation,
+          cardIds: new Set([...(frameMembersById.get(reservation.relMsgId) ?? reservation.cardIds)]
+            .filter(id => id in currentLayout)),
+        }));
+        for (const frame of frameBlocks) {
+          if (currentReservations.some(reservation => reservation.relMsgId === frame.relMsgId)) continue;
+          const rect = settledFrameRects[frame.relMsgId];
+          if (!rect) continue;
+          currentReservations.push({
+            relMsgId: frame.relMsgId,
+            rect,
+            cardIds: new Set([...frame.cardIds].filter(id => id in currentLayout)),
+          });
+        }
+        currentReservations.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+      }
+      return { layout: currentLayout, canvasHeight: currentCanvasHeight };
+    },
+    [compactedLayout, normals, colOf, frameAvoidanceReservations, compactedCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds, baseFrameRects, edges, frameBlocks]
   );
   
   const finalFrameRects = useMemo(() => {
-    // computeNoOverlapLayout resolves child frames before their parent frames.
-    // Preserve those atomic rectangles instead of rebuilding them from cards.
-    return { ...baseFrameRects };
-  }, [baseFrameRects]);
+    // Recompute after frame avoidance so rendering matches the protected layout.
+    return expandFrameRectsToMembers(baseFrameRects, layout);
+  }, [baseFrameRects, frameBlocks, layout, normals]);
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;
     for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + CANVAS_RIGHT_PAD);

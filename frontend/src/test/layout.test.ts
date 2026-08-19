@@ -1940,4 +1940,24 @@ describe('compactAnnoRefClusters', () => {
     expect(result.layout['m1'].y).toBe(100);
     expect(result.layout['m2'].y).toBe(300);
   });
+
+  it('does not move a frame member when its transient position is outside the frame rect', () => {
+    const normals = [makeNormal('member'), makeNormal('target')];
+    const colOf = { member: 1, target: 0 };
+    const layout = {
+      member: { x: colX(1), y: 48, width: CARD_W, height: 86 },
+      target: { x: colX(0), y: 360, width: CARD_W, height: 86 },
+    };
+    const result = compactAnnoRefClusters({
+      layout,
+      normals,
+      colOf,
+      edges: [makeEdge('e1', 'reference', 'rel-1', 'member', 'target')],
+      allFrameRects: { frame1: { x: colX(0), y: 200, width: CARD_W, height: 120 } },
+      frameMemberIds: new Set(['member']),
+      canvasHeight: 500,
+    });
+
+    expect(result.layout.member).toEqual(layout.member);
+  });
 });

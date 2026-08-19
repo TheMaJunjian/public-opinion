@@ -404,17 +404,17 @@ function getRelationBoundsFromLayout(params: {
   if (relMsg?.relationType === 'merge') {
     const headerTopPad = MERGE_CARD_H + FRAME_PAD;
     rect = {
-      x: rect.x - FRAME_PAD,
-      y: rect.y - FRAME_PAD - headerTopPad,
-      width: rect.width + FRAME_PAD * 2,
-      height: rect.height + FRAME_PAD * 2 + headerTopPad,
+      x: rect.x - FRAME_PAD_X,
+      y: rect.y - FRAME_PAD_Y - headerTopPad,
+      width: rect.width + FRAME_PAD_X * 2,
+      height: rect.height + FRAME_PAD_Y * 2 + headerTopPad,
     };
   } else if (relKind === 'arrange-frame' || relKind === 'frame-group' || relKind === 'replace-overlay') {
     rect = {
-      x: rect.x - FRAME_PAD,
-      y: rect.y - FRAME_PAD,
-      width: rect.width + FRAME_PAD * 2,
-      height: rect.height + FRAME_PAD * 2,
+      x: rect.x - FRAME_PAD_X,
+      y: rect.y - FRAME_PAD_Y,
+      width: rect.width + FRAME_PAD_X * 2,
+      height: rect.height + FRAME_PAD_Y * 2,
     };
   }
   return { rect, cardIds };
@@ -656,8 +656,9 @@ function buildFrameAvoidanceReservations(params: {
   layout: Record<string, LayoutBox>;
   msgMap: Map<string, DemoMessage>;
   relationCardMsgIds: Set<string>;
+  frameRects?: Record<string, Rect>;
 }): FrameAvoidanceReservation[] {
-  const { edges, layout, msgMap, relationCardMsgIds } = params;
+  const { edges, layout, msgMap, relationCardMsgIds, frameRects } = params;
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   for (const edge of edges) {
     const arr = edgesByRelMsg.get(edge.relationMessageId) ?? [];
@@ -719,15 +720,18 @@ function buildFrameAvoidanceReservations(params: {
     // ensures the frame left border aligns with text message cards outside the frame.
     const isMergeFrame = relEdges[0].relationType === "merge";
     const headerTopPad = isMergeFrame ? MERGE_CARD_H + FRAME_PAD : 0;
+    const layoutFrameRect = frameRects?.[relMsgId];
     reservations.push({
       relMsgId,
       cardIds,
       headerTopPad: isMergeFrame ? headerTopPad : undefined,
-      rect: {
-        x: union.x - FRAME_PAD,
-        y: union.y - FRAME_PAD - headerTopPad,
-        width: union.width + FRAME_PAD * 2,
-        height: union.height + FRAME_PAD * 2 + headerTopPad,
+      rect: layoutFrameRect ?? {
+        // Keep avoidance aligned with the rendered frame. Arrange/group frames
+        // use GRID_LEFT/GRID_TOP as their internal horizontal/vertical padding.
+        x: union.x - FRAME_PAD_X,
+        y: union.y - FRAME_PAD_Y - headerTopPad,
+        width: union.width + FRAME_PAD_X * 2,
+        height: union.height + FRAME_PAD_Y * 2 + headerTopPad,
       },
     });
   }
@@ -755,18 +759,10 @@ function applyFrameAvoidanceReservations(params: {
   // avoidance may have moved a card that also belongs to a later frame, so the
   // later frame must be checked against its updated bounds.
   function currentReservationRect(reservation: FrameAvoidanceReservation): Rect {
-    const boxes = [...reservation.cardIds]
-      .map(id => nextLayout[id])
-      .filter((box): box is LayoutBox => Boolean(box));
-    const union = unionBoxes(boxes);
-    if (!union) return reservation.rect;
-    const headerTopPad = reservation.headerTopPad ?? 0;
-    return {
-      x: union.x - FRAME_PAD,
-      y: union.y - FRAME_PAD - headerTopPad,
-      width: union.width + FRAME_PAD * 2,
-      height: union.height + FRAME_PAD * 2 + headerTopPad,
-    };
+    // Frame rectangles are atomic layout units. Their member cards are
+    // protected from movement, so rebuilding the rect from cards would only
+    // reintroduce coordinate drift for nested frames.
+    return reservation.rect;
   }
 
   const protectedCardIds = new Set<string>();
@@ -2311,8 +2307,8 @@ export default function GraphView(props: GraphViewProps) {
 
   // Frame avoidance — safety net ensuring frames don't overlap with cards below
   const frameAvoidanceReservations = useMemo(
-    () => buildFrameAvoidanceReservations({ edges, layout: compactedLayout, msgMap, relationCardMsgIds }),
-    [edges, compactedLayout, msgMap, relationCardMsgIds]
+    () => buildFrameAvoidanceReservations({ edges, layout: compactedLayout, msgMap, relationCardMsgIds, frameRects: baseFrameRects }),
+    [edges, compactedLayout, msgMap, relationCardMsgIds, baseFrameRects]
   );
   const { layout, canvasHeight } = useMemo(
     () => applyFrameAvoidanceReservations({
@@ -2329,50 +2325,10 @@ export default function GraphView(props: GraphViewProps) {
   );
   
   const finalFrameRects = useMemo(() => {
-    const result: Record<string, Rect> = {};
-    for (const fb of frameBlocks) {
-      // Recompute frame rect from current card positions so it stays tight
-      // even after upstream compaction / push-down moves cards.
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-      const collectBounds = (cardId: string) => {
-        const box = layout[cardId];
-        if (box) {
-          minX = Math.min(minX, box.x);
-          minY = Math.min(minY, box.y);
-          maxX = Math.max(maxX, box.x + box.width);
-          maxY = Math.max(maxY, box.y + box.height);
-        }
-        // Also encompass child frame rects
-        const childRect = result[cardId];
-        if (childRect) {
-          minX = Math.min(minX, childRect.x);
-          minY = Math.min(minY, childRect.y);
-          maxX = Math.max(maxX, childRect.x + childRect.width);
-          maxY = Math.max(maxY, childRect.y + childRect.height);
-        }
-      };
-
-      for (const cid of fb.cardIds) {
-        collectBounds(cid);
-      }
-
-      if (!isFinite(minX)) {
-        result[fb.relMsgId] = { ...baseFrameRects[fb.relMsgId] };
-        continue;
-      }
-
-      const isMerge = fb.isMerge;
-      const mergeHeaderPad = isMerge ? MERGE_CARD_H : 0;
-      result[fb.relMsgId] = {
-        x: minX - FRAME_PAD_X,
-        y: minY - FRAME_PAD_Y - mergeHeaderPad,
-        width: maxX - minX + FRAME_PAD_X * 2,
-        height: maxY - minY + FRAME_PAD_Y * 2 + mergeHeaderPad,
-      };
-    }
-    return result;
-  }, [baseFrameRects, layout, frameBlocks]);
+    // computeNoOverlapLayout resolves child frames before their parent frames.
+    // Preserve those atomic rectangles instead of rebuilding them from cards.
+    return { ...baseFrameRects };
+  }, [baseFrameRects]);
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;
     for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + CANVAS_RIGHT_PAD);

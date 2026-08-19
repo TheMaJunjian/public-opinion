@@ -651,7 +651,7 @@ export function applyMergeCanvasReservations(params: {
   return { layout: nextLayout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
 }
 
-function buildFrameAvoidanceReservations(params: {
+export function buildFrameAvoidanceReservations(params: {
   edges: DemoEdge[];
   layout: Record<string, LayoutBox>;
   msgMap: Map<string, DemoMessage>;
@@ -1515,6 +1515,25 @@ function buildFrameBlocks(params: {
   return blocks;
 }
 
+function buildFrameLayoutUnits(params: {
+  frameBlocks: FrameBlock[];
+  layout: Record<string, LayoutBox>;
+  frameRects: Record<string, Rect>;
+}): FrameAvoidanceReservation[] {
+  const units: FrameAvoidanceReservation[] = [];
+  for (const frame of params.frameBlocks) {
+    const rect = params.frameRects[frame.relMsgId];
+    if (!rect) continue;
+    units.push({
+      relMsgId: frame.relMsgId,
+      rect,
+      cardIds: new Set([...frame.cardIds].filter(id => id in params.layout)),
+      ...(frame.isMerge ? { headerTopPad: MERGE_CARD_H + FRAME_PAD } : {}),
+    });
+  }
+  return units.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+}
+
 function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; measuredWidths: Record<string, number>; maxCol: number;
   correctedTargetIds?: Set<string>;
@@ -2349,45 +2368,8 @@ export default function GraphView(props: GraphViewProps) {
 
   // Frame avoidance — safety net ensuring frames don't overlap with cards below
   const frameAvoidanceReservations = useMemo(
-    () => {
-      const reservations = buildFrameAvoidanceReservations({
-        edges,
-        layout: compactedLayout,
-        msgMap,
-        relationCardMsgIds,
-        frameRects: expandedFrameRects,
-      });
-      const frameMembersById = new Map(frameBlocks.map(frame => [frame.relMsgId, frame.cardIds]));
-      const normalized = reservations.map(reservation => {
-        const members = frameMembersById.get(reservation.relMsgId);
-        if (!members) return reservation;
-        return {
-          ...reservation,
-          // frameBlocks is the same authoritative membership used by the
-          // recursive layout. Do not let edge-derived membership classify an
-          // external card as protected from frame avoidance.
-          cardIds: new Set([...members].filter(id => id in compactedLayout)),
-        };
-      });
-      const reservedIds = new Set(normalized.map(reservation => reservation.relMsgId));
-      // buildFrameAvoidanceReservations intentionally understands presentation
-      // kinds, while buildFrameBlocks also supports unknown custom relation
-      // types as frames. Add those frame units here so custom frames reserve
-      // their complete rectangle for external cards as well.
-      for (const frame of frameBlocks) {
-        if (reservedIds.has(frame.relMsgId)) continue;
-        const rect = expandedFrameRects[frame.relMsgId];
-        if (!rect) continue;
-        normalized.push({
-          relMsgId: frame.relMsgId,
-          cardIds: new Set([...frame.cardIds].filter(id => id in compactedLayout)),
-          rect,
-        });
-      }
-      normalized.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
-      return normalized;
-    },
-    [edges, compactedLayout, msgMap, relationCardMsgIds, expandedFrameRects, frameBlocks]
+    () => buildFrameLayoutUnits({ frameBlocks, layout: compactedLayout, frameRects: expandedFrameRects }),
+    [frameBlocks, compactedLayout, expandedFrameRects]
   );
   const { layout, canvasHeight } = useMemo(
     () => {
@@ -2412,30 +2394,11 @@ export default function GraphView(props: GraphViewProps) {
         currentLayout = result.layout;
         currentCanvasHeight = result.canvasHeight;
         const settledFrameRects = expandFrameRectsToMembers(baseFrameRects, currentLayout);
-        currentReservations = buildFrameAvoidanceReservations({
-          edges,
+        currentReservations = buildFrameLayoutUnits({
+          frameBlocks,
           layout: currentLayout,
-          msgMap,
-          relationCardMsgIds,
           frameRects: settledFrameRects,
         });
-        const frameMembersById = new Map(frameBlocks.map(frame => [frame.relMsgId, frame.cardIds]));
-        currentReservations = currentReservations.map(reservation => ({
-          ...reservation,
-          cardIds: new Set([...(frameMembersById.get(reservation.relMsgId) ?? reservation.cardIds)]
-            .filter(id => id in currentLayout)),
-        }));
-        for (const frame of frameBlocks) {
-          if (currentReservations.some(reservation => reservation.relMsgId === frame.relMsgId)) continue;
-          const rect = settledFrameRects[frame.relMsgId];
-          if (!rect) continue;
-          currentReservations.push({
-            relMsgId: frame.relMsgId,
-            rect,
-            cardIds: new Set([...frame.cardIds].filter(id => id in currentLayout)),
-          });
-        }
-        currentReservations.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
       }
       return { layout: currentLayout, canvasHeight: currentCanvasHeight };
     },

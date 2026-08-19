@@ -1868,7 +1868,11 @@ export default function TopicDetailPage() {
     if (!isDedup) {
       const rt = backendRel.relationType?.toUpperCase();
       const isGovOps = rt === 'PROPOSAL' || rt === 'CODE_CHANGE' || rt === 'OPERATIONS';
-      if (isInsideClassify && currentClassifyRelMsgId) {
+      const isDecoration = new Set([
+        'AGREE', 'DISAGREE', 'TAG', 'READ', 'UNREAD', 'ANNOTATION', 'REFERENCE',
+        'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK',
+      ]).has(rt ?? '');
+      if (isInsideClassify && currentClassifyRelMsgId && !isDecoration) {
         await attachMessageToCurrentClassify(isGovOps ? backendRel.id : backendRel.id);
       }
     }

@@ -20,6 +20,11 @@ interface TopicRightPanelProps {
 
   // Mode
   isPreviewMode: boolean;
+  isViewerMode?: boolean;
+  viewerUsers?: User[];
+  viewerUsername?: string;
+  onViewerUsernameChange?: (username: string) => void;
+  onExitViewer?: () => void;
 
   // Draft
   draftUnits: any[];
@@ -139,6 +144,32 @@ interface TopicRightPanelProps {
 export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
   const navigate = useNavigate();
+  if (p.isViewerMode) {
+    return (
+      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0, boxSizing: "border-box" }}>
+        <div style={{ border: "1px solid #444", borderRadius: 6, padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontWeight: 600, color: "#e2e8f0" }}>只读阅览</div>
+          <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.6 }}>当前为导出数据阅览模式，不支持发送消息、建立关系或结算操作。</div>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
+            当前用户
+            <input
+              list="viewer-user-options"
+              placeholder="输入用户名"
+              value={p.viewerUsername ?? ""}
+              onChange={event => p.onViewerUsernameChange?.(event.target.value)}
+              style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#eee", fontSize: 12 }}
+            />
+            <datalist id="viewer-user-options">
+              {(p.viewerUsers ?? []).map(viewer => <option key={viewer.id} value={viewer.username} />)}
+            </datalist>
+          </label>
+          <button onClick={p.onExitViewer} style={{ padding: "5px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>
+            退出阅览
+          </button>
+        </div>
+      </div>
+    );
+  }
   const showContributionControls = p.singleButtonEnabled && !p.isPreviewMode;
 
   return (

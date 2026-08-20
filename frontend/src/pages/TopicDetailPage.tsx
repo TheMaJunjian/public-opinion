@@ -8,7 +8,7 @@ import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType, MessageKind,
 } from '../utils/modelBridge';
-import type { Topic, TargetRef, Relation, MessageStakes } from '../types';
+import type { Topic, TargetRef, Relation, MessageStakes, User } from '../types';
 import { getPresentationSpec, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 import ErrorBoundary from '../components/ErrorBoundary';
@@ -153,11 +153,13 @@ export default function TopicDetailPage() {
   const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
   const [messageBettorCounts, setMessageBettorCounts] = useState<Record<string, number>>({});
   const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
-  const correctionVersions = useMemo(() => {
-    const invalidCorrectionIds = computeUserSuppressedRelIds(edges, messages, user?.username ?? null);
-    return computeCorrectionVersions(messages, edges, invalidCorrectionIds);
-  }, [messages, edges, user?.username]);
   const [isPreloaded, setIsPreloaded] = useState(false);
+  const [viewerUser, setViewerUser] = useState<User | null>(null);
+  const displayUser = isPreloaded ? viewerUser : user;
+  const correctionVersions = useMemo(() => {
+    const invalidCorrectionIds = computeUserSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    return computeCorrectionVersions(messages, edges, invalidCorrectionIds);
+  }, [messages, edges, displayUser?.username]);
 
   // ── Preloaded data (from export viewer) ──
   const location = useLocation();
@@ -217,6 +219,22 @@ export default function TopicDetailPage() {
     setLoading(false);
     setIsPreloaded(true);
   }, [preloadedData]);
+
+  const viewerUsers = useMemo(() => {
+    if (!isPreloaded) return [];
+    const usernames = new Set<string>();
+    messages.forEach(message => { if (message.author) usernames.add(message.author); });
+    relations.forEach(relation => { if (relation.createdBy?.username) usernames.add(relation.createdBy.username); });
+    return [...usernames].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map(username => ({ id: `viewer:${username}`, username, createdAt: '' }));
+  }, [isPreloaded, messages, relations]);
+
+  useEffect(() => {
+    if (!isPreloaded || viewerUsers.length === 0) return;
+    setViewerUser(current => current && viewerUsers.some(candidate => candidate.username === current.username)
+      ? current
+      : viewerUsers[0]);
+  }, [isPreloaded, viewerUsers]);
 
   useEffect(() => {
     if (!topicId || preloadedData) return;
@@ -1176,8 +1194,8 @@ export default function TopicDetailPage() {
   }, [edges, msgMap]);
 
   const userPreferredJoinByTarget = useMemo(
-    () => getUserPreferredJoinByTarget(relations, computeUserActiveStanceRelIds(edges, messages, user?.username ?? null), user?.username ?? null),
-    [edges, messages, relations, user?.username]
+    () => getUserPreferredJoinByTarget(relations, computeUserActiveStanceRelIds(edges, messages, displayUser?.username ?? null), displayUser?.username ?? null),
+    [edges, messages, relations, displayUser?.username]
   );
   const effectiveJoinRelationIds = useMemo(
     () => getEffectiveJoinRelationIds(relations, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget),
@@ -1478,7 +1496,6 @@ export default function TopicDetailPage() {
   const MIN_LEFT_FLEX = 0.6;
   const MAX_LEFT_FLEX = TOTAL_FLEX - MIN_LEFT_FLEX;
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
-  const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const MIN_RIGHT_PX = 280;
   const MAX_RIGHT_PX = 500;
   const BASE_WIDTH = 1024;
@@ -5373,7 +5390,7 @@ export default function TopicDetailPage() {
   const filteredEdgesToRender = computeUserFilteredEdges(
     temporaryEdgesToRender,
     messages,
-    user?.username ?? null,
+    displayUser?.username ?? null,
     edges,
   );
   // The linear list keeps the annotation and its DISAGREE relation so the
@@ -5381,7 +5398,7 @@ export default function TopicDetailPage() {
   // uses the suppressed relation set as a visual projection only.
   const edgesToRender = viewMode === "list" ? temporaryEdgesToRender : filteredEdgesToRender;
   renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
-  const suppressedRelIds = computeUserSuppressedRelIds(edges, messages, user?.username ?? null);
+  const suppressedRelIds = computeUserSuppressedRelIds(edges, messages, displayUser?.username ?? null);
   const graphMessagesFinal = messagesToRenderFiltered
     .filter(message => !suppressedRelIds.has(message.id))
     .map(message => {
@@ -5411,7 +5428,7 @@ export default function TopicDetailPage() {
 
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
-  const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
+  const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRenderClean, messages, displayUser?.username ?? null);
   // Precomputed set of relation message IDs that are active stances.
   const activeStanceRelIds = new Set([...activeStanceMap.values()].map(v => v.relMsgId));
   // Set of target message IDs that have an active stance against them.
@@ -5423,39 +5440,22 @@ export default function TopicDetailPage() {
     return m;
   })();
   // Overridden stances: the user's previous stance messages that are no longer active.
-  const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null);
   const isOwner = user && topic && (topic as any).author?.id === user.id;
 
   return (
     <>
     <ErrorBoundary>
     <div style={{ minHeight: "100%", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
-      <div style={{ padding: headerCollapsed ? "4px 16px" : "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
+      <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            onClick={() => setHeaderCollapsed(c => !c)}
-            title={headerCollapsed ? "展开工具栏" : "折叠工具栏"}
-            style={{ padding: "2px 6px", borderRadius: 4, border: "1px solid #555", background: "#2a2a2a", color: "#999", fontSize: 12, cursor: "pointer", lineHeight: 1 }}
-          >
-            {headerCollapsed ? "▼" : "▲"}
-          </button>
-          {headerCollapsed ? (
-            <span style={{ fontSize: 12, color: "#888" }}>{topic?.title ?? '公论'}</span>
-          ) : (
-            <>
-          {isPreloaded ? (
-            <button onClick={() => navigate('/')} style={{ padding: "4px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>
-              退出阅览
-            </button>
-          ) : (isOwner && <>
+          {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
               {topic?.status === 'ARCHIVED' ? '重新开放' : '归档'}
             </button>
-          </>)}
-            </>
-          )}
+          </>}
         </div>
-        {!headerCollapsed && !isPreloaded && (
+        {!isPreloaded && (
         <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
@@ -5947,17 +5947,19 @@ export default function TopicDetailPage() {
         </div>
 
 
-        {isPreloaded ? (
-          <div style={{ padding: "16px", color: "#94a3b8", fontSize: 13, borderLeft: "1px solid #2a2a2a", minWidth: 280, flex: '0 0 auto' }}>
-            <div style={{ fontWeight: 600, marginBottom: 8, color: "#e2e8f0" }}>📋 只读阅览</div>
-            <div style={{ lineHeight: 1.6 }}>当前为导出数据阅览模式，不支持发送消息、建立关系或结算操作。</div>
-          </div>
-        ) : (
         <TopicRightPanel
           rightPanelRef={rightPanelRef}
           TOTAL_FLEX={TOTAL_FLEX}
           leftFlex={leftFlex}
           isPreviewMode={isPreviewMode}
+          isViewerMode={isPreloaded}
+          viewerUsers={viewerUsers}
+          viewerUsername={viewerUser?.username}
+          onViewerUsernameChange={username => {
+            const normalized = username.trim();
+            setViewerUser(normalized ? { id: `viewer:${normalized}`, username: normalized, createdAt: '' } : null);
+          }}
+          onExitViewer={() => navigate('/')}
           draftUnits={draftUnits}
           draftGroups={draftGroups}
           activeTextSelectId={activeTextSelectId}
@@ -6044,7 +6046,6 @@ export default function TopicDetailPage() {
           topicId={topicId!}
           debugRects={debugRects}
         />
-        )}
       </div>
     </div>
     </ErrorBoundary>

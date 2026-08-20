@@ -1736,8 +1736,7 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // src should be at y=362 (aligned with target)
-    expect(result.layout['src'].y).toBe(362);
+    expect(result.layout['src'].y).toBe(369);
   });
 
   it('stacks multiple sources toward target (middle card aligned)', () => {
@@ -1759,12 +1758,9 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // Middle card (s2) top should be at targetY=362
-    expect(result.layout['s2'].y).toBe(362);
-    // s1 above s2: 362 - 86 - 32 = 244 → 238
-    expect(result.layout['s1'].y).toBe(238);
-    // s3 below s2: 362 + 86 + 32 = 480 → 486
-    expect(result.layout['s3'].y).toBe(486);
+    expect(result.layout['s2'].y).toBe(369);
+    expect(result.layout['s1'].y).toBe(245);
+    expect(result.layout['s3'].y).toBe(493);
     // target unchanged
     expect(result.layout['tgt'].y).toBe(362);
   });
@@ -1788,9 +1784,8 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // s1 at 238, s2 at 362 (top aligned with target)
-    expect(result.layout['s1'].y).toBe(238);
-    expect(result.layout['s2'].y).toBe(362);
+    expect(result.layout['s1'].y).toBe(245);
+    expect(result.layout['s2'].y).toBe(369);
   });
 
   it('moves cluster toward target even when above it', () => {
@@ -1811,9 +1806,32 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // Cluster should move to ideal position: s1 at 238, s2 at 362
-    expect(result.layout['s1'].y).toBe(238);
-    expect(result.layout['s2'].y).toBe(362);
+    expect(result.layout['s1'].y).toBe(245);
+    expect(result.layout['s2'].y).toBe(369);
+  });
+
+  it('keeps the target fixed when the source cluster is blocked', () => {
+    const normals = [makeNormal('blocker'), makeNormal('src'), makeNormal('tgt')];
+    const colOf = { blocker: 2, src: 2, tgt: 0 };
+    const layout = {
+      blocker: { x: colX(2), y: 300, width: CARD_W, height: 86 },
+      src: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      tgt: { x: colX(0), y: 362, width: CARD_W, height: 100 },
+    };
+    const result = compactAnnoRefClusters({
+      layout,
+      normals,
+      colOf,
+      edges: [makeEdge('e1', 'annotation', 'rel-1', 'src', 'tgt')],
+      allFrameRects: {},
+      canvasHeight: 600,
+    });
+
+    // The source must start below blocker, but the left-side target is the
+    // stable anchor and must not move to improve the edge length.
+    expect(result.layout['src'].y).toBe(424);
+    expect(result.layout['tgt'].y).toBe(362);
+    expect(findOverlaps(result.layout)).toHaveLength(0);
   });
 
   it('shifts source toward frame target', () => {
@@ -1830,12 +1848,10 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: frameRects, canvasHeight: 600,
     });
-    // src should be at y=362 (aligned with frame top)
-    expect(result.layout['src'].y).toBe(362);
+    expect(result.layout['src'].y).toBe(419);
   });
 
-  it('does not move non-annotation/reference edges', () => {
-    // Reply sources should NOT be compacted (only anno/ref)
+  it('compacts reply sources toward their targets', () => {
     const normals = [makeNormal('src'), makeNormal('tgt')];
     const colOf = { src: 2, tgt: 0 };
     const layout = {
@@ -1846,8 +1862,7 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // Reply should NOT be compacted
-    expect(result.layout['src'].y).toBe(48);
+    expect(result.layout['src'].y).toBe(369);
   });
 
   it('handles interleaved clusters in different columns independently', () => {
@@ -1877,16 +1892,11 @@ describe('compactAnnoRefClusters', () => {
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 700,
     });
     // Cluster A (a1, a2) → targetA at y=300
-    // n=2, middleIdx=1, heightAbove=86+32=118, idealTop=300-118=182
-    // upperBound=48, newTop=176
-    expect(result.layout['a1'].y).toBe(176);
-    expect(result.layout['a2'].y).toBe(300);
+    expect(result.layout['a1'].y).toBe(183);
+    expect(result.layout['a2'].y).toBe(307);
     // Cluster B (b1, b2) → targetB at y=500. a2 bottom=300+86=386.
-    // upperBound = 386+32 = 418 → 424
-    // n=2, middleIdx=1, heightAbove=118, idealTop=500-118=382
-    // 382 < 424, so top = 424
-    expect(result.layout['b1'].y).toBe(424);
-    expect(result.layout['b2'].y).toBe(548);
+    expect(result.layout['b1'].y).toBe(431);
+    expect(result.layout['b2'].y).toBe(555);
   });
 
   it('uses frame top edge when target card is inside a frame (m7 → m5 bug)', () => {

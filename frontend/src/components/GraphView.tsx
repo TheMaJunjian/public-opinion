@@ -53,7 +53,7 @@ const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tag
 // Frame constants (shared by arrange, classify, merge, summary frames)
 // FRAME_PAD is imported from ../utils/layout
 const FRAME_PAD_X = GRID_LEFT;  // 18 — horizontal padding inside frame
-const FRAME_PAD_Y = GRID_TOP;   // 48 — vertical padding inside frame
+const FRAME_PAD_Y = FRAME_PAD;  // 16 — keep category content close to its frame header
 const FRAME_RADIUS = 8; // border-radius of group frames
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
@@ -770,92 +770,6 @@ function applyFrameAvoidanceReservations(params: {
     for (const id of reservation.cardIds) protectedCardIds.add(id);
   }
 
-  // Re-check every unprotected card after each upstream movement. This keeps
-  // the cascade live instead of waiting until all frame reservations have run.
-  function resolveGlobalCardCollisions() {
-    const createdAt = (id: string) => {
-      const value = new Date(params.msgMap.get(id)?.createdAt ?? 0).getTime();
-      return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
-    };
-    const shiftColumnFrom = (anchor: LayoutBox, fromY: number, delta: number) => {
-      if (delta <= 0) return;
-      for (const [id, box] of Object.entries(nextLayout)) {
-        if (protectedCardIds.has(id)) continue;
-        // Layout columns share the same x coordinate. Keep the whole affected
-        // column segment together instead of distorting individual card gaps.
-        if (box.x !== anchor.x || box.y < fromY) continue;
-        nextLayout[id] = { ...box, y: box.y + delta };
-      }
-    };
-
-    for (let pass = 0; pass < 100; pass++) {
-      let changed = false;
-      const cards = Object.entries(nextLayout)
-        .filter(([id]) => !protectedCardIds.has(id))
-        .sort(([aId, a], [bId, b]) =>
-          a.x - b.x || createdAt(aId) - createdAt(bId) || a.y - b.y
-        );
-      for (let i = 0; i < cards.length; i++) {
-        const [, current] = cards[i];
-        let requiredY = current.y;
-        for (let j = 0; j < i; j++) {
-          const [, previous] = cards[j];
-          if (current.x + current.width <= previous.x || previous.x + previous.width <= current.x) continue;
-          if (requiredY < previous.y + previous.height + ROW_GAP) {
-            requiredY = previous.y + previous.height + ROW_GAP;
-          }
-        }
-        for (const reservation of params.reservations) {
-          const rect = currentReservationRect(reservation);
-          if (current.x + current.width <= rect.x || rect.x + rect.width <= current.x) continue;
-          if (requiredY + current.height <= rect.y || requiredY >= rect.y + rect.height) continue;
-          requiredY = Math.max(requiredY, rect.y + rect.height + ROW_GAP);
-        }
-        if (requiredY !== current.y) {
-          const delta = requiredY - current.y;
-          shiftColumnFrom(current, current.y, delta);
-          const id = cards[i][0];
-          cards[i] = [id, nextLayout[id]];
-          changed = true;
-        }
-      }
-      if (!changed) break;
-    }
-  }
-
-  function compactUnprotectedColumns() {
-    const createdAt = (id: string) => {
-      const value = new Date(params.msgMap.get(id)?.createdAt ?? 0).getTime();
-      return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
-    };
-    const columns = new Map<number, string[]>();
-    for (const [id, box] of Object.entries(nextLayout)) {
-      if (protectedCardIds.has(id)) continue;
-      const ids = columns.get(box.x) ?? [];
-      ids.push(id);
-      columns.set(box.x, ids);
-    }
-    for (const [x, ids] of columns) {
-      ids.sort((a, b) => createdAt(a) - createdAt(b) || (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
-      let cursor = GRID_TOP;
-      for (const id of ids) {
-        const box = nextLayout[id];
-        if (!box) continue;
-        let nextY = Math.max(GRID_TOP, cursor);
-        // A frame is one opaque layout unit. Its complete rect, rather than
-        // its individual members, reserves the vertical slot for outsiders.
-        for (const reservation of params.reservations) {
-          const rect = currentReservationRect(reservation);
-          if (x + box.width <= rect.x || rect.x + rect.width <= x) continue;
-          if (nextY + box.height <= rect.y || nextY >= rect.y + rect.height) continue;
-          nextY = rect.y + rect.height + ROW_GAP;
-        }
-        nextLayout[id] = { ...box, y: nextY };
-        cursor = nextY + box.height + ROW_GAP;
-      }
-    }
-  }
-
   // Treat every frame as an opaque layout unit. Only cards outside the frame
   // are candidates for movement; members move only with their own frame.
   for (const reservation of params.reservations) {
@@ -881,13 +795,11 @@ function applyFrameAvoidanceReservations(params: {
       pushY = nextY + box.height + ROW_GAP;
     }
 
-    resolveGlobalCardCollisions();
   }
 
-  // First compact gaps created by one-way frame avoidance, then re-run the
-  // downward cascade because compaction may meet another card or frame.
-  compactUnprotectedColumns();
-  resolveGlobalCardCollisions();
+  // Frame avoidance may leave intentional whitespace. Do not rebuild columns
+  // or run a global chronological cascade here: both operations destroy the
+  // shorter directed-edge placement computed earlier.
 
   let maxBottom = GRID_TOP;
   for (const box of Object.values(nextLayout)) maxBottom = Math.max(maxBottom, box.y + box.height);
@@ -1608,6 +1520,7 @@ function computeNoOverlapLayout(params: {
       if (m) { frameCards.push(m); items.push({ kind: 'card', msg: m }); }
     }
     const isMerge = fb.isMerge;
+    const isHorizontal = !isMerge && fb.targetLayout === 'single-row';
     // Merge: normalize global columns. Collect columns from child frame cards
     // so the normalization accounts for the full column span of the merge content.
     const childFrameCols: number[] = [];
@@ -1620,7 +1533,7 @@ function computeNoOverlapLayout(params: {
         }
       }
     }
-    const localColOf = isMerge ? computeMergeLocalColumns(frameCards, childFrameCols) : {};
+    const localColOf = !isHorizontal ? computeMergeLocalColumns(frameCards, childFrameCols) : {};
     for (const childId of fb.childRelMsgIds) {
       const child = frameById.get(childId);
       if (child) items.push({ kind: 'childFrame', child });
@@ -1633,7 +1546,6 @@ function computeNoOverlapLayout(params: {
       return ta - tb;
     });
 
-    const isHorizontal = !isMerge && fb.targetLayout === 'single-row';
     const mergeHeaderPad = isMerge ? MERGE_CARD_H : 0; // merge card header height
     const contentX = frameX + FRAME_PAD_X;
     const contentY = frameY + FRAME_PAD_Y + mergeHeaderPad;
@@ -1657,7 +1569,7 @@ function computeNoOverlapLayout(params: {
         const m = item.msg;
         const h = cardHeight(m.id);
         const w = cardWidth(m.id);
-        if (isMerge) {
+        if (!isHorizontal) {
           const col = localColOf[m.id] ?? 0;
           const curY = colYCursor.get(col) ?? contentY;
           layout[m.id] = { x: contentX + colX(col) - colX(0), y: curY, width: w, height: h };
@@ -2347,14 +2259,23 @@ export default function GraphView(props: GraphViewProps) {
       let top = rect.y;
       let right = rect.x + rect.width;
       let bottom = rect.y + rect.height;
+      let contentTop = Infinity;
       for (const memberId of frame.cardIds) {
         if (!normalIds.has(memberId)) continue;
         const member = currentLayout[memberId];
         if (!member) continue;
+        contentTop = Math.min(contentTop, member.y);
         left = Math.min(left, member.x - FRAME_PAD_X);
-        top = Math.min(top, member.y - FRAME_PAD_Y);
         right = Math.max(right, member.x + member.width + FRAME_PAD_X);
         bottom = Math.max(bottom, member.y + member.height + FRAME_PAD_Y);
+      }
+      for (const childId of frame.childRelMsgIds) {
+        const childRect = next[childId];
+        if (childRect) contentTop = Math.min(contentTop, childRect.y);
+      }
+      if (contentTop !== Infinity) {
+        const headerPad = frame.isMerge ? MERGE_CARD_H : 0;
+        top = Math.max(top, contentTop - FRAME_PAD_Y - headerPad);
       }
       next[frame.relMsgId] = { x: left, y: top, width: right - left, height: bottom - top };
     }

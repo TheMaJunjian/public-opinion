@@ -64,6 +64,14 @@ function getRelKind(relType: string): PresentationKind {
   return getPresentationSpec(relType).kind;
 }
 
+function isDirectedEdgeRel(relType: string): boolean {
+  return getRelKind(relType) === 'edge-label';
+}
+
+function isRightConstrainedEdgeRel(relType: string): boolean {
+  return isDirectedEdgeRel(relType) && relType !== 'reply';
+}
+
 function isAnyFrameRel(relType: string): boolean {
   const k = getRelKind(relType);
   return k === 'arrange-frame' || k === 'frame-group' || k === 'replace-overlay';
@@ -202,13 +210,13 @@ export function computeMinColumnsForAnnoRefRule1(
 
   // annotation/reference/notify edges between two normal messages
   const relevant = edges.filter(
-    (e) => (e.relationType === 'annotation' || e.relationType === 'reference' || e.relationType === 'notify') &&
+    (e) => isRightConstrainedEdgeRel(e.relationType) &&
       normalSet.has(e.from.messageId) && normalSet.has(e.to.messageId),
   );
 
   // annotation/reference/notify edges where target is a relation message
   const toRelEdges = edges.filter(
-    (e) => (e.relationType === 'annotation' || e.relationType === 'reference' || e.relationType === 'notify') &&
+    (e) => isRightConstrainedEdgeRel(e.relationType) &&
       normalSet.has(e.from.messageId) && relIds.has(e.to.messageId),
   );
 
@@ -455,7 +463,7 @@ export function applyReplyLayoutAdjustments(params: {
   // a later reply by the same author may return to that author's lane.
   const sourcesByTarget = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.relationType !== 'annotation' && e.relationType !== 'reference') continue;
+    if (!isRightConstrainedEdgeRel(e.relationType)) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const arr = sourcesByTarget.get(e.to.messageId) ?? [];
     arr.push(e.from.messageId);
@@ -524,12 +532,7 @@ export function applyAgreeDisagreeColumnOverride(params: {
   const rightMinCol: Record<string, number> = {};
   const rightSourcesByTarget = new Map<string, string[]>();
   for (const e of edges) {
-    if (
-      e.relationType !== 'annotation' &&
-      e.relationType !== 'reference' &&
-      e.relationType !== 'notify' &&
-      e.relationType !== 'reply'
-    ) continue;
+    if (!isDirectedEdgeRel(e.relationType)) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const need = (col[e.to.messageId] ?? 0) + 1;
     rightMinCol[e.from.messageId] = Math.max(rightMinCol[e.from.messageId] ?? 0, need);
@@ -1016,7 +1019,9 @@ export function computeFrameAwareColumnCorrection(params: {
  *   2. Compute total cluster height (cards + gaps)
  *   3. Position middle card's top = targetY; cards above/below stack accordingly
  *   4. Constrain: can't go above GRID_TOP or above unrelated cards in same column
- *   5. Apply the shift — compact toward target regardless of direction
+ *   5. If the source is blocked below, move a movable target and its followers
+ *      by the same amount instead of leaving a long vertical edge
+ *   6. Apply the shift — compact toward target regardless of direction
  */
 export function compactAnnoRefClusters(params: {
   layout: Record<string, LayoutBox>;
@@ -1040,7 +1045,7 @@ export function compactAnnoRefClusters(params: {
   // Group: targetId → { sources: {messageId, edge}[], isFrameTarget: bool }
   const targetGroups = new Map<string, { sources: { messageId: string; edge: DemoEdge }[]; isFrame: boolean }>();
   for (const e of edges) {
-    if (e.relationType !== 'annotation' && e.relationType !== 'reference') continue;
+    if (!isDirectedEdgeRel(e.relationType)) continue;
     if (!normalSet.has(e.from.messageId)) continue;
     const tgtIsNormal = normalSet.has(e.to.messageId);
     const tgtIsFrame = !!allFrameRects[e.to.messageId];
@@ -1067,133 +1072,185 @@ export function compactAnnoRefClusters(params: {
 
   if (targetGroups.size === 0) return { layout: nextLayout, canvasHeight: params.canvasHeight };
 
-  // ── Per column: identify clusters of sources targeting the same thing ──
-  // Structure: column → targetId → sorted source message IDs
-  const columnClusters = new Map<number, Map<string, string[]>>();
+  const relatedIds = new Set<string>();
   for (const [targetId, group] of targetGroups) {
-    for (const { messageId } of group.sources) {
-      const col = colOf[messageId] ?? 0;
-      let colMap = columnClusters.get(col);
-      if (!colMap) { colMap = new Map(); columnClusters.set(col, colMap); }
-      let cluster = colMap.get(targetId);
-      if (!cluster) { cluster = []; colMap.set(targetId, cluster); }
-      cluster.push(messageId);
-    }
+    if (normalSet.has(targetId)) relatedIds.add(targetId);
+    for (const source of group.sources) relatedIds.add(source.messageId);
   }
 
-  // ── Compact each cluster ──
-  // Track cards that still need to be moved by upcoming clusters.
-  // Once a cluster is processed, its cards are at final positions and
-  // should block subsequent clusters (avoids overlapping compaction).
-  const pendingClusterCardIds = new Set<string>();
-  for (const [, colMap] of columnClusters) {
-    for (const [, cluster] of colMap) {
-      for (const id of cluster) pendingClusterCardIds.add(id);
-    }
+  const overlaps = (box: LayoutBox, rect: Rect) =>
+    box.x + box.width > rect.x && rect.x + rect.width > box.x &&
+    box.y + box.height > rect.y && rect.y + rect.height > box.y;
+  const isMovable = (id: string) => {
+    const box = nextLayout[id];
+    if (!box || !relatedIds.has(id) || frameMemberIds.has(id)) return false;
+    return !Object.values(allFrameRects).some(rect => overlaps(box, rect));
+  };
+  const centerOf = (id: string): number | null => {
+    const box = nextLayout[id];
+    if (box) return box.y + box.height / 2;
+    const rect = allFrameRects[id];
+    return rect ? rect.y + rect.height / 2 : null;
+  };
+
+  // Preserve the original vertical order, but let every movable card shift
+  // up or down within that order. This avoids chronological packing winning
+  // over the directed-edge objective after the initial layout pass.
+  const columnIds = new Map<number, string[]>();
+  for (const id of normalIds) {
+    if (!nextLayout[id]) continue;
+    const column = colOf[id] ?? 0;
+    const ids = columnIds.get(column) ?? [];
+    ids.push(id);
+    columnIds.set(column, ids);
+  }
+  for (const ids of columnIds.values()) {
+    ids.sort((a, b) => nextLayout[a].y - nextLayout[b].y || a.localeCompare(b));
   }
 
-  for (const [col, colMap] of columnClusters) {
-    // Build ordered list of ALL card IDs in this column (sorted by current y)
-    const columnCardIds = normalIds
-      .filter(id => (colOf[id] ?? 0) === col && nextLayout[id])
-      .sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+  // A source can point at several targets. Give it one desired position that
+  // represents all of them, instead of letting the last processed edge win.
+  // Sources sharing a target are assigned consecutive positions around the
+  // target center, keeping related cards together.
+  for (let pass = 0; pass < 8; pass++) {
+    const desiredSum = new Map<string, number>();
+    const desiredCount = new Map<string, number>();
+    const addDesired = (id: string, y: number) => {
+      desiredSum.set(id, (desiredSum.get(id) ?? 0) + y);
+      desiredCount.set(id, (desiredCount.get(id) ?? 0) + 1);
+    };
 
-    for (const [targetId, clusterIds] of colMap) {
-      if (clusterIds.length === 0) continue;
+    for (const [targetId, group] of targetGroups) {
+      const targetCenter = centerOf(targetId);
+      if (targetCenter === null) continue;
+      const sourceIds = [...new Set(group.sources.map(source => source.messageId))]
+        .filter(id => nextLayout[id])
+        .sort((a, b) => nextLayout[a].y - nextLayout[b].y || a.localeCompare(b));
+      const middleIndex = Math.floor(sourceIds.length / 2);
+      const middleBox = nextLayout[sourceIds[middleIndex]];
+      const middleTop = targetCenter - middleBox.height / 2;
+      const desiredTops: number[] = new Array(sourceIds.length);
+      desiredTops[middleIndex] = middleTop;
+      for (let index = middleIndex - 1; index >= 0; index--) {
+        const box = nextLayout[sourceIds[index]];
+        desiredTops[index] = desiredTops[index + 1] - box.height - ROW_GAP;
+      }
+      for (let index = middleIndex + 1; index < sourceIds.length; index++) {
+        const previousBox = nextLayout[sourceIds[index - 1]];
+        desiredTops[index] = desiredTops[index - 1] + previousBox.height + ROW_GAP;
+      }
+      for (let index = 0; index < sourceIds.length; index++) {
+        const id = sourceIds[index];
+        const box = nextLayout[id];
+        if (!box || !isMovable(id)) continue;
+        addDesired(id, desiredTops[index]);
+      }
+    }
 
-      // Sort cluster members by current y (preserves chronological order)
-      clusterIds.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
-
-      // Compute target's top-edge y.
-      // If the target is a text message inside a frame, use the frame's top edge
-      // so sources align with the frame, not with the card inside it.
-      let targetY: number;
-      if (allFrameRects[targetId]) {
-        targetY = allFrameRects[targetId].y;
-      } else {
-        const tgtBox = nextLayout[targetId];
-        if (tgtBox) {
-          // Check if the target card sits inside any frame
-          let insideFrameY: number | null = null;
-          for (const fr of Object.values(allFrameRects)) {
-            const xOverlap = !(tgtBox.x + tgtBox.width <= fr.x || fr.x + fr.width <= tgtBox.x);
-            const yOverlap = !(tgtBox.y + tgtBox.height <= fr.y || fr.y + fr.height <= tgtBox.y);
-            if (xOverlap && yOverlap) {
-              if (insideFrameY === null || fr.y < insideFrameY) insideFrameY = fr.y;
-            }
+    for (const ids of columnIds.values()) {
+      let segment: string[] = [];
+      const flushSegment = () => {
+        if (segment.length === 0) return;
+        const heights = segment.map(id => nextLayout[id].height);
+        const totalHeight = heights.reduce((sum, height, index) => sum + height + (index ? ROW_GAP : 0), 0);
+        const segmentIndex = ids.indexOf(segment[0]);
+        const previous = segmentIndex > 0 ? nextLayout[ids[segmentIndex - 1]] : undefined;
+        const nextIndex = segmentIndex + segment.length;
+        const next = nextIndex < ids.length ? nextLayout[ids[nextIndex]] : undefined;
+        const minTop = previous ? previous.y + previous.height + ROW_GAP : GRID_TOP;
+        const maxTop = next ? next.y - ROW_GAP - totalHeight : Infinity;
+        let cursor = minTop;
+        const positions: number[] = [];
+        for (const id of segment) {
+          const box = nextLayout[id];
+          const desiredTop = desiredCount.has(id)
+            ? (desiredSum.get(id) ?? box.y) / (desiredCount.get(id) ?? 1)
+            : box.y;
+          cursor = Math.max(cursor, desiredTop);
+          positions.push(cursor);
+          cursor += box.height + ROW_GAP;
+        }
+        let segmentTop = positions[0];
+        const segmentBottom = positions[positions.length - 1] + heights[heights.length - 1];
+        for (const rect of Object.values(allFrameRects)) {
+          const segmentBox = nextLayout[segment[0]];
+          if (!segmentBox) continue;
+          if (segmentBox.x + segmentBox.width <= rect.x || rect.x + rect.width <= segmentBox.x) continue;
+          if (segmentTop < rect.y + rect.height && segmentBottom > rect.y) {
+            segmentTop = Math.max(segmentTop, rect.y + rect.height + ROW_GAP);
           }
-          targetY = insideFrameY ?? tgtBox.y;
-        } else {
-          targetY = 0;
         }
-      }
+        const frameShift = segmentTop - positions[0];
+        const overflow = Number.isFinite(maxTop)
+          ? segmentBottom + frameShift - maxTop
+          : 0;
+        let shift = overflow > 0 ? frameShift - overflow : frameShift;
 
-      // Compute total cluster height: sum of card heights + ROW_GAP between them
-      const cardHeights: number[] = [];
-      for (const id of clusterIds) {
-        const box = nextLayout[id];
-        const h = box ? box.height : MIN_CARD_H;
-        cardHeights.push(h);
-      }
-
-      // Position the middle card's top at targetY.
-      // Cards above the middle card push the cluster top upward.
-      const middleIdx = Math.floor(clusterIds.length / 2);
-      let heightAbove = 0;
-      for (let i = 0; i < middleIdx; i++) {
-        heightAbove += cardHeights[i] + ROW_GAP;
-      }
-      const idealTop = targetY - heightAbove;
-
-      // Upper bound: ensure the cluster does not overlap with any
-      // card in the same column that is at its final position.
-      // Cards pending in other clusters are skipped — they will move.
-      let upperBound = GRID_TOP;
-      const clusterTotalHeight = cardHeights.reduce((s, h, i) => s + h + (i > 0 ? ROW_GAP : 0), 0);
-      for (const cid of columnCardIds) {
-        if (clusterIds.includes(cid)) continue;
-        if (pendingClusterCardIds.has(cid)) continue; // will be moved by its own cluster later
-        const box = nextLayout[cid];
-        if (!box) continue;
-        // If cluster at idealTop would vertically overlap this card, push below it
-        if (idealTop < box.y + box.height && idealTop + clusterTotalHeight > box.y) {
-          upperBound = Math.max(upperBound, box.y + box.height + ROW_GAP);
+        // If the desired cluster belongs below the next fixed card, compare
+        // that slot too. This allows a related source to cross an unrelated
+        // obstacle when doing so is materially closer to its target.
+        if (next && Number.isFinite(maxTop)) {
+          const belowTop = next.y + next.height + ROW_GAP;
+          const following = nextIndex + 1 < ids.length ? nextLayout[ids[nextIndex + 1]] : undefined;
+          const belowMax = following ? following.y - ROW_GAP - totalHeight : Infinity;
+          const desiredFirst = desiredCount.has(segment[0])
+            ? (desiredSum.get(segment[0]) ?? nextLayout[segment[0]].y) / (desiredCount.get(segment[0]) ?? 1)
+            : nextLayout[segment[0]].y;
+          if (desiredFirst > maxTop && belowTop <= belowMax) {
+            shift = belowTop - positions[0];
+          }
         }
+        for (let index = 0; index < segment.length; index++) {
+          const box = nextLayout[segment[index]];
+          nextLayout[segment[index]] = { ...box, y: Math.max(minTop, positions[index] + shift) };
+        }
+        segment = [];
+      };
+      for (const id of ids) {
+        if (isMovable(id)) segment.push(id);
+        else flushSegment();
       }
-
-      let newTop = Math.max(upperBound, idealTop);
-
-      // Frame avoidance: the cluster must not overlap with any frame
-      // (other than the one being targeted) that intersects its column.
-      const firstCardW = nextLayout[clusterIds[0]]?.width ?? CARD_W;
-      const firstCardX = colX(col);
-      for (const [frameId, fr] of Object.entries(allFrameRects)) {
-        if (frameId === targetId) continue; // the target frame is allowed
-        // Horizontal overlap?
-        if (firstCardX + firstCardW <= fr.x || fr.x + fr.width <= firstCardX) continue;
-        // Vertical overlap?
-        const clusterBottom = newTop + cardHeights.reduce((s, h, i) => s + h + (i > 0 ? ROW_GAP : 0), 0);
-        if (newTop >= fr.y + fr.height || clusterBottom <= fr.y) continue;
-        // Push below the frame
-        newTop = Math.max(newTop, fr.y + fr.height + ROW_GAP);
-      }
-
-      // Apply shift
-      let cursor = newTop;
-      for (const id of clusterIds) {
-        const box = nextLayout[id];
-        if (!box) continue;
-        nextLayout[id] = { ...box, y: cursor };
-        cursor += box.height + ROW_GAP;
-      }
-
-      // Cards in this cluster are now at final positions — remove from pending
-      // so they act as obstacles for subsequent clusters.
-      for (const id of clusterIds) pendingClusterCardIds.delete(id);
-
-      // Re-sort column card IDs after shift
-      columnCardIds.sort((a, b) => (nextLayout[a]?.y ?? 0) - (nextLayout[b]?.y ?? 0));
+      flushSegment();
     }
+
+    // Targets are anchors.  Do not move a target or the messages below it to
+    // improve an annotation edge: otherwise a long right-side annotation can
+    // make the left column drift vertically on every compaction pass.
+  }
+
+  // Final hard-constraint pass. Iterative edge compaction can move a target
+  // after its source column was processed, so validate the resulting layout
+  // again instead of trusting each local candidate check.
+  for (let pass = 0; pass < normalIds.length * 2; pass++) {
+    let changed = false;
+    for (const ids of columnIds.values()) {
+      const ordered = [...ids].sort((a, b) => nextLayout[a].y - nextLayout[b].y || a.localeCompare(b));
+      for (let index = 0; index < ordered.length - 1; index++) {
+        const firstId = ordered[index];
+        const secondId = ordered[index + 1];
+        const first = nextLayout[firstId];
+        const second = nextLayout[secondId];
+        if (first.y + first.height <= second.y) continue;
+        if (isMovable(secondId)) {
+          nextLayout[secondId] = { ...second, y: first.y + first.height + ROW_GAP };
+          changed = true;
+        } else if (isMovable(firstId)) {
+          nextLayout[firstId] = { ...first, y: Math.max(GRID_TOP, second.y - first.height - ROW_GAP) };
+          changed = true;
+        }
+      }
+    }
+    for (const id of normalIds) {
+      if (!isMovable(id)) continue;
+      const box = nextLayout[id];
+      for (const rect of Object.values(allFrameRects)) {
+        if (!overlaps(box, rect)) continue;
+        nextLayout[id] = { ...box, y: rect.y + rect.height + ROW_GAP };
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
   }
 
   // Recompute canvas height

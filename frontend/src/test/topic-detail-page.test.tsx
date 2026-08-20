@@ -1160,3 +1160,70 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
     expect(screen.queryByText('消息 m8')).not.toBeInTheDocument();
   });
 });
+
+describe('TopicDetailPage opposed annotation visibility in classify graph', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试分类',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('annotation-source', '注释信息'),
+        makeMessage('annotation-target', '被注释正文'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-annotation', topicId: 'topic-1', relationType: 'ANNOTATION',
+          sourceMessageId: 'annotation-source',
+          targetRefs: [{ kind: 'message', messageId: 'annotation-target' }],
+          createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-disagree', topicId: 'topic-1', relationType: 'DISAGREE',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-annotation' }],
+          createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [
+            { kind: 'relation', relationId: 'rel-annotation' },
+          ],
+          payload: { title: '分类' },
+          createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('keeps opposed annotation in list with a badge and hides it from the graph', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    await waitFor(() => expect(screen.getByText('关系消息 rel-annotation')).toBeInTheDocument());
+    expect(screen.getByText('你已反对 · 点赞同恢复')).toBeInTheDocument();
+    expect(screen.queryByText('你已反对此注释')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '切换为结构图' }));
+
+    await waitFor(() => {
+      expect(mockGraphView).toHaveBeenCalled();
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      expect(props.messages.some((message: { id: string }) => message.id === 'rel-annotation')).toBe(false);
+      expect(props.messages.some((message: { id: string }) => message.id === 'annotation-source')).toBe(true);
+      expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-annotation')).toBe(false);
+    });
+  });
+});

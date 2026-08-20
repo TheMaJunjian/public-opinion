@@ -718,9 +718,10 @@ export function computeUserOverriddenStanceRelIds(
 export function computeUserFilteredEdges(
   edges: DemoEdge[],
   messages: DemoMessage[],
-  currentUsername: string | null
+  currentUsername: string | null,
+  stanceEdges: DemoEdge[] = edges,
 ): DemoEdge[] {
-  const suppressedRelIds = computeUserSuppressedRelIds(edges, messages, currentUsername);
+  const suppressedRelIds = computeUserSuppressedRelIds(stanceEdges, messages, currentUsername);
   if (suppressedRelIds.size === 0) return edges;
   return edges.filter(e => !suppressedRelIds.has(e.relationMessageId));
 }

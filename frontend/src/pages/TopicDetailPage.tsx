@@ -4724,6 +4724,15 @@ export default function TopicDetailPage() {
           }
         }
       }
+      for (const e of baseEdges) {
+        if (!topicRelationIds.has(e.relationMessageId)) continue;
+        const relation = relationById.get(e.relationMessageId);
+        if (relation?.relationType.toUpperCase() !== 'ANNOTATION') continue;
+        for (const endpointId of [e.from.messageId, e.to.messageId]) {
+          const endpoint = msgMap.get(endpointId);
+          if (endpoint && isContentKind(endpoint.kind)) topicTextIds.add(endpointId);
+        }
+      }
       // Expand topicTextIds with text messages that have CORRECT (更正) relations
       // with any text message already in the topic, and add the CORRECT relation
       // messages between such pairs to topicRelationIds.
@@ -5358,17 +5367,27 @@ export default function TopicDetailPage() {
     : temporaryJoinViewIds
     ? rawEdgesToRender.filter(edge => temporaryJoinViewIds.has(edge.relationMessageId))
     : rawEdgesToRender;
-  const edgesToRender = computeUserFilteredEdges(temporaryEdgesToRender, messages, user?.username ?? null);
+  // A user's DISAGREE relation may be outside the current classify scope.
+  // Use all topic edges to determine suppression, then filter only the edges
+  // currently being rendered.
+  const filteredEdgesToRender = computeUserFilteredEdges(
+    temporaryEdgesToRender,
+    messages,
+    user?.username ?? null,
+    edges,
+  );
+  // The linear list keeps the annotation and its DISAGREE relation so the
+  // user's stance can be shown on the source message. The non-linear graph
+  // uses the suppressed relation set as a visual projection only.
+  const edgesToRender = viewMode === "list" ? temporaryEdgesToRender : filteredEdgesToRender;
   renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
-  // Suppressed relation IDs: used only for "你已反对" visual label in list view.
-  // No longer hides messages from graph view — opposed content is shown
-  // with visual indicators (empty frame, preview mode, etc.) instead.
-  const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRenderClean, messages, user?.username ?? null);
-  // Graph messages: no suppression hiding needed — all messages visible.
-  const graphMessagesFinal = messagesToRenderFiltered.map(message => {
+  const suppressedRelIds = computeUserSuppressedRelIds(edges, messages, user?.username ?? null);
+  const graphMessagesFinal = messagesToRenderFiltered
+    .filter(message => !suppressedRelIds.has(message.id))
+    .map(message => {
     const correction = correctionVersions.get(message.id)?.current;
     return correction ? { ...message, content: correction.content } : message;
-  });
+    });
   const invalidCorrectionIds = (() => {
     const ids = new Set<string>();
     for (const entry of correctionVersions.values()) {

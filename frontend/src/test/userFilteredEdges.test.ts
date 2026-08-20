@@ -119,6 +119,30 @@ describe('computeUserFilteredEdges', () => {
     expect(result[0].id).toBe('e3'); // only Bob's own DISAGREE edge remains
   });
 
+  it('uses full stance edges when the displayed edge scope is a classify subset', () => {
+    const msgs: DemoMessage[] = [
+      makeNormalMsg('annotation-source', 'alice'),
+      makeNormalMsg('target', 'alice'),
+      makeRelationMsg('rel-annotation', 'alice', 'annotation'),
+      makeNormalMsg('bob-disagree-source', 'bob'),
+      makeRelationMsg('rel-disagree', 'bob', 'disagree'),
+    ];
+    const allEdges: DemoEdge[] = [
+      makeEdge('annotation-edge', 'rel-annotation', 'annotation', 'annotation-source', 'target'),
+      makeEdge('disagree-edge', 'rel-disagree', 'disagree', 'bob-disagree-source', 'rel-annotation'),
+    ];
+
+    // The current classify view contains the annotation edge but not Bob's
+    // stance edge. Suppression must still be calculated from allEdges.
+    const result = computeUserFilteredEdges(
+      [allEdges[0]],
+      msgs,
+      'bob',
+      allEdges,
+    );
+    expect(result).toEqual([]);
+  });
+
   it('does NOT suppress edges for other users (only the disagreeing user)', () => {
     const msgs: DemoMessage[] = [
       makeNormalMsg('m1', 'alice'),

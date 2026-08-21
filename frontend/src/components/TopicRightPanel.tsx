@@ -137,6 +137,18 @@ interface TopicRightPanelProps {
   setShowRevenue: (v: boolean) => void;
   topicId: string;
 
+  // Comparison review
+  comparisonMode?: boolean;
+  comparisonTargetId?: string | null;
+  comparisonSide?: 'agree' | 'disagree';
+  comparisonReviewed?: boolean;
+  onComparisonSideChange?: (side: 'agree' | 'disagree') => void;
+  onComparisonReview?: () => void;
+  onComparisonVote?: (side?: 'agree' | 'disagree') => void;
+  onReturnToComparisonCategory?: () => void;
+  onExitComparison?: () => void;
+  comparisonMinStake?: number;
+
   // Debug
   debugRects: string;
 }
@@ -144,6 +156,46 @@ interface TopicRightPanelProps {
 export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
   const navigate = useNavigate();
+  if (p.comparisonMode || p.comparisonReviewed) {
+    const comparisonDraft = p.draftUnits.length === 1 && p.draftUnits[0].selection.kind === 'whole'
+      ? p.draftUnits[0]
+      : null;
+    const targetId = p.comparisonTargetId ?? comparisonDraft?.messageId ?? null;
+    const target = p.messages.find(message => message.id === targetId);
+    const comparisonCanReview = Boolean(comparisonDraft && target);
+    return (
+      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: 'flex', flexDirection: 'column', gap: 8, overflow: 'auto', minWidth: 0, boxSizing: 'border-box' }}>
+        <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ fontWeight: 600 }}>选择暂存区</div>
+            <button onClick={p.clearDraftAll} disabled={!comparisonDraft} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #666', background: comparisonDraft ? '#444' : '#333', color: comparisonDraft ? '#fff' : '#777', cursor: comparisonDraft ? 'pointer' : 'default', fontSize: 11 }}>清空</button>
+          </div>
+          {comparisonDraft ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{comparisonDraft.messageId} · {target?.author ?? '目标消息'}</span>
+              <button onClick={() => p.removeUnitFromDraft(comparisonDraft)} style={{ padding: '1px 6px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer', fontSize: 10 }}>删除</button>
+            </div>
+          ) : <div style={{ fontSize: 12, opacity: 0.6 }}>请选择一个目标消息，最多选择一条。</div>}
+        </div>
+        <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontWeight: 600 }}>对比审阅</div>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>{target ? `当前目标：${target.author} · ${target.content || target.id}` : '请在左侧选择目标消息'}</div>
+          {!p.comparisonReviewed && <button disabled={!comparisonCanReview} onClick={p.onComparisonReview} style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #38bdf8', background: '#123047', color: '#7dd3fc', cursor: comparisonCanReview ? 'pointer' : 'default', opacity: comparisonCanReview ? 1 : 0.5 }}>
+            审阅
+          </button>}
+          {p.comparisonReviewed && <div style={{ padding: '6px 8px', border: '1px solid #475569', borderRadius: 4, background: '#111827', color: '#cbd5e1', fontSize: 12 }}>
+            当前为只读对比审阅状态，可查看赞同后与反对后的结构，不支持发送关系或消息。
+          </div>}
+          {p.comparisonReviewed && <button onClick={p.onReturnToComparisonCategory} style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #38bdf8', background: '#123047', color: '#7dd3fc', cursor: 'pointer' }}>
+            回到临时分类
+          </button>}
+          <button onClick={p.onExitComparison} style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer' }}>
+            退出对比
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (p.isViewerMode) {
     return (
       <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0, boxSizing: "border-box" }}>

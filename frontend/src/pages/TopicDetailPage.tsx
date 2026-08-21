@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeCorrectionVersions, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeCorrectionVersions, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType, MessageKind,
@@ -43,6 +44,7 @@ import {
   getJoinRecoveryTargetIds,
   getEffectiveJoinRelationIds,
   filterContainerEdgesByEffectiveJoins,
+  resolveNavigationTargetId,
   getUserPreferredJoinByTarget,
   expandTextIdsWithSettlementResults,
   foldUpToWhole,
@@ -157,7 +159,7 @@ export default function TopicDetailPage() {
   const [viewerUser, setViewerUser] = useState<User | null>(null);
   const displayUser = isPreloaded ? viewerUser : user;
   const correctionVersions = useMemo(() => {
-    const invalidCorrectionIds = computeUserSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    const invalidCorrectionIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
     return computeCorrectionVersions(messages, edges, invalidCorrectionIds);
   }, [messages, edges, displayUser?.username]);
 
@@ -665,12 +667,19 @@ export default function TopicDetailPage() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
   const [settlementOpenType, setSettlementOpenType] = useState<'TRUTH' | 'VALUE' | null>(null);
+  const [comparisonMode, setComparisonMode] = useState(false);
+  const [comparisonReviewed, setComparisonReviewed] = useState(false);
+  const [comparisonTargetId, setComparisonTargetId] = useState<string | null>(null);
+  const [comparisonSide, setComparisonSide] = useState<'agree' | 'disagree'>('agree');
+  const [comparisonReviewBaseMessages, setComparisonReviewBaseMessages] = useState<DemoMessage[] | null>(null);
+  const [comparisonReviewBaseEdges, setComparisonReviewBaseEdges] = useState<DemoEdge[] | null>(null);
 
   // Helper: open settlement with explicit type (defaults to TRUTH for old code paths)
   const openSettlement = useCallback((msgId: string, type: 'TRUTH' | 'VALUE' = 'TRUTH') => {
+    if (comparisonReviewed) return;
     setSettlementOpenMsgId(msgId);
     setSettlementOpenType(type);
-  }, []);
+  }, [comparisonReviewed]);
   const closeSettlement = useCallback(() => {
     setSettlementOpenMsgId(null);
     setSettlementOpenType(null);
@@ -816,15 +825,44 @@ export default function TopicDetailPage() {
     () => computeTransitiveVoteStats(edges, messages),
     [edges, messages]
   );
+  const comparisonTargets = useMemo(
+    () => Object.entries(voteStats)
+      .filter(([, stats]) => stats.agreeCount + stats.disagreeCount > 0)
+      .map(([id, stats]) => ({ message: messages.find(message => message.id === id), ...stats }))
+      .filter((item): item is { message: DemoMessage; agreeCount: number; disagreeCount: number; agreeKey: string; disagreeKey: string } => {
+        const message = item.message;
+        if (!message) return false;
+        return !isContentKind(message.kind);
+      }),
+    [messages, voteStats],
+  );
+  const comparisonStakeTotals = useMemo(() => {
+    const totals = new Map<string, { agree: number; disagree: number }>();
+    for (const edge of edges) {
+      if (edge.relationType !== 'agree' && edge.relationType !== 'disagree') continue;
+      const current = totals.get(edge.to.messageId) ?? { agree: 0, disagree: 0 };
+      current[edge.relationType] += authorStakes[edge.relationMessageId] ?? 0;
+      totals.set(edge.to.messageId, current);
+    }
+    return totals;
+  }, [edges, authorStakes]);
+  const comparisonRecommendedDisplay = useMemo(() => {
+    if (!comparisonTargetId) return 'agree' as const;
+    const totals = comparisonStakeTotals.get(comparisonTargetId);
+    return totals && totals.disagree > totals.agree ? 'disagree' as const : 'agree' as const;
+  }, [comparisonStakeTotals, comparisonTargetId]);
+  const effectiveSuppressedRelIdsForLayout = useMemo(
+    () => computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null),
+    [edges, messages, displayUser?.username],
+  );
   const rejectedContainerIds = useMemo(() => {
     const ids = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'CLASSIFY' && relation.relationType !== 'SUMMARY' && relation.relationType !== 'ARRANGE' && relation.relationType !== 'MERGE') continue;
-      const stats = voteStats[relation.id];
-      if (stats && stats.disagreeCount > stats.agreeCount) ids.add(relation.id);
+      if (effectiveSuppressedRelIdsForLayout.has(relation.id)) ids.add(relation.id);
     }
     return ids;
-  }, [relations, voteStats]);
+  }, [relations, effectiveSuppressedRelIdsForLayout]);
   const rejectedJoinRelationIds = useMemo(
     () => new Set(getRejectedJoinRelationIds(relations, voteStats)),
     [relations, voteStats]
@@ -1307,7 +1345,7 @@ export default function TopicDetailPage() {
       owned.relationIds.forEach(id => relationIds.add(id));
     }
     return { textIds, relationIds };
-  }, [relations, relationById, rejectedContainerIds, userPreferredJoinByTarget]);
+  }, [relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
   const mergeOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
@@ -1345,7 +1383,7 @@ export default function TopicDetailPage() {
     }
     if (textIds.size > 0 || relationIds.size > 0) debugWarn('diag', `summaryOwn textIds=[${[...textIds].map(id=>id.slice(-6)).join(',')}] relIds=[${[...relationIds].map(id=>id.slice(-6)).join(',')}]`);
     return { textIds, relationIds };
-  }, [relations, relationById, rejectedContainerIds, userPreferredJoinByTarget]);
+  }, [relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
   const summaryCoverageByMessageId = useMemo(() => {
     const map = new Map<string, Array<{ summaryId: string; title: string }>>();
     for (const relation of relations) {
@@ -1481,6 +1519,10 @@ export default function TopicDetailPage() {
   );
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
+  const leftHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
+  const leftHorizontalScrollSourceRef = useRef<HTMLElement | null>(null);
+  const leftHorizontalScrollScaleRef = useRef(1);
+  const [leftHorizontalScrollMetrics, setLeftHorizontalScrollMetrics] = useState({ visible: false, left: 0, width: 0, scrollWidth: 1 });
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1586,36 +1628,12 @@ export default function TopicDetailPage() {
       messagePulseTimerRef.current = setTimeout(() => {
         setMessagePulse(null);
         messagePulseTimerRef.current = null;
-      }, 500);
+      }, 1600);
     });
   }
 
   function resolveScrollTargetMessageId(msgId: string): string {
-    const msg = messagesRef.current.find(m => m.id === msgId);
-    // Settlement messages should navigate to their settlement target message.
-    if (msg && (msg.kind === 'round' || msg.kind === 'round_result')) {
-      return msg.settlementTargetId ?? msgId;
-    }
-    // Join messages should navigate to the joined target message.
-    if (msg?.joinInfo?.targetIds?.length) {
-      return msg.joinInfo.targetIds[0] ?? msgId;
-    }
-
-    // Fallback for JOIN relation messages that may not yet carry joinInfo in DemoMessage.
-    const rel = relationsRef.current.find(r => r.id === msgId);
-    if (rel?.relationType?.toUpperCase() === 'JOIN') {
-      const firstTarget = (rel.targetRefs ?? []).find(ref =>
-        (ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation') &&
-        (('messageId' in ref && !!ref.messageId) || ('relationId' in ref && !!ref.relationId))
-      );
-      if (firstTarget) {
-        return firstTarget.kind === 'relation'
-          ? (firstTarget.relationId ?? msgId)
-          : ((firstTarget as { messageId?: string }).messageId ?? msgId);
-      }
-    }
-
-    return msgId;
+    return resolveNavigationTargetId(msgId, messagesRef.current, relationsRef.current);
   }
 
   function findMessageElements(container: HTMLElement, messageId: string): HTMLElement[] {
@@ -1663,7 +1681,11 @@ export default function TopicDetailPage() {
       );
       if (!dependencyReady) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const candidates = findMessageElements(container, targetId);
-      const el = candidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? candidates[0] ?? null;
+      const comparisonPair = container.querySelector('[data-comparison-pair]');
+      const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
+      const el = comparisonPair
+        ? comparisonCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? comparisonCandidates[0] ?? null
+        : candidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? candidates[0] ?? null;
       if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const elRect = el.getBoundingClientRect();
       if (elRect.width === 0 || elRect.height === 0) {
@@ -1671,10 +1693,27 @@ export default function TopicDetailPage() {
         return;
       }
       pendingScrollMsgIdRef.current = null;
-      const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
-      const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
-      container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
-      container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
+      const comparisonView = el.closest('[data-comparison-view="agree"]');
+      const comparisonViewport = comparisonView?.querySelector('[data-comparison-viewport="agree"]') as HTMLDivElement | null;
+        const comparisonPairElement = comparisonView?.closest('[data-comparison-pair]');
+        if (comparisonViewport && comparisonPairElement) {
+        const comparisonViewportRect = comparisonViewport.getBoundingClientRect();
+        const comparisonTargetTop = comparisonViewport.scrollTop + elRect.top - comparisonViewportRect.top + elRect.height / 2 - comparisonViewport.clientHeight / 2;
+        const comparisonTargetLeft = comparisonViewport.scrollLeft + elRect.left - comparisonViewportRect.left + elRect.width / 2 - comparisonViewport.clientWidth / 2;
+        const comparisonTop = Math.max(0, comparisonTargetTop);
+        const comparisonLeft = Math.max(0, comparisonTargetLeft);
+          const comparisonScrollTargets = comparisonPairElement.querySelectorAll('[data-comparison-viewport], [data-comparison-scroll-vertical]');
+        comparisonScrollTargets.forEach(node => { (node as HTMLElement).scrollTop = comparisonTop; });
+          const horizontalScroll = comparisonPairElement.querySelector('[data-comparison-scroll-horizontal]') as HTMLElement | null;
+          const horizontalTargets = comparisonPairElement.querySelectorAll('[data-comparison-viewport], [data-comparison-scroll-horizontal]');
+        horizontalTargets.forEach(node => { (node as HTMLElement).scrollLeft = comparisonLeft; });
+        if (horizontalScroll) horizontalScroll.scrollLeft = comparisonLeft;
+      } else {
+        const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
+        const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
+        container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
+        container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
+      }
       // The left panel may itself be only partly visible in the browser viewport.
       // Re-read after the inner scroll, then move the outer page if the target is
       // still outside the actual viewport before creating the jump overlay.
@@ -1950,6 +1989,7 @@ export default function TopicDetailPage() {
   }
 
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
+    if (comparisonReviewed) return null;
     if (!requireAuth()) return null;
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
@@ -2080,6 +2120,16 @@ export default function TopicDetailPage() {
     if (e.button !== 0) return;
     if (Date.now() - lastDragOrSelectTimeRef.current < 350) return;
     e.stopPropagation();
+    if (comparisonMode) {
+      setComparisonTargetId(messageId);
+      setComparisonReviewed(false);
+      setComparisonReviewBaseMessages(null);
+      setComparisonReviewBaseEdges(null);
+      setComparisonSide('agree');
+      setLastClickedMessageId(messageId);
+      setDraftUnits([{ messageId, selection: { kind: 'whole' } }]);
+      return;
+    }
     setLastClickedMessageId(messageId);
     const wholeUnit: UnitSelection = { messageId, selection: { kind: "whole" } };
     setDraftUnits(prev => {
@@ -2334,6 +2384,41 @@ export default function TopicDetailPage() {
     classifyStackRef.current.push({ relMsgId, snapshot: captureSnapshot() });
     setClassifyRelMsgId(relMsgId);
     setClassifyKey(k => k + 1);
+  }
+  function findContainingClassifyTopic(messageId: string): string | null {
+    const targetRelation = relationById.get(messageId);
+    let anchorId = messageId;
+    if (targetRelation) {
+      const relationType = targetRelation.relationType.toUpperCase();
+      const sourceId = targetRelation.sourceMessageId ?? null;
+      const firstTarget = (targetRelation.targetRefs ?? []).find(ref =>
+        ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation',
+      );
+      const targetId = firstTarget?.kind === 'relation'
+        ? firstTarget.relationId
+        : firstTarget?.messageId;
+      if (['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT'].includes(relationType)) {
+        anchorId = sourceId || messageId;
+      } else if (['AGREE', 'DISAGREE', 'TAG'].includes(relationType)) {
+        anchorId = targetId || messageId;
+      }
+    }
+    let match: { id: string; size: number } | null = null;
+    for (const relation of relations) {
+      if (relation.relationType !== 'CLASSIFY' || rejectedContainerIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(
+        relation.id,
+        relationById,
+        new Set(),
+        rejectedContainerIds,
+        rejectedJoinRelationIds,
+        userPreferredJoinByTarget,
+      );
+      if (!owned.textIds.has(anchorId) && !owned.relationIds.has(anchorId)) continue;
+      const size = owned.textIds.size + owned.relationIds.size;
+      if (!match || size < match.size) match = { id: relation.id, size };
+    }
+    return match?.id ?? null;
   }
 
   function exitClassifyTopic(options?: { restoreSnapshot?: boolean }) {
@@ -2719,6 +2804,7 @@ export default function TopicDetailPage() {
   }
 
   async function handleQuickSendAndRelateFromDraftTargets() {
+    if (comparisonReviewed) return;
     if (!requireAuth()) return;
     if (!singleButtonEnabled) return;
     const text = newMessageContent.trim();
@@ -4959,6 +5045,170 @@ export default function TopicDetailPage() {
     };
   }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds, userPreferredJoinByTarget]);
 
+  const normalGraphProjection = useMemo(() => {
+    const scopedCorrectedMessages = graphMessagesToRender.map(message => {
+      const correction = correctionVersions.get(message.id)?.current;
+      return correction ? { ...message, content: correction.content } : message;
+    });
+    const scopedCleanMessages = cleanVisibleIds
+      ? scopedCorrectedMessages.filter(message =>
+          cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
+      : scopedCorrectedMessages;
+    const scopedMessages = applyMessageFilter(scopedCleanMessages, msgFilter);
+    const correctedMessages = messages.map(message => {
+      const correction = correctionVersions.get(message.id)?.current;
+      return correction ? { ...message, content: correction.content } : message;
+    });
+    const cleanMessages = cleanVisibleIds
+      ? correctedMessages.filter(message =>
+          cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
+      : correctedMessages;
+    const filteredMessages = applyMessageFilter(cleanMessages, msgFilter);
+    const suppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    const rawEdges = filterContainerEdgesByEffectiveJoins(
+      graphEdgesToRender,
+      relations,
+      effectiveJoinRelationIds,
+    );
+    const cleanEdges = cleanVisibleIds
+      ? rawEdges.filter(edge => cleanVisibleIds.visibleRelIds.has(edge.relationMessageId))
+      : rawEdges;
+
+    return {
+      messages: filteredMessages,
+      scopedMessages,
+      edges: cleanEdges.filter(edge => !suppressedRelIds.has(edge.relationMessageId)),
+    };
+  }, [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
+
+  const comparisonAgreeSuppressedRelIds = useMemo(() => {
+    const ids = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    if (comparisonTargetId) ids.delete(comparisonTargetId);
+    if (comparisonReviewed) {
+      for (const edge of edges) {
+        if (edge.relationType !== 'annotation') continue;
+        if (ids.has(edge.from.messageId) || ids.has(edge.to.messageId)) ids.add(edge.relationMessageId);
+      }
+    }
+    return ids;
+  }, [comparisonReviewed, comparisonTargetId, edges, messages, displayUser?.username]);
+
+  const comparisonDisagreeSuppressedRelIds = useMemo(() => {
+    const ids = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    if (comparisonTargetId) ids.add(comparisonTargetId);
+    if (comparisonReviewed) {
+      for (const edge of edges) {
+        if (edge.relationType !== 'annotation') continue;
+        if (ids.has(edge.from.messageId) || ids.has(edge.to.messageId)) ids.add(edge.relationMessageId);
+      }
+    }
+    return ids;
+  }, [comparisonReviewed, comparisonTargetId, edges, messages, displayUser?.username]);
+
+  const comparisonGraphProjections = useMemo(() => {
+    if (!comparisonReviewed || !comparisonTargetId) return null;
+
+    const buildProjection = (side: 'agree' | 'disagree') => {
+      const sideRejectedContainerIds = new Set(rejectedContainerIds);
+      if (side === 'agree') sideRejectedContainerIds.delete(comparisonTargetId);
+      else sideRejectedContainerIds.add(comparisonTargetId);
+
+      const sideClassifyOwnership = { textIds: new Set<string>(), relationIds: new Set<string>() };
+      for (const relation of relations) {
+        if (relation.relationType !== 'CLASSIFY' || sideRejectedContainerIds.has(relation.id)) continue;
+        const owned = collectOwnedByRelation(relation.id, relationById, new Set(), sideRejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
+        owned.textIds.forEach(id => sideClassifyOwnership.textIds.add(id));
+        owned.relationIds.forEach(id => sideClassifyOwnership.relationIds.add(id));
+      }
+      const sideSummaryOwnership = { textIds: new Set<string>(), relationIds: new Set<string>() };
+      for (const relation of relations) {
+        if (relation.relationType !== 'SUMMARY' || sideRejectedContainerIds.has(relation.id)) continue;
+        const owned = collectOwnedByRelation(relation.id, relationById, new Set(), sideRejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
+        owned.textIds.forEach(id => sideSummaryOwnership.textIds.add(id));
+        owned.relationIds.forEach(id => sideSummaryOwnership.relationIds.add(id));
+      }
+      const sideClassifyTextIds = expandTextIdsWithSettlementResults(
+        expandTextIdsWithCorrections(sideClassifyOwnership.textIds, edges, msgMap),
+        messages,
+      );
+      const sideSummaryTextIds = expandTextIdsWithCorrections(sideSummaryOwnership.textIds, edges, msgMap);
+      const sideHiddenTextIds = new Set(sideClassifyTextIds);
+      sideSummaryTextIds.forEach(id => sideHiddenTextIds.add(id));
+      const sideOwnedRelationIds = new Set(sideClassifyOwnership.relationIds);
+      mergeOwnership.relationIds.forEach(id => sideOwnedRelationIds.add(id));
+      sideSummaryOwnership.relationIds.forEach(id => sideOwnedRelationIds.add(id));
+      const sideExclusiveRelMsgIds = collectExclusiveRelationMsgIds(sideHiddenTextIds, sideOwnedRelationIds);
+      const sideClassifyRelationIdsByType = (type: string) => new Set(
+        [...sideClassifyOwnership.relationIds].filter(id => relationById.get(id)?.relationType.toUpperCase() === type),
+      );
+      const sideHiddenRelationIds = new Set<string>([
+        ...sideClassifyRelationIdsByType('CLASSIFY'),
+        ...sideClassifyRelationIdsByType('MERGE'),
+        ...sideClassifyRelationIdsByType('ARRANGE'),
+        ...sideClassifyRelationIdsByType('SUMMARY'),
+        ...sideSummaryOwnership.relationIds,
+        ...sideExclusiveRelMsgIds,
+        ...replacedRelationMsgIds,
+      ]);
+      const projectionBaseMessages = comparisonReviewBaseMessages
+        ?? (isInsideClassify ? normalGraphProjection.scopedMessages : normalGraphProjection.messages);
+      const projectionBaseEdges = comparisonReviewBaseEdges ?? normalGraphProjection.edges;
+      const targetMessageIds = new Set([comparisonTargetId]);
+      const comparisonTargetEdges = edges.filter(edge => edge.relationMessageId === comparisonTargetId);
+      const targetRelationType = relationById.get(comparisonTargetId)?.relationType.toUpperCase();
+      const targetIsContainer = targetRelationType && ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(targetRelationType);
+      if (!targetIsContainer) {
+        for (const edge of comparisonTargetEdges) {
+          if (!edge.from.messageId.startsWith('anon:')) targetMessageIds.add(edge.from.messageId);
+          if (!edge.to.messageId.startsWith('anon:')) targetMessageIds.add(edge.to.messageId);
+        }
+      }
+      const baseMessagesWithTarget = [...projectionBaseMessages];
+      const baseMessageIds = new Set(baseMessagesWithTarget.map(message => message.id));
+      for (const targetId of targetMessageIds) {
+        if (baseMessageIds.has(targetId)) continue;
+        const targetMessage = msgMap.get(targetId);
+        if (targetMessage) {
+          baseMessagesWithTarget.push(targetMessage);
+          baseMessageIds.add(targetId);
+        }
+      }
+      const baseEdgesWithTarget = [
+        ...projectionBaseEdges,
+        ...(side === 'agree'
+          ? comparisonTargetEdges.filter(edge => !projectionBaseEdges.some(existing => existing.id === edge.id))
+          : []),
+      ];
+      const sideSuppressedRelIds = side === 'agree'
+        ? comparisonAgreeSuppressedRelIds
+        : comparisonDisagreeSuppressedRelIds;
+      const forcedVisibleIds = side === 'agree' ? targetMessageIds : new Set<string>();
+      const scopedBaseMessageIds = new Set(projectionBaseMessages.map(message => message.id));
+      const graphMessages = (side === 'agree' ? baseMessagesWithTarget : projectionBaseMessages).filter(message => {
+        if (forcedVisibleIds.has(message.id)) return true;
+        if (sideSuppressedRelIds.has(message.id)) return false;
+        if (isInsideClassify && scopedBaseMessageIds.has(message.id)) return true;
+        if (isContentKind(message.kind) && sideHiddenTextIds.has(message.id)) return false;
+        if (message.kind === 'relation' && sideHiddenRelationIds.has(message.id)) return false;
+        if (isContentKind(message.kind) && sideOwnedRelationIds.has(message.id)) return false;
+        return true;
+      });
+      const graphVisibleIds = new Set(graphMessages.map(message => message.id));
+      const graphEdges = baseEdgesWithTarget.filter(edge => {
+        if (sideSuppressedRelIds.has(edge.relationMessageId)) return false;
+        if (!graphVisibleIds.has(edge.relationMessageId) && !focusRelationMsgIds.has(edge.relationMessageId)) return false;
+        if (focusRelationMsgIds.has(edge.relationMessageId)) return true;
+        if (edge.relationType === 'classify' || edge.relationType === 'summary') return true;
+        const fromOk = edge.from.messageId.startsWith('anon:') || graphVisibleIds.has(edge.from.messageId);
+        const toOk = graphVisibleIds.has(edge.to.messageId);
+        return fromOk && toOk;
+      });
+      return { messages: graphMessages, edges: graphEdges, hideMessageIds: undefined };
+    };
+
+    return { agree: buildProjection('agree'), disagree: buildProjection('disagree') };
+  }, [comparisonReviewed, comparisonTargetId, relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, edges, msgMap, messages, mergeOwnership, replacedRelationMsgIds, focusRelationMsgIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds]);
+
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
     setRelationType(null); setSecondaryRelationType("none");
@@ -4966,6 +5216,7 @@ export default function TopicDetailPage() {
 
   async function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree") {
     // Quick send: pure-stance agree/disagree — relation messages are first-class, persist to backend
+    if (comparisonReviewed) return;
     if (!topicId) return;
     try {
       const backendRel = await createRel(topicId, {
@@ -4975,6 +5226,34 @@ export default function TopicDetailPage() {
       });
       await registerCreatedRelationInCurrentClassify(backendRel);
     } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
+  }
+
+  async function handleComparisonVote(side: 'agree' | 'disagree' = 'agree') {
+    if (comparisonReviewed) return;
+    const targetId = comparisonTargetId ?? (draftUnits.length === 1 ? draftUnits[0].messageId : null);
+    if (!comparisonReviewed || !topicId || !targetId) return;
+    const amount = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
+    const minimum = effectiveMinStake;
+    if (amount < minimum) {
+      setSendError(`关系消息最低押注 ${minimum} 点（当前 ${amount}）`);
+      return;
+    }
+    if (amount > availablePoints) {
+      setSendError(`贡献点余额不足：需要 ${amount} 点，可用 ${availablePoints} 点`);
+      return;
+    }
+    setSendError(null);
+    try {
+      const relation = await createRel(topicId, {
+        relationType: side.toUpperCase(),
+        sourceMessageId: null,
+        targetRefs: [unitSelectionToTargetRef({ messageId: targetId, selection: { kind: 'whole' } }, msgMap)],
+        stakeAmount: amount,
+      });
+      await registerCreatedRelationInCurrentClassify(relation);
+    } catch (e: any) {
+      showAlert(`建立对比表态失败: ${e?.message ?? e}`);
+    }
   }
 
   function handleDecorationBodyClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {
@@ -5316,6 +5595,82 @@ export default function TopicDetailPage() {
 
   // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
 
+  useEffect(() => {
+    const panel = leftPanelRef.current;
+    if (!panel) return;
+    const comparisonSource = panel.querySelector('[data-comparison-scroll-horizontal]') as HTMLElement | null;
+    const measure = () => {
+      const comparisonViewports = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'));
+      const comparisonViewport = comparisonViewports.reduce<HTMLElement | null>((widest, viewport) => {
+        if (!widest) return viewport;
+        return viewport.scrollWidth - viewport.clientWidth > widest.scrollWidth - widest.clientWidth
+          ? viewport
+          : widest;
+      }, null);
+      const comparisonPair = panel.querySelector('[data-comparison-pair]') as HTMLElement | null;
+      const candidate = comparisonViewport ?? panel;
+      leftHorizontalScrollSourceRef.current = candidate;
+      const sourceRect = candidate.getBoundingClientRect();
+      const rect = comparisonPair?.getBoundingClientRect() ?? sourceRect;
+      leftHorizontalScrollScaleRef.current = sourceRect.width / Math.max(candidate.offsetWidth, 1);
+      const scale = leftHorizontalScrollScaleRef.current;
+      const visible = candidate.scrollWidth > candidate.clientWidth + 1;
+      setLeftHorizontalScrollMetrics(previous => {
+        const sourceOverflow = Math.max(candidate.scrollWidth - candidate.clientWidth, 0) * scale;
+        const next = { visible, left: rect.left, width: rect.width, scrollWidth: Math.max(rect.width + sourceOverflow, 1) };
+        return previous.visible === next.visible
+          && previous.left === next.left
+          && previous.width === next.width
+          && previous.scrollWidth === next.scrollWidth
+          ? previous
+          : next;
+      });
+      const scrollbar = leftHorizontalScrollRef.current;
+      const nextScrollLeft = candidate.scrollLeft * scale;
+      if (scrollbar && scrollbar.scrollLeft !== nextScrollLeft) scrollbar.scrollLeft = nextScrollLeft;
+    };
+    const syncScrollbar = () => {
+      const candidate = leftHorizontalScrollSourceRef.current ?? panel;
+      const scrollbar = leftHorizontalScrollRef.current;
+      const scale = leftHorizontalScrollScaleRef.current;
+      const nextScrollLeft = candidate.scrollLeft * scale;
+      if (scrollbar && scrollbar.scrollLeft !== nextScrollLeft) scrollbar.scrollLeft = nextScrollLeft;
+    };
+    const syncSource = () => {
+      const candidate = leftHorizontalScrollSourceRef.current ?? panel;
+      const scrollbar = leftHorizontalScrollRef.current;
+      const scale = leftHorizontalScrollScaleRef.current;
+      if (scrollbar && candidate.scrollLeft !== scrollbar.scrollLeft / scale) candidate.scrollLeft = scrollbar.scrollLeft / scale;
+      measure();
+    };
+    panel.addEventListener('scroll', syncScrollbar, { passive: true });
+    comparisonSource?.addEventListener('scroll', syncScrollbar, { passive: true });
+    panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]').forEach(viewport => {
+      viewport.addEventListener('scroll', syncScrollbar, { passive: true });
+    });
+    const scrollbar = leftHorizontalScrollRef.current;
+    scrollbar?.addEventListener('scroll', syncSource, { passive: true });
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    resizeObserver?.observe(panel);
+    for (const element of panel.querySelectorAll<HTMLElement>('[data-jump-canvas], [data-comparison-pair], [data-comparison-scroll-horizontal], [data-comparison-scroll-horizontal] > div')) {
+      resizeObserver?.observe(element);
+    }
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, { passive: true });
+    measure();
+    return () => {
+      panel.removeEventListener('scroll', syncScrollbar);
+      comparisonSource?.removeEventListener('scroll', syncScrollbar);
+      panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]').forEach(viewport => {
+        viewport.removeEventListener('scroll', syncScrollbar);
+      });
+      scrollbar?.removeEventListener('scroll', syncSource);
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure);
+    };
+  }, [loading, viewMode, comparisonReviewed, messages.length, edges.length, comparisonMode]);
+
   if (loading) {
     return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
   }
@@ -5346,6 +5701,9 @@ export default function TopicDetailPage() {
       : (joinRelationsByTarget.get(joinFilterTargetId) ?? [])
     ).map(join => join.id))
     : null;
+  const comparisonViewIds = comparisonMode
+    ? new Set(comparisonTargets.map(item => item.message.id))
+    : null;
   const correctionTemporaryViewIds = correctionFilterTargetId
     ? new Set(
         edges
@@ -5356,7 +5714,11 @@ export default function TopicDetailPage() {
   // JOIN records can belong to different containers and therefore be absent
   // from the current canvas. Build this temporary category from the full
   // message map and show JOIN records only, not the target message itself.
-  const messagesToRenderFiltered = correctionTemporaryViewIds
+  const messagesToRenderFiltered = comparisonViewIds
+    ? Array.from(comparisonViewIds)
+        .map(id => msgMap.get(id))
+        .filter((message): message is DemoMessage => Boolean(message))
+    : correctionTemporaryViewIds
     ? Array.from(correctionTemporaryViewIds)
         .map(id => msgMap.get(id))
         .filter((message): message is DemoMessage => Boolean(message))
@@ -5367,6 +5729,7 @@ export default function TopicDetailPage() {
         .filter(message => !msgFilter.hideJoin || message.kind !== 'join')
     : typeFilteredMessages;
   renderedMessageIdsRef.current = new Set(messagesToRenderFiltered.map(message => message.id));
+
   const rawEdgesToRender = filterContainerEdgesByEffectiveJoins(
     viewMode === "list" ? listEdgesToRender : graphEdgesToRender,
     relations,
@@ -5379,7 +5742,9 @@ export default function TopicDetailPage() {
   // Filter edges based on current user's DISAGREE stances on relation messages.
   // When the user disagrees with a relation message, all edges produced by that
   // relation are suppressed from this user's view (per-user branch semantics).
-  const temporaryEdgesToRender = correctionTemporaryViewIds
+  const temporaryEdgesToRender = comparisonViewIds
+    ? rawEdgesToRender
+    : correctionTemporaryViewIds
     ? rawEdgesToRender.filter(edge => correctionTemporaryViewIds.has(edge.relationMessageId))
     : temporaryJoinViewIds
     ? rawEdgesToRender.filter(edge => temporaryJoinViewIds.has(edge.relationMessageId))
@@ -5387,24 +5752,26 @@ export default function TopicDetailPage() {
   // A user's DISAGREE relation may be outside the current classify scope.
   // Use all topic edges to determine suppression, then filter only the edges
   // currently being rendered.
-  const filteredEdgesToRender = computeUserFilteredEdges(
-    temporaryEdgesToRender,
-    messages,
-    displayUser?.username ?? null,
-    edges,
-  );
+  const effectiveSuppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+  const comparisonSuppressedRelIds = comparisonReviewed && comparisonTargetId
+    ? comparisonSide === 'agree' ? comparisonAgreeSuppressedRelIds : comparisonDisagreeSuppressedRelIds
+    : effectiveSuppressedRelIds;
+  const filteredEdgesToRender = temporaryEdgesToRender.filter(edge => !comparisonSuppressedRelIds.has(edge.relationMessageId));
   // The linear list keeps the annotation and its DISAGREE relation so the
   // user's stance can be shown on the source message. The non-linear graph
   // uses the suppressed relation set as a visual projection only.
   const edgesToRender = viewMode === "list" ? temporaryEdgesToRender : filteredEdgesToRender;
   renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
-  const suppressedRelIds = computeUserSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+  const suppressedRelIds = comparisonSuppressedRelIds;
   const graphMessagesFinal = messagesToRenderFiltered
     .filter(message => !suppressedRelIds.has(message.id))
     .map(message => {
     const correction = correctionVersions.get(message.id)?.current;
     return correction ? { ...message, content: correction.content } : message;
     });
+  const comparisonAgreeGraph = comparisonGraphProjections?.agree;
+  const comparisonDisagreeGraph = comparisonGraphProjections?.disagree;
+  const comparisonGraphMessages = comparisonAgreeGraph?.messages ?? messagesToRenderFiltered;
   const invalidCorrectionIds = (() => {
     const ids = new Set<string>();
     for (const entry of correctionVersions.values()) {
@@ -5446,7 +5813,7 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ minHeight: "100%", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ height: "100%", minHeight: 0, minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
@@ -5499,8 +5866,8 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 auto", minWidth: containerWidth }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: "1 1 0", minHeight: 0, minWidth: containerWidth }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
@@ -5538,6 +5905,24 @@ export default function TopicDetailPage() {
                   settings={msgFilter}
                   onChange={setMsgFilter}
                 />
+                {!comparisonMode && !comparisonReviewed && <button
+                  onClick={() => {
+                    setComparisonMode(current => {
+                      const next = !current;
+                      setComparisonTargetId(null);
+                      setComparisonReviewed(false);
+                      setComparisonReviewBaseMessages(null);
+                      setComparisonReviewBaseEdges(null);
+                      if (next) setDraftUnits([]);
+                      return next;
+                    });
+                    setViewMode('list');
+                  }}
+                  style={{ padding: "2px 8px", borderRadius: 4, border: comparisonMode ? "1px solid #22c55e" : "1px solid #666", background: comparisonMode ? "#12351f" : "#333", color: comparisonMode ? "#86efac" : "#fff", fontSize: 12, cursor: "pointer" }}
+                  title="查看赞同/反对生效后的不同显示效果"
+                >
+                  {comparisonMode ? '退出对比' : '对比'}
+                </button>}
                 <button
                   onClick={() => setShowLeaderboard(true)}
                   style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#3f2a06", color: "#fbbf24", fontSize: 12, cursor: "pointer" }}
@@ -5545,39 +5930,49 @@ export default function TopicDetailPage() {
                 >
                   排行榜
                 </button>
-                <button onClick={() => {
+                {!comparisonMode && !comparisonReviewed && <button onClick={() => {
                 if (leftPanelRef.current) {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
                 }
-                setViewMode(prev => prev === "list" ? "graph" : "list");
-                if (lastClickedMessageId) {
-                  setTimeout(() => scrollMsgToCenter(lastClickedMessageId), 100);
+                const nextViewMode = viewMode === "list" ? "graph" : "list";
+                const comparisonId = draftUnits.length === 1 ? draftUnits[0].messageId : comparisonTargetId;
+                if (comparisonMode && nextViewMode === 'list') {
+                  setComparisonTargetId(null);
+                }
+                setViewMode(nextViewMode);
+                const scrollTargetId = comparisonMode ? comparisonId : lastClickedMessageId;
+                if (scrollTargetId) {
+                  setTimeout(() => scrollMsgToCenter(scrollTargetId), 100);
                 }
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
-              </button>
+              </button>}
               </div>
             </div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>
               {viewMode === "list" ? "线性视图：按线性结构查看消息。" : "结构图：按非线性结构查看消息。"}
             </div>
           </div>
-          {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null) && (
+          {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null || comparisonMode) && (
             <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
               <div style={{ border: "1px solid #334155", borderRadius: 10, padding: "8px 10px", background: "linear-gradient(180deg, #162036 0%, #0f172a 100%)", color: "#e2e8f0", boxShadow: "0 6px 16px rgba(0,0,0,0.25)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {correctionFilterTargetId !== null
+                      {comparisonMode
+                        ? `对比临时分类（${comparisonTargets.length}）`
+                        : correctionFilterTargetId !== null
                         ? `更正记录临时分类（${correctionTemporaryViewIds?.size ?? 0}）`
                         : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (topicFocusTitle || classifyKindLabel)}
                     </div>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
-                      {correctionFilterTargetId !== null || isTemporaryJoinCategory ? "临时" : "进行中"}
+                      {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory ? "临时" : "进行中"}
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    {correctionFilterTargetId !== null ? (
+                    {comparisonMode ? (
+                      <span>{comparisonTargetId ? `正在审阅目标消息 ${comparisonTargetId}` : '显示所有影响显示效果的赞同/反对目标消息'}</span>
+                    ) : correctionFilterTargetId !== null ? (
                       <span>目标消息 {correctionFilterTargetId} 的全部更正消息</span>
                     ) : isTemporaryJoinCategory ? (
                       <span>目标消息 {joinFilterTargetId} 的全部加入记录</span>
@@ -5590,16 +5985,17 @@ export default function TopicDetailPage() {
                     )}
                   </div>
                 </div>
-                <button onClick={() => correctionFilterTargetId !== null ? setCorrectionFilterTargetId(null) : isTemporaryJoinCategory ? setJoinFilterTargetId(null) : exitClassifyTopic()} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
-                  {correctionFilterTargetId !== null || isTemporaryJoinCategory ? "退出临时分类" : classifyExitLabel}
+                <button onClick={() => comparisonMode ? (setComparisonMode(false), setComparisonTargetId(null)) : correctionFilterTargetId !== null ? setCorrectionFilterTargetId(null) : isTemporaryJoinCategory ? setJoinFilterTargetId(null) : exitClassifyTopic()} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
+                  {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory ? "退出临时分类" : classifyExitLabel}
                 </button>
               </div>
             </div>
           )}
 
           <div ref={leftPanelRef}
-            className={isPreviewMode ? "preview-mode" : ""}
-            style={{ flex: "1 1 auto", overflow: "auto", WebkitOverflowScrolling: "touch", padding: 8, minHeight: 0, position: "relative" }}
+            data-topic-left-panel="true"
+            className={`${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
+            style={{ flex: "1 1 auto", overflowY: "auto", overflowX: "hidden", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, minHeight: 0, position: "relative" }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay
@@ -5873,8 +6269,15 @@ export default function TopicDetailPage() {
               </div>
             ) : (
               <GraphView
-                  key={`gv-${classifyKey}-${focusKey}`}
-                  messages={graphMessagesFinal} edges={edgesToRender} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
+                  key={`gv-${classifyKey}-${focusKey}-${comparisonReviewed ? `comparison-${comparisonTargetId ?? 'none'}` : 'normal'}`}
+                  messages={comparisonReviewed ? comparisonGraphMessages : graphMessagesFinal} edges={comparisonReviewed ? (comparisonAgreeGraph?.edges ?? temporaryEdgesToRender) : edgesToRender} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
+                  comparisonPair={comparisonReviewed} comparisonTargetId={comparisonTargetId} comparisonRecommendedDisplay={comparisonRecommendedDisplay}
+                  comparisonAgreeMessages={comparisonAgreeGraph?.messages} comparisonAgreeEdges={comparisonAgreeGraph?.edges}
+                  comparisonAgreeHideMessageIds={comparisonAgreeGraph?.hideMessageIds}
+                  comparisonDisagreeMessages={comparisonDisagreeGraph?.messages} comparisonDisagreeEdges={comparisonDisagreeGraph?.edges}
+                  comparisonDisagreeHideMessageIds={comparisonDisagreeGraph?.hideMessageIds}
+                  comparisonAgreeSuppressedRelIds={comparisonAgreeSuppressedRelIds} comparisonDisagreeSuppressedRelIds={comparisonDisagreeSuppressedRelIds}
+                  autoCenterMessageId={comparisonReviewed ? comparisonTargetId : null}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
                   onTextMouseUp={handleTextMouseUp} onEdgeLabelSingleClick={handleEdgeLabelSingleClick}
@@ -5919,6 +6322,34 @@ export default function TopicDetailPage() {
           </div>
         </div>
 
+        {typeof document !== "undefined" && createPortal(
+          <div
+            ref={leftHorizontalScrollRef}
+            data-main-horizontal-scroll="true"
+            aria-label="主界面水平滚动条"
+            style={{
+              display: leftHorizontalScrollMetrics.visible ? "block" : "none",
+              position: "fixed",
+              left: leftHorizontalScrollMetrics.left,
+              bottom: 0,
+              width: leftHorizontalScrollMetrics.width,
+              height: 14,
+              zIndex: 60,
+              overflowX: "scroll",
+              overflowY: "hidden",
+              scrollbarGutter: "stable",
+              background: "#181818",
+              border: "1px solid #333",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{ width: leftHorizontalScrollMetrics.scrollWidth, height: 1 }}
+            />
+          </div>,
+          document.body,
+        )}
+
         {/* Draggable splitter — 12px wide with visible grip handle */}
         <div
           onMouseDown={handleSplitterMouseDown}
@@ -5929,7 +6360,7 @@ export default function TopicDetailPage() {
             cursor: "col-resize",
             transition: "background 0.15s",
             touchAction: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
+            alignItems: "center", justifyContent: "center",
             userSelect: "none",
           }}
           onMouseEnter={e => { if (!splitterActive) (e.currentTarget as HTMLDivElement).style.background = "#4a4a4a"; }}
@@ -6045,6 +6476,35 @@ export default function TopicDetailPage() {
           setShowRevenue={setShowRevenue}
           topicId={topicId!}
           debugRects={debugRects}
+          comparisonMode={comparisonMode}
+          comparisonReviewed={comparisonReviewed}
+          comparisonTargetId={comparisonTargetId}
+          comparisonSide={comparisonSide}
+          onComparisonSideChange={setComparisonSide}
+          onComparisonReview={() => {
+            const targetId = draftUnits.length === 1 ? draftUnits[0].messageId : comparisonTargetId;
+            if (!targetId) return;
+            const containingClassifyId = findContainingClassifyTopic(targetId);
+            if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
+              if (currentClassifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+              enterClassifyTopic(containingClassifyId);
+            }
+            closeSettlement();
+            setComparisonTargetId(targetId);
+            setComparisonSide('agree');
+            setComparisonReviewBaseMessages(containingClassifyId
+              ? null
+              : (isInsideClassify ? normalGraphProjection.scopedMessages : normalGraphProjection.messages));
+            setComparisonReviewBaseEdges(containingClassifyId ? null : normalGraphProjection.edges);
+            setComparisonReviewed(true);
+            setComparisonMode(false);
+            setLastClickedMessageId(targetId);
+            setViewMode('graph');
+            setTimeout(() => scrollMsgToCenter(targetId), 150);
+          }}
+          onComparisonVote={handleComparisonVote}
+          onReturnToComparisonCategory={() => { setComparisonReviewed(false); setComparisonMode(true); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); setViewMode('list'); }}
+          onExitComparison={() => { setComparisonMode(false); setComparisonReviewed(false); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); }}
         />
       </div>
     </div>

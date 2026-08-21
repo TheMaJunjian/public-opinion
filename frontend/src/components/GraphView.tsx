@@ -143,7 +143,7 @@ export function getSelectionFragment(
 export function extractTextTargetsForMessage(messageId: string, edges: DemoEdge[]) {
   const res: { start: number; len: number; relationType: RelationType; edgeId: string }[] = [];
   for (const e of edges) {
-    if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
+        if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
     if (e.to.messageId !== messageId) continue;
     if (!selectionIsText(e.to.selection)) continue;
     res.push({ start: e.to.selection.start, len: e.to.selection.len, relationType: e.relationType, edgeId: e.id });
@@ -1540,9 +1540,9 @@ function computeNoOverlapLayout(params: {
     }
     items.sort((a, b) => {
       const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
-        : Math.min(...[...a.child.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+        : Math.min(...[...a.child.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
       const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
-        : Math.min(...[...b.child.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+        : Math.min(...[...b.child.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
       return ta - tb;
     });
 
@@ -1703,9 +1703,9 @@ function computeNoOverlapLayout(params: {
   for (const fb of rootFrames2) items2.push({ kind: 'frame', block: fb });
   items2.sort((a, b) => {
     const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
-      : Math.min(...[...a.block.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+      : Math.min(...[...a.block.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
     const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
-      : Math.min(...[...b.block.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+      : Math.min(...[...b.block.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
     return ta - tb;
   });
 
@@ -1900,6 +1900,21 @@ export interface GraphViewProps {
   onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) => void;
   /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
   hideMessageIds?: Set<string>;
+  /** Render two aligned comparison projections using the same graph layout. */
+  comparisonPair?: boolean;
+  comparisonTargetId?: string | null;
+  comparisonDisplay?: 'agree' | 'disagree';
+  comparisonRecommendedDisplay?: 'agree' | 'disagree';
+  comparisonAgreeMessages?: DemoMessage[];
+  comparisonAgreeEdges?: DemoEdge[];
+  comparisonAgreeHideMessageIds?: Set<string>;
+  comparisonDisagreeMessages?: DemoMessage[];
+  comparisonDisagreeEdges?: DemoEdge[];
+  comparisonDisagreeHideMessageIds?: Set<string>;
+  comparisonAgreeSuppressedRelIds?: Set<string>;
+  comparisonDisagreeSuppressedRelIds?: Set<string>;
+  comparisonSuppressedRelIds?: Set<string>;
+  autoCenterMessageId?: string | null;
   /** Phase 2: stake counts per message (truth/value split) for display on cards */
   stakeCounts?: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
   /** Phase 3: callback when ⚖️ truth settlement toggle is clicked */
@@ -1933,9 +1948,213 @@ export interface GraphViewProps {
   onDebugRects?: (text: string) => void;
 }
 
-export default function GraphView(props: GraphViewProps) {
+const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
+const COMPARISON_HEADER_HEIGHT = 28;
+const COMPARISON_CANVAS_EXTRA_RIGHT_PAD = 96;
+
+function ComparisonGraphPair(props: GraphViewProps) {
+  const pairRef = useRef<HTMLDivElement | null>(null);
+  const agreeViewportRef = useRef<HTMLDivElement | null>(null);
+  const disagreeViewportRef = useRef<HTMLDivElement | null>(null);
+  const verticalScrollRef = useRef<HTMLDivElement | null>(null);
+  const horizontalScrollRef = useRef<HTMLDivElement | null>(null);
+  const syncingScrollRef = useRef(false);
+  const splitDragRef = useRef<{ startX: number; startAgreeRatio: number } | null>(null);
+  const [agreeRatio, setAgreeRatio] = useState(0.5);
+  const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
+  const [scrollHostSize, setScrollHostSize] = useState({ height: 0, viewportHeight: 0 });
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = splitDragRef.current;
+      const pair = pairRef.current;
+      if (!drag || !pair) return;
+      const pairWidth = pair.getBoundingClientRect().width;
+      const availableWidth = Math.max(1, pairWidth - 14 - 16);
+      const nextRatio = (drag.startAgreeRatio * availableWidth + event.clientX - drag.startX) / availableWidth;
+      setAgreeRatio(Math.max(0.25, Math.min(0.75, nextRatio)));
+    };
+    const handlePointerUp = () => { splitDragRef.current = null; };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, []);
+
+  const handleSplitPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    splitDragRef.current = { startX: event.clientX, startAgreeRatio: agreeRatio };
+  };
+
+  const setSharedScroll = (top: number, left: number) => {
+    const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+    const viewports = [agreeViewportRef.current, disagreeViewportRef.current].filter(Boolean) as HTMLDivElement[];
+    for (const viewport of viewports) {
+      viewport.scrollTop = 0;
+      viewport.scrollLeft = left;
+    }
+    if (scrollHost) scrollHost.scrollTop = top;
+    if (verticalScrollRef.current) verticalScrollRef.current.scrollTop = top;
+    if (horizontalScrollRef.current) horizontalScrollRef.current.scrollLeft = left;
+  };
+
+  useEffect(() => {
+    const targetId = props.autoCenterMessageId;
+    const agreeViewport = agreeViewportRef.current;
+    const verticalScroll = verticalScrollRef.current;
+    if (!targetId || !agreeViewport || !verticalScroll) return;
+    const centerTarget = () => {
+      const target = Array.from(agreeViewport.querySelectorAll<HTMLElement>('[data-msgid], [data-jump-msgids]'))
+        .find(element => element.getAttribute('data-msgid') === targetId
+          || (element.getAttribute('data-jump-msgids')?.split(/\s+/).includes(targetId) ?? false));
+      if (!target) return;
+      const targetRect = target.getBoundingClientRect();
+      const viewportRect = agreeViewport.getBoundingClientRect();
+      const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+      const scrollRect = scrollHost?.getBoundingClientRect() ?? viewportRect;
+      const scrollTop = scrollHost?.scrollTop ?? agreeViewport.scrollTop;
+      const scrollHeight = scrollHost?.scrollHeight ?? contentSize.height;
+      const clientHeight = scrollHost?.clientHeight ?? agreeViewport.clientHeight;
+      const nextTop = Math.max(0, Math.min(
+        scrollTop + targetRect.top - scrollRect.top + targetRect.height / 2 - clientHeight / 2,
+        Math.max(0, scrollHeight - clientHeight),
+      ));
+      const nextLeft = Math.max(0, Math.min(
+        agreeViewport.scrollLeft + targetRect.left - viewportRect.left + targetRect.width / 2 - agreeViewport.clientWidth / 2,
+        Math.max(0, contentSize.width - agreeViewport.clientWidth),
+      ));
+      setSharedScroll(nextTop, nextLeft);
+    };
+    const timer = window.setTimeout(centerTarget, 100);
+    return () => window.clearTimeout(timer);
+  }, [props.autoCenterMessageId, props.messages, props.edges, contentSize]);
+
+  useEffect(() => {
+    const updateContentSize = () => {
+      const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+      const dimensions = [agreeViewportRef.current, disagreeViewportRef.current].map(viewport => ({
+        width: viewport?.scrollWidth ?? 0,
+        height: viewport?.scrollHeight ?? 0,
+      }));
+      setContentSize({
+        width: Math.max(...dimensions.map(dimension => dimension.width), 0),
+        height: Math.max(...dimensions.map(dimension => dimension.height), agreeViewportRef.current?.clientHeight ?? 0),
+      });
+      setScrollHostSize({ height: scrollHost?.scrollHeight ?? 0, viewportHeight: scrollHost?.clientHeight ?? 0 });
+    };
+    updateContentSize();
+    const observer = new ResizeObserver(updateContentSize);
+    if (agreeViewportRef.current) observer.observe(agreeViewportRef.current);
+    if (disagreeViewportRef.current) observer.observe(disagreeViewportRef.current);
+    const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+    if (scrollHost) observer.observe(scrollHost);
+    for (const canvas of [agreeViewportRef.current, disagreeViewportRef.current]
+      .flatMap(viewport => viewport ? Array.from(viewport.querySelectorAll<HTMLElement>('[data-jump-canvas]')) : [])) {
+      observer.observe(canvas);
+    }
+    window.addEventListener('resize', updateContentSize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateContentSize);
+    };
+  }, [props.messages, props.edges]);
+
+  useEffect(() => {
+    const viewports = [agreeViewportRef.current, disagreeViewportRef.current].filter(Boolean) as HTMLDivElement[];
+    const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+    const verticalScroll = verticalScrollRef.current;
+    const horizontalScroll = horizontalScrollRef.current;
+    if (!verticalScroll || !horizontalScroll) return;
+    const syncFromViewport = (source: HTMLDivElement) => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      for (const viewport of viewports) {
+        viewport.scrollTop = 0;
+        viewport.scrollLeft = source.scrollLeft;
+      }
+      if (scrollHost) scrollHost.scrollTop = source.scrollTop;
+      verticalScroll.scrollTop = source.scrollTop;
+      horizontalScroll.scrollLeft = source.scrollLeft;
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    const syncFromVerticalScroll = () => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      if (scrollHost) scrollHost.scrollTop = verticalScroll.scrollTop;
+      for (const viewport of viewports) viewport.scrollTop = 0;
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    const syncFromHorizontalScroll = () => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      for (const viewport of viewports) viewport.scrollLeft = horizontalScroll.scrollLeft;
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    const handlers = viewports.map(viewport => {
+      const handler = () => syncFromViewport(viewport);
+      viewport.addEventListener('scroll', handler, { passive: true });
+      return [viewport, handler] as const;
+    });
+    const handleScrollHost = () => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      verticalScroll.scrollTop = scrollHost?.scrollTop ?? 0;
+      for (const viewport of viewports) viewport.scrollTop = 0;
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    verticalScroll.addEventListener('scroll', syncFromVerticalScroll, { passive: true });
+    horizontalScroll.addEventListener('scroll', syncFromHorizontalScroll, { passive: true });
+    scrollHost?.addEventListener('scroll', handleScrollHost, { passive: true });
+    return () => {
+      for (const [viewport, handler] of handlers) viewport.removeEventListener('scroll', handler);
+      verticalScroll.removeEventListener('scroll', syncFromVerticalScroll);
+      horizontalScroll.removeEventListener('scroll', syncFromHorizontalScroll);
+      scrollHost?.removeEventListener('scroll', handleScrollHost);
+    };
+  }, []);
+
+  const viewportStyle: React.CSSProperties = {
+    flex: '0 0 auto',
+    minWidth: 0,
+    minHeight: 0,
+    overflowX: 'auto',
+    overflowY: 'hidden',
+  };
+
+  return (
+    <div ref={pairRef} data-comparison-pair="true" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `${agreeRatio}fr 30px ${1 - agreeRatio}fr`, gap: 8, alignItems: 'stretch' }}>
+      <div data-comparison-view="agree" style={{ minWidth: 0, minHeight: 0, border: '1px solid #365314', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: `0 0 ${COMPARISON_HEADER_HEIGHT}px`, height: COMPARISON_HEADER_HEIGHT, boxSizing: 'border-box', display: 'flex', alignItems: 'center', padding: '6px 8px', color: '#86efac', background: '#17210f', fontSize: 12, fontWeight: 600 }}>赞同后显示{props.comparisonRecommendedDisplay === 'agree' ? ' · 推荐显示' : ''}</div>
+        <div ref={agreeViewportRef} data-comparison-viewport="agree" style={viewportStyle}>
+          <GraphView {...props} messages={props.comparisonAgreeMessages ?? props.messages} edges={props.comparisonAgreeEdges ?? props.edges} hideMessageIds={props.comparisonAgreeHideMessageIds ?? props.hideMessageIds} comparisonPair={false} comparisonDisplay="agree" comparisonSuppressedRelIds={props.comparisonAgreeSuppressedRelIds} autoCenterMessageId={null} />
+        </div>
+      </div>
+      <div data-comparison-divider="true" style={{ minHeight: 0, marginTop: COMPARISON_HEADER_HEIGHT, display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr)', gap: 4, position: 'sticky', top: 0, alignSelf: 'start', height: Math.max(scrollHostSize.viewportHeight, 1), overflow: 'hidden', background: '#2a2a2a', borderRadius: 4 }}>
+        <div ref={verticalScrollRef} data-comparison-scroll-vertical="true" aria-label="对比视图垂直滚动条" style={{ minHeight: 0, minWidth: 0, height: '100%', overflowY: 'scroll', overflowX: 'hidden', scrollbarGutter: 'stable', borderRadius: 4 }}>
+          <div style={{ height: Math.max(scrollHostSize.height, contentSize.height, 1), width: 1 }} />
+        </div>
+        <div onPointerDown={handleSplitPointerDown} role="separator" aria-label="调整对比视图宽度" style={{ minWidth: 0, cursor: 'col-resize', background: '#3a3a3a', borderRadius: 4, touchAction: 'none', userSelect: 'none' }} />
+      </div>
+      <div data-comparison-view="disagree" style={{ minWidth: 0, minHeight: 0, border: '1px solid #7f1d1d', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: `0 0 ${COMPARISON_HEADER_HEIGHT}px`, height: COMPARISON_HEADER_HEIGHT, boxSizing: 'border-box', display: 'flex', alignItems: 'center', padding: '6px 8px', color: '#fca5a5', background: '#2a1212', fontSize: 12, fontWeight: 600 }}>反对后显示{props.comparisonRecommendedDisplay === 'disagree' ? ' · 推荐显示' : ''}</div>
+        <div ref={disagreeViewportRef} data-comparison-viewport="disagree" style={viewportStyle}>
+          <GraphView {...props} messages={props.comparisonDisagreeMessages ?? props.messages} edges={props.comparisonDisagreeEdges ?? props.edges} hideMessageIds={props.comparisonDisagreeHideMessageIds ?? props.hideMessageIds} comparisonPair={false} comparisonDisplay="disagree" comparisonSuppressedRelIds={props.comparisonDisagreeSuppressedRelIds} autoCenterMessageId={null} />
+        </div>
+      </div>
+      </div>
+      <div ref={horizontalScrollRef} data-comparison-scroll-horizontal="true" aria-label="对比视图水平滚动条" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 14, opacity: 0, pointerEvents: 'none', overflowX: 'scroll', overflowY: 'hidden', scrollbarGutter: 'stable', borderRadius: 4 }}>
+        <div style={{ width: Math.max(contentSize.width, 1), height: 1 }} />
+      </div>
+    </div>
+  );
+}
+
+function GraphViewCanvas(props: GraphViewProps) {
   const {
-    messages, edges, invalidCorrectionIds, draftUnits, activeTextSelectId, lastClickedMessageId,
+    messages: inputMessages, edges: inputEdges, invalidCorrectionIds, draftUnits, activeTextSelectId, lastClickedMessageId,
     onMessageClick, onMessageDoubleClick, onTextMouseUp,
     onEdgeLabelSingleClick, onEdgeLabelDoubleClick,
     onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
@@ -1945,7 +2164,6 @@ export default function GraphView(props: GraphViewProps) {
     onTagBodyClick, onTagDoubleClick,
     onGroupFrameClick, onGroupFrameDoubleClick,
     onInlineBadgeClick, onInlineBadgeDoubleClick,
-    hideMessageIds,
     stakeCounts,
     onSettlementToggleTruth,
     onSettlementToggleValue,
@@ -1965,6 +2183,13 @@ export default function GraphView(props: GraphViewProps) {
     onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
+
+  const messages = inputMessages;
+  const edges = inputEdges;
+  const comparisonSuppressedRelIds = props.comparisonSuppressedRelIds ?? EMPTY_COMPARISON_SUPPRESSED_REL_IDS;
+  const effectiveHideMessageIds = props.hideMessageIds
+    ? new Set([...props.hideMessageIds, ...comparisonSuppressedRelIds])
+    : comparisonSuppressedRelIds;
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
   const cardRefs = useRef<Record<string,HTMLDivElement|null>>({});
@@ -2066,7 +2291,8 @@ export default function GraphView(props: GraphViewProps) {
   // TAG relations targeting relation messages — for rendering next to edge labels / arrange frames
   const [tagsByRelMsgState, setTagsByRelMsgState] = useState<Map<string,Array<{label:string;relMsgId:string}>>>(new Map());
 
-  const canvasWidth = GRID_LEFT + (pipelineMaxCol+1)*CARD_W + pipelineMaxCol*COL_GAP + CANVAS_RIGHT_PAD;
+  const canvasRightPad = props.comparisonDisplay ? CANVAS_RIGHT_PAD + COMPARISON_CANVAS_EXTRA_RIGHT_PAD : CANVAS_RIGHT_PAD;
+  const canvasWidth = GRID_LEFT + (pipelineMaxCol+1)*CARD_W + pipelineMaxCol*COL_GAP + canvasRightPad;
   const edgesByRelMsg = useMemo(() => {
     const map = new Map<string,DemoEdge[]>();
     for (const e of edges) { const arr=map.get(e.relationMessageId)??[]; arr.push(e); map.set(e.relationMessageId,arr); }
@@ -2332,16 +2558,25 @@ export default function GraphView(props: GraphViewProps) {
   }, [baseFrameRects, frameBlocks, layout, normals]);
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;
-    for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + CANVAS_RIGHT_PAD);
-    for (const r of Object.values(finalFrameRects)) w = Math.max(w, r.x + r.width + CANVAS_RIGHT_PAD);
+    for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + canvasRightPad);
+    for (const r of Object.values(finalFrameRects)) w = Math.max(w, r.x + r.width + canvasRightPad);
     return w;
-  }, [canvasWidth, layout, finalFrameRects]);
+  }, [canvasWidth, canvasRightPad, layout, finalFrameRects]);
   const actualCanvasHeight = useMemo(() => {
     let h = canvasHeight;
     for (const box of Object.values(layout)) h = Math.max(h, box.y + box.height + CANVAS_BOTTOM_PAD);
     for (const r of Object.values(finalFrameRects)) h = Math.max(h, r.y + r.height + CANVAS_BOTTOM_PAD);
     return h;
   }, [canvasHeight, layout, finalFrameRects]);
+  const visibleArrangeFrames = arrangeFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId));
+  const visibleGroupFrames = groupFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId));
+
+  useEffect(() => {
+    if (!props.autoCenterMessageId) return;
+    const target = cardRefs.current[props.autoCenterMessageId];
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
+  }, [props.autoCenterMessageId, layout]);
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
   // Used to embed correction badge in the target relation's hit area.
@@ -2976,6 +3211,7 @@ export default function GraphView(props: GraphViewProps) {
     };
 
     for (const e of edges) {
+      if (comparisonSuppressedRelIds.has(e.relationMessageId)) continue;
       const fromMsg=msgMap.get(e.from.messageId);
       if (!fromMsg) continue;
       // Container relations are rendered as frames rather than cards.  They can
@@ -3240,7 +3476,7 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, actualCanvasWidth, actualCanvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds]);
+  }, [edges, comparisonSuppressedRelIds, msgMap, layout, colOf, normalIds, edgesByRelMsg, actualCanvasWidth, actualCanvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
@@ -3310,7 +3546,7 @@ export default function GraphView(props: GraphViewProps) {
       <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
-          if (hideMessageIds?.has(msg.id)) return null;
+          if (effectiveHideMessageIds.has(msg.id)) return null;
           // Hidden targets: corrected targets (replaced by correction source) and
           // summarized targets (covered by summary card). Chained sources remain visible.
           if (hiddenTargetIds.has(msg.id)) return null;
@@ -3823,7 +4059,7 @@ export default function GraphView(props: GraphViewProps) {
       {(arrangeFrames.length>0||groupFrames.length>0)&&(
         <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
           {/* arrange frames — stroke and fill reflect selection state; hidden when blank-corrected */}
-          {arrangeFrames.map(sf=>{
+          {visibleArrangeFrames.map(sf=>{
             if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
@@ -3835,7 +4071,7 @@ export default function GraphView(props: GraphViewProps) {
             );
           })}
           {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY); hidden when blank-corrected */}
-          {groupFrames.map(gf=>{
+          {visibleGroupFrames.map(gf=>{
             if (gf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(gf.relMsgId);
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
@@ -4127,7 +4363,7 @@ export default function GraphView(props: GraphViewProps) {
           selection (like a normal message card), double-click uses the message double-click handler.
           When isBlankCorrected, the frame border is invisible so border strips are omitted; only the
           correction badge is rendered so users can interact with the correction. */}
-      {arrangeFrames.map(sf=>{
+      {visibleArrangeFrames.map(sf=>{
         const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageClick(e,sf.relMsgId);};
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageDoubleClick(e,sf.relMsgId);};
         const {x,y,width,height}=sf.rect;
@@ -4179,7 +4415,7 @@ export default function GraphView(props: GraphViewProps) {
       })}
 
       {/* GROUP frame hit strips (CLASSIFY/MERGE/CORRECT/SUMMARY) */}
-      {groupFrames.map(gf=>{
+      {visibleGroupFrames.map(gf=>{
         const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameClick??onMessageClick)(e,gf.relMsgId);};
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameDoubleClick??onMessageDoubleClick)(e,gf.relMsgId);};
         const {x,y,width,height}=gf.rect;
@@ -4357,7 +4593,7 @@ export default function GraphView(props: GraphViewProps) {
           styled and interactive identically to text-message decoration badges.
           Icon area: quick-send agree/disagree targeting the arrange relation message.
           Body area: toggle selection of all agree/disagree relation messages on this arrange. */}
-      {arrangeFrames.map(sf=>{
+      {visibleArrangeFrames.map(sf=>{
         const sfTagItems=tagsByRelMsgState.get(sf.relMsgId)??[];
         const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
         let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
@@ -4457,7 +4693,7 @@ export default function GraphView(props: GraphViewProps) {
       })}
 
       {/* GROUP frame decoration badges — AGREE/DISAGREE badges to the RIGHT of the group frame */}
-      {groupFrames.map(gf=>{
+      {visibleGroupFrames.map(gf=>{
         if (gf.relAgreeCount===0&&gf.relDisagreeCount===0) return null;
         const gfDecLeft=gf.rect.x+gf.rect.width+DEC_RIGHT_GAP;
         let gfDecTop=gf.rect.y+DEC_RIGHT_TOP;
@@ -4647,7 +4883,7 @@ export default function GraphView(props: GraphViewProps) {
               }).join('\n')}\n双击查看详情`
             : `${badge.relLabel}；双击展开操作详情`;
           return (
-            <div key={`badge-${badge.relMsgId}`} data-rel-overlay="true"
+            <div key={`badge-${badge.relMsgId}`} data-msgid={badge.relMsgId} data-jump-msgids={[badge.relMsgId, ...(badge.relMsgIds ?? [])].join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
               onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId, { relMsgIds: badge.relMsgIds, subDetails: badge.subDetails });}}
               title={tooltip}
@@ -4664,6 +4900,12 @@ export default function GraphView(props: GraphViewProps) {
 
     </div>
   );
+}
+
+export default function GraphView(props: GraphViewProps) {
+  return props.comparisonPair
+    ? <ComparisonGraphPair {...props} />
+    : <GraphViewCanvas {...props} />;
 }
 
 

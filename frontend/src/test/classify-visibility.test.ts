@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TargetRef } from '../types';
 import { isContentKind } from '../utils/modelBridge';
-import { collectContainerVisibleIds, collectOwnedByRelation, expandTextIdsWithSettlementResults, filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getAutoClassifyTargetForSettlementMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getSettlementClassifyJoinTarget, getStaleJoinRelationIds, getUserPreferredJoinByTarget, isAppendToExistingClassifyAction } from '../pages/topicDetailHelpers';
+import { collectContainerVisibleIds, collectOwnedByRelation, expandTextIdsWithSettlementResults, filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getAutoClassifyTargetForSettlementMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getSettlementClassifyJoinTarget, getStaleJoinRelationIds, getUserPreferredJoinByTarget, isAppendToExistingClassifyAction, resolveNavigationTargetId } from '../pages/topicDetailHelpers';
 
 /**
  * classify-visibility.test.ts
@@ -557,5 +557,35 @@ describe('治理消息（一次发送多个 REFERENCE）', () => {
     const textIds = getTextTargetIds(classifyRefs);
     expect(relIds).toContain('gov-1');
     expect(textIds).toEqual(['target-1', 'target-2']);
+  });
+});
+
+describe('导航目标解析', () => {
+  it('边标签关系消息定位自身，而不是定位其目标消息', () => {
+    const relations = [{
+      id: 'annotation-1',
+      relationType: 'ANNOTATION',
+      targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+    }] as any;
+
+    expect(resolveNavigationTargetId('annotation-1', [], relations)).toBe('annotation-1');
+  });
+
+  it('装饰标签关系仍定位到目标消息，分类关系仍定位自身', () => {
+    const relations = [
+      {
+        id: 'tag-1',
+        relationType: 'TAG',
+        targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+      },
+      {
+        id: 'classify-1',
+        relationType: 'CLASSIFY',
+        targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+      },
+    ] as any;
+
+    expect(resolveNavigationTargetId('tag-1', [], relations)).toBe('target-1');
+    expect(resolveNavigationTargetId('classify-1', [], relations)).toBe('classify-1');
   });
 });

@@ -1227,3 +1227,103 @@ describe('TopicDetailPage opposed annotation visibility in classify graph', () =
     });
   });
 });
+
+describe('TopicDetailPage comparison classify projection', () => {
+  const topic: Topic = {
+    id: 'topic-1', title: '对比分类', status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z', updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({ data: [
+      makeMessage('inside-a', '分类内部消息 A'),
+      makeMessage('inside-b', '分类内部消息 B'),
+      { ...makeMessage('round-preview', '结算消息'), kind: 'ROUND' },
+    ] });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      {
+        id: 'rel-classify-preview', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId: 'inside-a' }, { kind: 'message', messageId: 'inside-b' }],
+        createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-agree-preview', topicId: 'topic-1', relationType: 'AGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'rel-classify-preview' }],
+        createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-disagree-annotation-preview', topicId: 'topic-1', relationType: 'DISAGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'rel-annotation-preview' }],
+        createdAt: '2024-01-01T00:03:30.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-annotation-preview', topicId: 'topic-1', relationType: 'ANNOTATION', sourceMessageId: 'inside-a',
+        targetRefs: [{ kind: 'relation', relationId: 'rel-classify-preview' }],
+        createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-join-preview', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-classify-preview',
+        targetRefs: [{ kind: 'message', messageId: 'inside-b' }],
+        createdAt: '2024-01-01T00:05:00.000Z', createdBy: makeUser(),
+      },
+    ] });
+  });
+
+  it('keeps classify contents hidden on agree and releases them on disagree', async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '对比' }));
+    await waitFor(() => expect(screen.getByText('分类 rel-classify-preview')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('分类 rel-classify-preview'));
+    fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const agreeIds = new Set((props.comparisonAgreeMessages ?? []).map((message: { id: string }) => message.id));
+      const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
+      expect(props.autoCenterMessageId).toBe('rel-classify-preview');
+      expect(agreeIds.has('rel-classify-preview')).toBe(true);
+      expect(agreeIds.has('inside-a')).toBe(false);
+      expect(agreeIds.has('rel-join-preview')).toBe(false);
+      expect(agreeIds.has('round-preview')).toBe(false);
+      expect(props.comparisonDisagreeSuppressedRelIds.has('rel-classify-preview')).toBe(true);
+      expect(props.comparisonDisagreeSuppressedRelIds.has('rel-annotation-preview')).toBe(true);
+      expect(disagreeIds.has('rel-classify-preview')).toBe(false);
+      expect(disagreeIds.has('rel-annotation-preview')).toBe(false);
+      expect((props.comparisonDisagreeEdges ?? []).some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-classify-preview')).toBe(false);
+      expect((props.comparisonDisagreeEdges ?? []).some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-annotation-preview')).toBe(false);
+      expect(disagreeIds.has('inside-a')).toBe(true);
+      expect(disagreeIds.has('inside-b')).toBe(true);
+      expect(disagreeIds.has('rel-join-preview')).toBe(false);
+      expect(disagreeIds.has('round-preview')).toBe(false);
+    });
+  });
+
+  it('enters the containing classify when reviewing an owned relation message', async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '对比' }));
+    await waitFor(() => expect(screen.getByText('关系消息 rel-annotation-preview')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('关系消息 rel-annotation-preview'));
+    fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '退出分类' })).toBeInTheDocument();
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const agreeIds = new Set((props.comparisonAgreeMessages ?? []).map((message: { id: string }) => message.id));
+      const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
+      expect(props.autoCenterMessageId).toBe('rel-annotation-preview');
+      expect(agreeIds.has('inside-a')).toBe(true);
+      expect(agreeIds.has('inside-b')).toBe(true);
+      expect(disagreeIds.has('inside-a')).toBe(true);
+      expect(disagreeIds.has('inside-b')).toBe(true);
+    });
+  });
+});

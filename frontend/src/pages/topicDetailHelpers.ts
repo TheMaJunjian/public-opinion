@@ -2,7 +2,7 @@ import type { DemoEdge, DemoMessage, RelationType, UnitSelection } from '../util
 import { computeCharDiff } from '../components/CharDiffText';
 import { isContentKind, unitSelectionToTargetRef } from '../utils/modelBridge';
 import type { Relation, RelationPayload, TargetRef } from '../types';
-import { getRelationLabel, getRelationTitle } from '../types';
+import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 import { relationTypeName } from '../components/GraphView';
 
 export const ALL_RELATION_TYPES: RelationType[] = [
@@ -315,6 +315,55 @@ export function getRelationTargetIds(targetRefs: TargetRef[]): string[] {
       .filter((ref): ref is Extract<TargetRef, { kind: 'relation' }> => ref.kind === 'relation')
       .map(ref => ref.relationId)
   ));
+}
+
+export function resolveNavigationTargetId(
+  messageId: string,
+  messages: DemoMessage[],
+  relations: Relation[],
+): string {
+  const message = messages.find(item => item.id === messageId);
+  if (message && (message.kind === 'round' || message.kind === 'round_result')) {
+    return message.settlementTargetId ?? messageId;
+  }
+  if (message?.joinInfo?.targetIds?.length) {
+    return message.joinInfo.targetIds[0] ?? messageId;
+  }
+
+  const relation = relations.find(item => item.id === messageId);
+  if (!relation) return messageId;
+
+  if (relation.relationType.toUpperCase() === 'JOIN') {
+    const firstTarget = (relation.targetRefs ?? []).find(ref =>
+      (ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation') &&
+      (('messageId' in ref && !!ref.messageId) || ('relationId' in ref && !!ref.relationId))
+    );
+    if (firstTarget) {
+      return firstTarget.kind === 'relation'
+        ? (firstTarget.relationId ?? messageId)
+        : ((firstTarget as { messageId?: string }).messageId ?? messageId);
+    }
+  }
+
+  if (['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(relation.relationType.toUpperCase())) {
+    return messageId;
+  }
+
+  if (getPresentationSpec(relation.relationType).kind === 'edge-label') {
+    return messageId;
+  }
+
+  const firstTarget = (relation.targetRefs ?? []).find(ref =>
+    (ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation') &&
+    (('messageId' in ref && !!ref.messageId) || ('relationId' in ref && !!ref.relationId))
+  );
+  if (firstTarget) {
+    return firstTarget.kind === 'relation'
+      ? (firstTarget.relationId ?? messageId)
+      : ((firstTarget as { messageId?: string }).messageId ?? messageId);
+  }
+
+  return messageId;
 }
 
 function targetIsOwnedByContainer(

@@ -13,3 +13,21 @@ html, body, #root {
 .preview-mode {
   filter: grayscale(40%) opacity(0.9);
 }
+
+.comparison-scroll-host {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.comparison-scroll-host::-webkit-scrollbar {
+  display: none;
+}
+
+[data-comparison-viewport] {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+[data-comparison-viewport]::-webkit-scrollbar {
+  display: none;
+}

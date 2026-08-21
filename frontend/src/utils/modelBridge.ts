@@ -817,3 +817,38 @@ export function computeTransitiveVoteStats(
 
   return res;
 }
+
+/**
+ * Compute relation messages rejected by the shared vote result.
+ * A tie remains visible; only a strict DISAGREE majority suppresses a relation.
+ */
+export function computeGloballySuppressedRelIds(
+  edges: DemoEdge[],
+  messages: DemoMessage[],
+): Set<string> {
+  const stats = computeTransitiveVoteStats(edges, messages);
+  const relationIds = new Set(messages.filter(message => message.kind === 'relation').map(message => message.id));
+  return new Set(
+    Object.entries(stats)
+      .filter(([messageId, value]) => relationIds.has(messageId) && value.disagreeCount > value.agreeCount)
+      .map(([messageId]) => messageId),
+  );
+}
+
+/**
+ * Resolve the display result for one user: the community majority is only a
+ * default for users without an active stance on that target.
+ */
+export function computeEffectiveSuppressedRelIds(
+  edges: DemoEdge[],
+  messages: DemoMessage[],
+  currentUsername: string | null,
+): Set<string> {
+  const suppressed = computeGloballySuppressedRelIds(edges, messages);
+  const activeStances = computeUserActiveStanceRelIds(edges, messages, currentUsername);
+  for (const [targetId, stance] of activeStances) {
+    if (stance.type === 'agree') suppressed.delete(targetId);
+    else suppressed.add(targetId);
+  }
+  return suppressed;
+}

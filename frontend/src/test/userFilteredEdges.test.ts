@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { computeUserFilteredEdges, computeUserSuppressedRelIds, computeTransitiveVoteStats } from '../utils/modelBridge';
+import { computeUserFilteredEdges, computeUserSuppressedRelIds, computeTransitiveVoteStats, computeEffectiveSuppressedRelIds } from '../utils/modelBridge';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
@@ -654,5 +654,26 @@ describe('computeTransitiveVoteStats', () => {
   it('handles empty edges', () => {
     const stats = computeTransitiveVoteStats([], []);
     expect(Object.keys(stats).length).toBe(0);
+  });
+});
+
+describe('computeEffectiveSuppressedRelIds', () => {
+  it('uses community majority as default but lets the current user override it', () => {
+    const messages = [
+      makeNormalMsg('m1', 'author'), makeRelationMsg('rel-arr', 'author', 'arrange'),
+      makeRelationMsg('rel-alice-agree', 'alice', 'agree'),
+      makeRelationMsg('rel-alice-dis', 'alice', 'disagree'),
+      makeRelationMsg('rel-bob-dis', 'bob', 'disagree'),
+    ];
+    const edges = [
+      makeEdge('e1', 'rel-arr', 'arrange', 'm1', 'm1'),
+      makeEdge('e2', 'rel-alice-agree', 'agree', 'anon:agree', 'rel-arr'),
+      makeEdge('e3', 'rel-alice-dis', 'disagree', 'anon:dis', 'rel-arr'),
+      makeEdge('e4', 'rel-bob-dis', 'disagree', 'anon:bob', 'rel-arr'),
+    ];
+
+    expect(computeEffectiveSuppressedRelIds(edges, messages, null).has('rel-arr')).toBe(true);
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'alice').has('rel-arr')).toBe(false);
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'bob').has('rel-arr')).toBe(true);
   });
 });

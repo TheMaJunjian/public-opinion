@@ -129,6 +129,12 @@ export function MessageJumpOverlay({
         })}
       </div>
       <div ref={contentLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 2 }} />
+      {cloneReady && <div style={{
+        position: 'fixed', left: '50%', top: 16, transform: 'translateX(-50%)',
+        padding: '6px 12px', border: '1px solid rgba(250,204,21,0.7)', borderRadius: 4,
+        background: 'rgba(23,23,23,0.92)', color: '#fde68a', fontSize: 13, fontWeight: 600,
+        whiteSpace: 'nowrap', boxShadow: '0 2px 10px rgba(0,0,0,0.45)', pointerEvents: 'none',
+      }}>已定位目标消息</div>}
     </div>
   ), document.body);
 }

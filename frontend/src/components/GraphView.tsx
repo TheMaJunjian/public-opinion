@@ -3672,6 +3672,8 @@ function GraphViewCanvas(props: GraphViewProps) {
             && ['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations'].includes(msg.relationType ?? '');
           const isText=activeTextSelectId===msg.id&&(msg.kind==="normal" || isCorrectableRelation);
           const corrBadges = correctionsByTargetMsgId.get(msg.id) ?? [];
+          const correctionBadge = corrBadges[corrBadges.length - 1];
+          const correctionCount = corrBadges.length;
           const validCorrectionCount = corrBadges.filter(b => !invalidCorrectionIds?.has(b.relMsgId)).length;
 
           // Phase 5: Stance path highlighting
@@ -3731,20 +3733,20 @@ function GraphViewCanvas(props: GraphViewProps) {
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
-                  {msg.kind!=="normal" && corrBadges.map((b) => (
-                    <div key={`corr-hdr-${b.relMsgId}`}
-                      data-msgid={b.relMsgId} data-jump-msgids={b.relMsgId} data-rel-overlay="true"
-                      onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
-                      onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                      title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
-                      style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
+                  {msg.kind!=="normal" && correctionBadge && (
+                    <div key={`corr-hdr-${correctionBadge.relMsgId}`}
+                      data-msgid={correctionBadge.relMsgId} data-jump-msgids={correctionBadge.relMsgId} data-rel-overlay="true"
+                      onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,correctionBadge.relMsgId);}}
+                      onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,correctionBadge.relMsgId);}}
+                      title={`更正关系：${correctionBadge.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}
+                      style={{background:isRelWholeSel(correctionBadge.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
                         color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                         cursor:"pointer",pointerEvents:"auto",
-                        border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                        border:isRelWholeSel(correctionBadge.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                         whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                      ✏更正
+                      ✏更正 {validCorrectionCount}/{correctionCount}
                     </div>
-                  ))}
+                  )}
                   <span>{msg.author}</span>
                   {kindMeta && (
                     <span style={{fontSize:9,fontWeight:600,padding:"0 5px",borderRadius:3,background:`${kindMeta.color}22`,color:kindMeta.color,lineHeight:"16px",border:`1px solid ${kindMeta.color}44`}}>
@@ -3754,9 +3756,10 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </div>
                 {/* For text messages, correction badges are centered between author and msgId,
                     with AGREE/DISAGREE mini-badges rendered inline to the right of each correction badge. */}
-                {msg.kind==="normal" && corrBadges.length>0 && (
+                {msg.kind==="normal" && correctionBadge && (
                   <div style={{flex:1,display:"flex",justifyContent:"center",gap:4,flexWrap:"wrap"}}>
-                    {corrBadges.map((b) => {
+                    {(() => {
+                      const b = correctionBadge;
                       const corrDec=relDecByRelMsgState?.get(b.relMsgId);
                       return (
                         <React.Fragment key={`corr-hdr-${b.relMsgId}`}>
@@ -3764,13 +3767,13 @@ function GraphViewCanvas(props: GraphViewProps) {
                             data-msgid={b.relMsgId} data-jump-msgids={b.relMsgId} data-rel-overlay="true"
                             onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
                             onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                            title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
+                            title={`更正关系：${b.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}
                             style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
                               color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                               cursor:"pointer",pointerEvents:"auto",
                               border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
                               whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                            ✏更正 {corrBadges.length}/{validCorrectionCount}
+                            ✏更正 {validCorrectionCount}/{correctionCount}
                           </div>
                           {corrDec && corrDec.agreeCount>0 && (
                             <div data-rel-overlay="true"
@@ -3796,7 +3799,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                           )}
                         </React.Fragment>
                       );
-                    })}
+                    })()}
                   </div>
                 )}
                 <div style={{flex:1,display:"flex",justifyContent:"flex-end",flexDirection:"column",alignItems:"flex-end"}}>

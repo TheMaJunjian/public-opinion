@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import type { DemoEdge, DemoMessage, RelationType } from '../utils/modelBridge';
+import { computeCorrectionVersions, type DemoEdge, type DemoMessage, type RelationType } from '../utils/modelBridge';
 import { relationTypeName } from './GraphView';
 import { computeCharDiff, renderDiffParts, type DiffPart } from './CharDiffText';
 import PopupOverlay from './PopupOverlay';
@@ -29,10 +29,17 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
 
   if (relType === 'correct' && targetMsgs.length > 0) {
     const origMsg = targetMsgs[0];
+    const correctionVersions = computeCorrectionVersions(messages, edges);
+    const correctionVersion = correctionVersions.get(origMsg.id)?.versions.find(version => version.correctionId === popup.relMsgId);
+    const baseContent = correctionVersion?.baseContent ?? origMsg.content;
     const correctionContent = relEdges[0] && msgMap.get(popup.relMsgId)?.relationPayload?.correctionContent;
 
     if (correctionContent !== undefined) {
-      const { origParts, nextParts } = computeCharDiff(origMsg.content, correctionContent);
+      const { origParts, nextParts } = computeReplacementDiff(
+        baseContent,
+        correctionContent,
+        relEdges[0]?.to.selection,
+      );
       return (
         <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
           <div ref={contentRef} style={{ background: '#1e1e1e',
@@ -42,10 +49,10 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <MessageDiffColumn title="原文" message={origMsg} border="#554" background="#211e14">
+              <MessageDiffColumn title="更正前" message={{ ...origMsg, content: baseContent }} border="#554" background="#211e14">
                 {renderDiffParts(origParts, 'orig')}
               </MessageDiffColumn>
-              <MessageDiffColumn title="更正内容" message={msgMap.get(popup.relMsgId) ?? origMsg} border="#255" background="#14201e">
+              <MessageDiffColumn title="更正后" message={msgMap.get(popup.relMsgId) ?? origMsg} border="#255" background="#14201e">
                 {renderDiffParts(nextParts, 'next')}
               </MessageDiffColumn>
             </div>
@@ -68,8 +75,23 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
       const newSrcRaw = newRelEdges[0]?.from.messageId ?? '';
       const oldSrc = oldSrcRaw.startsWith('anon:') ? null : oldSrcRaw;
       const newSrc = newSrcRaw.startsWith('anon:') ? null : newSrcRaw;
-      const oldTargetStr = Array.from(new Set(oldRelEdges.map(e => e.to.messageId))).join(',');
-      const newTargetStr = Array.from(new Set(newRelEdges.map(e => e.to.messageId))).join(',');
+      const oldTargetIds = Array.from(new Set(oldRelEdges.map(e => e.to.messageId)));
+      const newTargetIds = Array.from(new Set(newRelEdges.map(e => e.to.messageId)));
+      const oldTargetIdSet = new Set(oldTargetIds);
+      const newTargetIdSet = new Set(newTargetIds);
+      const removedTargetIds = oldTargetIds.filter(id => !newTargetIdSet.has(id));
+      const addedTargetIds = newTargetIds.filter(id => !oldTargetIdSet.has(id));
+      const messageValue = (id: string) => msgMap.get(id)?.content || id;
+      const oldChanges = [
+        oldType !== newType ? oldTypeName : '',
+        oldSrc !== newSrc ? (oldSrc ? messageValue(oldSrc) : '无来源') : '',
+        ...removedTargetIds.map(messageValue),
+      ].filter(Boolean);
+      const newChanges = [
+        oldType !== newType ? newTypeName : '',
+        oldSrc !== newSrc ? (newSrc ? messageValue(newSrc) : '无来源') : '',
+        ...addedTargetIds.map(messageValue),
+      ].filter(Boolean);
       return (
         <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
           <div ref={contentRef} style={{ background: '#1e1e1e',
@@ -81,27 +103,21 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
             <div style={{ display: 'flex', gap: 10 }}>
               <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: '1px solid #554', background: '#211e14', padding: 10 }}>
                 <div style={{ fontSize: 11, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 600 }}>原关系</span>
+                  <span style={{ fontWeight: 600 }}>被替换内容</span>
                   <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 10 }}>{origMsg.id}</span>
                 </div>
                 <div style={{ fontSize: 13, fontFamily: 'monospace', lineHeight: 1.8 }}>
-                  <span style={{ color: '#ff9944', fontWeight: 700 }}>{oldTypeName}</span>
-                  <span style={{ color: '#ddd' }}>
-                    {oldSrc ? `: ${oldSrc} → ${oldTargetStr}` : `: ${oldTargetStr}`}
-                  </span>
+                  <span style={{ color: '#ff9944', fontWeight: 700 }}>{oldChanges.join('\n') || '无可见变化'}</span>
                 </div>
               </div>
               <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: '1px solid #255', background: '#14201e', padding: 10 }}>
                 <div style={{ fontSize: 11, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 600 }}>更正后</span>
+                  <span style={{ fontWeight: 600 }}>替换内容</span>
                   {sourceMsg && <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 10 }}>{sourceMsg.id}</span>}
                 </div>
                 {sourceMsg && (
                   <div style={{ fontSize: 13, fontFamily: 'monospace', lineHeight: 1.8 }}>
-                    <span style={{ color: '#44ddaa', fontWeight: 700 }}>{newTypeName}</span>
-                    <span style={{ color: '#ddd' }}>
-                      {newSrc ? `: ${newSrc} → ${newTargetStr}` : `: ${newTargetStr}`}
-                    </span>
+                    <span style={{ color: '#44ddaa', fontWeight: 700 }}>{newChanges.join('\n') || '无可见变化'}</span>
                   </div>
                 )}
               </div>
@@ -222,6 +238,48 @@ function MessageMeta({ title, message }: { title: string; message: DemoMessage }
       <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 10 }}>{message.id}</span>
     </div>
   );
+}
+
+export function computeReplacementDiff(
+  original: string,
+  corrected: string,
+  selection: DemoEdge['to']['selection'] | undefined,
+): { origParts: DiffPart[]; nextParts: DiffPart[] } {
+  if (selection?.kind !== 'text') {
+    return {
+      origParts: original ? [{ type: 'del', text: original }] : [],
+      nextParts: corrected ? [{ type: 'ins', text: corrected }] : [],
+    };
+  }
+
+  const prefixEnd = Math.max(0, Math.min(selection.start, original.length));
+  const suffixStartOriginal = Math.max(prefixEnd, Math.min(selection.start + selection.len, original.length));
+  const originalSuffix = original.slice(suffixStartOriginal);
+  let suffixLength = 0;
+  while (
+    suffixLength < originalSuffix.length
+    && suffixLength < corrected.length - prefixEnd
+    && originalSuffix[originalSuffix.length - 1 - suffixLength]
+      === corrected[corrected.length - 1 - suffixLength]
+  ) {
+    suffixLength++;
+  }
+  const suffixStartCorrected = corrected.length - suffixLength;
+  const insertedLength = Math.max(0, suffixStartCorrected - prefixEnd);
+
+  const origParts: DiffPart[] = [];
+  const nextParts: DiffPart[] = [];
+  if (prefixEnd > 0) {
+    origParts.push({ type: 'keep', text: original.slice(0, prefixEnd) });
+    nextParts.push({ type: 'keep', text: corrected.slice(0, prefixEnd) });
+  }
+  if (selection.len > 0) origParts.push({ type: 'del', text: original.slice(prefixEnd, suffixStartOriginal) });
+  if (insertedLength > 0) nextParts.push({ type: 'ins', text: corrected.slice(prefixEnd, suffixStartCorrected) });
+  if (suffixLength > 0) {
+    origParts.push({ type: 'keep', text: original.slice(suffixStartOriginal) });
+    nextParts.push({ type: 'keep', text: corrected.slice(suffixStartCorrected) });
+  }
+  return { origParts, nextParts };
 }
 
 function CloseRow({ onClose }: { onClose: () => void }) {

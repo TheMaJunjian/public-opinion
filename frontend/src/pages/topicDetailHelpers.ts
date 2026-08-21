@@ -859,7 +859,8 @@ export function uniqueTargetRefsFromEdges(
 export function generateCorrectionContent(
   targetUnits: UnitSelection[],
   replacementText: string,
-  msgMap: Map<string, DemoMessage>
+  msgMap: Map<string, DemoMessage>,
+  baseContent?: string,
 ): string | null {
   const uniqueTargetMids = Array.from(new Set(targetUnits.map(u => u.messageId)));
   if (uniqueTargetMids.length !== 1) return null;
@@ -876,7 +877,7 @@ export function generateCorrectionContent(
 
   if (textFragments.length > 0) {
     const sorted = [...textFragments].sort((a, b) => b.start - a.start);
-    let content = targetMsg.content;
+    let content = baseContent ?? targetMsg.content;
     for (const frag of sorted) {
       content = content.slice(0, frag.start) + replacementText + content.slice(frag.start + frag.len);
     }
@@ -884,6 +885,10 @@ export function generateCorrectionContent(
   }
 
   return replacementText;
+}
+
+export function formatCorrectionRange(start: number, len: number, text: string): string {
+  return `start=${start} len=${len} "${text}"`;
 }
 
 export function getCorrectionChangeSummary(original: string, corrected: string): {

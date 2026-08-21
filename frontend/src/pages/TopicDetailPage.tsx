@@ -44,6 +44,7 @@ import {
   getJoinRecoveryTargetIds,
   getEffectiveJoinRelationIds,
   filterContainerEdgesByEffectiveJoins,
+  formatCorrectionRange,
   resolveNavigationTargetId,
   getUserPreferredJoinByTarget,
   expandTextIdsWithSettlementResults,
@@ -3009,7 +3010,12 @@ export default function TopicDetailPage() {
     const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
     const hasSecSelector = relationType === "correct" && hasDraftRelTarget;
     if (relationType === 'correct' && !hasDraftRelTarget && effectiveTargets.length === 1 && text.length > 0) {
-      const correctedContent = generateCorrectionContent(effectiveTargets, text, msgMap);
+      const correctedContent = generateCorrectionContent(
+        effectiveTargets,
+        text,
+        msgMap,
+        correctionVersions.get(effectiveTargets[0].messageId)?.current?.content,
+      );
       if (correctedContent == null) {
         setSendError('更正只能针对一条文本消息或其片段');
         return;
@@ -6105,14 +6111,8 @@ export default function TopicDetailPage() {
                   const correctionTargetText = correctionTargetEdge?.to.selection.kind === 'text'
                     ? correctionTargetEdge.to.selection.text
                     : correctionTargetOriginal?.content ?? '';
-                  const correctionTargetOccurrence = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetOriginal
-                    ? correctionTargetOriginal.content
-                      .slice(0, correctionTargetEdge.to.selection.start)
-                      .split(correctionTargetText)
-                      .length
-                    : undefined;
-                  const correctionTargetLabel = correctionTargetOccurrence && correctionTargetText.length > 0
-                    ? `第${correctionTargetOccurrence}处「${correctionTargetText}」`
+                  const correctionTargetLabel = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetText.length > 0
+                    ? formatCorrectionRange(correctionTargetEdge.to.selection.start, correctionTargetEdge.to.selection.len, correctionTargetText)
                     : `「${correctionTargetText}」`;
                   const correctionReplacement = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetOriginal
                     ? (() => {

@@ -64,6 +64,7 @@ export type DemoMessage = {
 export type CorrectionVersion = {
   correctionId: string;
   targetId: string;
+  baseContent: string;
   content: string;
   valid: boolean;
   createdAt: string;
@@ -356,6 +357,7 @@ export function computeCorrectionVersions(
     const version: CorrectionVersion = {
       correctionId: correction.id,
       targetId: edge.to.messageId,
+      baseContent: target.content,
       content,
       valid: !invalidCorrectionIds.has(correction.id),
       createdAt: correction.createdAt,
@@ -366,6 +368,11 @@ export function computeCorrectionVersions(
   }
   for (const entry of result.values()) {
     entry.versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    let currentContent = entry.versions[0]?.baseContent;
+    for (const version of entry.versions) {
+      version.baseContent = currentContent ?? version.baseContent;
+      if (version.valid) currentContent = version.content;
+    }
     entry.current = [...entry.versions].reverse().find(version => version.valid);
   }
   return result;

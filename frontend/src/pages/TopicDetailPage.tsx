@@ -120,7 +120,9 @@ function collectNavigationDisplayDependencies(
 }
 
 type FocusSnapshot = {
+  viewMode: ViewMode;
   leftScroll: { top: number; left: number } | null;
+  leftHorizontalScroll: number | null;
   rightScroll: { top: number; left: number } | null;
   draftUnits: UnitSelection[];
   sourceUnits: UnitSelection[];
@@ -538,6 +540,18 @@ export default function TopicDetailPage() {
   // Stack-based snapshot store for nested classify enter/exit.
   // Each entry holds the classify id and the snapshot captured before entering it.
   const classifyStackRef = useRef<Array<{ relMsgId: string; snapshot: FocusSnapshot | null }>>([]);
+  const temporaryCategoryStackRef = useRef<Array<{
+    snapshot: FocusSnapshot;
+    joinFilterTargetId: string | null;
+    joinFilterDirection: 'incoming' | 'outgoing';
+    correctionFilterTargetId: string | null;
+    comparisonMode: boolean;
+    comparisonReviewed: boolean;
+    comparisonTargetId: string | null;
+    comparisonSide: 'agree' | 'disagree';
+    comparisonReviewBaseMessages: DemoMessage[] | null;
+    comparisonReviewBaseEdges: DemoEdge[] | null;
+  }>>([]);
   // Preview mode: when entering a rejected classify, the view is read-only
   // with a grey filter.  null = normal mode, string = classify ID being previewed.
   const [previewClassifyId, setPreviewClassifyId] = useState<string | null>(null);
@@ -1762,7 +1776,11 @@ export default function TopicDetailPage() {
 
   function captureSnapshot(): FocusSnapshot {
     return {
+      viewMode,
       leftScroll: leftPanelRef.current ? { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft } : null,
+      leftHorizontalScroll: leftHorizontalScrollSourceRef.current?.scrollLeft
+        ?? leftHorizontalScrollRef.current?.scrollLeft
+        ?? null,
       rightScroll: rightPanelRef.current ? { top: rightPanelRef.current.scrollTop, left: rightPanelRef.current.scrollLeft } : null,
       draftUnits: draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       sourceUnits: sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
@@ -1781,6 +1799,12 @@ export default function TopicDetailPage() {
     if (left !== null) container.scrollLeft = Math.min(Math.max(0, left), maxLeft);
   }
 
+  function clampAndSetHorizontalScroll(container: HTMLElement | null, left: number | null) {
+    if (!container || left === null) return;
+    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    container.scrollLeft = Math.min(Math.max(0, left), maxLeft);
+  }
+
   function restoreSnapshot(s: FocusSnapshot | null, opts?: { restoreSelection?: boolean }) {
     if (!s) return;
     const restoreSel = opts?.restoreSelection !== false; // 默认 true，焦点模式恢复候选区
@@ -1792,6 +1816,7 @@ export default function TopicDetailPage() {
     setActiveTextSelectId(s.activeTextSelectId);
     setLastClickedMessageId(s.lastClickedMessageId);
     setFocusHop(s.focusHop);
+    setViewMode(s.viewMode);
     // Cancel any in-flight scroll rAF before scheduling new ones so that stale
     // callbacks never touch DOM nodes after React has reconciled them away.
     cancelScrollRafs();
@@ -1800,9 +1825,51 @@ export default function TopicDetailPage() {
         scrollRafRef.current = null;
         scrollRaf2Ref.current = null;
         clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
+        clampAndSetHorizontalScroll(leftHorizontalScrollSourceRef.current, s.leftHorizontalScroll);
+        clampAndSetHorizontalScroll(
+          leftHorizontalScrollRef.current,
+          s.leftHorizontalScroll === null
+            ? null
+            : s.leftHorizontalScroll * leftHorizontalScrollScaleRef.current,
+        );
         clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
       });
     });
+  }
+
+  function enterTemporaryCategory(force = false) {
+    const isTemporaryCategoryActive = joinFilterTargetId !== null
+      || correctionFilterTargetId !== null
+      || comparisonMode
+      || comparisonReviewed;
+    if (isTemporaryCategoryActive && !force) return;
+    temporaryCategoryStackRef.current.push({
+      snapshot: captureSnapshot(),
+      joinFilterTargetId,
+      joinFilterDirection,
+      correctionFilterTargetId,
+      comparisonMode,
+      comparisonReviewed,
+      comparisonTargetId,
+      comparisonSide,
+      comparisonReviewBaseMessages,
+      comparisonReviewBaseEdges,
+    });
+  }
+
+  function exitTemporaryCategory() {
+    const entry = temporaryCategoryStackRef.current.pop();
+    if (!entry) return;
+    setJoinFilterTargetId(entry.joinFilterTargetId);
+    setJoinFilterDirection(entry.joinFilterDirection);
+    setCorrectionFilterTargetId(entry.correctionFilterTargetId);
+    setComparisonMode(entry.comparisonMode);
+    setComparisonReviewed(entry.comparisonReviewed);
+    setComparisonTargetId(entry.comparisonTargetId);
+    setComparisonSide(entry.comparisonSide);
+    setComparisonReviewBaseMessages(entry.comparisonReviewBaseMessages);
+    setComparisonReviewBaseEdges(entry.comparisonReviewBaseEdges);
+    restoreSnapshot(entry.snapshot);
   }
 
   function enterFocus(messageId: string, options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
@@ -2176,6 +2243,7 @@ export default function TopicDetailPage() {
         }
         const targetId = edges.find(edge => edge.relationMessageId === messageId)?.to.messageId;
         if (targetId) {
+          enterTemporaryCategory(true);
           setJoinFilterTargetId(null);
           setCorrectionFilterTargetId(targetId);
           setViewMode("list");
@@ -5522,6 +5590,7 @@ export default function TopicDetailPage() {
     } else if (relType === 'correct') {
       const targetId = relEdges[0]?.to.messageId;
       if (!targetId) return;
+      enterTemporaryCategory(true);
       setJoinFilterTargetId(null);
       setCorrectionFilterTargetId(targetId);
       setViewMode("list");
@@ -5931,6 +6000,7 @@ export default function TopicDetailPage() {
                   onClick={() => {
                     setComparisonMode(current => {
                       const next = !current;
+                      if (next) enterTemporaryCategory(true);
                       setComparisonTargetId(null);
                       setComparisonReviewed(false);
                       setComparisonReviewBaseMessages(null);
@@ -6007,7 +6077,17 @@ export default function TopicDetailPage() {
                     )}
                   </div>
                 </div>
-                <button onClick={() => comparisonMode ? (setComparisonMode(false), setComparisonTargetId(null)) : correctionFilterTargetId !== null ? setCorrectionFilterTargetId(null) : isTemporaryJoinCategory ? setJoinFilterTargetId(null) : exitClassifyTopic()} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
+                <button onClick={() => {
+                  if (comparisonMode) {
+                    exitTemporaryCategory();
+                    return;
+                  }
+                  if (correctionFilterTargetId !== null || isTemporaryJoinCategory) {
+                    exitTemporaryCategory();
+                    return;
+                  }
+                  exitClassifyTopic();
+                }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
                   {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory ? "退出临时分类" : classifyExitLabel}
                 </button>
               </div>
@@ -6224,7 +6304,7 @@ export default function TopicDetailPage() {
                           {outgoingJoinRelations.length > 0 && (
                             <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                               <button
-                                onClick={(event) => { event.stopPropagation(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('outgoing'); setJoinFilterTargetId(current => current === msg.id && joinFilterDirection === 'outgoing' ? null : msg.id); }}
+                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'outgoing'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('outgoing'); setJoinFilterTargetId(msg.id); }}
                                 title="筛选显示该容器发出的全部加入消息"
                                 style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(16,185,129,0.14)", color: "#a7f3d0", border: "1px solid rgba(16,185,129,0.4)", cursor: "pointer" }}
                               >加入消息：{outgoingJoinRelations.length} 条</button>
@@ -6233,7 +6313,7 @@ export default function TopicDetailPage() {
                           {relatedJoinRelations.length > 0 && (
                             <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                               <button
-                                onClick={(event) => { event.stopPropagation(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('incoming'); setJoinFilterTargetId(current => current === msg.id && joinFilterDirection === 'incoming' ? null : msg.id); }}
+                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'incoming'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('incoming'); setJoinFilterTargetId(msg.id); }}
                                 title="筛选显示把此消息加入容器的全部加入消息"
                                 style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinFilterTargetId === msg.id ? "rgba(59,130,246,0.28)" : "rgba(59,130,246,0.14)", color: "#bfdbfe", border: "1px solid rgba(59,130,246,0.4)", cursor: "pointer" }}
                               >被加入消息：{effectiveJoinCount} 条生效</button>
@@ -6330,7 +6410,10 @@ export default function TopicDetailPage() {
                   onJoinFilterClick={(messageId, direction) => {
                     setMsgFilter(prev => ({ ...prev, hideJoin: false }));
                     setJoinFilterDirection(direction);
-                    setJoinFilterTargetId(current => current === messageId && joinFilterDirection === direction ? null : messageId);
+                    const isExiting = joinFilterTargetId === messageId && joinFilterDirection === direction;
+                    if (isExiting) { exitTemporaryCategory(); return; }
+                    enterTemporaryCategory();
+                    setJoinFilterTargetId(messageId);
                   }}
                   onDebugRects={setDebugRects}
                 />
@@ -6520,7 +6603,7 @@ export default function TopicDetailPage() {
           }}
           onComparisonVote={handleComparisonVote}
           onReturnToComparisonCategory={() => { setComparisonReviewed(false); setComparisonMode(true); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); setViewMode('list'); }}
-          onExitComparison={() => { setComparisonMode(false); setComparisonReviewed(false); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); }}
+          onExitComparison={() => { exitTemporaryCategory(); }}
         />
       </div>
     </div>

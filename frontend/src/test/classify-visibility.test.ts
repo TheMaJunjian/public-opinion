@@ -571,11 +571,36 @@ describe('导航目标解析', () => {
     expect(resolveNavigationTargetId('annotation-1', [], relations)).toBe('annotation-1');
   });
 
-  it('装饰标签关系仍定位到目标消息，分类关系仍定位自身', () => {
+  it('普通装饰标签定位到目标消息，推荐和冷藏定位到自身，分类关系仍定位自身', () => {
     const relations = [
       {
         id: 'tag-1',
         relationType: 'TAG',
+        targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+      },
+      {
+        id: 'recommend-1',
+        relationType: 'RECOMMEND',
+        targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+      },
+      {
+        id: 'archive-1',
+        relationType: 'ARCHIVE',
+        targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+      },
+      {
+        id: 'agree-1',
+        relationType: 'AGREE',
+        targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+      },
+      {
+        id: 'disagree-1',
+        relationType: 'DISAGREE',
+        targetRefs: [{ kind: 'message', messageId: 'target-1' }],
+      },
+      {
+        id: 'correct-1',
+        relationType: 'CORRECT',
         targetRefs: [{ kind: 'message', messageId: 'target-1' }],
       },
       {
@@ -586,6 +611,11 @@ describe('导航目标解析', () => {
     ] as any;
 
     expect(resolveNavigationTargetId('tag-1', [], relations)).toBe('target-1');
+    expect(resolveNavigationTargetId('recommend-1', [], relations)).toBe('recommend-1');
+    expect(resolveNavigationTargetId('archive-1', [], relations)).toBe('archive-1');
+    expect(resolveNavigationTargetId('agree-1', [], relations)).toBe('agree-1');
+    expect(resolveNavigationTargetId('disagree-1', [], relations)).toBe('disagree-1');
+    expect(resolveNavigationTargetId('correct-1', [], relations)).toBe('correct-1');
     expect(resolveNavigationTargetId('classify-1', [], relations)).toBe('classify-1');
   });
 });

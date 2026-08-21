@@ -3733,7 +3733,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
                   {msg.kind!=="normal" && corrBadges.map((b) => (
                     <div key={`corr-hdr-${b.relMsgId}`}
-                      data-rel-overlay="true"
+                      data-msgid={b.relMsgId} data-jump-msgids={b.relMsgId} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
                       onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
                       title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
@@ -3761,7 +3761,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       return (
                         <React.Fragment key={`corr-hdr-${b.relMsgId}`}>
                           <div
-                            data-rel-overlay="true"
+                            data-msgid={b.relMsgId} data-jump-msgids={b.relMsgId} data-rel-overlay="true"
                             onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
                             onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
                             title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
@@ -4174,7 +4174,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 if (!corrRelMsgId) return null;
                 const isCorrSel=isRelWholeSel(corrRelMsgId);
                 return (
-                  <div key={`corr-edge-${corrRelMsgId}`}
+                  <div key={`corr-edge-${corrRelMsgId}`} data-msgid={corrRelMsgId} data-jump-msgids={corrRelMsgId} data-rel-overlay="true"
                     onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,corrRelMsgId);}}
                     onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,corrRelMsgId);}}
                     title={`更正关系：${corrRelMsgId}；单击选中，双击查看历史`}
@@ -4330,7 +4330,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               const icon=kind==="agree"?"👍":"👎";
               const label=kind==="agree"?"赞":"反";
               items.push(
-                <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-msgid={ci.corrRelMsgId} data-jump-msgids={ci.corrRelMsgId} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();}}
                   onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,ci.corrRelMsgId,kind);}}
                   title={`${kind==="agree"?"赞同":"反对"}更正：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
@@ -4843,6 +4843,11 @@ function GraphViewCanvas(props: GraphViewProps) {
           :"0 2px 6px rgba(0,0,0,0.5)";
         return (
           <div key={`dec-${v.key}`}
+            data-msgid={v.messageId}
+            data-jump-msgids={edges
+              .filter(edge => edge.relationType === v.kind && edge.to.messageId === v.messageId)
+              .map(edge => edge.relationMessageId)
+              .join(' ') || undefined}
             data-rel-overlay="true"
             onClick={ev=>{ev.stopPropagation();}}
             onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}

@@ -845,8 +845,10 @@ export function computeEffectiveSuppressedRelIds(
   currentUsername: string | null,
 ): Set<string> {
   const suppressed = computeGloballySuppressedRelIds(edges, messages);
+  const relationIds = new Set(messages.filter(message => message.kind === 'relation').map(message => message.id));
   const activeStances = computeUserActiveStanceRelIds(edges, messages, currentUsername);
   for (const [targetId, stance] of activeStances) {
+    if (!relationIds.has(targetId)) continue;
     if (stance.type === 'agree') suppressed.delete(targetId);
     else suppressed.add(targetId);
   }

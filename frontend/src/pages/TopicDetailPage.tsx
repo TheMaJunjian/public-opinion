@@ -1608,9 +1608,13 @@ export default function TopicDetailPage() {
     messagePulseRafRef.current = requestAnimationFrame(() => {
       messagePulseRafRef.current = null;
       if (!element.isConnected) return;
-      const targetRects = Array.from(leftPanelRef.current?.querySelectorAll(
+      const allTargetElements = Array.from(leftPanelRef.current?.querySelectorAll(
         `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
-      ) ?? [])
+      ) ?? []);
+      const overlayTargetElements = allTargetElements.filter(candidate =>
+        (candidate as HTMLElement).hasAttribute('data-rel-overlay'),
+      );
+      const targetRects = (overlayTargetElements.length > 0 ? overlayTargetElements : allTargetElements)
         .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
         .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
       const rect = targetRects.reduce((bounds, candidateRect) => {
@@ -1681,11 +1685,24 @@ export default function TopicDetailPage() {
       );
       if (!dependencyReady) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const candidates = findMessageElements(container, targetId);
+      const targetRelation = relationsRef.current.find(relation => relation.id === targetId);
+      const isDecorationTarget = targetRelation
+        ? ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetRelation.relationType.toUpperCase())
+          || getPresentationSpec(targetRelation.relationType).kind === 'inline-badge'
+        : false;
       const comparisonPair = container.querySelector('[data-comparison-pair]');
       const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
+      const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
+      const overlayComparisonCandidates = comparisonCandidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
+      const preferredCandidates = isDecorationTarget && overlayCandidates.length > 0 ? overlayCandidates : candidates;
+      const preferredComparisonCandidates = isDecorationTarget && overlayComparisonCandidates.length > 0
+        ? overlayComparisonCandidates
+        : comparisonCandidates;
       const el = comparisonPair
-        ? comparisonCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? comparisonCandidates[0] ?? null
-        : candidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? candidates[0] ?? null;
+        ? preferredComparisonCandidates[0] ?? null
+        : isDecorationTarget
+          ? preferredCandidates[0] ?? null
+          : preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
       if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const elRect = el.getBoundingClientRect();
       if (elRect.width === 0 || elRect.height === 0) {
@@ -5265,7 +5282,7 @@ export default function TopicDetailPage() {
       edge.to.selection.kind === "whole"
     ).map(edge => edge.relationMessageId);
     const uniqueRelMsgIds = Array.from(new Set(matchingRelMsgs));
-    setLastClickedMessageId(messageId);
+    setLastClickedMessageId(uniqueRelMsgIds[0] ?? messageId);
     for (const relMsgId of uniqueRelMsgIds) {
       const wholeUnit: UnitSelection = { messageId: relMsgId, selection: { kind: "whole" } };
       setDraftUnits(prev => {

@@ -349,6 +349,11 @@ export function resolveNavigationTargetId(
     return messageId;
   }
 
+  if (['AGREE', 'DISAGREE', 'CORRECT'].includes(relation.relationType.toUpperCase())
+    || getPresentationSpec(relation.relationType).kind === 'inline-badge') {
+    return messageId;
+  }
+
   if (getPresentationSpec(relation.relationType).kind === 'edge-label') {
     return messageId;
   }

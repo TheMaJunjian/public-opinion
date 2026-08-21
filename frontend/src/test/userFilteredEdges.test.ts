@@ -676,4 +676,18 @@ describe('computeEffectiveSuppressedRelIds', () => {
     expect(computeEffectiveSuppressedRelIds(edges, messages, 'alice').has('rel-arr')).toBe(false);
     expect(computeEffectiveSuppressedRelIds(edges, messages, 'bob').has('rel-arr')).toBe(true);
   });
+
+  it('does not suppress a text message targeted by DISAGREE', () => {
+    const messages = [
+      makeNormalMsg('text-target', 'author'),
+      makeNormalMsg('stance-source', 'bob'),
+      makeRelationMsg('rel-disagree', 'bob', 'disagree'),
+    ];
+    const edges = [
+      makeEdge('e1', 'rel-disagree', 'disagree', 'stance-source', 'text-target'),
+    ];
+
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'bob').has('text-target')).toBe(false);
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'bob').has('rel-disagree')).toBe(false);
+  });
 });

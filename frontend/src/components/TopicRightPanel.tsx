@@ -156,49 +156,100 @@ interface TopicRightPanelProps {
 export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
   const navigate = useNavigate();
-  if (p.comparisonMode || p.comparisonReviewed) {
-    const comparisonDraft = p.draftUnits.length === 1 && p.draftUnits[0].selection.kind === 'whole'
-      ? p.draftUnits[0]
-      : null;
-    const targetId = p.comparisonTargetId ?? comparisonDraft?.messageId ?? null;
-    const target = p.messages.find(message => message.id === targetId);
-    const comparisonCanReview = Boolean(comparisonDraft && target);
-    return (
-      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: 'flex', flexDirection: 'column', gap: 8, overflow: 'auto', minWidth: 0, boxSizing: 'border-box' }}>
-        <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div style={{ fontWeight: 600 }}>选择暂存区</div>
-            <button onClick={p.clearDraftAll} disabled={!comparisonDraft} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #666', background: comparisonDraft ? '#444' : '#333', color: comparisonDraft ? '#fff' : '#777', cursor: comparisonDraft ? 'pointer' : 'default', fontSize: 11 }}>清空</button>
-          </div>
-          {comparisonDraft ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{comparisonDraft.messageId} · {target?.author ?? '目标消息'}</span>
-              <button onClick={() => p.removeUnitFromDraft(comparisonDraft)} style={{ padding: '1px 6px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer', fontSize: 10 }}>删除</button>
-            </div>
-          ) : <div style={{ fontSize: 12, opacity: 0.6 }}>请选择一个目标消息，最多选择一条。</div>}
-        </div>
-        <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontWeight: 600 }}>对比审阅</div>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>{target ? `当前目标：${target.author} · ${target.content || target.id}` : '请在左侧选择目标消息'}</div>
-          {!p.comparisonReviewed && <button disabled={!comparisonCanReview} onClick={p.onComparisonReview} style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #38bdf8', background: '#123047', color: '#7dd3fc', cursor: comparisonCanReview ? 'pointer' : 'default', opacity: comparisonCanReview ? 1 : 0.5 }}>
-            审阅
-          </button>}
-          {p.comparisonReviewed && <div style={{ padding: '6px 8px', border: '1px solid #475569', borderRadius: 4, background: '#111827', color: '#cbd5e1', fontSize: 12 }}>
-            当前为只读对比审阅状态，可查看赞同后与反对后的结构，不支持发送关系或消息。
-          </div>}
-          {p.comparisonReviewed && <button onClick={p.onReturnToComparisonCategory} style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #38bdf8', background: '#123047', color: '#7dd3fc', cursor: 'pointer' }}>
-            回到临时分类
-          </button>}
-          <button onClick={p.onExitComparison} style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer' }}>
-            退出对比
-          </button>
-        </div>
+  const showContributionControls = p.singleButtonEnabled && !p.isPreviewMode;
+
+  const renderSendControls = () => (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {showContributionControls && <>
+        {/* Text stake */}
+        {p.hasTextContent && p.relationType !== "delegation" && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isArrangeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) && (
+          <>
+            <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
+            <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
+              onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
+              style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
+          </>
+        )}
+        {!p.hasTextContent && !p.relationType && (
+          <>
+            <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
+            <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
+              onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
+              style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
+          </>
+        )}
+        {/* Relation stake */}
+        {p.relationType && (
+          <>
+            <span style={{ fontSize: 11, color: "#888" }}>{p.hasTextContent && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
+            <input type="number" min={p.effectiveMinStake} max={p.availablePoints} value={p.relStakeAmount}
+              onChange={e => { const raw = e.target.value; if (raw === '') { p.setRelStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setRelStakeAmount(Math.min(v, p.availablePoints)); }}
+              style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: typeof p.relStakeAmount === 'number' && p.relStakeAmount < p.effectiveMinStake ? "1px solid #f87171" : "1px solid #666", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
+            {p.subType && p.subTypeStakeMap.current[p.subType] && p.subTypeStakeMap.current[p.subType] > (p.relationStakeMap.current[(p.relationType ?? '').toUpperCase()] ?? 0) && (
+              <span style={{ fontSize: 10, color: "#f59e0b" }}>（「{p.subTypeLabel(p.subType)}」最低 {p.subTypeStakeMap.current[p.subType]} 点）</span>
+            )}
+          </>
+        )}
+        <span style={{ fontSize: 11, color: "#666" }}>点 / {p.availablePoints}</span>
+        {p.totalConsumption && (
+          <span style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? "#f87171" : "#f59e0b" }}>
+            总计 {p.totalConsumption.total} 点
+            <span style={{ color: "#888" }}>
+              （{[p.totalConsumption.hasText ? `文本 ${p.totalConsumption.textStake}` : null,
+                p.totalConsumption.hasRel ? `关系 ${p.totalConsumption.perStake}×${p.totalConsumption.relCount}` : null,
+                (p.totalConsumption as any).refCount > 0 ? `引用 ${(p.totalConsumption as any).refStakeTotal}` : null,
+                (p.totalConsumption as any).joinCount > 0 ? `加入 ${(p.totalConsumption as any).joinStakeTotal + ((p.totalConsumption as any).joinFeeTotal ?? (p.totalConsumption as any).joinBurnTotal ?? 0)}（${(p.totalConsumption as any).joinCount}×${1 + p.stakeFeeAmountRef.current}）` : null,
+                p.totalConsumption.burnTotal > 0 ? `燃烧 ${p.totalConsumption.burnTotal}` : null,
+              ].filter(Boolean).join(' + ')}）
+            </span>
+            {' '}
+            <span style={{ color: p.availablePoints - p.totalConsumption.total < 0 ? "#f87171" : "#4ade80" }}>
+              剩余 {p.availablePoints - p.totalConsumption.total} 点
+            </span>
+          </span>
+        )}
+        </>}
+        <button onClick={p.handleQuickSendAndRelateFromDraftTargets} disabled={p.isPreviewMode || !p.singleButtonEnabled}
+          style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: (p.singleButtonEnabled && !p.isPreviewMode) ? "#0b84ff" : "#333", color: (p.singleButtonEnabled && !p.isPreviewMode) ? "#fff" : "#777", cursor: (p.singleButtonEnabled && !p.isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+          发送
+        </button>
+        <span style={{ fontSize: 11, color: "#fff" }}>{p.singleButtonLabel}</span>
       </div>
-    );
-  }
+      {p.sendValidationLabel && <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>}
+      {p.sendError && <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>}
+      {p.sendWarning && <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
+    </>
+  );
+  const isComparison = Boolean(p.comparisonMode || p.comparisonReviewed);
+  const comparisonDraft = p.draftUnits.length === 1 && p.draftUnits[0].selection.kind === 'whole'
+    ? p.draftUnits[0]
+    : null;
+  const comparisonTarget = p.messages.find(message => message.id === (p.comparisonTargetId ?? comparisonDraft?.messageId ?? null));
+  const comparisonCanReview = Boolean(comparisonDraft && comparisonTarget);
+  const renderComparisonHeader = () => isComparison && (
+    <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontWeight: 600 }}>对比审阅</div>
+      <div style={{ fontSize: 12, opacity: 0.8 }}>{comparisonTarget ? `当前目标：${comparisonTarget.author} · ${comparisonTarget.content || comparisonTarget.id}` : "请在左侧选择目标消息"}</div>
+      {!p.comparisonReviewed && <button disabled={!comparisonCanReview} onClick={p.onComparisonReview} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #38bdf8", background: "#123047", color: "#7dd3fc", cursor: comparisonCanReview ? "pointer" : "default", opacity: comparisonCanReview ? 1 : 0.5 }}>
+        审阅
+      </button>}
+      {p.comparisonReviewed && p.isViewerMode && <div style={{ padding: "6px 8px", border: "1px solid #475569", borderRadius: 4, background: "#111827", color: "#cbd5e1", fontSize: 12 }}>
+        当前为只读对比审阅状态，可查看赞同后与反对后的结构，不支持发送关系或消息。
+      </div>}
+      {p.comparisonReviewed && <button onClick={p.onReturnToComparisonCategory} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #38bdf8", background: "#123047", color: "#7dd3fc", cursor: "pointer" }}>
+        回到临时分类
+      </button>}
+      <button onClick={p.onExitComparison} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>
+        退出对比
+      </button>
+    </div>
+  );
+
   if (p.isViewerMode) {
     return (
       <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0, boxSizing: "border-box" }}>
+        {renderComparisonHeader()}
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontWeight: 600, color: "#e2e8f0" }}>只读阅览</div>
           <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.6 }}>当前为导出数据阅览模式，不支持发送消息、建立关系或结算操作。</div>
@@ -222,10 +273,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
       </div>
     );
   }
-  const showContributionControls = p.singleButtonEnabled && !p.isPreviewMode;
-
   return (
     <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0, boxSizing: "border-box" }}>
+      {renderComparisonHeader()}
       {p.isPreviewMode && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
           ⚠ 预览模式 — 该分类已被反对，无法发送消息或修改
@@ -445,74 +495,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
               />
             );
           })()}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            {showContributionControls && <>
-            {/* Text stake */}
-            {p.hasTextContent && p.relationType !== "delegation" && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isArrangeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) && (
-              <>
-                <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
-                <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
-                  onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
-                  style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
-              </>
-            )}
-            {!p.hasTextContent && !p.relationType && (
-              <>
-                <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
-                <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
-                  onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
-                  style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
-              </>
-            )}
-            {/* Relation stake */}
-            {p.relationType && (
-              <>
-                <span style={{ fontSize: 11, color: "#888" }}>{p.hasTextContent && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
-                <input type="number" min={p.effectiveMinStake} max={p.availablePoints} value={p.relStakeAmount}
-                  onChange={e => { const raw = e.target.value; if (raw === '') { p.setRelStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setRelStakeAmount(Math.min(v, p.availablePoints)); }}
-                  style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: typeof p.relStakeAmount === 'number' && p.relStakeAmount < p.effectiveMinStake ? "1px solid #f87171" : "1px solid #666", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
-                {p.subType && p.subTypeStakeMap.current[p.subType] && p.subTypeStakeMap.current[p.subType] > (p.relationStakeMap.current[(p.relationType ?? '').toUpperCase()] ?? 0) && (
-                  <span style={{ fontSize: 10, color: "#f59e0b" }}>（「{p.subTypeLabel(p.subType)}」最低 {p.subTypeStakeMap.current[p.subType]} 点）</span>
-                )}
-              </>
-            )}
-            <span style={{ fontSize: 11, color: "#666" }}>点 / {p.availablePoints}</span>
-            {/* Total consumption */}
-            {p.totalConsumption && (
-              <span style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? "#f87171" : "#f59e0b" }}>
-                总计 {p.totalConsumption.total} 点
-                <span style={{ color: "#888" }}>
-                  （{[p.totalConsumption.hasText ? `文本 ${p.totalConsumption.textStake}` : null,
-                    p.totalConsumption.hasRel ? `关系 ${p.totalConsumption.perStake}×${p.totalConsumption.relCount}` : null,
-                    (p.totalConsumption as any).refCount > 0 ? `引用 ${(p.totalConsumption as any).refStakeTotal}` : null,
-                    (p.totalConsumption as any).joinCount > 0 ? `加入 ${(p.totalConsumption as any).joinStakeTotal + ((p.totalConsumption as any).joinFeeTotal ?? (p.totalConsumption as any).joinBurnTotal ?? 0)}（${(p.totalConsumption as any).joinCount}×${1 + p.stakeFeeAmountRef.current}）` : null,
-                    p.totalConsumption.burnTotal > 0 ? `燃烧 ${p.totalConsumption.burnTotal}` : null,
-                  ].filter(Boolean).join(' + ')}）
-                </span>
-                {' '}
-                <span style={{ color: p.availablePoints - p.totalConsumption.total < 0 ? "#f87171" : "#4ade80" }}>
-                  剩余 {p.availablePoints - p.totalConsumption.total} 点
-                </span>
-              </span>
-            )}
-            </>}
-            <button onClick={p.handleQuickSendAndRelateFromDraftTargets} disabled={p.isPreviewMode || !p.singleButtonEnabled}
-              style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: (p.singleButtonEnabled && !p.isPreviewMode) ? "#0b84ff" : "#333", color: (p.singleButtonEnabled && !p.isPreviewMode) ? "#fff" : "#777", cursor: (p.singleButtonEnabled && !p.isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
-              发送
-            </button>
-            <span style={{ fontSize: 11, color: "#fff" }}>
-              {p.singleButtonLabel}
-            </span>
-          </div>
-          {p.sendValidationLabel && (
-            <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>
-          )}
-          {p.sendError && (
-            <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>
-          )}
-          {p.sendWarning && (
-            <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>
-          )}
+          {renderSendControls()}
           </div>
         </div>
       )}

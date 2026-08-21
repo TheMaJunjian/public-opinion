@@ -2006,7 +2006,6 @@ export default function TopicDetailPage() {
   }
 
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
-    if (comparisonReviewed) return null;
     if (!requireAuth()) return null;
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
@@ -2821,7 +2820,6 @@ export default function TopicDetailPage() {
   }
 
   async function handleQuickSendAndRelateFromDraftTargets() {
-    if (comparisonReviewed) return;
     if (!requireAuth()) return;
     if (!singleButtonEnabled) return;
     const text = newMessageContent.trim();
@@ -5246,9 +5244,10 @@ export default function TopicDetailPage() {
   }
 
   async function handleComparisonVote(side: 'agree' | 'disagree' = 'agree') {
-    if (comparisonReviewed) return;
+    if (isPreloaded || !comparisonReviewed) return;
+    if (!requireAuth()) return;
     const targetId = comparisonTargetId ?? (draftUnits.length === 1 ? draftUnits[0].messageId : null);
-    if (!comparisonReviewed || !topicId || !targetId) return;
+    if (!topicId || !targetId) return;
     const amount = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
     const minimum = effectiveMinStake;
     if (amount < minimum) {

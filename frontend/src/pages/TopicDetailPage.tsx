@@ -5884,40 +5884,50 @@ export default function TopicDetailPage() {
     document.addEventListener('touchend', onTouchEnd);
   }
 
-  function handleLeftPanelTouchStart(e: React.TouchEvent<HTMLDivElement>) {
-    leftPanelTouchRef.current = e.touches.length === 1
-      ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
-      : null;
-  }
-
-  function handleLeftPanelTouchMove(e: React.TouchEvent<HTMLDivElement>) {
-    if (e.touches.length !== 1 || !leftPanelTouchRef.current) {
-      leftPanelTouchRef.current = null;
-      return;
-    }
+  useEffect(() => {
     const panel = leftPanelRef.current;
     if (!panel) return;
-    const touch = e.touches[0];
-    const deltaX = touch.clientX - leftPanelTouchRef.current.x;
-    const atLeftEdge = panel.scrollLeft <= 0 && deltaX > 0;
-    const atRightEdge = panel.scrollLeft >= panel.scrollWidth - panel.clientWidth - 1 && deltaX < 0;
-    if ((atLeftEdge || atRightEdge) && Math.abs(deltaX) > 0) {
-      e.preventDefault();
+    const handleTouchStart = (event: TouchEvent) => {
+      leftPanelTouchRef.current = event.touches.length === 1
+        ? { x: event.touches[0].clientX, y: event.touches[0].clientY }
+        : null;
+    };
+    const handleTouchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 1 || !leftPanelTouchRef.current) {
+        leftPanelTouchRef.current = null;
+        return;
+      }
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - leftPanelTouchRef.current.x;
+      const maxPanelScrollLeft = Math.max(0, panel.scrollWidth - panel.clientWidth);
+      const atLeftEdge = panel.scrollLeft <= 0 && deltaX > 0;
+      const atRightEdge = panel.scrollLeft >= maxPanelScrollLeft - 1 && deltaX < 0;
       const documentScroller = document.scrollingElement;
-      if (documentScroller) {
-        const maxScrollLeft = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
-        documentScroller.scrollLeft = Math.max(0, Math.min(
-          maxScrollLeft,
+      if ((atLeftEdge || atRightEdge) && documentScroller && deltaX !== 0) {
+        const maxDocumentScrollLeft = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
+        const nextScrollLeft = Math.max(0, Math.min(
+          maxDocumentScrollLeft,
           documentScroller.scrollLeft - deltaX,
         ));
+        if (nextScrollLeft !== documentScroller.scrollLeft) {
+          event.preventDefault();
+          documentScroller.scrollLeft = nextScrollLeft;
+        }
       }
-    }
-    leftPanelTouchRef.current = { x: touch.clientX, y: touch.clientY };
-  }
-
-  function handleLeftPanelTouchEnd() {
-    leftPanelTouchRef.current = null;
-  }
+      leftPanelTouchRef.current = { x: touch.clientX, y: touch.clientY };
+    };
+    const handleTouchEnd = () => { leftPanelTouchRef.current = null; };
+    panel.addEventListener('touchstart', handleTouchStart, { passive: true });
+    panel.addEventListener('touchmove', handleTouchMove, { passive: false });
+    panel.addEventListener('touchend', handleTouchEnd, { passive: true });
+    panel.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+    return () => {
+      panel.removeEventListener('touchstart', handleTouchStart);
+      panel.removeEventListener('touchmove', handleTouchMove);
+      panel.removeEventListener('touchend', handleTouchEnd);
+      panel.removeEventListener('touchcancel', handleTouchEnd);
+    };
+  }, [loading, viewMode, comparisonReviewed, messages.length, edges.length, comparisonMode]);
 
   // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
 
@@ -6344,10 +6354,6 @@ export default function TopicDetailPage() {
             data-topic-left-panel="true"
             className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
             style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", overscrollBehaviorX: "auto", touchAction: "pan-x pan-y pinch-zoom", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
-            onTouchStart={handleLeftPanelTouchStart}
-            onTouchMove={handleLeftPanelTouchMove}
-            onTouchEnd={handleLeftPanelTouchEnd}
-            onTouchCancel={handleLeftPanelTouchEnd}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

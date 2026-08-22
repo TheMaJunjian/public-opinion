@@ -65,7 +65,7 @@ export default function App() {
       window.removeEventListener('resize', measure);
       window.visualViewport?.removeEventListener('resize', measure);
     };
-  }, [interfaceZoom]);
+  }, [interfaceZoom, documentScrollMetrics.visible]);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
   const handleGestureConfirm = (direction: GestureDirection, target: HTMLElement | null, symbol: ShortcutSymbol) => {
     if (symbol === 'zoom-in' || symbol === 'zoom-out') {

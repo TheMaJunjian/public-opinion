@@ -6877,6 +6877,11 @@ export default function TopicDetailPage() {
         popup={comparisonPopup}
         messages={messages}
         edges={edges}
+        invalidCorrectionIds={new Set(
+          Array.from(correctionVersions.values()).flatMap(entry =>
+            entry.versions.filter(version => !version.valid).map(version => version.correctionId),
+          ),
+        )}
         onClose={() => setComparisonPopup(null)}
         reversePreview={comparisonPopup.reversePreview ? {
           before: comparisonPopup.reversePreview.before,

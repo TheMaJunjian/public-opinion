@@ -14,6 +14,7 @@ type Props = {
   popup: ComparisonPopupState;
   messages: DemoMessage[];
   edges: DemoEdge[];
+  invalidCorrectionIds?: Set<string>;
   onClose: () => void;
   reversePreview?: {
     before: string;
@@ -22,7 +23,7 @@ type Props = {
   };
 };
 
-export default function CorrectionComparisonPopup({ popup, messages, edges, onClose, reversePreview }: Props) {
+export default function CorrectionComparisonPopup({ popup, messages, edges, invalidCorrectionIds = new Set(), onClose, reversePreview }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const msgMap = new Map(messages.map(m => [m.id, m]));
   const relEdges = edges.filter(e => e.relationMessageId === popup.relMsgId);
@@ -64,17 +65,77 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
 
   if (relType === 'correct' && targetMsgs.length > 0) {
     const origMsg = targetMsgs[0];
-    const selectedVersion = computeCorrectionVersions(messages, edges)
+    const selectedVersion = computeCorrectionVersions(messages, edges, invalidCorrectionIds)
       .get(origMsg.id)?.versions.find(version => version.correctionId === popup.relMsgId);
-    const baseContent = selectedVersion?.baseContent ?? origMsg.content;
-    const correctionContent = selectedVersion?.content ?? origMsg.content;
+    const beforeContent = origMsg.content;
 
-    if (correctionContent !== undefined) {
-      const { origParts, nextParts } = computeReplacementDiff(
-        baseContent,
-        correctionContent,
-        relEdges[0]?.to.selection,
+    if (selectedVersion) {
+      const versionState = computeCorrectionVersions(messages, edges, invalidCorrectionIds).get(origMsg.id);
+      const effectiveVersions = new Map<string, typeof selectedVersion>();
+      for (const version of versionState?.versions ?? []) {
+        if (version.valid || version.correctionId === selectedVersion.correctionId) {
+          const fieldKey = version.selection?.kind === 'text'
+            ? `text:${version.selection.start}:${version.selection.len}`
+            : `whole:${beforeContent.length}`;
+          effectiveVersions.set(fieldKey, version);
+        }
+      }
+      effectiveVersions.set(
+        selectedVersion.selection?.kind === 'text'
+          ? `text:${selectedVersion.selection.start}:${selectedVersion.selection.len}`
+          : `whole:${beforeContent.length}`,
+        selectedVersion,
       );
+      const changes = Array.from(effectiveVersions.values()).map(version => {
+        const selection = version.selection;
+        if (selection?.kind !== 'text') {
+          return { version, start: 0, end: beforeContent.length, replacement: version.content };
+        }
+        const start = Math.max(0, Math.min(selection.start, beforeContent.length));
+        const end = Math.max(start, Math.min(start + selection.len, beforeContent.length));
+        const suffix = beforeContent.slice(end);
+        const prefix = beforeContent.slice(0, start);
+        const replacement = version.content.startsWith(prefix) && version.content.endsWith(suffix)
+          ? version.content.slice(start, version.content.length - suffix.length || undefined)
+          : version.content.slice(start, start + selection.len);
+        return { version, start, end, replacement };
+      }).sort((left, right) => left.start - right.start);
+      let offset = 0;
+      const positionedChanges = changes.map(change => {
+        const positioned = { ...change, afterStart: change.start + offset };
+        offset += change.replacement.length - (change.end - change.start);
+        return positioned;
+      });
+      let afterContent = beforeContent;
+      for (const change of [...positionedChanges].sort((left, right) => right.start - left.start)) {
+        afterContent = afterContent.slice(0, change.start) + change.replacement + afterContent.slice(change.end);
+      }
+      const renderHighlightedContent = (content: string, side: 'before' | 'after') => {
+        const parts: Array<{ text: string; color?: string }> = [];
+        let cursor = 0;
+        for (const change of positionedChanges) {
+          const isCurrent = change.version.correctionId === selectedVersion.correctionId;
+          const color = isCurrent
+            ? side === 'before' ? '#ff6b6b' : '#4ade80'
+            : '#fbbf24';
+          const text = side === 'before'
+            ? beforeContent.slice(change.start, change.end)
+            : change.replacement;
+          const position = side === 'before' ? change.start : change.afterStart;
+          if (position > cursor) parts.push({ text: content.slice(cursor, position) });
+          if (text) parts.push({ text, color });
+          cursor = side === 'before' ? change.end : position + text.length;
+        }
+        if (cursor < content.length) parts.push({ text: content.slice(cursor) });
+        return parts.map((part, index) => (
+          <span key={index} style={part.color ? {
+            background: part.color === '#fbbf24' ? 'rgba(245,158,11,0.38)' : `${part.color}55`,
+            color: part.color,
+            borderRadius: 2,
+            outline: `1px solid ${part.color}99`,
+          } : undefined}>{part.text}</span>
+        ));
+      };
       return (
         <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
           <div ref={contentRef} style={{ background: '#1e1e1e',
@@ -84,11 +145,11 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <MessageDiffColumn title="更正前" message={{ ...origMsg, content: baseContent }} isCorrected={false} border="#554" background="#211e14">
-                {renderDiffParts(origParts, 'orig')}
+              <MessageDiffColumn title="原文" message={{ ...origMsg, content: beforeContent }} isCorrected={false} border="#554" background="#211e14">
+                {renderHighlightedContent(beforeContent, 'before')}
               </MessageDiffColumn>
-              <MessageDiffColumn title="更正后" message={msgMap.get(popup.relMsgId) ?? origMsg} border="#255" background="#14201e">
-                {renderDiffParts(nextParts, 'next')}
+              <MessageDiffColumn title="本次更正有效后的最新内容" message={{ ...origMsg, content: afterContent }} border="#255" background="#14201e">
+                {renderHighlightedContent(afterContent, 'after')}
               </MessageDiffColumn>
             </div>
             <CloseRow onClose={onClose} />

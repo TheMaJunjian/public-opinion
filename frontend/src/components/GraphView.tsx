@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
-import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
+import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters, convergeGroupingAndRightConstraints } from '../utils/layout';
 import { debugWarn } from '../utils/debugLog';
 import SettlementPanel from './SettlementPanel';
@@ -2369,6 +2369,11 @@ function GraphViewCanvas(props: GraphViewProps) {
     return map;
   }, [edges, msgMap]);
 
+  const correctionVersionsByTargetMsgId = useMemo(
+    () => computeCorrectionVersions(messages, edges, invalidCorrectionIds),
+    [messages, edges, invalidCorrectionIds],
+  );
+
   // Corrected-target IDs that are NOT themselves correction sources.
   // A message that corrects another while also being corrected (chained correction) must
   // remain visible so its own correction badge is not lost.
@@ -3672,9 +3677,18 @@ function GraphViewCanvas(props: GraphViewProps) {
             && ['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations'].includes(msg.relationType ?? '');
           const isText=activeTextSelectId===msg.id&&(msg.kind==="normal" || isCorrectableRelation);
           const corrBadges = correctionsByTargetMsgId.get(msg.id) ?? [];
-          const correctionBadge = corrBadges[corrBadges.length - 1];
-          const correctionCount = corrBadges.length;
-          const validCorrectionCount = corrBadges.filter(b => !invalidCorrectionIds?.has(b.relMsgId)).length;
+          const uniqueCorrBadges = Array.from(new Map(corrBadges.map(b => [b.relMsgId, b])).values());
+          const correctionBadge = uniqueCorrBadges[uniqueCorrBadges.length - 1];
+          const correctionCount = uniqueCorrBadges.length;
+          const versionState = correctionVersionsByTargetMsgId.get(msg.id);
+          const validCorrectionIds = new Set(
+            versionState?.versions
+              .filter(version => version.valid && !version.conflicted)
+              .map(version => version.correctionId) ?? [],
+          );
+          const validCorrectionCount = uniqueCorrBadges.filter(b => validCorrectionIds.has(b.relMsgId)).length;
+          const correctionBadgeOpacity = validCorrectionCount === 0 ? 0.45 : 1;
+          const correctionBadgeLabel = `✏更正 ${validCorrectionCount}/${correctionCount}`;
 
           // Phase 5: Stance path highlighting
           const isStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
@@ -3743,8 +3757,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                         color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                         cursor:"pointer",pointerEvents:"auto",
                         border:isRelWholeSel(correctionBadge.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                        whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                      ✏更正 {validCorrectionCount}/{correctionCount}
+                        whiteSpace:"nowrap",userSelect:"none",flexShrink:0,opacity:correctionBadgeOpacity}}>
+                      {correctionBadgeLabel}
                     </div>
                   )}
                   <span>{msg.author}</span>
@@ -3772,8 +3786,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                               color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                               cursor:"pointer",pointerEvents:"auto",
                               border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                              whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                            ✏更正 {validCorrectionCount}/{correctionCount}
+                              whiteSpace:"nowrap",userSelect:"none",flexShrink:0,opacity:correctionBadgeOpacity}}>
+                            {correctionBadgeLabel}
                           </div>
                           {corrDec && corrDec.agreeCount>0 && (
                             <div data-rel-overlay="true"

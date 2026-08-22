@@ -96,8 +96,6 @@ export type TargetRef =
       messageId: string;
       text: string;
       hash: string;
-      contextBefore?: string;
-      contextAfter?: string;
     }
   | {
       kind: 'relation';

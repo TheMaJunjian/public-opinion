@@ -4,7 +4,7 @@ import { useParams, useSearchParams, useLocation, useNavigate } from 'react-rout
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeCorrectionVersions, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection, Selection,
   RelationType, MessageKind,
@@ -602,6 +602,7 @@ export default function TopicDetailPage() {
   messagesRef.current = messages;
   const renderedMessageIdsRef = useRef<Set<string>>(new Set());
   const renderedRelationIdsRef = useRef<Set<string>>(new Set());
+  const pendingCorrectionNavigationRef = useRef<{ messageId: string } | null>(null);
   const navigationVisibilityRef = useRef<{
     cleanMode: boolean;
     cleanVisibleIds: { visibleTextIds: Set<string>; visibleRelIds: Set<string> } | null;
@@ -645,6 +646,23 @@ export default function TopicDetailPage() {
     }
   }, [loading, messages, classifyKey, focusKey, scrollKey, viewMode]);
 
+  useEffect(() => {
+    const pendingNavigation = pendingCorrectionNavigationRef.current;
+    if (!pendingNavigation || correctionFilterTargetId !== null || viewMode !== 'list') return;
+    const dependencyIds = collectNavigationDisplayDependencies(
+      pendingNavigation.messageId,
+      messagesRef.current,
+      relationsRef.current,
+      edgesRef.current,
+    );
+    const allRendered = Array.from(dependencyIds).every(id =>
+      renderedMessageIdsRef.current.has(id) || renderedRelationIdsRef.current.has(id),
+    );
+    if (!allRendered) return;
+    pendingCorrectionNavigationRef.current = null;
+    handleNavigateToMessage(pendingNavigation.messageId);
+  }, [correctionFilterTargetId, viewMode, loading, messages, edges, relations, scrollKey]);
+
   useEffect(() => () => {
     if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
     if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
@@ -664,6 +682,13 @@ export default function TopicDetailPage() {
   const [comparisonPopup, setComparisonPopup] = useState<{
     relMsgId: string;
     x: number; y: number;
+    reversePreview?: {
+      before: string;
+      after: string;
+      target: UnitSelection;
+      mode?: 'direct' | 'source';
+      label?: string;
+    };
   } | null>(null);
   const [mergeInfoPopup, setMergeInfoPopup] = useState<{
     relMsgId: string;
@@ -3078,38 +3103,38 @@ export default function TopicDetailPage() {
     const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
     const hasSecSelector = relationType === "correct" && hasDraftRelTarget;
     if (relationType === 'correct' && !hasDraftRelTarget && effectiveTargets.length === 1 && text.length > 0) {
+      const correctionTarget = effectiveTargets[0];
+      if (correctionTarget.selection.kind !== 'text') {
+        setSendError('更正只能选择原始内容中的一个文本字段');
+        return;
+      }
+      const originalContent = msgMap.get(correctionTarget.messageId)?.content ?? '';
+      if (hasActiveCorrectionForSelection(correctionTarget.messageId, correctionTarget.selection, correctionVersions)) {
+        setSendError('该字段已有未被反对的更正，不能重复发送');
+        return;
+      }
       const correctedContent = generateCorrectionContent(
         effectiveTargets,
         text,
         msgMap,
-        correctionVersions.get(effectiveTargets[0].messageId)?.current?.content,
+        originalContent,
       );
       if (correctedContent == null) {
         setSendError('更正只能针对一条文本消息或其片段');
         return;
       }
-      try {
-        const backendRel = await createRel(topicId!, {
-          relationType: 'CORRECT',
-          sourceMessageId: null,
-          targetRefs: [unitSelectionToTargetRef(effectiveTargets[0], msgMap)],
-          payload: { correctionContent: correctedContent },
-        });
-        await registerCreatedRelationInCurrentClassify(backendRel);
-        setEdges(prev => [...prev, {
-          id: nextId('edge'),
-          relationMessageId: backendRel.id,
-          relationType: 'correct',
-          from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
-          to: { ...effectiveTargets[0] },
-          relationLabel: relationTypeName('correct'),
-        }]);
-      } catch (e: any) {
-        showAlert(`建立更正关系失败: ${e?.message ?? e}`);
+      if (correctionSelectionIsStale(
+        originalContent,
+        correctionTarget.selection,
+      )) {
+        setSendError('当前选择已不再匹配原始内容');
         return;
       }
-      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
+      const beforeContent = originalContent;
+      setComparisonPopup({
+        relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
+        reversePreview: { before: beforeContent, after: correctedContent, target: effectiveTargets[0], mode: 'direct' },
+      });
       return;
     }
     if (hasSecSelector) {
@@ -3756,18 +3781,30 @@ export default function TopicDetailPage() {
         ? effectiveTargets
         : effectiveTargets.map(u => ({ ...u, messageId: ancestorTargetMid }));
 
-      const generated = generateCorrectionContent(resolvedTargets, text, msgMap);
+      const generated = generateCorrectionContent(
+        resolvedTargets,
+        text,
+        msgMap,
+        correctionVersions.get(ancestorTargetMid)?.current?.content,
+      );
       if (generated === null) {
         showAlert("更正关系目标必须是普通文本消息");
         return;
       }
-      const msg = await handleSendMessageOnly(generated);
-      if (!msg) return;
-      const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-      await handleCreateRelationWithSourcesAndTargets({ sources, targets: resolvedTargets, label });
-      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setNewMessageContent("");
-      setRelationType(null); setSecondaryRelationType("none");
+      if (correctionSelectionIsStale(
+        correctionVersions.get(ancestorTargetMid)?.current?.content
+          ?? msgMap.get(ancestorTargetMid)?.content
+          ?? '',
+        resolvedTargets[0].selection,
+      )) {
+        setSendError('当前片段已被其他更正修改，请基于最新内容新建更正');
+        return;
+      }
+      const beforeContent = msgMap.get(ancestorTargetMid)?.content ?? generated;
+      setComparisonPopup({
+        relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
+        reversePreview: { before: beforeContent, after: generated, target: resolvedTargets[0], mode: 'source', label },
+      });
       return;
     }
 
@@ -5105,6 +5142,9 @@ export default function TopicDetailPage() {
     // CLASSIFY / SUMMARY edges are always included so their topic cards can
     // display the correct target count, even when targets are hidden.
     const graphEdges = baseEdges.filter(e => {
+      // CORRECT relations are rendered as decorations on their target cards.
+      // Keep them when the target is visible even if the relation message is hidden.
+      if (e.relationType === 'correct' && graphVisibleIds.has(e.to.messageId)) return true;
       if (!graphVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
       // Edges of focused relations: always visible
       if (focusRelationMsgIds.has(e.relationMessageId)) return true;
@@ -5303,10 +5343,61 @@ export default function TopicDetailPage() {
     setRelationType(null); setSecondaryRelationType("none");
   }
 
+  async function confirmReverseCorrection() {
+    const preview = comparisonPopup?.reversePreview;
+    if (!preview || !topicId) return;
+    try {
+      if (preview.mode === 'source') {
+        const sourceMessage = await handleSendMessageOnly(preview.after);
+        if (!sourceMessage) return;
+        await handleCreateRelationWithSourcesAndTargets({
+          sources: [{ messageId: sourceMessage.id, selection: { kind: 'whole' } }],
+          targets: [preview.target],
+          label: preview.label ?? relationTypeName('correct'),
+        });
+      } else {
+        const backendRel = await createRel(topicId, {
+          relationType: 'CORRECT',
+          sourceMessageId: null,
+          targetRefs: [unitSelectionToTargetRef(preview.target, msgMap)],
+          payload: { correctionContent: preview.after },
+        });
+        await registerCreatedRelationInCurrentClassify(backendRel);
+        setEdges(prev => [...prev, {
+          id: nextId('edge'),
+          relationMessageId: backendRel.id,
+          relationType: 'correct',
+          from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
+          to: preview.target,
+          relationLabel: relationTypeName('correct'),
+        }]);
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
+      setComparisonPopup(null);
+    } catch (e: any) {
+      showAlert(`建立反向更正失败: ${e?.message ?? e}`);
+    }
+  }
+
   async function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree") {
     // Quick send: pure-stance agree/disagree — relation messages are first-class, persist to backend
     if (comparisonReviewed) return;
     if (!topicId) return;
+    if (kind === 'agree' && msgMap.get(messageId)?.relationType === 'correct') {
+      const correctionVersion = Array.from(correctionVersions.values())
+        .flatMap(entry => entry.versions)
+        .find(version => version.correctionId === messageId);
+      if (correctionVersion && hasActiveCorrectionForSelection(
+        correctionVersion.targetId,
+        correctionVersion.selection,
+        correctionVersions,
+        correctionVersion.correctionId,
+      )) {
+        showAlert('该字段已有其他有效更正，不能赞同这条更正');
+        return;
+      }
+    }
     try {
       const backendRel = await createRel(topicId, {
         relationType: kind.toUpperCase(),
@@ -5572,6 +5663,18 @@ export default function TopicDetailPage() {
     pendingScrollMsgRef.current = messageId;
     setScrollKey(k => k + 1);
   }, [classifyRelMsgId, cleanMode, msgFilter, isTemporaryJoinCategory, clearCleanView, showAlert]);
+
+  const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
+    if (correctionFilterTargetId === null) {
+      handleNavigateToMessage(messageId);
+      return;
+    }
+    pendingCorrectionNavigationRef.current = { messageId };
+    exitTemporaryCategory();
+    setCorrectionFilterTargetId(null);
+    if (switchToList) setViewMode('list');
+    setMsgFilter(previous => ({ ...previous, hideJoin: false, hideSettlement: false }));
+  }, [correctionFilterTargetId, handleNavigateToMessage]);
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
     e.stopPropagation();
@@ -5847,7 +5950,9 @@ export default function TopicDetailPage() {
   const comparisonSuppressedRelIds = comparisonReviewed && comparisonTargetId
     ? comparisonSide === 'agree' ? comparisonAgreeSuppressedRelIds : comparisonDisagreeSuppressedRelIds
     : effectiveSuppressedRelIds;
-  const filteredEdgesToRender = temporaryEdgesToRender.filter(edge => !comparisonSuppressedRelIds.has(edge.relationMessageId));
+  const filteredEdgesToRender = temporaryEdgesToRender.filter(edge =>
+    edge.relationType === 'correct' || !comparisonSuppressedRelIds.has(edge.relationMessageId),
+  );
   // The linear list keeps the annotation and its DISAGREE relation so the
   // user's stance can be shown on the source message. The non-linear graph
   // uses the suppressed relation set as a visual projection only.
@@ -5855,7 +5960,7 @@ export default function TopicDetailPage() {
   renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
   const suppressedRelIds = comparisonSuppressedRelIds;
   const graphMessagesFinal = messagesToRenderFiltered
-    .filter(message => !suppressedRelIds.has(message.id))
+    .filter(message => correctionTemporaryViewIds?.has(message.id) || !suppressedRelIds.has(message.id))
     .map(message => {
     const correction = correctionVersions.get(message.id)?.current;
     return correction ? { ...message, content: correction.content } : message;
@@ -5866,7 +5971,7 @@ export default function TopicDetailPage() {
   const invalidCorrectionIds = (() => {
     const ids = new Set<string>();
     for (const entry of correctionVersions.values()) {
-      for (const version of entry.versions) if (!version.valid) ids.add(version.correctionId);
+      for (const version of entry.versions) if (!version.valid || version.conflicted) ids.add(version.correctionId);
     }
     return ids;
   })();
@@ -6022,7 +6127,7 @@ export default function TopicDetailPage() {
                 >
                   排行榜
                 </button>
-                {!comparisonMode && !comparisonReviewed && <button onClick={() => {
+                {!comparisonMode && !comparisonReviewed && correctionFilterTargetId === null && <button onClick={() => {
                 if (leftPanelRef.current) {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
                 }
@@ -6191,9 +6296,9 @@ export default function TopicDetailPage() {
                   const correctionTargetText = correctionTargetEdge?.to.selection.kind === 'text'
                     ? correctionTargetEdge.to.selection.text
                     : correctionTargetOriginal?.content ?? '';
-                  const correctionTargetLabel = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetText.length > 0
+                  const correctionTargetLabel = correctionTargetEdge?.to.selection.kind === 'text'
                     ? formatCorrectionRange(correctionTargetEdge.to.selection.start, correctionTargetEdge.to.selection.len, correctionTargetText)
-                    : `「${correctionTargetText}」`;
+                    : formatCorrectionRange(0, correctionTargetText.length, correctionTargetText);
                   const correctionReplacement = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetOriginal
                     ? (() => {
                       const selection = correctionTargetEdge.to.selection;
@@ -6206,6 +6311,15 @@ export default function TopicDetailPage() {
                     })()
                     : correctionContent;
 
+                  const correctionRecords = msg.relationType !== 'correct'
+                    ? edges.filter(edge => edge.relationType === 'correct' && edge.to.messageId === msg.id)
+                    : [];
+                  const correctionVersion = msg.relationType === 'correct'
+                    ? Array.from(correctionVersions.values())
+                      .flatMap(entry => entry.versions)
+                      .find(version => version.correctionId === msg.id)
+                    : undefined;
+
                   return (
                     <MessageCard
                       key={msg.id} msg={msg} ctx={ctx}
@@ -6214,21 +6328,39 @@ export default function TopicDetailPage() {
                       onMouseDown={handleMessageMouseDown}
                       onMouseUp={handleMessageMouseUp}
                       onContentMouseUp={handleTextMouseUp}
+                      headerLabel={correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
+                        <span
+                          role="link"
+                          tabIndex={0}
+                          onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(msg.id, true); }}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              handleNavigateFromCorrectionTemporaryCategory(msg.id, true);
+                            }
+                          }}
+                          style={{ color: '#fbbf24', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2, fontWeight: 600 }}
+                          title={`跳转到更正消息 ${msg.id}`}
+                        >
+                          {msg.id}
+                          <span style={{
+                            marginLeft: 5,
+                            color: correctionVersion?.valid && !correctionVersion.conflicted ? '#4ade80' : '#f87171',
+                            textDecoration: 'none',
+                          }}>
+                            {correctionVersion?.valid && !correctionVersion.conflicted ? '（生效）' : '（未生效）'}
+                          </span>
+                        </span>
+                      ) : undefined}
+                      headerAfterAuthor={viewMode === 'list' && correctionRecords.length > 0 && correctionVersions.get(msg.id)?.current ? (
+                        <span style={{ color: '#fbbf24', fontWeight: 600 }} title="此消息已被更正">已被更正</span>
+                      ) : undefined}
                       onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
                       headerExtra={
                         <>
                           <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
                           <div style={{ display: "flex", gap: 4, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
-                            {correctionFilterTargetId !== null && msg.relationType === 'correct' && correctionTarget && (
-                              <button
-                                type="button"
-                                onClick={event => { event.stopPropagation(); handleNavigateToMessage(correctionTarget.id); }}
-                                title={`跳转到更正目标 ${correctionTarget.id}`}
-                                style={{ padding: '1px 6px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 10 }}
-                              >
-                                目标 · {correctionTarget.id}
-                              </button>
-                            )}
                             {showTruthProCon && (
                               <span style={{ color: "#a5b4fc" }} title="真假仲裁">
                                 ⚖️{truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
@@ -6341,7 +6473,7 @@ export default function TopicDetailPage() {
                             {correctionTarget && (
                               <button
                                 type="button"
-                                onClick={event => { event.stopPropagation(); handleNavigateToMessage(correctionTarget.id); }}
+                                onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(correctionTarget.id, false); }}
                                 style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 11 }}
                                 title={`跳转到目标消息 ${correctionTarget.id}`}
                               >
@@ -6746,6 +6878,11 @@ export default function TopicDetailPage() {
         messages={messages}
         edges={edges}
         onClose={() => setComparisonPopup(null)}
+        reversePreview={comparisonPopup.reversePreview ? {
+          before: comparisonPopup.reversePreview.before,
+          after: comparisonPopup.reversePreview.after,
+          onConfirm: confirmReverseCorrection,
+        } : undefined}
       />
     )}
     </>

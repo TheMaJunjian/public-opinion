@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { computeCorrectionVersions, type DemoEdge, type DemoMessage, type RelationType } from '../utils/modelBridge';
+import { computeCorrectionVersions, resolveCorrectionContent, type DemoEdge, type DemoMessage, type RelationType } from '../utils/modelBridge';
 import { relationTypeName } from './GraphView';
 import { computeCharDiff, renderDiffParts, type DiffPart } from './CharDiffText';
 import PopupOverlay from './PopupOverlay';
@@ -15,9 +15,14 @@ type Props = {
   messages: DemoMessage[];
   edges: DemoEdge[];
   onClose: () => void;
+  reversePreview?: {
+    before: string;
+    after: string;
+    onConfirm: () => void | Promise<void>;
+  };
 };
 
-export default function CorrectionComparisonPopup({ popup, messages, edges, onClose }: Props) {
+export default function CorrectionComparisonPopup({ popup, messages, edges, onClose, reversePreview }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const msgMap = new Map(messages.map(m => [m.id, m]));
   const relEdges = edges.filter(e => e.relationMessageId === popup.relMsgId);
@@ -27,12 +32,42 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
   const targetMsgs = targetMids.map(id => msgMap.get(id)).filter((m): m is DemoMessage => m != null);
   const relType = relEdges[0]?.relationType ?? '';
 
+  if (reversePreview) {
+    const { origParts, nextParts } = computeCharDiff(reversePreview.before, reversePreview.after);
+    const previewMessage = messages[0] ?? {
+      id: 'correction-preview', content: '', kind: 'normal', author: '', createdAt: '',
+    } as DemoMessage;
+    return (
+      <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
+        <div ref={contentRef} style={{ background: '#1e1e1e',
+          border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
+          overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
+          onClick={e => e.stopPropagation()}>
+          <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 反向更正预览</div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <MessageDiffColumn title="发送前最新内容" message={{ ...previewMessage, content: reversePreview.before }} border="#554" background="#211e14">
+              {renderDiffParts(origParts, 'orig')}
+            </MessageDiffColumn>
+            <MessageDiffColumn title="发送后显示内容" message={{ ...previewMessage, content: reversePreview.after }} border="#255" background="#14201e">
+              {renderDiffParts(nextParts, 'next')}
+            </MessageDiffColumn>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <button onClick={onClose} style={buttonStyle}>取消</button>
+            <button onClick={() => void reversePreview.onConfirm()} style={{ ...buttonStyle, background: '#245b4a', color: '#fff' }}>确认发送更正</button>
+          </div>
+        </div>
+      </PopupOverlay>
+    );
+  }
+
   if (relType === 'correct' && targetMsgs.length > 0) {
     const origMsg = targetMsgs[0];
-    const correctionVersions = computeCorrectionVersions(messages, edges);
-    const correctionVersion = correctionVersions.get(origMsg.id)?.versions.find(version => version.correctionId === popup.relMsgId);
-    const baseContent = correctionVersion?.baseContent ?? origMsg.content;
-    const correctionContent = relEdges[0] && msgMap.get(popup.relMsgId)?.relationPayload?.correctionContent;
+    const selectedVersion = computeCorrectionVersions(messages, edges)
+      .get(origMsg.id)?.versions.find(version => version.correctionId === popup.relMsgId);
+    const baseContent = selectedVersion?.baseContent ?? origMsg.content;
+    const correctionContent = selectedVersion?.content ?? origMsg.content;
 
     if (correctionContent !== undefined) {
       const { origParts, nextParts } = computeReplacementDiff(
@@ -49,7 +84,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
             onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <MessageDiffColumn title="更正前" message={{ ...origMsg, content: baseContent }} border="#554" background="#211e14">
+              <MessageDiffColumn title="更正前" message={{ ...origMsg, content: baseContent }} isCorrected={false} border="#554" background="#211e14">
                 {renderDiffParts(origParts, 'orig')}
               </MessageDiffColumn>
               <MessageDiffColumn title="更正后" message={msgMap.get(popup.relMsgId) ?? origMsg} border="#255" background="#14201e">
@@ -207,11 +242,36 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, onCl
   );
 }
 
-function MessageDiffColumn(props: { title: string; message: DemoMessage; border: string; background: string; children: React.ReactNode }) {
-  const { title, message, border, background, children } = props;
+const buttonStyle: React.CSSProperties = {
+  border: '1px solid #555', borderRadius: 4, padding: '5px 10px',
+  background: '#333', color: '#ddd', cursor: 'pointer', fontSize: 12,
+};
+
+export function getCorrectionBaseContent(
+  target: DemoMessage,
+  correctionId: string,
+  messages: DemoMessage[],
+  edges: DemoEdge[],
+): string {
+  const correctionVersions = computeCorrectionVersions(messages, edges);
+  return correctionVersions.get(target.id)?.versions.find(version => version.correctionId === correctionId)?.baseContent
+    ?? target.content;
+}
+
+export function rebuildCorrectionContent(
+  originalContent: string,
+  baseContent: string,
+  rawCorrectionContent: string,
+  selection: DemoEdge['to']['selection'] | undefined,
+): string {
+  return resolveCorrectionContent(originalContent, baseContent, rawCorrectionContent, selection);
+}
+
+function MessageDiffColumn(props: { title: string; message: DemoMessage; isCorrected?: boolean; border: string; background: string; children: React.ReactNode }) {
+  const { title, message, isCorrected, border, background, children } = props;
   return (
     <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: `1px solid ${border}`, background, padding: 10 }}>
-      <MessageMeta title={title} message={message} />
+      <MessageMeta title={title} message={message} isCorrected={isCorrected} />
       <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, color: '#ddd', fontFamily: 'monospace', lineHeight: 1.6 }}>
         {children}
       </pre>
@@ -229,13 +289,14 @@ function PlainMessageCard(props: { title: string; message: DemoMessage; border: 
   );
 }
 
-function MessageMeta({ title, message }: { title: string; message: DemoMessage }) {
+function MessageMeta({ title, message, isCorrected }: { title: string; message: DemoMessage; isCorrected?: boolean }) {
   return (
     <div style={{ fontSize: 11, marginBottom: 6 }}>
       <span style={{ fontWeight: 600 }}>{title}</span>
-      <span style={{ marginLeft: 6 }}>{message.author}</span>
-      <span style={{ opacity: 0.6, marginLeft: 6 }}>{new Date(message.createdAt).toLocaleString()}</span>
       <span style={{ opacity: 0.45, marginLeft: 6, fontSize: 10 }}>{message.id}</span>
+      <span style={{ marginLeft: 6 }}>{message.author}</span>
+      {isCorrected && <span style={{ color: '#fbbf24', fontWeight: 700, marginLeft: 6 }} title="此内容来自更正版本">已被更正</span>}
+      <span style={{ opacity: 0.6, marginLeft: 6 }}>{new Date(message.createdAt).toLocaleString()}</span>
     </div>
   );
 }
@@ -246,14 +307,14 @@ export function computeReplacementDiff(
   selection: DemoEdge['to']['selection'] | undefined,
 ): { origParts: DiffPart[]; nextParts: DiffPart[] } {
   if (selection?.kind !== 'text') {
-    return {
-      origParts: original ? [{ type: 'del', text: original }] : [],
-      nextParts: corrected ? [{ type: 'ins', text: corrected }] : [],
-    };
+    return computeCharDiff(original, corrected);
   }
 
-  const prefixEnd = Math.max(0, Math.min(selection.start, original.length));
-  const suffixStartOriginal = Math.max(prefixEnd, Math.min(selection.start + selection.len, original.length));
+  const recordedStart = Math.max(0, Math.min(selection.start, original.length));
+  const selectionMatches = original.slice(recordedStart, recordedStart + selection.len) === selection.text;
+  const resolvedStart = selectionMatches ? recordedStart : original.indexOf(selection.text);
+  const prefixEnd = resolvedStart >= 0 ? resolvedStart : recordedStart;
+  const suffixStartOriginal = Math.max(prefixEnd, Math.min(prefixEnd + selection.len, original.length));
   const originalSuffix = original.slice(suffixStartOriginal);
   let suffixLength = 0;
   while (

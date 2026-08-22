@@ -29,6 +29,10 @@ export interface MessageCardProps {
   onMouseUp?: (e: React.MouseEvent, msgId: string) => void;
   /** Extra content rendered in the header right area (stances, stakes, settlement toggles) */
   headerExtra?: React.ReactNode;
+  /** Override the default message title in the header. */
+  headerLabel?: React.ReactNode;
+  /** Status rendered after the author. */
+  headerAfterAuthor?: React.ReactNode;
   /** Extra badges below header (relation type, stance status, etc.) */
   badges?: React.ReactNode;
   /** Extra overlays (settlement panel, etc.) */
@@ -48,7 +52,9 @@ export default function MessageCard({
   onDoubleClick,
   onMouseDown,
   onMouseUp,
+  headerAfterAuthor,
   headerExtra,
+  headerLabel,
   badges,
   overlays,
   onSettlementTargetClick,
@@ -114,7 +120,7 @@ export default function MessageCard({
         color: isTopicMsg ? '#94a3b8' : undefined,
       }}>
         <span>
-          {isClassifyTopic ? `分类 ${msg.id}`
+          {headerLabel ?? (isClassifyTopic ? `分类 ${msg.id}`
             : isSummaryTopic ? `总结 ${msg.id}`
             : isMergeTopic ? `归并 ${msg.id}`
             : msg.kind === 'relation' ? `关系消息 ${msg.id}`
@@ -123,14 +129,14 @@ export default function MessageCard({
             : bk === 'GOVERNANCE' ? '🏛️ 治理提案'
             : bk === 'CODE' ? '💻 代码'
             : bk === 'OPERATIONS' ? '📊 运营'
-            : `消息 ${msg.id}`}
+            : `消息 ${msg.id}`)}
         </span>
         <span style={{ textAlign: 'right' }}>
           <div>
             {isClassifyTopic ? '双击进入分类'
               : isSummaryTopic ? '双击进入总结'
               : isMergeTopic ? '归并'
-              : `作者：${msg.author}`}
+              : <>{`作者：${msg.author}`}{headerAfterAuthor && ' '}{headerAfterAuthor}</>}
           </div>
           {headerExtra}
         </span>

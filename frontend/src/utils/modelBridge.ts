@@ -68,7 +68,42 @@ export type CorrectionVersion = {
   content: string;
   valid: boolean;
   createdAt: string;
+  selection?: Selection;
+  conflicted?: boolean;
 };
+
+export function resolveCorrectionContent(
+  originalContent: string,
+  baseContent: string,
+  rawCorrectionContent: string,
+  selection: Selection | undefined,
+): string {
+  if (selection?.kind !== 'text') return rawCorrectionContent;
+  const baseMatches = baseContent.slice(selection.start, selection.start + selection.len) === selection.text;
+  const originalMatches = originalContent.slice(selection.start, selection.start + selection.len) === selection.text;
+  const baseHasContext = baseMatches && rawCorrectionContent.startsWith(baseContent.slice(0, selection.start))
+    && rawCorrectionContent.endsWith(baseContent.slice(selection.start + selection.len));
+  const originalHasContext = originalMatches && rawCorrectionContent.startsWith(originalContent.slice(0, selection.start))
+    && rawCorrectionContent.endsWith(originalContent.slice(selection.start + selection.len));
+  const usesBaseContext = baseHasContext && !originalHasContext;
+  const contextContent = usesBaseContext ? baseContent : originalContent;
+  const start = Math.max(0, Math.min(selection.start, contextContent.length));
+  const end = Math.max(start, Math.min(start + selection.len, contextContent.length));
+  if (contextContent.slice(start, end) !== selection.text) return rawCorrectionContent;
+  const baseStart = usesBaseContext ? start : baseContent.indexOf(selection.text);
+  if (baseStart < 0) return rawCorrectionContent;
+  const hasContext = rawCorrectionContent.startsWith(contextContent.slice(0, start))
+    && rawCorrectionContent.endsWith(contextContent.slice(end));
+  const replacement = hasContext
+    ? rawCorrectionContent.slice(start, rawCorrectionContent.length - (contextContent.length - end))
+    : rawCorrectionContent.slice(start, start + selection.len);
+  return baseContent.slice(0, baseStart) + replacement + baseContent.slice(baseStart + selection.len);
+}
+
+export function correctionSelectionIsStale(content: string, selection: Selection | undefined): boolean {
+  return selection?.kind === 'text'
+    && content.slice(selection.start, selection.start + selection.len) !== selection.text;
+}
 
 export type DemoEdge = {
   id: string;
@@ -144,9 +179,9 @@ function normalizeReplyAdditional(label: string | undefined): "reply" | "questio
 }
 
 function findTextInContent(content: string, text: string): { start: number; len: number } | null {
+  if (!text) return null;
   const idx = content.indexOf(text);
-  if (idx === -1) return null;
-  return { start: idx, len: text.length };
+  return idx === -1 ? null : { start: idx, len: text.length };
 }
 
 export function convertMessagesToDemoModel(
@@ -361,6 +396,7 @@ export function computeCorrectionVersions(
       content,
       valid: !invalidCorrectionIds.has(correction.id),
       createdAt: correction.createdAt,
+      selection: edge.to.selection,
     };
     const entry = result.get(edge.to.messageId) ?? { versions: [] };
     if (!entry.versions.some(item => item.correctionId === version.correctionId)) entry.versions.push(version);
@@ -368,14 +404,78 @@ export function computeCorrectionVersions(
   }
   for (const entry of result.values()) {
     entry.versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    let currentContent = entry.versions[0]?.baseContent;
+    const originalContent = entry.versions[0]?.baseContent ?? '';
     for (const version of entry.versions) {
-      version.baseContent = currentContent ?? version.baseContent;
-      if (version.valid) currentContent = version.content;
+      version.baseContent = originalContent;
+      version.conflicted = false;
     }
-    entry.current = [...entry.versions].reverse().find(version => version.valid);
+
+    const changes = entry.versions.map(version => getCorrectionChange(version, originalContent));
+    const effectiveChanges = new Map<string, { version: CorrectionVersion; change: CorrectionChange }>();
+    for (let index = 0; index < entry.versions.length; index++) {
+      const version = entry.versions[index];
+      const change = changes[index];
+      if (!version.valid || !change) continue;
+      const fieldKey = correctionFieldKey(version.selection, originalContent);
+      effectiveChanges.set(fieldKey, { version, change });
+    }
+    const orderedChanges = Array.from(effectiveChanges.values())
+      .sort((left, right) => right.change.start - left.change.start);
+    let currentContent = originalContent;
+    for (const { change } of orderedChanges) {
+      currentContent = currentContent.slice(0, change.start)
+        + change.replacement
+        + currentContent.slice(change.end);
+    }
+    const latest = [...effectiveChanges.values()].sort((left, right) => right.version.createdAt.localeCompare(left.version.createdAt))[0]?.version;
+    entry.current = latest ? { ...latest, content: currentContent } : undefined;
   }
   return result;
+}
+
+export function correctionFieldKey(selection: Selection | undefined, originalContent: string): string {
+  if (selection?.kind !== 'text') return `whole:0:${originalContent.length}`;
+  return `text:${selection.start}:${selection.len}`;
+}
+
+export function hasActiveCorrectionForSelection(
+  targetId: string,
+  selection: Selection | undefined,
+  corrections: Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>,
+  excludedCorrectionId?: string,
+): boolean {
+  const entry = corrections.get(targetId);
+  if (!entry) return false;
+  const fieldKey = correctionFieldKey(selection, entry.versions[0]?.baseContent ?? '');
+  return entry.versions.some(version =>
+    version.correctionId !== excludedCorrectionId &&
+    version.valid && correctionFieldKey(version.selection, version.baseContent) === fieldKey,
+  );
+}
+
+type CorrectionChange = { start: number; end: number; replacement: string; fromBase: boolean };
+
+function getCorrectionChange(version: CorrectionVersion, originalContent: string): CorrectionChange | undefined {
+  if (version.selection?.kind !== 'text') {
+    return { start: 0, end: originalContent.length, replacement: version.content, fromBase: false };
+  }
+  const start = Math.max(0, Math.min(version.selection.start, originalContent.length));
+  const end = Math.max(start, Math.min(start + version.selection.len, originalContent.length));
+  const originalMatches = originalContent.slice(start, end) === version.selection.text;
+  const baseStart = Math.max(0, Math.min(version.selection.start, version.baseContent.length));
+  const baseEnd = Math.max(baseStart, Math.min(baseStart + version.selection.len, version.baseContent.length));
+  const baseMatches = version.baseContent.slice(baseStart, baseEnd) === version.selection.text;
+  const originalSuffix = originalContent.slice(end);
+  const originalPrefix = originalContent.slice(0, start);
+  if (originalMatches && version.content.startsWith(originalPrefix) && version.content.endsWith(originalSuffix)) {
+    return { start, end, replacement: version.content.slice(start, version.content.length - originalSuffix.length), fromBase: false };
+  }
+  const baseSuffix = version.baseContent.slice(baseEnd);
+  const basePrefix = version.baseContent.slice(0, baseStart);
+  if (baseMatches && version.content.startsWith(basePrefix) && version.content.endsWith(baseSuffix)) {
+    return { start: baseStart, end: baseEnd, replacement: version.content.slice(baseStart, version.content.length - baseSuffix.length), fromBase: true };
+  }
+  return undefined;
 }
 
 /**
@@ -396,7 +496,12 @@ export function unitSelectionToTargetRef(
     return { kind: 'message', messageId: unit.messageId };
   }
   if (s.kind === 'text') {
-    return { kind: 'text-fragment', messageId: unit.messageId, text: s.text, hash: hashText(s.text) };
+    return {
+      kind: 'text-fragment',
+      messageId: unit.messageId,
+      text: s.text,
+      hash: hashText(s.text),
+    };
   }
   // edge selection always targets a relation message's label/edge part
   return { kind: 'relation', relationId: unit.messageId, part: 'label' };

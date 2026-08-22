@@ -41,8 +41,6 @@ const targetRefSchema = z.discriminatedUnion('kind', [
     messageId: z.string().min(1, '消息 ID 不能为空'),
     text: z.string().min(1).max(2000),
     hash: z.string().min(1),
-    contextBefore: z.string().max(200).optional(),
-    contextAfter: z.string().max(200).optional(),
   }),
   z.object({
     kind: z.literal('relation'),

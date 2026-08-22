@@ -1182,7 +1182,7 @@ export default function TopicDetailPage() {
   }, [topicId, mergeStakeSnapshot]);
 
   const createRel = useCallback(async (topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
-    const amount = Math.max(relStakeRef.current, 1);
+    const amount = relStakeRef.current;
     try {
       return await api.createRelation(topicId, { ...data, stakeAmount: amount });
     } catch (e: any) {
@@ -1692,7 +1692,7 @@ export default function TopicDetailPage() {
       messagePulseTimerRef.current = setTimeout(() => {
         setMessagePulse(null);
         messagePulseTimerRef.current = null;
-      }, 1600);
+      }, 500);
     });
   }
 
@@ -2564,7 +2564,7 @@ export default function TopicDetailPage() {
     return match?.id ?? null;
   }
 
-  function exitClassifyTopic(options?: { restoreSnapshot?: boolean }) {
+  function exitClassifyTopic(_options?: { restoreSnapshot?: boolean }) {
     const entry = classifyStackRef.current.pop();
     const prev = classifyStackRef.current.length > 0
       ? classifyStackRef.current[classifyStackRef.current.length - 1]
@@ -2578,8 +2578,8 @@ export default function TopicDetailPage() {
     }
     setClassifyKey(k => k + 1);
     setPreviewClassifyId(null); // exit preview mode when leaving classify
-    if (options?.restoreSnapshot !== false && entry?.snapshot) {
-      restoreSnapshot(entry.snapshot);
+    if (entry?.snapshot) {
+      restoreSnapshot(entry.snapshot, { restoreSelection: false });
     }
   }
 
@@ -2962,8 +2962,12 @@ export default function TopicDetailPage() {
     const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
     // Validate both stakes — collect all errors
     const errors: string[] = [];
-    if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) {
-      errors.push(`文本消息最低押注 10 点（当前 ${stakeAmount}）`);
+    if (hasTextContent) {
+      if (typeof stakeAmount !== 'number') {
+        errors.push('请输入文本消息贡献点');
+      } else if (stakeAmount < 10) {
+        errors.push(`文本消息最低押注 10 点（当前 ${stakeAmount}）`);
+      }
     }
     if (relationType) {
       const isContainerRelation = containerRelationTypes.has(relationType.toUpperCase());
@@ -2971,6 +2975,9 @@ export default function TopicDetailPage() {
       if (isContainerRelation && hasSelectedSource && !appendContainerType) {
         setSendError('加入消息的来源必须是当前关系类型对应的容器消息，目标消息来自当前选择');
         return;
+      }
+      if (typeof relStakeAmount !== 'number') {
+        errors.push('请输入关系消息贡献点');
       }
       if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
         const subTypeNote = (subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0))
@@ -4332,6 +4339,9 @@ export default function TopicDetailPage() {
   const singleButtonEnabled = (() => {
     if (relationType === null) return newMessageContent.trim().length > 0;
     // Check that relation stake meets the effective minimum (type + subType combined)
+    if (hasTextContent && typeof stakeAmount !== 'number') return false;
+    if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) return false;
+    if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return false;
     if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return false;
     if (totalConsumption && totalConsumption.total > availablePoints) return false;
     // Ambiguous: both draft and target non-empty — force user to clear one
@@ -4504,6 +4514,9 @@ export default function TopicDetailPage() {
     if (singleButtonEnabled) return null;
     if (relationType === null && !hasTextContent) return "请输入消息内容后发送";
     if (draftUnits.length > 0 && targetUnits.length > 0) return "候选区和目标集合不能同时有内容，请清空其中一方";
+    if (hasTextContent && typeof stakeAmount !== 'number') return "请输入文本消息贡献点";
+    if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) return `文本消息最低押注 10 点`;
+    if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return "请输入关系消息贡献点";
     if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
     if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
     if (hasInvalidCorrectTarget) return "更正关系只能选择一条普通消息片段";

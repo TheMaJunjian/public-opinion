@@ -317,7 +317,7 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
 }) {
   const { user: currentUser } = useAuth();
   const [voteDirection, setVoteDirection] = useState<'TRUE' | 'FALSE'>('TRUE');
-  const [voteAmount, setVoteAmount] = useState(1);
+  const [voteAmount, setVoteAmount] = useState<number | ''>(1);
   const [voting, setVoting] = useState(false);
   const [settling, setSettling] = useState(false);
   const [localRound, setLocalRound] = useState(round);
@@ -334,8 +334,8 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
 
   async function handleVote() {
     if (voting || settling) return;
-    if (!Number.isInteger(voteAmount) || voteAmount < 1) {
-      setSettleError('投票押注必须是至少 1 点的整数');
+    if (typeof voteAmount !== 'number' || !Number.isInteger(voteAmount) || voteAmount <= 0) {
+      setSettleError('投票押注必须是大于 0 的整数');
       return;
     }
     try {
@@ -515,7 +515,10 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
           type="number"
           min={1}
           value={voteAmount}
-          onChange={(e) => setVoteAmount(Math.max(1, parseInt(e.target.value) || 1))}
+          onChange={(e) => {
+            const raw = e.target.value;
+            setVoteAmount(raw === '' ? '' : Number(raw));
+          }}
           className="w-16 text-xs border border-gray-300 rounded px-2 py-1.5 text-center bg-white text-gray-800"
         />
         <button

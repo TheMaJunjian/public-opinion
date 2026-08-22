@@ -50,16 +50,17 @@ describe('SettlementPanel voting', () => {
     expect(await screen.findByText('余额不足')).toBeInTheDocument();
   });
 
-  it('normalizes a non-positive voting amount before submitting', async () => {
+  it('allows editing a non-positive amount and validates it before submitting', async () => {
     render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '投票' })).toBeInTheDocument());
     const amount = screen.getByRole('spinbutton');
     fireEvent.change(amount, { target: { value: '0' } });
-    expect(amount).toHaveValue(1);
+    expect(amount).toHaveValue(0);
     fireEvent.click(screen.getByRole('button', { name: '投票' }));
 
-    await waitFor(() => expect(mockApi.castVote).toHaveBeenCalledWith('round-1', { vote: 'TRUE', amount: 1 }));
+    expect(await screen.findByText('投票押注必须是大于 0 的整数')).toBeInTheDocument();
+    expect(mockApi.castVote).not.toHaveBeenCalled();
   });
 
   it('refreshes the target stakes after settlement', async () => {

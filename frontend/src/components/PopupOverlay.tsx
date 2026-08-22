@@ -15,7 +15,7 @@ export function PulseGuide({ start, end, index }: { start: { x: number; y: numbe
     backgroundSize: '20px 100%',
     backgroundPosition: '0 0',
     borderRadius: 3,
-    animation: 'popup-guide-line 1.8s ease-in-out infinite',
+    animation: 'popup-guide-line 0.5s ease-in-out infinite',
     animationDelay: `${(index % 5) * 0.12}s`,
     willChange: 'opacity, background-position',
   };

@@ -156,7 +156,7 @@ interface TopicRightPanelProps {
 export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
   const navigate = useNavigate();
-  const showContributionControls = p.singleButtonEnabled && !p.isPreviewMode;
+  const showContributionControls = !p.isPreviewMode;
 
   const renderSendControls = () => (
     <>
@@ -294,22 +294,22 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                 style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.canSetFocus ? "#444" : "#333", color: p.canSetFocus ? "#fff" : "#777", cursor: p.canSetFocus ? "pointer" : "default" }}>
                 设为焦点消息
               </button>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={p.exitFocus} disabled={!p.canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.canExitFocus ? "#444" : "#333", color: p.canExitFocus ? "#fff" : "#777", cursor: p.canExitFocus ? "pointer" : "default" }} title="退出最近一次进入的焦点并恢复进入该焦点前的现场">退出焦点</button>
-                <button onClick={p.exitAllFocus} disabled={!p.canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.canExitFocus ? "#333" : "#222", color: p.canExitFocus ? "#fff" : "#777", cursor: p.canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
-              </div>
+              {p.canExitFocus && <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={p.exitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#444", color: "#fff", cursor: "pointer" }} title="退出最近一次进入的焦点并恢复进入该焦点前的现场">退出焦点</button>
+                <button onClick={p.exitAllFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", cursor: "pointer" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
+              </div>}
             </div>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {p.canExitFocus && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div style={{ fontSize: 12, opacity: 0.8 }}>焦点范围：{p.focusHop}</div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={() => p.setFocusHop(h => Math.max(0, h - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
             <button onClick={() => p.setFocusHop(h => Math.min(8, h + 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>+</button>
             <div style={{ fontSize: 12, opacity: 0.7 }}>（数值越大，显示的关联消息越多；默认 1，最大 8）</div>
           </div>
-        </div>
+        </div>}
 
         {p.draftGroups.length === 0 ? (
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>当前未选择任何候选。</div>

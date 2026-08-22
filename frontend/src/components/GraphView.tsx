@@ -62,6 +62,9 @@ const MERGE_HEADER_MAX_W = 320;
 const MERGE_CANVAS_LABEL_LEFT_OFFSET = 10;
 const MERGE_CANVAS_LABEL_TOP_OFFSET = 8;
 const MERGE_CANVAS_STACK_GAP = ROW_GAP;
+const MERGE_CONTENT_TOP_GAP = 8;
+const MERGE_CARD_HEADER_X_OFFSET = 8;
+const MERGE_CARD_HEADER_Y_OFFSET = 8;
 // Approximate per-character width for mixed Chinese/Latin short titles in the current 12px header style.
 const MERGE_LABEL_CHAR_WIDTH_ESTIMATE = 14;
 const MERGE_LABEL_HORIZONTAL_PADDING = 24;
@@ -340,8 +343,8 @@ function getGroupHeaderRect(frameRect: Rect): Rect {
 /** Compute the card-style header rect for MERGE group frames, positioned inside the frame at the top-left. */
 function getMergeCardHeaderRect(frameRect: Rect): Rect {
   return {
-    x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y + FRAME_PAD,
+    x: frameRect.x + MERGE_CARD_HEADER_X_OFFSET,
+    y: frameRect.y + MERGE_CARD_HEADER_Y_OFFSET,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
     height: MERGE_CARD_H,
   };
@@ -401,7 +404,7 @@ function getRelationBoundsFromLayout(params: {
   if (!rect) return null;
   const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
   if (relMsg?.relationType === 'merge') {
-    const headerTopPad = MERGE_CARD_H + FRAME_PAD;
+    const headerTopPad = MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP;
     rect = {
       x: rect.x - FRAME_PAD_X,
       y: rect.y - FRAME_PAD_Y - headerTopPad,
@@ -718,7 +721,7 @@ export function buildFrameAvoidanceReservations(params: {
     // Left FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
     // ensures the frame left border aligns with text message cards outside the frame.
     const isMergeFrame = relEdges[0].relationType === "merge";
-    const headerTopPad = isMergeFrame ? MERGE_CARD_H + FRAME_PAD : 0;
+    const headerTopPad = isMergeFrame ? MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP : 0;
     const layoutFrameRect = frameRects?.[relMsgId];
     reservations.push({
       relMsgId,
@@ -1439,7 +1442,7 @@ function buildFrameLayoutUnits(params: {
       relMsgId: frame.relMsgId,
       rect,
       cardIds: new Set([...frame.cardIds].filter(id => id in params.layout)),
-      ...(frame.isMerge ? { headerTopPad: MERGE_CARD_H + FRAME_PAD } : {}),
+      ...(frame.isMerge ? { headerTopPad: MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP } : {}),
     });
   }
   return units.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
@@ -1545,7 +1548,7 @@ function computeNoOverlapLayout(params: {
       return ta - tb;
     });
 
-    const mergeHeaderPad = isMerge ? MERGE_CARD_H : 0; // merge card header height
+    const mergeHeaderPad = isMerge ? MERGE_CARD_H + MERGE_CONTENT_TOP_GAP : 0;
     const contentX = frameX + FRAME_PAD_X;
     const contentY = frameY + FRAME_PAD_Y + mergeHeaderPad;
 
@@ -2501,7 +2504,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         if (childRect) contentTop = Math.min(contentTop, childRect.y);
       }
       if (contentTop !== Infinity) {
-        const headerPad = frame.isMerge ? MERGE_CARD_H : 0;
+        const headerPad = frame.isMerge ? MERGE_CARD_H + MERGE_CONTENT_TOP_GAP : 0;
         top = Math.max(top, contentTop - FRAME_PAD_Y - headerPad);
       }
       next[frame.relMsgId] = { x: left, y: top, width: right - left, height: bottom - top };
@@ -2849,7 +2852,7 @@ function GraphViewCanvas(props: GraphViewProps) {
 
     // For MERGE group frames: extend upward to include the card-style header inside the frame.
     // Skip when the rect already comes from baseFrameRects (header already applied).
-    const mergeHeaderTopPad = MERGE_CARD_H + FRAME_PAD;
+    const mergeHeaderTopPad = MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
         const fromBaseRects = !!finalFrameRects[gf.relMsgId];

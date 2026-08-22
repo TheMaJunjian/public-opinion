@@ -1,5 +1,6 @@
 import { BrowserRouter, HashRouter, Routes, Route } from 'react-router-dom';
-import { Suspense, lazy, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import Navbar from './components/Navbar';
 import GestureShortcutManager from './components/GestureShortcutManager';
@@ -16,6 +17,55 @@ export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [interfaceZoom, setInterfaceZoom] = useState(1);
+  const documentScrollRef = useRef<HTMLDivElement | null>(null);
+  const [documentScrollMetrics, setDocumentScrollMetrics] = useState({ visible: false, width: 0, scrollWidth: 1 });
+  useEffect(() => {
+    const measure = () => {
+      const source = document.scrollingElement;
+      if (!source) return;
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const width = Math.max(0, Math.min(viewportWidth, source.clientWidth));
+      const scrollWidth = Math.max(source.scrollWidth, width, 1);
+      setDocumentScrollMetrics(previous => {
+        const next = { visible: source.scrollWidth > source.clientWidth + 1, width, scrollWidth };
+        return previous.visible === next.visible && previous.width === next.width && previous.scrollWidth === next.scrollWidth
+          ? previous
+          : next;
+      });
+      if (documentScrollRef.current) documentScrollRef.current.scrollLeft = source.scrollLeft;
+    };
+    const syncFromDocument = () => {
+      if (documentScrollRef.current && documentScrollRef.current.scrollLeft !== (document.scrollingElement?.scrollLeft ?? 0)) {
+        documentScrollRef.current.scrollLeft = document.scrollingElement?.scrollLeft ?? 0;
+      }
+    };
+    const syncToDocument = () => {
+      const source = document.scrollingElement;
+      if (source && documentScrollRef.current) source.scrollLeft = documentScrollRef.current.scrollLeft;
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(document.documentElement);
+    observer?.observe(document.body);
+    const root = document.getElementById('root');
+    if (root) observer?.observe(root);
+    const mutationObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(measure);
+    if (root) mutationObserver?.observe(root, { childList: true, subtree: true });
+    document.scrollingElement?.addEventListener('scroll', syncFromDocument, { passive: true });
+    documentScrollRef.current?.addEventListener('scroll', syncToDocument, { passive: true });
+    window.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('resize', measure);
+    measure();
+    const layoutTimer = window.setTimeout(measure, 100);
+    return () => {
+      observer?.disconnect();
+      mutationObserver?.disconnect();
+      window.clearTimeout(layoutTimer);
+      document.scrollingElement?.removeEventListener('scroll', syncFromDocument);
+      documentScrollRef.current?.removeEventListener('scroll', syncToDocument);
+      window.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('resize', measure);
+    };
+  }, [interfaceZoom]);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
   const handleGestureConfirm = (direction: GestureDirection, target: HTMLElement | null, symbol: ShortcutSymbol) => {
     if (symbol === 'zoom-in' || symbol === 'zoom-out') {
@@ -102,6 +152,31 @@ export default function App() {
             </Suspense>
           )}
         </div>
+        {typeof document !== 'undefined' && createPortal(
+          <div
+            ref={documentScrollRef}
+            data-document-horizontal-scroll="true"
+            aria-label="整个界面水平滚动条"
+            style={{
+              display: documentScrollMetrics.visible ? 'block' : 'none',
+              position: 'fixed',
+              left: 0,
+              bottom: 0,
+              width: documentScrollMetrics.width,
+              height: 14,
+              zIndex: 61,
+              overflowX: 'scroll',
+              overflowY: 'hidden',
+              scrollbarGutter: 'stable',
+              background: '#181818',
+              border: '1px solid #333',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ width: documentScrollMetrics.scrollWidth, height: 1 }} />
+          </div>,
+          document.body,
+        )}
       </Router>
     </AuthProvider>
   );

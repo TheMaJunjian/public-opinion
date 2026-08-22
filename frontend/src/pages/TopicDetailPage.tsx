@@ -1586,6 +1586,7 @@ export default function TopicDetailPage() {
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const leftPanelTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const [documentHorizontalScrollVisible, setDocumentHorizontalScrollVisible] = useState(false);
   const leftHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
   const leftHorizontalScrollSourceRef = useRef<HTMLElement | null>(null);
   const leftHorizontalScrollScaleRef = useRef(1);
@@ -5902,7 +5903,14 @@ export default function TopicDetailPage() {
     const atRightEdge = panel.scrollLeft >= panel.scrollWidth - panel.clientWidth - 1 && deltaX < 0;
     if ((atLeftEdge || atRightEdge) && Math.abs(deltaX) > 0) {
       e.preventDefault();
-      window.scrollBy({ left: -deltaX });
+      const documentScroller = document.scrollingElement;
+      if (documentScroller) {
+        const maxScrollLeft = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
+        documentScroller.scrollLeft = Math.max(0, Math.min(
+          maxScrollLeft,
+          documentScroller.scrollLeft - deltaX,
+        ));
+      }
     }
     leftPanelTouchRef.current = { x: touch.clientX, y: touch.clientY };
   }
@@ -5918,6 +5926,8 @@ export default function TopicDetailPage() {
     if (!panel) return;
     const comparisonSource = panel.querySelector('[data-comparison-scroll-horizontal]') as HTMLElement | null;
     const measure = () => {
+      const documentScrollSource = document.scrollingElement;
+      setDocumentHorizontalScrollVisible(Boolean(documentScrollSource && documentScrollSource.scrollWidth > documentScrollSource.clientWidth + 1));
       const comparisonViewports = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'));
       const comparisonViewport = comparisonViewports.reduce<HTMLElement | null>((widest, viewport) => {
         if (!widest) return viewport;
@@ -6698,7 +6708,7 @@ export default function TopicDetailPage() {
               display: leftHorizontalScrollMetrics.visible ? "block" : "none",
               position: "fixed",
               left: leftHorizontalScrollMetrics.left,
-              bottom: 0,
+              bottom: documentHorizontalScrollVisible ? 14 : 0,
               width: leftHorizontalScrollMetrics.width,
               height: 14,
               zIndex: 60,

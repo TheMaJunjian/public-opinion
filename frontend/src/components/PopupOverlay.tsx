@@ -182,7 +182,8 @@ export default function PopupOverlay({
       if (!overlay || !content) {
         setGeometry({
           left, top, viewportWidth: width, viewportHeight: height,
-          overlayWidth: window.innerWidth, overlayHeight: window.innerHeight,
+          overlayWidth: Math.max(document.documentElement.scrollWidth, window.innerWidth),
+          overlayHeight: Math.max(document.documentElement.scrollHeight, window.innerHeight),
           centerX: left + width / 2, centerY: top + height / 2,
         });
         return;
@@ -194,8 +195,8 @@ export default function PopupOverlay({
         top,
         viewportWidth: width,
         viewportHeight: height,
-        overlayWidth: Math.max(overlay.clientWidth, window.innerWidth),
-        overlayHeight: Math.max(overlay.clientHeight, window.innerHeight),
+        overlayWidth: Math.max(document.documentElement.scrollWidth, overlay.clientWidth, window.innerWidth),
+        overlayHeight: Math.max(document.documentElement.scrollHeight, overlay.clientHeight, window.innerHeight),
         centerX: (contentBounds.left + contentBounds.right) / 2 - overlayBounds.left,
         centerY: (contentBounds.top + contentBounds.bottom) / 2 - overlayBounds.top,
       });
@@ -225,7 +226,7 @@ export default function PopupOverlay({
       ref={overlayRef}
       style={{
         position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
-        width: '100dvw', height: '100dvh', minWidth: '100vw', minHeight: '100vh',
+        width: overlayWidth, height: overlayHeight,
         boxSizing: 'border-box', zIndex,
         background,
       }}

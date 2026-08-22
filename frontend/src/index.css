@@ -31,3 +31,10 @@ html, body, #root {
 [data-comparison-viewport]::-webkit-scrollbar {
   display: none;
 }
+
+@media (max-width: 768px) {
+  .topic-left-panel {
+    overflow-x: auto !important;
+    touch-action: pan-x pan-y;
+  }
+}

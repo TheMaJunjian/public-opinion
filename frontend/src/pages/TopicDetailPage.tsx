@@ -5901,12 +5901,15 @@ export default function TopicDetailPage() {
       leftHorizontalScrollSourceRef.current = candidate;
       const sourceRect = candidate.getBoundingClientRect();
       const rect = comparisonPair?.getBoundingClientRect() ?? sourceRect;
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const visibleLeft = Math.max(0, Math.min(rect.left, viewportWidth));
+      const visibleWidth = Math.max(0, Math.min(rect.width, viewportWidth - visibleLeft));
       leftHorizontalScrollScaleRef.current = sourceRect.width / Math.max(candidate.offsetWidth, 1);
       const scale = leftHorizontalScrollScaleRef.current;
       const visible = candidate.scrollWidth > candidate.clientWidth + 1;
       setLeftHorizontalScrollMetrics(previous => {
         const sourceOverflow = Math.max(candidate.scrollWidth - candidate.clientWidth, 0) * scale;
-        const next = { visible, left: rect.left, width: rect.width, scrollWidth: Math.max(rect.width + sourceOverflow, 1) };
+        const next = { visible, left: visibleLeft, width: visibleWidth, scrollWidth: Math.max(visibleWidth + sourceOverflow, 1) };
         return previous.visible === next.visible
           && previous.left === next.left
           && previous.width === next.width
@@ -6300,8 +6303,8 @@ export default function TopicDetailPage() {
 
           <div ref={leftPanelRef}
             data-topic-left-panel="true"
-            className={`${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
-            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "hidden", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
+            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", touchAction: "pan-x pan-y", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay
@@ -6669,6 +6672,7 @@ export default function TopicDetailPage() {
               overflowX: "scroll",
               overflowY: "hidden",
               scrollbarGutter: "stable",
+              scrollbarWidth: "auto",
               background: "#181818",
               border: "1px solid #333",
               boxSizing: "border-box",

@@ -34,7 +34,7 @@ html, body, #root {
 
 @media (max-width: 768px) {
   .topic-left-panel {
-    overflow-x: visible !important;
+    overflow-x: hidden !important;
     touch-action: pan-x pan-y pinch-zoom;
   }
 }

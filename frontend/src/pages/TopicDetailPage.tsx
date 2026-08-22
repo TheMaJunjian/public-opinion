@@ -6304,7 +6304,7 @@ export default function TopicDetailPage() {
           <div ref={leftPanelRef}
             data-topic-left-panel="true"
             className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
-            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", touchAction: "pan-x pan-y", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

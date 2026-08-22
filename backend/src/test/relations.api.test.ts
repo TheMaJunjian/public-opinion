@@ -623,6 +623,7 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
       parameters: { minStake: 1, selfStakeOnCreate: 1 },
     });
@@ -909,6 +910,7 @@ describe('POST /api/topics/:topicId/relations — CORRECT single-target validati
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
       parameters: { minStake: 1, selfStakeOnCreate: 1 },
     });
@@ -962,6 +964,24 @@ describe('POST /api/topics/:topicId/relations — CORRECT single-target validati
     expect(res.status).toBe(201);
   });
 
+  it('rejects CORRECT after a second user has staked on the target', async () => {
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([
+      { userId: 'user-1' },
+      { userId: 'user-2' },
+    ]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+        payload: { correctionContent: 'Corrected world' },
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('第二位用户押注');
+  });
+
   it('rejects CORRECT targeting the whole message', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
@@ -1005,6 +1025,24 @@ describe('POST /api/topics/:topicId/relations — CORRECT single-target validati
         payload: { correctionContent: 'Corrected relation content' },
       });
     expect(res.status).toBe(400);
+  });
+
+  it('rejects AGREE targeting an existing CORRECT relation', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([{
+      id: 'correction-1',
+      kind: 'RELATION',
+      relationType: 'CORRECT',
+      targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+    }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'AGREE',
+        targetRefs: [{ kind: 'relation', relationId: 'correction-1' }],
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('更正消息');
   });
 });
 

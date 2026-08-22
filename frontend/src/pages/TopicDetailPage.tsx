@@ -756,6 +756,21 @@ export default function TopicDetailPage() {
     setMessageBettorCounts(prev => ({ ...prev, [messageId]: bettors }));
   }, []);
 
+  async function blockCorrectionForSecondBettor(messageId: string): Promise<boolean> {
+    try {
+      const stakes = await api.getMessageStakes(messageId);
+      mergeStakeSnapshot(messageId, stakes);
+      const bettors = new Set(stakes.stakes.map(stake => stake.user.id || stake.user.username)).size;
+      if (bettors >= 2) {
+        showAlert('目标消息已有第二位用户押注，不能再发送更正消息');
+        return true;
+      }
+    } catch {
+      // The backend remains authoritative when the best-effort refresh fails.
+    }
+    return false;
+  }
+
   // Phase 5: Refs to avoid stale closure in points-navigate handler
   // (initialized empty; values synced via useEffect below after all useMemos run)
   const focusEntriesRef = useRef<FocusEntry[]>([]);
@@ -3148,6 +3163,7 @@ export default function TopicDetailPage() {
         setSendError('当前选择已不再匹配原始内容');
         return;
       }
+      if (await blockCorrectionForSecondBettor(correctionTarget.messageId)) return;
       const beforeContent = originalContent;
       setComparisonPopup({
         relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
@@ -3168,6 +3184,7 @@ export default function TopicDetailPage() {
       ));
       if (relationType === "correct" && secondaryRelationType !== "none" && relDraftMsgIds.length === 1) {
         const targetRelMsgId = relDraftMsgIds[0];
+        if (await blockCorrectionForSecondBettor(targetRelMsgId)) return;
         const oldRelEdges = edges.filter(e => e.relationMessageId === targetRelMsgId);
         if (oldRelEdges.length === 0) {
           showAlert(`无法找到目标关系消息的边（ID：${targetRelMsgId}），无法创建更正关系`);

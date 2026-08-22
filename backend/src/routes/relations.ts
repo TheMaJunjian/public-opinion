@@ -456,6 +456,24 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
           res.status(400).json({ error: '更正关系只能指向文本消息或允许更正的关系消息' });
           return;
         }
+        const targetStakeUsers = await prisma.stake.findMany({
+          where: { messageId: { in: uniqueMessageIds } },
+          select: { userId: true },
+          distinct: ['userId'],
+        });
+        if (targetStakeUsers.length >= 2) {
+          res.status(409).json({ error: '目标消息已有第二位用户押注，不允许再发送更正消息' });
+          return;
+        }
+      }
+      if (data.relationType === 'AGREE' || data.relationType === 'DISAGREE') {
+        const correctionTarget = foundMessages.find(message =>
+          message.kind === 'RELATION' && message.relationType === 'CORRECT'
+        );
+        if (correctionTarget) {
+          res.status(409).json({ error: '更正消息不允许再发送赞同或反对关系' });
+          return;
+        }
       }
       if (data.relationType === 'JOIN') {
         const invalidTarget = foundMessages.find(message =>
@@ -520,6 +538,25 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         const target = foundTargetRelations.find(relation => relation.id === targetRelationIds[0]);
         if (!target || !correctableRelationTypes.has(target.relationType ?? '')) {
           res.status(400).json({ error: '更正关系只能指向分类、总结、提案、委托、代码或运营消息' });
+          return;
+        }
+
+        const targetStakeUsers = await prisma.stake.findMany({
+          where: { messageId: targetRelationIds[0] },
+          select: { userId: true },
+          distinct: ['userId'],
+        });
+        if (targetStakeUsers.length >= 2) {
+          res.status(409).json({ error: '目标消息已有第二位用户押注，不允许再发送更正消息' });
+          return;
+        }
+      }
+      if (data.relationType === 'AGREE' || data.relationType === 'DISAGREE') {
+        const correctionTarget = foundTargetRelations.find(relation =>
+          relation.id === targetRelationIds[0] && relation.relationType === 'CORRECT'
+        );
+        if (correctionTarget) {
+          res.status(409).json({ error: '更正消息不允许再发送赞同或反对关系' });
           return;
         }
       }

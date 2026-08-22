@@ -26,7 +26,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial }: NavbarProps) {
         </Link>
         <button
           onClick={onOpenTutorial}
-          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+          className="ml-8 text-indigo-200 hover:text-white text-sm font-medium transition-colors"
           title="打开教程"
         >
           教程

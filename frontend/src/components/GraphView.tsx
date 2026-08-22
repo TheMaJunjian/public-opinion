@@ -3,7 +3,6 @@ import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } fr
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters, convergeGroupingAndRightConstraints } from '../utils/layout';
-import { debugWarn } from '../utils/debugLog';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
 import {
@@ -1944,8 +1943,6 @@ export interface GraphViewProps {
   joinRelationsBySource?: Map<string, Relation[]>;
   onJoinFilterClick?: (messageId: string, direction: 'incoming' | 'outgoing') => void;
   joinStatusByMessage?: Map<string, 'valid' | 'rejected' | 'superseded' | 'container-rejected'>;
-  /** DEBUG: callback to report frame/card rectangles */
-  onDebugRects?: (text: string) => void;
 }
 
 const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
@@ -2180,7 +2177,6 @@ function GraphViewCanvas(props: GraphViewProps) {
     joinRelationsBySource,
     onJoinFilterClick,
     joinStatusByMessage,
-    onDebugRects,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
@@ -2913,55 +2909,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     setRelDecByRelMsgState(relDecByRelMsgId);
     setTagDecorationsByMsg(newTagDecorationsByMsg);
     setArrangeFrames(newArrangeFrames);
-    debugWarn('diag-gv', `groupFrames count=${newGroupFrames.length} ${newGroupFrames.map(f=>`${f.relMsgId.slice(-6)}:${f.relType} card=${f.relMsgId.slice(-6)} rect=${f.rect.x},${f.rect.y} ${f.rect.width}x${f.rect.height}`).join(' | ')}`);
     setGroupFrames(newGroupFrames);
-
-    // DEBUG: send rects + cardIds to parent
-    if (onDebugRects) {
-      const lines: string[] = [];
-      // Compute cardIds per reservation
-      const edgesByRelMsg2 = new Map<string, DemoEdge[]>();
-      for (const e of edges) {
-        const arr = edgesByRelMsg2.get(e.relationMessageId) ?? [];
-        arr.push(e); edgesByRelMsg2.set(e.relationMessageId, arr);
-      }
-      const resInfo: string[] = [];
-      for (const [rid, redges] of edgesByRelMsg2) {
-        const rk = getRelKind(redges[0]?.relationType ?? '');
-        if (rk !== 'arrange-frame' && rk !== 'frame-group' && rk !== 'replace-overlay') continue;
-        const cids = new Set<string>();
-        // Include source
-        const srcId = redges[0].from.messageId;
-        if (!srcId.startsWith('anon:')) cids.add(srcId);
-        for (const e of redges) {
-          const tm = msgMap.get(e.to.messageId);
-          if (tm?.kind === 'relation') {
-            const nb = getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg: edgesByRelMsg2, layout, msgMap, relationCardMsgIds });
-            if (nb) nb.cardIds.forEach(id => cids.add(id));
-          } else if (tm && isContentKind(tm.kind)) {
-            cids.add(e.to.messageId);
-          }
-        }
-        resInfo.push(`${rid} cardIds=[${[...cids].join(',')}]`);
-      }
-      lines.push('--- RESERVATIONS ---');
-      lines.push(...resInfo);
-      lines.push('--- FRAMES ---');
-      for (const gf of newGroupFrames) {
-        const rm = msgMap.get(gf.relMsgId);
-        lines.push(`${gf.relMsgId}(${rm?.relationType??'?'}) rect={x:${gf.rect.x},y:${gf.rect.y},w:${gf.rect.width},h:${gf.rect.height}} bottom=${gf.rect.y+gf.rect.height}`);
-      }
-      for (const sf of newArrangeFrames) {
-        lines.push(`${sf.relMsgId}(supp) rect={x:${sf.rect.x},y:${sf.rect.y},w:${sf.rect.width},h:${sf.rect.height}} bottom=${sf.rect.y+sf.rect.height}`);
-      }
-      lines.push('--- CARDS ---');
-      for (const m of normals) {
-        const b = layout[m.id];
-        if (!b) continue;
-        lines.push(`${m.id}(${m.kind}) box={x:${b.x},y:${b.y},w:${b.width},h:${b.height}} bottom=${b.y+b.height}`);
-      }
-      onDebugRects(lines.join('\n'));
-    }
 
     // Collect TAG relations targeting relation messages (for display next to edge labels / frames)
     const newTagsByRelMsg = new Map<string,Array<{label:string;relMsgId:string}>>();

@@ -3,6 +3,7 @@ import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
 import TopicStructureView from './TopicStructureView';
 import StanceHistoryPanel from './StanceHistoryPanel';
 import AuditLogView from './AuditLogView';
+import OperationLogView from './OperationLogView';
 import RevenuePanel from './RevenuePanel';
 import { useNavigate } from 'react-router-dom';
 
@@ -149,8 +150,6 @@ interface TopicRightPanelProps {
   onExitComparison?: () => void;
   comparisonMinStake?: number;
 
-  // Debug
-  debugRects: string;
 }
 
 export default function TopicRightPanel(props: TopicRightPanelProps) {
@@ -586,11 +585,8 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         )}
       </div>
 
-      {/* Debug */}
-      <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
-        <div style={{ fontWeight: 600, marginBottom: 4, color: "#0f0" }}>Debug Rects</div>
-        <pre style={{ fontSize: 10, fontFamily: "monospace", color: "#0f0", margin: 0, maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap" }}>{p.debugRects || "等待数据..."}</pre>
-      </div>
+      <OperationLogView />
+
     </div>
   );
 }

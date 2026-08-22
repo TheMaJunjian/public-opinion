@@ -4,9 +4,17 @@
  */
 const DEBUG = import.meta.env.VITE_DEBUG !== 'false';
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
+export interface OperationLogEntry {
+  time: string;
+  action: string;
+  details: string;
+}
 
-function sendLog(tag: string, msg: string, debug: boolean) {
-  if (!DEBUG) return;
+const operationEntries: OperationLogEntry[] = [];
+const operationListeners = new Set<(entries: OperationLogEntry[]) => void>();
+
+function sendLog(tag: string, msg: string, debug: boolean, force = false) {
+  if (!DEBUG && !force) return;
   console.log(`[${tag}]`, msg);
   fetch(`${BASE_URL}/debug-log`, {
     method: 'POST',
@@ -18,6 +26,25 @@ function sendLog(tag: string, msg: string, debug: boolean) {
 /** 写入 app-YYYY-MM-DD.log */
 export function debugLog(tag: string, msg: string) {
   sendLog(tag, msg, false);
+}
+
+/** 写入 app-YYYY-MM-DD.log，不受调试开关影响 */
+export function operationLog(action: string, details: string) {
+  const entry = { time: new Date().toLocaleTimeString('zh-CN'), action, details };
+  operationEntries.push(entry);
+  if (operationEntries.length > 100) operationEntries.shift();
+  operationListeners.forEach(listener => listener([...operationEntries]));
+  sendLog('操作', `${action} ${details}`, false, true);
+}
+
+export function getOperationLogs() {
+  return [...operationEntries];
+}
+
+export function subscribeOperationLogs(listener: (entries: OperationLogEntry[]) => void) {
+  operationListeners.add(listener);
+  listener([...operationEntries]);
+  return () => { operationListeners.delete(listener); };
 }
 
 /** 写入 debug-YYYY-MM-DD.log */

@@ -23,7 +23,7 @@ import { MessageJumpOverlay } from '../components/PopupOverlay';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
-import { debugWarn } from '../utils/debugLog';
+import { operationLog } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
 import MessageFilterPanel, { type MessageFilterSettings, applyMessageFilter } from '../components/MessageFilterPanel';
@@ -263,7 +263,7 @@ export default function TopicDetailPage() {
         );
         setRelations(relationsData.data);
         setAttentionUsersByTarget(attentionData.data);
-        debugWarn('diag', `LOAD relations=${relationsData.data.length} types=[${relationsData.data.map(r=>r.relationType).join(',')}] ids=[${relationsData.data.map(r=>r.id.slice(-6)).join(',')}]`);
+        operationLog('加载主题关系', `count=${relationsData.data.length}`);
         setMessages(demoMsgs);
         setEdges(demoEdges);
 
@@ -527,6 +527,24 @@ export default function TopicDetailPage() {
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
   const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
   const [targetUnits, setTargetUnits] = useState<UnitSelection[]>([]);
+  const selectionLogInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!selectionLogInitializedRef.current) {
+      selectionLogInitializedRef.current = true;
+      return;
+    }
+    const describe = (units: UnitSelection[]) => units.map(unit => {
+      const selection = unit.selection;
+      const detail = selection.kind === 'whole'
+        ? '整条'
+        : selection.kind === 'text'
+          ? `字符${selection.start}-${selection.start + selection.len}`
+          : `边${selection.edgeId}`;
+      return `${unit.messageId}[${detail}]`;
+    }).join(',') || '空';
+    operationLog('选择变化', `暂存区=${describe(draftUnits)} 来源集合=${describe(sourceUnits)} 目标集合=${describe(targetUnits)}`);
+  }, [draftUnits, sourceUnits, targetUnits]);
   const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
   const [focusEntries, setFocusEntries] = useState<FocusEntry[]>([]);
   // Counter incremented on every exitFocus/exitAllFocus to force GraphView
@@ -691,7 +709,6 @@ export default function TopicDetailPage() {
     x: number; y: number;
   } | null>(null);
   // DEBUG
-  const [debugRects, setDebugRects] = useState("");
   const [stakeAmount, setStakeAmount] = useState<number | ''>(10);
   const [relStakeAmount, setRelStakeAmount] = useState<number | ''>(10);
   const [minSelfStake, setMinSelfStake] = useState(10);
@@ -1432,7 +1449,6 @@ export default function TopicDetailPage() {
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
-    if (textIds.size > 0 || relationIds.size > 0) debugWarn('diag', `summaryOwn textIds=[${[...textIds].map(id=>id.slice(-6)).join(',')}] relIds=[${[...relationIds].map(id=>id.slice(-6)).join(',')}]`);
     return { textIds, relationIds };
   }, [relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
   const summaryCoverageByMessageId = useMemo(() => {
@@ -1554,7 +1570,6 @@ export default function TopicDetailPage() {
     activeSummaryOwnershipTextIdsExpanded.forEach(id => ids.add(id));
     // MERGE displays as a group frame whose targets remain visible as cards on the canvas,
     // so mergeOwnership.textIds is intentionally excluded here.
-    debugWarn('diag', `hiddenTextIds total=${ids.size} classify=${activeClassifyOwnershipTextIdsExpanded.size} summary=${activeSummaryOwnershipTextIdsExpanded.size} ids=[${[...ids].map(id=>id.slice(-6)).join(',')}]`);
     return ids;
   }, [activeClassifyOwnershipTextIdsExpanded, activeSummaryOwnershipTextIdsExpanded]);
 
@@ -1762,7 +1777,7 @@ export default function TopicDetailPage() {
       const preferredComparisonCandidates = isDecorationTarget && overlayComparisonCandidates.length > 0
         ? overlayComparisonCandidates
         : comparisonCandidates;
-      let el = comparisonPair
+      const el = comparisonPair
         ? preferredComparisonCandidates[0] ?? null
         : isDecorationTarget
           ? preferredCandidates[0] ?? null
@@ -1932,6 +1947,7 @@ export default function TopicDetailPage() {
 
   function enterFocus(messageId: string, options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
     if (!messageId) return;
+    operationLog(`进入${options?.mode === 'topic' ? '分类' : '焦点'}`, `message=${messageId}`);
     const snapshot = captureSnapshot();
     const entry: FocusEntry = { ids: [messageId], snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
     setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
@@ -1939,6 +1955,7 @@ export default function TopicDetailPage() {
 
   function enterFocusMultiple(messageIds: string[], options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
     if (!messageIds || messageIds.length === 0) return;
+    operationLog(`进入${options?.mode === 'topic' ? '分类' : '焦点'}`, `messages=${messageIds.join(',')}`);
     const snapshot = captureSnapshot();
     const entry: FocusEntry = { ids: messageIds, snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
     setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
@@ -1952,6 +1969,7 @@ export default function TopicDetailPage() {
     // avoiding React 18 concurrent reconciliation bugs (removeChild errors).
     const entry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
     const snapshot = entry?.snapshot ?? null;
+    operationLog('退出焦点', `depth=${focusEntries.length}`);
     setFocusEntries(prev => {
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
@@ -1962,6 +1980,7 @@ export default function TopicDetailPage() {
 
   function exitAllFocus() {
     const snapshot = focusEntries.length > 0 ? focusEntries[0].snapshot : null;
+    operationLog('退出全部焦点', `depth=${focusEntries.length}`);
     setFocusEntries(prev => {
       if (prev.length === 0) return prev;
       return [];
@@ -1983,6 +2002,10 @@ export default function TopicDetailPage() {
     const u: UnitSelection = { messageId, selection: { kind: "text", start, len, text } };
     setDraftUnits(prev => {
       const exists = prev.some(x => unitEquals(x, u));
+      if (!exists && sourceUnits.some(unit => unit.messageId === messageId)) {
+        setSendError('消息已在来源集合中，不能同时加入候选暂存区');
+        return prev;
+      }
       return exists ? prev.filter(x => !unitEquals(x, u)) : [...prev, u];
     });
   }
@@ -2151,6 +2174,7 @@ export default function TopicDetailPage() {
     setSendError(null);
     try {
       const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT', stakeAmount: pts });
+      operationLog('发送消息', `message=${backendMsg.id} length=${text.length} stake=${pts}`);
       const msg: DemoMessage = {
         id: backendMsg.id,
         author: backendMsg.createdBy.username,
@@ -2276,6 +2300,10 @@ export default function TopicDetailPage() {
     const wholeUnit: UnitSelection = { messageId, selection: { kind: "whole" } };
     setDraftUnits(prev => {
       const exists = prev.some(u => unitEquals(u, wholeUnit));
+      if (!exists && sourceUnits.some(unit => unit.messageId === messageId)) {
+        setSendError('消息已在来源集合中，不能同时加入候选暂存区');
+        return prev;
+      }
       const next = exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
       lastClickActionsRef.current.push({ type: "toggleWhole", messageId, prevExisted: exists, time: Date.now() });
       const now = Date.now();
@@ -2384,6 +2412,10 @@ export default function TopicDetailPage() {
     const fragmentUnit: UnitSelection = { messageId, selection: { kind: "text", start: frag.start, len: frag.len, text: frag.text } };
     setDraftUnits(prev => {
       const exists = prev.some(u => unitEquals(u, fragmentUnit));
+      if (!exists && sourceUnits.some(unit => unit.messageId === messageId)) {
+        setSendError('消息已在来源集合中，不能同时加入候选暂存区');
+        return prev;
+      }
       return exists ? prev.filter(u => !unitEquals(u, fragmentUnit)) : [...prev, fragmentUnit];
     });
     lastAddedFragmentRef.current = { messageId, unit: fragmentUnit, time: Date.now() };
@@ -2400,6 +2432,12 @@ export default function TopicDetailPage() {
 
   function commitDraftTo(role: "source" | "target") {
     if (draftUnits.length === 0) return;
+    const oppositeUnits = role === "source" ? targetUnits : sourceUnits;
+    const oppositeMessageIds = new Set(oppositeUnits.map(unit => unit.messageId));
+    if (draftUnits.some(unit => oppositeMessageIds.has(unit.messageId))) {
+      setSendError(`消息已在${role === "source" ? "目标" : "来源"}集合中，不能同时加入${role === "source" ? "来源" : "目标"}集合`);
+      return;
+    }
     if (role === "source") setSourceUnits(prev => mergeUnits(prev, draftUnits));
     else setTargetUnits(prev => mergeUnits(prev, draftUnits));
     setDraftUnits([]); setActiveTextSelectId(null);
@@ -2578,7 +2616,7 @@ export default function TopicDetailPage() {
     }
     setClassifyKey(k => k + 1);
     setPreviewClassifyId(null); // exit preview mode when leaving classify
-    if (entry?.snapshot) {
+    if (_options?.restoreSnapshot !== false && entry?.snapshot) {
       restoreSnapshot(entry.snapshot, { restoreSelection: false });
     }
   }
@@ -2870,6 +2908,7 @@ export default function TopicDetailPage() {
         }
       }
     }
+    operationLog('创建关系', `type=${relationType} sources=${sources.length} targets=${targets.length} created=${newEdgesList.length} label=${label.slice(0, 80)}`);
     setEdges(prev => [...prev, ...newEdgesList]);
   }
 
@@ -2939,7 +2978,7 @@ export default function TopicDetailPage() {
           }
         }
       } catch (e) {
-        debugWarn('join', `FAILED containerId=${containerId.slice(-6)} tgt=${tgtMid.slice(-6)} error=${String(e)}`);
+        operationLog('加入分类失败', `containerId=${containerId.slice(-6)} target=${tgtMid.slice(-6)} error=${String(e)}`);
         throw e;
       }
     }
@@ -2955,6 +2994,11 @@ export default function TopicDetailPage() {
 
     if (draftUnits.length > 0 && targetUnits.length > 0) {
       setSendError('候选区和目标集合不能同时有内容，请先将候选区移入目标集合或清空其中一方');
+      return;
+    }
+    const sourceMessageIds = new Set(sourceUnits.map(unit => unit.messageId));
+    if (draftUnits.some(unit => sourceMessageIds.has(unit.messageId)) || targetUnits.some(unit => sourceMessageIds.has(unit.messageId))) {
+      setSendError('同一消息不能同时出现在来源集合和候选暂存区或目标集合中');
       return;
     }
 
@@ -5695,7 +5739,7 @@ export default function TopicDetailPage() {
       unavailableReasons.push(`当前画布未显示 ${notRenderedDependencyIds.length} 个目标或依赖消息`);
     }
     if (unavailableReasons.length > 0) {
-      debugWarn('navigate', `blocked target=${messageId} clean=[${cleanFilteredDependencyIds.join(',')}] type=[${typeFilteredDependencyIds.join(',')}] missing=[${missingDataDependencyIds.join(',')}] canvas=[${notRenderedDependencyIds.join(',')}]`);
+      operationLog('消息跳转受阻', `target=${messageId}`);
       showAlert(`无法跳转：${unavailableReasons.join('；')}。请先调整过滤条件或切换到能显示目标消息的画布。`);
       pendingScrollDependencyIdsRef.current = [];
       pendingScrollMsgRef.current = null;
@@ -6604,7 +6648,6 @@ export default function TopicDetailPage() {
                     enterTemporaryCategory();
                     setJoinFilterTargetId(messageId);
                   }}
-                  onDebugRects={setDebugRects}
                 />
             )}
           </div>
@@ -6763,7 +6806,6 @@ export default function TopicDetailPage() {
           showRevenue={showRevenue}
           setShowRevenue={setShowRevenue}
           topicId={topicId!}
-          debugRects={debugRects}
           comparisonMode={comparisonMode}
           comparisonReviewed={comparisonReviewed}
           comparisonTargetId={comparisonTargetId}

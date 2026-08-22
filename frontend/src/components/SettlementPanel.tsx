@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
-import { debugLog } from '../utils/debugLog';
+import { operationLog } from '../utils/debugLog';
 import PromptModal from './PromptModal';
 
 interface Props {
@@ -118,7 +118,7 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
       setCreatingRound(true);
       const stype = filterSettlementType ?? 'TRUTH';
       const round = await api.createRound(messageId, { settlementType: stype });
-      debugLog('结算', `创建轮次 msg=${messageId.slice(-6)} round=${round.id.slice(-6)} type=${stype}`);
+      operationLog('发起结算', `message=${messageId} round=${round.id} type=${stype}`);
       setActiveRounds(prev => [...prev, round]);
       setRounds(prev => [round, ...prev]);
       window.dispatchEvent(new Event('points-refresh'));
@@ -342,7 +342,7 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
       setSettleError(null);
       setVoting(true);
       const result = await api.castVote(localRound.id, { vote: voteDirection, amount: voteAmount });
-      debugLog('结算', `投票 round=${localRound.id.slice(-6)} ${voteDirection} ${voteAmount}`);
+      operationLog('投票', `round=${localRound.id} vote=${voteDirection} amount=${voteAmount}`);
       setVoteAmount(1);
       window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
@@ -368,7 +368,7 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
       setSettling(true);
       setConfirmOpen(false);
       const result = await api.closeAndSettle(localRound.id);
-      debugLog('结算', `结算完成 round=${localRound.id.slice(-6)} result=${result.result}`);
+      operationLog('完成结算', `round=${localRound.id} result=${result.result}`);
       const settlementLabel = localRound.settlementType === 'VALUE' ? '价值仲裁' : '真假仲裁';
       const resultLabel = result.result === 'TRUE' ? '赞成胜出' : result.result === 'FALSE' ? '反对胜出' : '平局';
       const resultContent = result.resultContent

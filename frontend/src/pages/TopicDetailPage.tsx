@@ -73,6 +73,7 @@ function collectNavigationDisplayDependencies(
   messages: DemoMessage[],
   relations: Relation[],
   edges: DemoEdge[],
+  includeAuxiliaryRecords = true,
 ): Set<string> {
   const relationById = new Map(relations.map(relation => [relation.id, relation]));
   const dependencyIds = new Set<string>();
@@ -98,20 +99,22 @@ function collectNavigationDisplayDependencies(
       }
     }
 
-    // JOIN and settlement records can affect whether the current message is
-    // included in its owning presentation, even though they do not always
-    // produce a visible edge of their own.
-    for (const candidate of relations) {
-      if (candidate.relationType?.toUpperCase() === 'JOIN' && candidate.targetRefs.some(ref =>
-        (ref.kind === 'relation' ? ref.relationId : ref.messageId) === currentId,
-      )) {
-        pendingIds.push(candidate.id);
+    if (includeAuxiliaryRecords) {
+      // JOIN and settlement records can affect whether the current message is
+      // included in its owning presentation, even though they do not always
+      // produce a visible edge of their own.
+      for (const candidate of relations) {
+        if (candidate.relationType?.toUpperCase() === 'JOIN' && candidate.targetRefs.some(ref =>
+          (ref.kind === 'relation' ? ref.relationId : ref.messageId) === currentId,
+        )) {
+          pendingIds.push(candidate.id);
+        }
       }
-    }
-    for (const candidate of messages) {
-      if ((candidate.kind === 'round' || candidate.kind === 'round_result')
-        && candidate.settlementTargetId === currentId) {
-        pendingIds.push(candidate.id);
+      for (const candidate of messages) {
+        if ((candidate.kind === 'round' || candidate.kind === 'round_result')
+          && candidate.settlementTargetId === currentId) {
+          pendingIds.push(candidate.id);
+        }
       }
     }
   }
@@ -648,17 +651,10 @@ export default function TopicDetailPage() {
 
   useEffect(() => {
     const pendingNavigation = pendingCorrectionNavigationRef.current;
-    if (!pendingNavigation || correctionFilterTargetId !== null || viewMode !== 'list') return;
-    const dependencyIds = collectNavigationDisplayDependencies(
-      pendingNavigation.messageId,
-      messagesRef.current,
-      relationsRef.current,
-      edgesRef.current,
-    );
-    const allRendered = Array.from(dependencyIds).every(id =>
-      renderedMessageIdsRef.current.has(id) || renderedRelationIdsRef.current.has(id),
-    );
-    if (!allRendered) return;
+    if (!pendingNavigation || correctionFilterTargetId !== null) return;
+    const targetExists = messagesRef.current.some(message => message.id === pendingNavigation.messageId)
+      || relationsRef.current.some(relation => relation.id === pendingNavigation.messageId);
+    if (!targetExists) return;
     pendingCorrectionNavigationRef.current = null;
     handleNavigateToMessage(pendingNavigation.messageId);
   }, [correctionFilterTargetId, viewMode, loading, messages, edges, relations, scrollKey]);
@@ -1647,14 +1643,23 @@ export default function TopicDetailPage() {
     if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
     messagePulseRafRef.current = requestAnimationFrame(() => {
       messagePulseRafRef.current = null;
-      if (!element.isConnected) return;
-      const allTargetElements = Array.from(leftPanelRef.current?.querySelectorAll(
-        `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
+      let pulseElement = element;
+      if (!pulseElement.isConnected) {
+        const currentCandidates = Array.from(leftPanelRef.current?.querySelectorAll(
+          `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
+        ) ?? []) as HTMLElement[];
+        pulseElement = currentCandidates.find(candidate =>
+          candidate.hasAttribute('data-rel-overlay') && candidate.getAttribute('data-msgid') === targetId,
+        ) ?? currentCandidates.find(candidate => candidate.hasAttribute('data-rel-overlay'))
+          ?? currentCandidates[0];
+      }
+      if (!pulseElement?.isConnected) return;
+      const targetElements = Array.from(leftPanelRef.current?.querySelectorAll(
+        pulseElement.hasAttribute('data-rel-overlay')
+          ? `[data-msgid="${targetId}"][data-rel-overlay]`
+          : `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
       ) ?? []);
-      const overlayTargetElements = allTargetElements.filter(candidate =>
-        (candidate as HTMLElement).hasAttribute('data-rel-overlay'),
-      );
-      const targetRects = (overlayTargetElements.length > 0 ? overlayTargetElements : allTargetElements)
+      const targetRects = targetElements
         .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
         .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
       const rect = targetRects.reduce((bounds, candidateRect) => {
@@ -1663,12 +1668,12 @@ export default function TopicDetailPage() {
         const right = Math.max(bounds.right, candidateRect.right);
         const bottom = Math.max(bounds.bottom, candidateRect.bottom);
         return new DOMRect(left, top, right - left, bottom - top);
-      }, element.getBoundingClientRect());
-      const visualRoot = element.hasAttribute('data-rel-overlay')
-        ? element.closest('[data-jump-canvas]') as HTMLElement | null
+      }, pulseElement.getBoundingClientRect());
+      const visualRoot = pulseElement.hasAttribute('data-rel-overlay')
+        ? pulseElement.closest('[data-jump-canvas]') as HTMLElement | null
         : null;
       const visualRect = rect;
-      setMessagePulse({ element, rect, visualRoot, visualRect });
+      setMessagePulse({ element: pulseElement, rect, visualRoot, visualRect });
       messagePulseTimerRef.current = setTimeout(() => {
         setMessagePulse(null);
         messagePulseTimerRef.current = null;
@@ -1726,19 +1731,23 @@ export default function TopicDetailPage() {
       if (!dependencyReady) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
       const candidates = findMessageElements(container, targetId);
       const targetRelation = relationsRef.current.find(relation => relation.id === targetId);
+      const targetEdge = edgesRef.current.find(edge => edge.relationMessageId === targetId);
       const isDecorationTarget = targetRelation
         ? ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetRelation.relationType.toUpperCase())
           || getPresentationSpec(targetRelation.relationType).kind === 'inline-badge'
-        : false;
+        : ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetEdge?.relationType?.toUpperCase() ?? '');
       const comparisonPair = container.querySelector('[data-comparison-pair]');
       const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
       const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
+      const directOverlayCandidates = overlayCandidates.filter(candidate => candidate.getAttribute('data-msgid') === targetId);
       const overlayComparisonCandidates = comparisonCandidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
-      const preferredCandidates = isDecorationTarget && overlayCandidates.length > 0 ? overlayCandidates : candidates;
+      const preferredCandidates = isDecorationTarget
+        ? (directOverlayCandidates.length > 0 ? directOverlayCandidates : overlayCandidates.length > 0 ? overlayCandidates : candidates)
+        : candidates;
       const preferredComparisonCandidates = isDecorationTarget && overlayComparisonCandidates.length > 0
         ? overlayComparisonCandidates
         : comparisonCandidates;
-      const el = comparisonPair
+      let el = comparisonPair
         ? preferredComparisonCandidates[0] ?? null
         : isDecorationTarget
           ? preferredCandidates[0] ?? null
@@ -1775,8 +1784,17 @@ export default function TopicDetailPage() {
       // Re-read after the inner scroll, then move the outer page if the target is
       // still outside the actual viewport before creating the jump overlay.
       requestAnimationFrame(() => {
-        if (!el.isConnected) return;
-        const currentRect = el.getBoundingClientRect();
+        let currentElement = el;
+        if (!currentElement.isConnected) {
+          const currentCandidates = findMessageElements(container, targetId);
+          currentElement = currentCandidates.find(candidate =>
+            isDecorationTarget && candidate.hasAttribute('data-rel-overlay')
+              && candidate.getAttribute('data-msgid') === targetId,
+          ) ?? currentCandidates.find(candidate => isDecorationTarget && candidate.hasAttribute('data-rel-overlay'))
+            ?? currentCandidates[0];
+        }
+        if (!currentElement?.isConnected) return;
+        const currentRect = currentElement.getBoundingClientRect();
         const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
         const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
         const targetOutsideViewport = currentRect.bottom <= 0
@@ -1784,13 +1802,13 @@ export default function TopicDetailPage() {
           || currentRect.right <= 0
           || currentRect.left >= viewportWidth;
         if (targetOutsideViewport) {
-          el.scrollIntoView({ block: 'center', inline: 'nearest' });
+          currentElement.scrollIntoView({ block: 'center', inline: 'nearest' });
           requestAnimationFrame(() => {
-            if (el.isConnected) showMessagePulse(targetId, el);
+            showMessagePulse(targetId, currentElement);
           });
           return;
         }
-        showMessagePulse(targetId, el);
+        showMessagePulse(targetId, currentElement);
       });
       // The left panel handles the inner scroll; the target scrollIntoView above
       // handles the outer page when the panel itself is outside the viewport.
@@ -5573,13 +5591,17 @@ export default function TopicDetailPage() {
     const isSpecialTarget = targetMessage?.kind === 'join'
       || targetMessage?.kind === 'round'
       || targetMessage?.kind === 'round_result';
+    const isCorrectionTarget = targetMessage?.relationType?.toUpperCase() === 'CORRECT'
+      || relationsRef.current.some(relation => relation.id === messageId && relation.relationType?.toUpperCase() === 'CORRECT')
+      || edgesRef.current.some(edge => edge.relationType?.toUpperCase() === 'CORRECT' && edge.to.messageId === messageId);
     const allDependencyIds = collectNavigationDisplayDependencies(
       messageId,
       messagesRef.current,
       relationsRef.current,
       edgesRef.current,
+      !isCorrectionTarget,
     );
-    const dependencyIds = isSpecialTarget
+    const dependencyIds = isSpecialTarget || isCorrectionTarget
       ? new Set([messageId])
       : allDependencyIds;
     const navigationFilterState = navigationVisibilityRef.current;
@@ -5673,8 +5695,7 @@ export default function TopicDetailPage() {
     exitTemporaryCategory();
     setCorrectionFilterTargetId(null);
     if (switchToList) setViewMode('list');
-    setMsgFilter(previous => ({ ...previous, hideJoin: false, hideSettlement: false }));
-  }, [correctionFilterTargetId, handleNavigateToMessage]);
+  }, [correctionFilterTargetId, handleNavigateToMessage, viewMode]);
 
   function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
     e.stopPropagation();
@@ -6139,7 +6160,11 @@ export default function TopicDetailPage() {
                 setViewMode(nextViewMode);
                 const scrollTargetId = comparisonMode ? comparisonId : lastClickedMessageId;
                 if (scrollTargetId) {
-                  setTimeout(() => scrollMsgToCenter(scrollTargetId), 100);
+                  const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
+                  const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
+                  const isCorrectionTarget = scrollTargetMessage?.relationType?.toUpperCase() === 'CORRECT'
+                    || scrollTargetRelation?.relationType?.toUpperCase() === 'CORRECT';
+                  setTimeout(() => scrollMsgToCenter(scrollTargetId, { resolveTarget: !isCorrectionTarget }), 100);
                 }
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}

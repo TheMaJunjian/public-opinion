@@ -3680,6 +3680,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           const uniqueCorrBadges = Array.from(new Map(corrBadges.map(b => [b.relMsgId, b])).values());
           const correctionBadge = uniqueCorrBadges[uniqueCorrBadges.length - 1];
           const correctionCount = uniqueCorrBadges.length;
+          const correctionBadgeJumpIds = uniqueCorrBadges.map(b => b.relMsgId).join(' ');
           const versionState = correctionVersionsByTargetMsgId.get(msg.id);
           const validCorrectionIds = new Set(
             versionState?.versions
@@ -3749,7 +3750,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
                   {msg.kind!=="normal" && correctionBadge && (
                     <div key={`corr-hdr-${correctionBadge.relMsgId}`}
-                      data-msgid={correctionBadge.relMsgId} data-jump-msgids={correctionBadge.relMsgId} data-rel-overlay="true"
+                      data-msgid={correctionBadge.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,correctionBadge.relMsgId);}}
                       onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,correctionBadge.relMsgId);}}
                       title={`更正关系：${correctionBadge.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}
@@ -3778,7 +3779,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       return (
                         <React.Fragment key={`corr-hdr-${b.relMsgId}`}>
                           <div
-                            data-msgid={b.relMsgId} data-jump-msgids={b.relMsgId} data-rel-overlay="true"
+                            data-msgid={b.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                             onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
                             onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
                             title={`更正关系：${b.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}

@@ -61,7 +61,7 @@ export default function App() {
     <AuthProvider>
       <Router>
         <div
-          className="h-screen min-w-fit flex flex-col bg-[#101010]"
+          className="min-h-screen min-w-fit flex flex-col bg-[#101010]"
           style={{
             transform: `scale(${interfaceZoom})`,
             transformOrigin: 'top left',
@@ -74,7 +74,7 @@ export default function App() {
             onOpenViewer={() => setViewerOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
           />
-          <main className="flex-1 min-h-0">
+          <main className="flex-1">
             <Suspense fallback={routeFallback}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />

@@ -6104,7 +6104,7 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ height: "100%", minHeight: 0, minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ minHeight: "100%", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
@@ -6157,8 +6157,8 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: "1 1 0", minHeight: 0, minWidth: containerWidth }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden", paddingBottom: 8 }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", minWidth: containerWidth }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "visible", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
@@ -6301,7 +6301,7 @@ export default function TopicDetailPage() {
           <div ref={leftPanelRef}
             data-topic-left-panel="true"
             className={`${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
-            style={{ flex: "1 1 auto", overflowY: "auto", overflowX: "hidden", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, minHeight: 0, position: "relative" }}
+            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "hidden", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

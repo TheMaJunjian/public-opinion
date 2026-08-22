@@ -6354,21 +6354,23 @@ export default function TopicDetailPage() {
                       onMouseUp={handleMessageMouseUp}
                       onContentMouseUp={handleTextMouseUp}
                       headerLabel={correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
-                        <span
-                          role="link"
-                          tabIndex={0}
-                          onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(msg.id, true); }}
-                          onKeyDown={event => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              handleNavigateFromCorrectionTemporaryCategory(msg.id, true);
-                            }
-                          }}
-                          style={{ color: '#fbbf24', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2, fontWeight: 600 }}
-                          title={`跳转到更正消息 ${msg.id}`}
-                        >
-                          {msg.id}
+                        <span style={{ color: '#fbbf24', fontWeight: 600 }}>
+                          <span
+                            role="link"
+                            tabIndex={0}
+                            onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(msg.id, true); }}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                handleNavigateFromCorrectionTemporaryCategory(msg.id, true);
+                              }
+                            }}
+                            style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                            title={`跳转到更正消息 ${msg.id}`}
+                          >
+                            {msg.id}
+                          </span>
                           <span style={{
                             marginLeft: 5,
                             color: correctionVersion?.valid && !correctionVersion.conflicted ? '#4ade80' : '#f87171',

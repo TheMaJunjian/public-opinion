@@ -1585,6 +1585,7 @@ export default function TopicDetailPage() {
   );
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
+  const leftPanelTouchRef = useRef<{ x: number; y: number } | null>(null);
   const leftHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
   const leftHorizontalScrollSourceRef = useRef<HTMLElement | null>(null);
   const leftHorizontalScrollScaleRef = useRef(1);
@@ -5882,6 +5883,34 @@ export default function TopicDetailPage() {
     document.addEventListener('touchend', onTouchEnd);
   }
 
+  function handleLeftPanelTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    leftPanelTouchRef.current = e.touches.length === 1
+      ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+      : null;
+  }
+
+  function handleLeftPanelTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+    if (e.touches.length !== 1 || !leftPanelTouchRef.current) {
+      leftPanelTouchRef.current = null;
+      return;
+    }
+    const panel = leftPanelRef.current;
+    if (!panel) return;
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - leftPanelTouchRef.current.x;
+    const atLeftEdge = panel.scrollLeft <= 0 && deltaX > 0;
+    const atRightEdge = panel.scrollLeft >= panel.scrollWidth - panel.clientWidth - 1 && deltaX < 0;
+    if ((atLeftEdge || atRightEdge) && Math.abs(deltaX) > 0) {
+      e.preventDefault();
+      window.scrollBy({ left: -deltaX });
+    }
+    leftPanelTouchRef.current = { x: touch.clientX, y: touch.clientY };
+  }
+
+  function handleLeftPanelTouchEnd() {
+    leftPanelTouchRef.current = null;
+  }
+
   // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
 
   useEffect(() => {
@@ -6304,7 +6333,11 @@ export default function TopicDetailPage() {
           <div ref={leftPanelRef}
             data-topic-left-panel="true"
             className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
-            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", overscrollBehaviorX: "auto", touchAction: "pan-x pan-y pinch-zoom", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            onTouchStart={handleLeftPanelTouchStart}
+            onTouchMove={handleLeftPanelTouchMove}
+            onTouchEnd={handleLeftPanelTouchEnd}
+            onTouchCancel={handleLeftPanelTouchEnd}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

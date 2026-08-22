@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
@@ -125,7 +124,6 @@ function collectNavigationDisplayDependencies(
 type FocusSnapshot = {
   viewMode: ViewMode;
   leftScroll: { top: number; left: number } | null;
-  leftHorizontalScroll: number | null;
   rightScroll: { top: number; left: number } | null;
   draftUnits: UnitSelection[];
   sourceUnits: UnitSelection[];
@@ -1585,12 +1583,6 @@ export default function TopicDetailPage() {
   );
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
-  const leftPanelTouchRef = useRef<{ x: number; y: number } | null>(null);
-  const [documentHorizontalScrollVisible, setDocumentHorizontalScrollVisible] = useState(false);
-  const leftHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
-  const leftHorizontalScrollSourceRef = useRef<HTMLElement | null>(null);
-  const leftHorizontalScrollScaleRef = useRef(1);
-  const [leftHorizontalScrollMetrics, setLeftHorizontalScrollMetrics] = useState({ visible: false, left: 0, width: 0, scrollWidth: 1 });
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1853,9 +1845,6 @@ export default function TopicDetailPage() {
     return {
       viewMode,
       leftScroll: leftPanelRef.current ? { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft } : null,
-      leftHorizontalScroll: leftHorizontalScrollSourceRef.current?.scrollLeft
-        ?? leftHorizontalScrollRef.current?.scrollLeft
-        ?? null,
       rightScroll: rightPanelRef.current ? { top: rightPanelRef.current.scrollTop, left: rightPanelRef.current.scrollLeft } : null,
       draftUnits: draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       sourceUnits: sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
@@ -1872,12 +1861,6 @@ export default function TopicDetailPage() {
     const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
     if (top !== null) container.scrollTop = Math.min(Math.max(0, top), maxTop);
     if (left !== null) container.scrollLeft = Math.min(Math.max(0, left), maxLeft);
-  }
-
-  function clampAndSetHorizontalScroll(container: HTMLElement | null, left: number | null) {
-    if (!container || left === null) return;
-    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-    container.scrollLeft = Math.min(Math.max(0, left), maxLeft);
   }
 
   function restoreSnapshot(s: FocusSnapshot | null, opts?: { restoreSelection?: boolean }) {
@@ -1900,13 +1883,6 @@ export default function TopicDetailPage() {
         scrollRafRef.current = null;
         scrollRaf2Ref.current = null;
         clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
-        clampAndSetHorizontalScroll(leftHorizontalScrollSourceRef.current, s.leftHorizontalScroll);
-        clampAndSetHorizontalScroll(
-          leftHorizontalScrollRef.current,
-          s.leftHorizontalScroll === null
-            ? null
-            : s.leftHorizontalScroll * leftHorizontalScrollScaleRef.current,
-        );
         clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
       });
     });
@@ -5884,134 +5860,6 @@ export default function TopicDetailPage() {
     document.addEventListener('touchend', onTouchEnd);
   }
 
-  useEffect(() => {
-    const panel = leftPanelRef.current;
-    if (!panel) return;
-    const handleTouchStart = (event: TouchEvent) => {
-      leftPanelTouchRef.current = event.touches.length === 1
-        ? { x: event.touches[0].clientX, y: event.touches[0].clientY }
-        : null;
-    };
-    const handleTouchMove = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || !leftPanelTouchRef.current) {
-        leftPanelTouchRef.current = null;
-        return;
-      }
-      const touch = event.touches[0];
-      const deltaX = touch.clientX - leftPanelTouchRef.current.x;
-      const maxPanelScrollLeft = Math.max(0, panel.scrollWidth - panel.clientWidth);
-      const atLeftEdge = panel.scrollLeft <= 0 && deltaX > 0;
-      const atRightEdge = panel.scrollLeft >= maxPanelScrollLeft - 1 && deltaX < 0;
-      const documentScroller = document.scrollingElement;
-      if ((atLeftEdge || atRightEdge) && documentScroller && deltaX !== 0) {
-        const maxDocumentScrollLeft = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
-        const nextScrollLeft = Math.max(0, Math.min(
-          maxDocumentScrollLeft,
-          documentScroller.scrollLeft - deltaX,
-        ));
-        if (nextScrollLeft !== documentScroller.scrollLeft) {
-          event.preventDefault();
-          documentScroller.scrollLeft = nextScrollLeft;
-        }
-      }
-      leftPanelTouchRef.current = { x: touch.clientX, y: touch.clientY };
-    };
-    const handleTouchEnd = () => { leftPanelTouchRef.current = null; };
-    panel.addEventListener('touchstart', handleTouchStart, { passive: true });
-    panel.addEventListener('touchmove', handleTouchMove, { passive: false });
-    panel.addEventListener('touchend', handleTouchEnd, { passive: true });
-    panel.addEventListener('touchcancel', handleTouchEnd, { passive: true });
-    return () => {
-      panel.removeEventListener('touchstart', handleTouchStart);
-      panel.removeEventListener('touchmove', handleTouchMove);
-      panel.removeEventListener('touchend', handleTouchEnd);
-      panel.removeEventListener('touchcancel', handleTouchEnd);
-    };
-  }, [loading, viewMode, comparisonReviewed, messages.length, edges.length, comparisonMode]);
-
-  // Phase 6: Clean mode — computed by useCleanView hook (multi-dimensional filters)
-
-  useEffect(() => {
-    const panel = leftPanelRef.current;
-    if (!panel) return;
-    const comparisonSource = panel.querySelector('[data-comparison-scroll-horizontal]') as HTMLElement | null;
-    const measure = () => {
-      const documentScrollSource = document.scrollingElement;
-      setDocumentHorizontalScrollVisible(Boolean(documentScrollSource && documentScrollSource.scrollWidth > documentScrollSource.clientWidth + 1));
-      const comparisonViewports = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'));
-      const comparisonViewport = comparisonViewports.reduce<HTMLElement | null>((widest, viewport) => {
-        if (!widest) return viewport;
-        return viewport.scrollWidth - viewport.clientWidth > widest.scrollWidth - widest.clientWidth
-          ? viewport
-          : widest;
-      }, null);
-      const comparisonPair = panel.querySelector('[data-comparison-pair]') as HTMLElement | null;
-      const candidate = comparisonViewport ?? panel;
-      leftHorizontalScrollSourceRef.current = candidate;
-      const sourceRect = candidate.getBoundingClientRect();
-      const rect = comparisonPair?.getBoundingClientRect() ?? sourceRect;
-      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-      const visibleLeft = Math.max(0, Math.min(rect.left, viewportWidth));
-      const visibleWidth = Math.max(0, Math.min(rect.width, viewportWidth - visibleLeft));
-      leftHorizontalScrollScaleRef.current = sourceRect.width / Math.max(candidate.offsetWidth, 1);
-      const scale = leftHorizontalScrollScaleRef.current;
-      const visible = candidate.scrollWidth > candidate.clientWidth + 1;
-      setLeftHorizontalScrollMetrics(previous => {
-        const sourceOverflow = Math.max(candidate.scrollWidth - candidate.clientWidth, 0) * scale;
-        const next = { visible, left: visibleLeft, width: visibleWidth, scrollWidth: Math.max(visibleWidth + sourceOverflow, 1) };
-        return previous.visible === next.visible
-          && previous.left === next.left
-          && previous.width === next.width
-          && previous.scrollWidth === next.scrollWidth
-          ? previous
-          : next;
-      });
-      const scrollbar = leftHorizontalScrollRef.current;
-      const nextScrollLeft = candidate.scrollLeft * scale;
-      if (scrollbar && scrollbar.scrollLeft !== nextScrollLeft) scrollbar.scrollLeft = nextScrollLeft;
-    };
-    const syncScrollbar = () => {
-      const candidate = leftHorizontalScrollSourceRef.current ?? panel;
-      const scrollbar = leftHorizontalScrollRef.current;
-      const scale = leftHorizontalScrollScaleRef.current;
-      const nextScrollLeft = candidate.scrollLeft * scale;
-      if (scrollbar && scrollbar.scrollLeft !== nextScrollLeft) scrollbar.scrollLeft = nextScrollLeft;
-    };
-    const syncSource = () => {
-      const candidate = leftHorizontalScrollSourceRef.current ?? panel;
-      const scrollbar = leftHorizontalScrollRef.current;
-      const scale = leftHorizontalScrollScaleRef.current;
-      if (scrollbar && candidate.scrollLeft !== scrollbar.scrollLeft / scale) candidate.scrollLeft = scrollbar.scrollLeft / scale;
-      measure();
-    };
-    panel.addEventListener('scroll', syncScrollbar, { passive: true });
-    comparisonSource?.addEventListener('scroll', syncScrollbar, { passive: true });
-    panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]').forEach(viewport => {
-      viewport.addEventListener('scroll', syncScrollbar, { passive: true });
-    });
-    const scrollbar = leftHorizontalScrollRef.current;
-    scrollbar?.addEventListener('scroll', syncSource, { passive: true });
-    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    resizeObserver?.observe(panel);
-    for (const element of panel.querySelectorAll<HTMLElement>('[data-jump-canvas], [data-comparison-pair], [data-comparison-scroll-horizontal], [data-comparison-scroll-horizontal] > div')) {
-      resizeObserver?.observe(element);
-    }
-    window.addEventListener('resize', measure);
-    window.addEventListener('scroll', measure, { passive: true });
-    measure();
-    return () => {
-      panel.removeEventListener('scroll', syncScrollbar);
-      comparisonSource?.removeEventListener('scroll', syncScrollbar);
-      panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]').forEach(viewport => {
-        viewport.removeEventListener('scroll', syncScrollbar);
-      });
-      scrollbar?.removeEventListener('scroll', syncSource);
-      resizeObserver?.disconnect();
-      window.removeEventListener('resize', measure);
-      window.removeEventListener('scroll', measure);
-    };
-  }, [loading, viewMode, comparisonReviewed, messages.length, edges.length, comparisonMode]);
-
   if (loading) {
     return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
   }
@@ -6704,35 +6552,6 @@ export default function TopicDetailPage() {
             )}
           </div>
         </div>
-
-        {typeof document !== "undefined" && createPortal(
-          <div
-            ref={leftHorizontalScrollRef}
-            data-main-horizontal-scroll="true"
-            aria-label="主界面水平滚动条"
-            style={{
-              display: leftHorizontalScrollMetrics.visible ? "block" : "none",
-              position: "fixed",
-              left: leftHorizontalScrollMetrics.left,
-              bottom: documentHorizontalScrollVisible ? 14 : 0,
-              width: leftHorizontalScrollMetrics.width,
-              height: 14,
-              zIndex: 60,
-              overflowX: "scroll",
-              overflowY: "hidden",
-              scrollbarGutter: "stable",
-              scrollbarWidth: "auto",
-              background: "#181818",
-              border: "1px solid #333",
-              boxSizing: "border-box",
-            }}
-          >
-            <div
-              style={{ width: leftHorizontalScrollMetrics.scrollWidth, height: 1 }}
-            />
-          </div>,
-          document.body,
-        )}
 
         {/* Draggable splitter — 12px wide with visible grip handle */}
         <div

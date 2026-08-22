@@ -2090,6 +2090,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
       if (syncingScrollRef.current) return;
       syncingScrollRef.current = true;
       for (const viewport of viewports) viewport.scrollLeft = horizontalScroll.scrollLeft;
+      if (horizontalScrollRef.current) horizontalScrollRef.current.scrollLeft = horizontalScroll.scrollLeft;
       requestAnimationFrame(() => { syncingScrollRef.current = false; });
     };
     const handlers = viewports.map(viewport => {
@@ -2101,7 +2102,12 @@ function ComparisonGraphPair(props: GraphViewProps) {
       if (syncingScrollRef.current) return;
       syncingScrollRef.current = true;
       verticalScroll.scrollTop = scrollHost?.scrollTop ?? 0;
-      for (const viewport of viewports) viewport.scrollTop = 0;
+      const left = scrollHost?.scrollLeft ?? 0;
+      horizontalScroll.scrollLeft = left;
+      for (const viewport of viewports) {
+        viewport.scrollTop = 0;
+        viewport.scrollLeft = left;
+      }
       requestAnimationFrame(() => { syncingScrollRef.current = false; });
     };
     verticalScroll.addEventListener('scroll', syncFromVerticalScroll, { passive: true });
@@ -2124,7 +2130,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
   };
 
   return (
-    <div ref={pairRef} data-comparison-pair="true" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+    <div ref={pairRef} data-comparison-pair="true" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 8, width: '100%', minHeight: '100%' }}>
       <div style={{ display: 'grid', gridTemplateColumns: `${agreeRatio}fr 30px ${1 - agreeRatio}fr`, gap: 8, alignItems: 'stretch' }}>
       <div data-comparison-view="agree" style={{ minWidth: 0, minHeight: 0, border: '1px solid #365314', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ flex: `0 0 ${COMPARISON_HEADER_HEIGHT}px`, height: COMPARISON_HEADER_HEIGHT, boxSizing: 'border-box', display: 'flex', alignItems: 'center', padding: '6px 8px', color: '#86efac', background: '#17210f', fontSize: 12, fontWeight: 600 }}>赞同后显示{props.comparisonRecommendedDisplay === 'agree' ? ' · 推荐显示' : ''}</div>
@@ -2145,7 +2151,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
         </div>
       </div>
       </div>
-      <div ref={horizontalScrollRef} data-comparison-scroll-horizontal="true" aria-label="对比视图水平滚动条" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 14, opacity: 0, pointerEvents: 'none', overflowX: 'scroll', overflowY: 'hidden', scrollbarGutter: 'stable', borderRadius: 4 }}>
+      <div ref={horizontalScrollRef} data-comparison-scroll-horizontal="true" aria-label="对比视图水平滚动条" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 1, opacity: 0, pointerEvents: 'none', overflowX: 'scroll', overflowY: 'hidden' }}>
         <div style={{ width: Math.max(contentSize.width, 1), height: 1 }} />
       </div>
     </div>

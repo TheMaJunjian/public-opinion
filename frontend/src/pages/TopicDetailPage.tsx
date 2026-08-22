@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
@@ -1588,6 +1589,9 @@ export default function TopicDetailPage() {
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
   const leftPanelTouchRef = useRef<{ x: number } | null>(null);
+  const fixedHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
+  const [fixedHorizontalScroll, setFixedHorizontalScroll] = useState<{ left: number; bottom: number; width: number; contentWidth: number; scale: number } | null>(null);
+  const [leftPanelMinHeight, setLeftPanelMinHeight] = useState(0);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1630,6 +1634,111 @@ export default function TopicDetailPage() {
   useEffect(() => () => { cancelScrollRafs(); }, []);
   // Persist containerWidth to localStorage
   useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
+
+  useEffect(() => {
+    const updateFixedHorizontalScroll = () => {
+      const panel = leftPanelRef.current;
+      const isTouchDevice = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+      if (!panel || isTouchDevice) {
+        setFixedHorizontalScroll(null);
+        return;
+      }
+      const rect = panel.getBoundingClientRect();
+      const visibleTop = Math.max(rect.top, 0);
+      const visibleBottom = Math.min(rect.bottom, window.innerHeight);
+      const scale = panel.offsetWidth > 0 ? rect.width / panel.offsetWidth : 1;
+      const visibleLeft = Math.max(rect.left, 0);
+      const visibleRight = Math.min(rect.right, window.innerWidth);
+      const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+      const comparisonWidths = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'))
+        .map(viewport => viewport.scrollWidth);
+      const contentWidth = Math.max(panel.scrollWidth, ...comparisonWidths, 0) * scale;
+      if (visibleBottom <= visibleTop || visibleWidth <= 0 || contentWidth <= visibleWidth + 1) {
+        setFixedHorizontalScroll(null);
+        return;
+      }
+      setFixedHorizontalScroll({
+        left: visibleLeft,
+        bottom: 0,
+        width: visibleWidth,
+        contentWidth,
+        scale,
+      });
+    };
+    const scheduleUpdate = () => window.requestAnimationFrame(updateFixedHorizontalScroll);
+    updateFixedHorizontalScroll();
+    scheduleUpdate();
+    window.addEventListener('resize', updateFixedHorizontalScroll);
+    window.addEventListener('scroll', updateFixedHorizontalScroll, { passive: true });
+    const observer = new ResizeObserver(updateFixedHorizontalScroll);
+    if (leftPanelRef.current) {
+      observer.observe(leftPanelRef.current);
+      Array.from(leftPanelRef.current.children).forEach(element => observer.observe(element));
+      leftPanelRef.current.querySelectorAll<HTMLElement>('[data-comparison-viewport], [data-jump-canvas]')
+        .forEach(element => observer.observe(element));
+    }
+    const mutationObserver = new MutationObserver(() => {
+      updateFixedHorizontalScroll();
+    });
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+    return () => {
+      window.removeEventListener('resize', updateFixedHorizontalScroll);
+      window.removeEventListener('scroll', updateFixedHorizontalScroll);
+      observer.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [comparisonReviewed, viewMode, containerWidth]);
+
+  useEffect(() => {
+    const panel = leftPanelRef.current;
+    const fixedScroll = fixedHorizontalScrollRef.current;
+    if (!panel || !fixedScroll) return;
+    const syncPanelToFixedScroll = () => {
+      const left = fixedScroll.scrollLeft / (fixedHorizontalScroll?.scale ?? 1);
+      panel.scrollLeft = left;
+      for (const viewport of panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]')) {
+        viewport.scrollLeft = left;
+      }
+    };
+    const syncFixedScrollToPanel = () => {
+      const comparisonViewport = panel.querySelector<HTMLElement>('[data-comparison-viewport]');
+      const left = comparisonViewport?.scrollLeft || panel.scrollLeft;
+      fixedScroll.scrollLeft = left * (fixedHorizontalScroll?.scale ?? 1);
+    };
+    fixedScroll.addEventListener('scroll', syncPanelToFixedScroll, { passive: true });
+    panel.addEventListener('scroll', syncFixedScrollToPanel, { passive: true });
+    const comparisonViewports = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'));
+    comparisonViewports.forEach(viewport => viewport.addEventListener('scroll', syncFixedScrollToPanel, { passive: true }));
+    syncFixedScrollToPanel();
+    return () => {
+      fixedScroll.removeEventListener('scroll', syncPanelToFixedScroll);
+      panel.removeEventListener('scroll', syncFixedScrollToPanel);
+      comparisonViewports.forEach(viewport => viewport.removeEventListener('scroll', syncFixedScrollToPanel));
+    };
+  }, [fixedHorizontalScroll]);
+
+  useEffect(() => {
+    const updateLeftPanelMinHeight = () => {
+      const panel = leftPanelRef.current;
+      if (!panel) return;
+      const panelRect = panel.getBoundingClientRect();
+      const scale = panel.offsetWidth > 0 ? panelRect.width / panel.offsetWidth : 1;
+      const minHeight = Math.max(0, Math.ceil((window.innerHeight - panelRect.top) / Math.max(scale, 0.01)));
+      setLeftPanelMinHeight(current => current === minHeight ? current : minHeight);
+    };
+    updateLeftPanelMinHeight();
+    window.addEventListener('resize', updateLeftPanelMinHeight);
+    const zoomObserver = new MutationObserver(updateLeftPanelMinHeight);
+    const zoomRoot = document.querySelector('[style*="scale("]');
+    if (zoomRoot) zoomObserver.observe(zoomRoot, { attributes: true, attributeFilter: ['style'] });
+    return () => {
+      window.removeEventListener('resize', updateLeftPanelMinHeight);
+      zoomObserver.disconnect();
+    };
+  }, []);
 
   // Check auth before sending: redirect to login if not logged in
   function requireAuth(): boolean {
@@ -6240,7 +6349,7 @@ export default function TopicDetailPage() {
           <div ref={leftPanelRef}
             data-topic-left-panel="true"
             className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
-            style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", overscrollBehaviorX: "auto", touchAction: "pan-x pan-y pinch-zoom", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "visible", overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
             onTouchStart={handleLeftPanelTouchStart}
             onTouchMove={handleLeftPanelTouchMove}
             onTouchEnd={handleLeftPanelTouchEnd}
@@ -6754,6 +6863,17 @@ export default function TopicDetailPage() {
       </div>
     </div>
     </ErrorBoundary>
+    {fixedHorizontalScroll && createPortal(
+      <div
+        ref={fixedHorizontalScrollRef}
+        data-fixed-left-horizontal-scroll="true"
+        aria-label="左侧视图水平滚动条"
+        style={{ position: "fixed", left: fixedHorizontalScroll.left, bottom: fixedHorizontalScroll.bottom, width: fixedHorizontalScroll.width, height: 14, overflowX: "scroll", overflowY: "hidden", scrollbarGutter: "stable", zIndex: 2147483647, background: "#101010" }}
+      >
+        <div style={{ width: fixedHorizontalScroll.contentWidth, height: 1 }} />
+      </div>,
+      document.body,
+    )}
 
     <LeaderboardModal
       open={showLeaderboard}

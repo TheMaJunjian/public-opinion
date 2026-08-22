@@ -23,6 +23,17 @@ html, body, #root {
   display: none;
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .topic-left-panel {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .topic-left-panel::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 [data-comparison-viewport] {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -35,6 +46,12 @@ html, body, #root {
 @media (max-width: 768px) {
   .topic-left-panel {
     overflow-x: auto !important;
+    scrollbar-width: auto;
+    -ms-overflow-style: auto;
     touch-action: pan-x pan-y pinch-zoom;
+  }
+
+  .topic-left-panel::-webkit-scrollbar {
+    display: initial;
   }
 }

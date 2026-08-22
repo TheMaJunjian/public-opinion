@@ -1583,6 +1583,7 @@ export default function TopicDetailPage() {
   );
 
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
+  const leftPanelTouchRef = useRef<{ x: number } | null>(null);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -5860,6 +5861,37 @@ export default function TopicDetailPage() {
     document.addEventListener('touchend', onTouchEnd);
   }
 
+  function handleLeftPanelTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    leftPanelTouchRef.current = e.touches.length === 1 ? { x: e.touches[0].clientX } : null;
+  }
+
+  function handleLeftPanelTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+    if (e.touches.length !== 1 || !leftPanelTouchRef.current) {
+      leftPanelTouchRef.current = null;
+      return;
+    }
+    const panel = leftPanelRef.current;
+    const documentScroller = document.scrollingElement;
+    if (!panel || !documentScroller) return;
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - leftPanelTouchRef.current.x;
+    const panelMax = Math.max(0, panel.scrollWidth - panel.clientWidth);
+    const documentMax = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
+    const panelAtEdge = (panel.scrollLeft <= 0 && deltaX > 0) || (panel.scrollLeft >= panelMax - 1 && deltaX < 0);
+    if (panelAtEdge && documentMax > 0) {
+      const next = Math.max(0, Math.min(documentMax, documentScroller.scrollLeft - deltaX));
+      if (next !== documentScroller.scrollLeft) {
+        e.preventDefault();
+        documentScroller.scrollLeft = next;
+      }
+    }
+    leftPanelTouchRef.current = { x: touch.clientX };
+  }
+
+  function handleLeftPanelTouchEnd() {
+    leftPanelTouchRef.current = null;
+  }
+
   if (loading) {
     return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
   }
@@ -6202,6 +6234,10 @@ export default function TopicDetailPage() {
             data-topic-left-panel="true"
             className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
             style={{ flex: "0 0 auto", overflowY: "visible", overflowX: "auto", overscrollBehaviorX: "auto", touchAction: "pan-x pan-y pinch-zoom", scrollbarWidth: comparisonReviewed ? "none" : undefined, msOverflowStyle: comparisonReviewed ? "none" : undefined, WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            onTouchStart={handleLeftPanelTouchStart}
+            onTouchMove={handleLeftPanelTouchMove}
+            onTouchEnd={handleLeftPanelTouchEnd}
+            onTouchCancel={handleLeftPanelTouchEnd}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay

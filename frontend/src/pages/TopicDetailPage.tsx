@@ -159,6 +159,8 @@ export default function TopicDetailPage() {
   const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
   const [messageBettorCounts, setMessageBettorCounts] = useState<Record<string, number>>({});
   const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
+  const [leaderboardRefreshVersion, setLeaderboardRefreshVersion] = useState(0);
+  const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   const [isPreloaded, setIsPreloaded] = useState(false);
   const [viewerUser, setViewerUser] = useState<User | null>(null);
   const displayUser = isPreloaded ? viewerUser : user;
@@ -248,11 +250,12 @@ export default function TopicDetailPage() {
     async function load() {
       try {
         setLoading(true); setLoadError(null);
-        const [topicData, messagesData, relationsData, attentionData] = await Promise.all([
+        const [topicData, messagesData, relationsData, attentionData, usersData] = await Promise.all([
           api.getTopic(topicId!),
           api.getMessages(topicId!, { limit: 200 }),
           api.getRelations(topicId!, { limit: 200 }),
           api.getAttentionUsers(topicId!),
+          api.getUsers ? api.getUsers() : Promise.resolve({ data: [] as User[] }),
         ]);
         if (cancelled) return;
         setTopic(topicData);
@@ -261,6 +264,7 @@ export default function TopicDetailPage() {
         );
         setRelations(relationsData.data);
         setAttentionUsersByTarget(attentionData.data);
+        setRegisteredUsers(usersData.data);
         operationLog('加载主题关系', `count=${relationsData.data.length}`);
         setMessages(demoMsgs);
         setEdges(demoEdges);
@@ -327,7 +331,7 @@ export default function TopicDetailPage() {
     }
     load();
     return () => { cancelled = true; };
-  }, [topicId]);
+  }, [topicId, leaderboardRefreshVersion]);
 
   // Messages that have no DOM element in the non-linear graph view.
   // Mirror of GraphView's hiddenTargetIds logic — used to decide whether
@@ -6148,7 +6152,10 @@ export default function TopicDetailPage() {
                   {comparisonMode ? '退出对比' : '对比'}
                 </button>}
                 <button
-                  onClick={() => setShowLeaderboard(true)}
+                  onClick={() => {
+                    setShowLeaderboard(true);
+                    setLeaderboardRefreshVersion(version => version + 1);
+                  }}
                   style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#3f2a06", color: "#fbbf24", fontSize: 12, cursor: "pointer" }}
                   title="查看用户榜与消息榜"
                 >
@@ -6751,9 +6758,11 @@ export default function TopicDetailPage() {
     <LeaderboardModal
       open={showLeaderboard}
       onClose={() => setShowLeaderboard(false)}
+      onRefresh={() => setLeaderboardRefreshVersion(version => version + 1)}
       messages={messages}
       edges={edges}
       relations={relations}
+      users={registeredUsers}
       stakeCounts={stakeCounts}
       messageBettorCounts={messageBettorCounts}
     />

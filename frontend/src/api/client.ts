@@ -301,6 +301,10 @@ export function getUser(userId: string) {
   return request<import('../types').User>(`/users/${userId}`);
 }
 
+export function getUsers() {
+  return request<{ data: import('../types').User[] }>('/users');
+}
+
 export function getUserMessages(userId: string, params?: { page?: number; limit?: number }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));

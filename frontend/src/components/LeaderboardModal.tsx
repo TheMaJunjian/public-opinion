@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import type { Relation } from '../types';
+import type { Relation, User } from '../types';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 import { isContentKind } from '../utils/modelBridge';
 import PopupOverlay from './PopupOverlay';
@@ -35,6 +35,8 @@ interface Props {
   messages: DemoMessage[];
   edges: DemoEdge[];
   relations: Relation[];
+  users: User[];
+  onRefresh: () => void;
   stakeCounts: Record<string, StakeCountItem>;
   messageBettorCounts: Record<string, number>;
 }
@@ -87,6 +89,8 @@ export default function LeaderboardModal({
   messages,
   edges,
   relations,
+  users,
+  onRefresh,
   stakeCounts,
   messageBettorCounts,
 }: Props) {
@@ -145,6 +149,22 @@ export default function LeaderboardModal({
     }
 
     const byUser = new Map<string, UserRow>();
+    for (const user of users) {
+      byUser.set(user.username, {
+        userId: user.id,
+        username: user.username,
+        rechargeIncome: 0,
+        messageCount: 0,
+        totalIncome: 0,
+        receivedTruthStake: 0,
+        receivedStanceStake: 0,
+        receivedTruthPro: 0,
+        receivedTruthCon: 0,
+        netSupportRate: 0,
+        referenceHeat: 0,
+        settlementActivity: 0,
+      });
+    }
     const ensure = (username: string): UserRow => {
       const prev = byUser.get(username);
       if (prev) return prev;
@@ -236,7 +256,7 @@ export default function LeaderboardModal({
       return applyDir(b.totalIncome - a.totalIncome, userSortDir);
     });
     return arr;
-  }, [messages, relations, stakeCounts, userSort, userSortDir, idToName, nameToId, edges]);
+  }, [messages, relations, users, stakeCounts, userSort, userSortDir, idToName, nameToId, edges]);
 
   const filteredUserRows = useMemo(() => {
     const normalized = userKeyword.trim().toLowerCase();
@@ -377,7 +397,16 @@ export default function LeaderboardModal({
         }}
       >
         <div style={{ padding: '10px 14px', borderBottom: '1px solid #2b3440', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ fontWeight: 700, fontSize: 15, color: '#e2e8f0' }}>排行榜</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#e2e8f0' }}>排行榜</div>
+            <button
+              onClick={onRefresh}
+              style={{ border: '1px solid #475569', background: '#1e293b', color: '#cbd5e1', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', fontSize: 12 }}
+              title="重新加载最新排行榜数据"
+            >
+              刷新
+            </button>
+          </div>
           <button
             onClick={onClose}
             style={{
@@ -488,7 +517,7 @@ export default function LeaderboardModal({
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUserRows.slice(0, 50).map((row, idx) => (
+                  {filteredUserRows.map((row, idx) => (
                     <tr key={`${row.userId || 'unknown'}::${row.username}`} style={{ color: '#e2e8f0' }}>
                       <td style={{ padding: '6px 8px', borderBottom: '1px solid #1e293b' }}>{idx + 1}</td>
                       <td style={{ padding: '6px 8px', borderBottom: '1px solid #1e293b', color: '#94a3b8' }}>{row.userId || '-'}</td>

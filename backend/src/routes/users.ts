@@ -4,6 +4,18 @@ import { Prisma } from '@prisma/client';
 
 const router = Router();
 
+router.get('/api/users', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: { id: true, username: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json({ data: users });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/api/users/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const user = await prisma.user.findUnique({

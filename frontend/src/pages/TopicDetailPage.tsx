@@ -1696,17 +1696,27 @@ export default function TopicDetailPage() {
     const panel = leftPanelRef.current;
     const fixedScroll = fixedHorizontalScrollRef.current;
     if (!panel || !fixedScroll) return;
+    const getHorizontalMax = (element: HTMLElement) => Math.max(0, element.scrollWidth - element.clientWidth);
+    const getScrollProgress = (element: HTMLElement) => {
+      const max = getHorizontalMax(element);
+      return max > 0 ? element.scrollLeft / max : 0;
+    };
+    const getFixedProgress = () => {
+      const max = getHorizontalMax(fixedScroll);
+      return max > 0 ? fixedScroll.scrollLeft / max : 0;
+    };
     const syncPanelToFixedScroll = () => {
-      const left = fixedScroll.scrollLeft / (fixedHorizontalScroll?.scale ?? 1);
-      panel.scrollLeft = left;
+      const progress = Math.max(0, Math.min(1, getFixedProgress()));
+      panel.scrollLeft = getHorizontalMax(panel) * progress;
       for (const viewport of panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]')) {
-        viewport.scrollLeft = left;
+        viewport.scrollLeft = getHorizontalMax(viewport) * progress;
       }
     };
     const syncFixedScrollToPanel = () => {
       const comparisonViewport = panel.querySelector<HTMLElement>('[data-comparison-viewport]');
-      const left = comparisonViewport?.scrollLeft || panel.scrollLeft;
-      fixedScroll.scrollLeft = left * (fixedHorizontalScroll?.scale ?? 1);
+      const source = comparisonViewport && getHorizontalMax(comparisonViewport) > 0 ? comparisonViewport : panel;
+      const progress = Math.max(0, Math.min(1, getScrollProgress(source)));
+      fixedScroll.scrollLeft = getHorizontalMax(fixedScroll) * progress;
     };
     fixedScroll.addEventListener('scroll', syncPanelToFixedScroll, { passive: true });
     panel.addEventListener('scroll', syncFixedScrollToPanel, { passive: true });

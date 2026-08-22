@@ -2067,16 +2067,25 @@ function ComparisonGraphPair(props: GraphViewProps) {
     const verticalScroll = verticalScrollRef.current;
     const horizontalScroll = horizontalScrollRef.current;
     if (!verticalScroll || !horizontalScroll) return;
+    const getHorizontalMax = (element: HTMLElement) => Math.max(0, element.scrollWidth - element.clientWidth);
+    const getScrollProgress = (element: HTMLElement) => {
+      const max = getHorizontalMax(element);
+      return max > 0 ? element.scrollLeft / max : 0;
+    };
+    const setHorizontalProgress = (progress: number) => {
+      const clampedProgress = Math.max(0, Math.min(1, progress));
+      for (const viewport of viewports) viewport.scrollLeft = getHorizontalMax(viewport) * clampedProgress;
+      horizontalScroll.scrollLeft = getHorizontalMax(horizontalScroll) * clampedProgress;
+    };
     const syncFromViewport = (source: HTMLDivElement) => {
       if (syncingScrollRef.current) return;
       syncingScrollRef.current = true;
       for (const viewport of viewports) {
         viewport.scrollTop = 0;
-        viewport.scrollLeft = source.scrollLeft;
       }
+      setHorizontalProgress(getScrollProgress(source));
       if (scrollHost) scrollHost.scrollTop = source.scrollTop;
       verticalScroll.scrollTop = source.scrollTop;
-      horizontalScroll.scrollLeft = source.scrollLeft;
       requestAnimationFrame(() => { syncingScrollRef.current = false; });
     };
     const syncFromVerticalScroll = () => {
@@ -2089,8 +2098,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
     const syncFromHorizontalScroll = () => {
       if (syncingScrollRef.current) return;
       syncingScrollRef.current = true;
-      for (const viewport of viewports) viewport.scrollLeft = horizontalScroll.scrollLeft;
-      if (horizontalScrollRef.current) horizontalScrollRef.current.scrollLeft = horizontalScroll.scrollLeft;
+      setHorizontalProgress(getScrollProgress(horizontalScroll));
       requestAnimationFrame(() => { syncingScrollRef.current = false; });
     };
     const handlers = viewports.map(viewport => {
@@ -2102,12 +2110,9 @@ function ComparisonGraphPair(props: GraphViewProps) {
       if (syncingScrollRef.current) return;
       syncingScrollRef.current = true;
       verticalScroll.scrollTop = scrollHost?.scrollTop ?? 0;
-      const left = scrollHost?.scrollLeft ?? 0;
-      horizontalScroll.scrollLeft = left;
-      for (const viewport of viewports) {
-        viewport.scrollTop = 0;
-        viewport.scrollLeft = left;
-      }
+      const source = scrollHost ?? viewports[0];
+      setHorizontalProgress(source ? getScrollProgress(source) : 0);
+      for (const viewport of viewports) viewport.scrollTop = 0;
       requestAnimationFrame(() => { syncingScrollRef.current = false; });
     };
     verticalScroll.addEventListener('scroll', syncFromVerticalScroll, { passive: true });

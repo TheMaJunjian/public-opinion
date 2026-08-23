@@ -40,7 +40,7 @@ Configuration, test, or diagnostic-only changes are allowed before verification 
    - **Ambiguous:** perform one additional focused check or read one nearby boundary, then decide. Do not stack speculative edits.
 6. After a confirmed fix, rerun the same focused check first. Then run the narrowest relevant typecheck, lint, integration test, or end-to-end test available.
 7. Remove temporary diagnostic code and rerun the focused check if its removal could affect behavior. Keep only intentional error logging and project-standard operational logs.
-8. Unless the user requests detail, respond in the shortest useful form with only: **Problem/Symptom**, **Cause Verification**, **Confirmed Cause**, and **Solution**. Use one short sentence or phrase for each item; keep cause verification to the essential confirming observation, and omit other diagnostic steps, test output, file lists, and unrelated context. If verification was impossible, state briefly that the cause is not confirmed and do not propose an implementation change.
+8. Unless the user requests detail, respond in the shortest useful form with four separate items: **Problem/Symptom**, **Cause Verification**, **Confirmed Cause**, and **Solution**. Cause verification and confirmed cause must remain separate and must not be merged or omitted. Use one short sentence or phrase for each item; keep cause verification to the essential confirming observation, and omit other diagnostic steps, test output, file lists, and unrelated context. If verification was impossible, state briefly that the cause is not confirmed and do not propose an implementation change.
 
 ## Evidence Quality
 
@@ -54,4 +54,4 @@ Prefer checks that distinguish competing hypotheses. Keep diagnostic output focu
 - The fix is minimal and addresses the verified controlling path.
 - The original focused check passes after the fix.
 - Relevant temporary diagnostics are removed.
-- Unless more detail is requested, the final response contains only short statements of the problem/symptom, cause verification, confirmed cause, and corresponding solution.
+- Unless more detail is requested, the final response contains four separate short statements: problem/symptom, cause verification, confirmed cause, and corresponding solution. Cause verification is always included when a cause is reported.

@@ -1591,6 +1591,7 @@ export default function TopicDetailPage() {
   const leftPanelTouchRef = useRef<{ x: number } | null>(null);
   const fixedHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
   const [fixedHorizontalScroll, setFixedHorizontalScroll] = useState<{ left: number; bottom: number; width: number; contentWidth: number; scale: number } | null>(null);
+  const horizontalScrollProgressRef = useRef(0);
   const [leftPanelMinHeight, setLeftPanelMinHeight] = useState(0);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
@@ -1604,19 +1605,21 @@ export default function TopicDetailPage() {
   const lastDragOrSelectTimeRef = useRef<number>(0);
   const lastClickActionsRef = useRef<{ type: "toggleWhole"; messageId: string; prevExisted: boolean; time: number }[]>([]);
   const TOTAL_FLEX = 4;
-  const MIN_LEFT_FLEX = 0.6;
-  const MAX_LEFT_FLEX = TOTAL_FLEX - MIN_LEFT_FLEX;
+  const MIN_LEFT_PX = 560;
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const MIN_RIGHT_PX = 280;
+  const REVIEW_RIGHT_PX = 380;
+  const VIEWER_RIGHT_PX = 300;
   const MAX_RIGHT_PX = 500;
-  const BASE_WIDTH = 1024;
+  const getMinimumContainerWidth = () => Math.max(window.innerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12);
   const [containerWidth, setContainerWidth] = useState(() => {
     const saved = localStorage.getItem('topicWidth');
-    return saved ? Number(saved) : BASE_WIDTH;
+    return Math.max(saved ? Number(saved) : 0, getMinimumContainerWidth());
   });
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
-  const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
+  const splitterDragRef = useRef<{ startX: number; startLeftPx: number } | null>(null);
   // Ref to track the ID of a newly sent message that should be scrolled into view.
   const pendingScrollMsgIdRef = useRef<string | null>(null);
   // Track pending requestAnimationFrame handles so they can be cancelled before
@@ -1634,6 +1637,27 @@ export default function TopicDetailPage() {
   useEffect(() => () => { cancelScrollRafs(); }, []);
   // Persist containerWidth to localStorage
   useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', updateViewportWidth);
+    return () => window.removeEventListener('resize', updateViewportWidth);
+  }, []);
+
+  useEffect(() => {
+    if (!comparisonReviewed) return;
+    const minimumReviewWidth = MIN_LEFT_PX + REVIEW_RIGHT_PX + 12;
+    const nextWidth = Math.max(containerWidth, minimumReviewWidth, getMinimumContainerWidth());
+    setContainerWidth(nextWidth);
+    setLeftFlex(TOTAL_FLEX * MIN_LEFT_PX / (nextWidth - 12));
+  }, [comparisonReviewed]);
+
+  useEffect(() => {
+    if (!isPreloaded) return;
+    const nextWidth = Math.max(viewportWidth, MIN_LEFT_PX + VIEWER_RIGHT_PX + 12);
+    const nextLeftWidth = nextWidth - VIEWER_RIGHT_PX - 12;
+    setContainerWidth(nextWidth);
+    setLeftFlex(TOTAL_FLEX * nextLeftWidth / (nextWidth - 12));
+  }, [isPreloaded]);
 
   useEffect(() => {
     const updateFixedHorizontalScroll = () => {
@@ -1690,7 +1714,7 @@ export default function TopicDetailPage() {
       observer.disconnect();
       mutationObserver.disconnect();
     };
-  }, [comparisonReviewed, viewMode, containerWidth]);
+  }, [comparisonReviewed, viewMode, containerWidth, leftFlex]);
 
   useEffect(() => {
     const panel = leftPanelRef.current;
@@ -5916,27 +5940,40 @@ export default function TopicDetailPage() {
     } catch (e: any) { showAlert(`操作失败: ${e?.message ?? e}`); }
   }
 
+  function restoreHorizontalScrollPosition() {
+    const progress = Math.max(0, Math.min(1, horizontalScrollProgressRef.current));
+    const panel = leftPanelRef.current;
+    const fixedScroll = fixedHorizontalScrollRef.current;
+    if (panel) panel.scrollLeft = progress * Math.max(0, panel.scrollWidth - panel.clientWidth);
+    if (fixedScroll) fixedScroll.scrollLeft = progress * Math.max(0, fixedScroll.scrollWidth - fixedScroll.clientWidth);
+    panel?.querySelectorAll<HTMLElement>('[data-comparison-viewport]').forEach(viewport => {
+      viewport.scrollLeft = progress * Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+    });
+  }
+
   function handleSplitterMouseDown(e: React.MouseEvent) {
     e.preventDefault();
     setSplitterActive(true);
-    splitterDragRef.current = { startX: e.clientX, startFlex: leftFlex };
+    const leftPanel = panelContainerRef.current?.firstElementChild as HTMLElement | null;
+    splitterDragRef.current = { startX: e.clientX, startLeftPx: leftPanel?.getBoundingClientRect().width ?? 0 };
+    const fixedScroll = fixedHorizontalScrollRef.current;
+    if (fixedScroll) horizontalScrollProgressRef.current = fixedScroll.scrollWidth > fixedScroll.clientWidth
+      ? fixedScroll.scrollLeft / (fixedScroll.scrollWidth - fixedScroll.clientWidth) : 0;
     function onMouseMove(ev: MouseEvent) {
       if (!splitterDragRef.current || !panelContainerRef.current) return;
       const dx = ev.clientX - splitterDragRef.current.startX;
       const containerW = panelContainerRef.current.clientWidth;
-      const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
-      const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
-      // Adjust containerWidth to keep right panel between MIN_RIGHT_PX and MAX_RIGHT_PX
-      const rightFlex = TOTAL_FLEX - newLeft;
-      if (rightFlex > 0) {
-        const rightPx = (containerW - 12) * rightFlex / TOTAL_FLEX;
-        if (rightPx < MIN_RIGHT_PX) {
-          setContainerWidth(prev => Math.max(prev, Math.ceil(MIN_RIGHT_PX * TOTAL_FLEX / rightFlex + 12)));
-        } else if (rightPx > MAX_RIGHT_PX) {
-          setContainerWidth(prev => Math.max(BASE_WIDTH, Math.min(prev, Math.ceil(MAX_RIGHT_PX * TOTAL_FLEX / rightFlex + 12))));
-        }
+      const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
+      if (!comparisonReviewed) {
+        setLeftFlex(containerW > 12 ? TOTAL_FLEX * desiredLeftPx / (containerW - 12) : leftFlex);
+        requestAnimationFrame(() => restoreHorizontalScrollPosition());
+        return;
       }
-      setLeftFlex(newLeft);
+      const desiredRightPx = Math.max(MIN_RIGHT_PX, Math.min(MAX_RIGHT_PX, containerW - 12 - desiredLeftPx));
+      const nextWidth = Math.max(getMinimumContainerWidth(), desiredLeftPx + desiredRightPx + 12);
+      setContainerWidth(nextWidth);
+      setLeftFlex(TOTAL_FLEX * desiredLeftPx / (nextWidth - 12));
+      requestAnimationFrame(() => restoreHorizontalScrollPosition());
     }
     function onMouseUp() {
       setSplitterActive(false);
@@ -5953,26 +5990,28 @@ export default function TopicDetailPage() {
     setSplitterActive(true);
     const touch = e.touches[0];
     if (!touch) return;
-    splitterDragRef.current = { startX: touch.clientX, startFlex: leftFlex };
+    const leftPanel = panelContainerRef.current?.firstElementChild as HTMLElement | null;
+    splitterDragRef.current = { startX: touch.clientX, startLeftPx: leftPanel?.getBoundingClientRect().width ?? 0 };
+    const fixedScroll = fixedHorizontalScrollRef.current;
+    if (fixedScroll) horizontalScrollProgressRef.current = fixedScroll.scrollWidth > fixedScroll.clientWidth
+      ? fixedScroll.scrollLeft / (fixedScroll.scrollWidth - fixedScroll.clientWidth) : 0;
     function onTouchMove(ev: TouchEvent) {
       if (!splitterDragRef.current || !panelContainerRef.current) return;
       const t = ev.touches[0];
       if (!t) return;
       const dx = t.clientX - splitterDragRef.current.startX;
       const containerW = panelContainerRef.current.clientWidth;
-      const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
-      const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
-      // Adjust containerWidth to keep right panel between MIN_RIGHT_PX and MAX_RIGHT_PX
-      const rightFlex = TOTAL_FLEX - newLeft;
-      if (rightFlex > 0) {
-        const rightPx = (containerW - 12) * rightFlex / TOTAL_FLEX;
-        if (rightPx < MIN_RIGHT_PX) {
-          setContainerWidth(prev => Math.max(prev, Math.ceil(MIN_RIGHT_PX * TOTAL_FLEX / rightFlex + 12)));
-        } else if (rightPx > MAX_RIGHT_PX) {
-          setContainerWidth(prev => Math.max(BASE_WIDTH, Math.min(prev, Math.ceil(MAX_RIGHT_PX * TOTAL_FLEX / rightFlex + 12))));
-        }
+      const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
+      if (!comparisonReviewed) {
+        setLeftFlex(containerW > 12 ? TOTAL_FLEX * desiredLeftPx / (containerW - 12) : leftFlex);
+        requestAnimationFrame(() => restoreHorizontalScrollPosition());
+        return;
       }
-      setLeftFlex(newLeft);
+      const desiredRightPx = Math.max(MIN_RIGHT_PX, Math.min(MAX_RIGHT_PX, containerW - 12 - desiredLeftPx));
+      const nextWidth = Math.max(getMinimumContainerWidth(), desiredLeftPx + desiredRightPx + 12);
+      setContainerWidth(nextWidth);
+      setLeftFlex(TOTAL_FLEX * desiredLeftPx / (nextWidth - 12));
+      requestAnimationFrame(() => restoreHorizontalScrollPosition());
     }
     function onTouchEnd() {
       setSplitterActive(false);
@@ -6159,7 +6198,7 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ minHeight: "100%", minWidth: containerWidth, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <div style={{ minHeight: "100%", minWidth: Math.max(containerWidth, viewportWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
@@ -6213,7 +6252,7 @@ export default function TopicDetailPage() {
       </div>
 
       <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", minWidth: containerWidth }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "visible", paddingBottom: 8 }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
@@ -6747,6 +6786,7 @@ export default function TopicDetailPage() {
           rightPanelRef={rightPanelRef}
           TOTAL_FLEX={TOTAL_FLEX}
           leftFlex={leftFlex}
+          minWidth={MIN_RIGHT_PX}
           isPreviewMode={isPreviewMode}
           isViewerMode={isPreloaded}
           viewerUsers={viewerUsers}

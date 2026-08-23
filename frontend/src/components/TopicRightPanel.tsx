@@ -18,6 +18,7 @@ interface TopicRightPanelProps {
   rightPanelRef: React.RefObject<HTMLDivElement | null> | React.Ref<HTMLDivElement>;
   TOTAL_FLEX: number;
   leftFlex: number;
+  minWidth: number;
 
   // Mode
   isPreviewMode: boolean;
@@ -247,7 +248,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
 
   if (p.isViewerMode) {
     return (
-      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0, boxSizing: "border-box" }}>
+      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: p.minWidth, boxSizing: "border-box" }}>
         {renderComparisonHeader()}
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontWeight: 600, color: "#e2e8f0" }}>只读阅览</div>
@@ -273,7 +274,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     );
   }
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0, boxSizing: "border-box" }}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: p.minWidth, boxSizing: "border-box" }}>
       {renderComparisonHeader()}
       {p.isPreviewMode && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>

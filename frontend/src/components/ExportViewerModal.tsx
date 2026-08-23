@@ -38,6 +38,8 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   }, []);
 
   const openData = (data: ExportData) => {
+    // Leave the current topic view only after the export file is confirmed.
+    window.dispatchEvent(new Event('prepare-export-viewer'));
     onClose();
     // Navigate to home first to clear preloaded state, then to viewer.
     // Needed when already on /topics/__preloaded__ — same-route nav won't re-render.

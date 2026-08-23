@@ -2029,6 +2029,22 @@ export default function TopicDetailPage() {
     setComparisonReviewBaseEdges(null);
   }
 
+  useEffect(() => {
+    const prepareViewer = () => {
+      exitAllTemporaryCategories();
+      setFocusEntries([]);
+      setFocusKey(key => key + 1);
+      if (classifyStackRef.current.length > 0 || classifyRelMsgId !== null) {
+        classifyStackRef.current = [];
+        setClassifyRelMsgId(null);
+        setClassifyKey(key => key + 1);
+        setPreviewClassifyId(null);
+      }
+    };
+    window.addEventListener('prepare-export-viewer', prepareViewer);
+    return () => window.removeEventListener('prepare-export-viewer', prepareViewer);
+  }, [classifyRelMsgId]);
+
   function enterFocus(messageId: string, options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
     if (!messageId) return;
     operationLog(`进入${options?.mode === 'topic' ? '分类' : '焦点'}`, `message=${messageId}`);

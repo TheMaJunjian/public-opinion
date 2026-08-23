@@ -10,6 +10,7 @@ interface PromptModalProps {
   confirmDisabled?: boolean;
   cancelText?: string;
   danger?: boolean;
+  hideActions?: boolean;
   onConfirm: () => void;
   onCancel?: () => void;
 }
@@ -27,6 +28,7 @@ export default function PromptModal({
   confirmDisabled = false,
   cancelText = '取消',
   danger = false,
+  hideActions = false,
   onConfirm,
   onCancel,
 }: PromptModalProps) {
@@ -93,7 +95,7 @@ export default function PromptModal({
           {message}
         </div>
 
-        <div ref={footerRef} style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
+        {!hideActions && <div ref={footerRef} style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
           {onCancel && (
             <button
               data-shortcut-cancel="true"
@@ -129,7 +131,7 @@ export default function PromptModal({
           >
             {confirmText}
           </button>
-        </div>
+        </div>}
       </div>
     </PopupOverlay>,
     document.body,

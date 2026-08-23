@@ -6055,7 +6055,13 @@ export default function TopicDetailPage() {
   }
 
   if (loading) {
-    return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
+    return <PromptModal
+      open
+      title="正在加载"
+      message="正在加载主题数据，请稍候…"
+      hideActions
+      onConfirm={() => undefined}
+    />;
   }
   if (loadError) {
     return (
@@ -6312,7 +6318,6 @@ export default function TopicDetailPage() {
                 <button
                   onClick={() => {
                     setShowLeaderboard(true);
-                    setLeaderboardRefreshVersion(version => version + 1);
                   }}
                   style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#3f2a06", color: "#fbbf24", fontSize: 12, cursor: "pointer" }}
                   title="查看用户榜与消息榜"

@@ -95,7 +95,7 @@ export default function LeaderboardModal({
   messageBettorCounts,
 }: Props) {
   const [tab, setTab] = useState<'user' | 'message'>('user');
-  const [userSort, setUserSort] = useState<UserSortKey>('rechargeIncome');
+  const [userSort, setUserSort] = useState<UserSortKey>('messageCount');
   const [messageSort, setMessageSort] = useState<MessageSortKey>('stakeTotal');
   const [userSortDir, setUserSortDir] = useState<'desc' | 'asc'>('desc');
   const [messageSortDir, setMessageSortDir] = useState<'desc' | 'asc'>('desc');

@@ -68,60 +68,6 @@ import {
 
 type ViewMode = "list" | "graph";
 
-function collectNavigationDisplayDependencies(
-  messageId: string,
-  messages: DemoMessage[],
-  relations: Relation[],
-  edges: DemoEdge[],
-  includeAuxiliaryRecords = true,
-): Set<string> {
-  const relationById = new Map(relations.map(relation => [relation.id, relation]));
-  const dependencyIds = new Set<string>();
-  const pendingIds = [messageId];
-
-  while (pendingIds.length > 0) {
-    const currentId = pendingIds.pop()!;
-    if (dependencyIds.has(currentId)) continue;
-    dependencyIds.add(currentId);
-
-    for (const edge of edges) {
-      if (edge.relationMessageId === currentId) {
-        if (!edge.from.messageId.startsWith('anon:')) pendingIds.push(edge.from.messageId);
-        if (!edge.to.messageId.startsWith('anon:')) pendingIds.push(edge.to.messageId);
-      }
-    }
-
-    const relation = relationById.get(currentId);
-    if (relation) {
-      if (relation.sourceMessageId) pendingIds.push(relation.sourceMessageId);
-      for (const ref of relation.targetRefs ?? []) {
-        pendingIds.push(ref.kind === 'relation' ? ref.relationId : ref.messageId);
-      }
-    }
-
-    if (includeAuxiliaryRecords) {
-      // JOIN and settlement records can affect whether the current message is
-      // included in its owning presentation, even though they do not always
-      // produce a visible edge of their own.
-      for (const candidate of relations) {
-        if (candidate.relationType?.toUpperCase() === 'JOIN' && candidate.targetRefs.some(ref =>
-          (ref.kind === 'relation' ? ref.relationId : ref.messageId) === currentId,
-        )) {
-          pendingIds.push(candidate.id);
-        }
-      }
-      for (const candidate of messages) {
-        if ((candidate.kind === 'round' || candidate.kind === 'round_result')
-          && candidate.settlementTargetId === currentId) {
-          pendingIds.push(candidate.id);
-        }
-      }
-    }
-  }
-
-  return dependencyIds;
-}
-
 type FocusSnapshot = {
   viewMode: ViewMode;
   leftScroll: { top: number; left: number } | null;
@@ -665,7 +611,7 @@ export default function TopicDetailPage() {
       // it to the joined target; the JOIN card is the requested destination.
       const dependencyIds = pendingScrollDependencyIdsRef.current;
       pendingScrollDependencyIdsRef.current = [];
-      scrollMsgToCenter(pendingScrollMsgRef.current, { resolveTarget: false, dependencyIds });
+      scrollMsgToCenter(pendingScrollMsgRef.current, { dependencyIds });
       pendingScrollMsgRef.current = null;
     }
   }, [loading, messages, classifyKey, focusKey, scrollKey, viewMode]);
@@ -1627,6 +1573,7 @@ export default function TopicDetailPage() {
   // rAF callbacks accessing nodes that React has already removed.
   const scrollRafRef = useRef<number | null>(null);
   const scrollRaf2Ref = useRef<number | null>(null);
+  const scrollRequestIdRef = useRef(0);
 
   function cancelScrollRafs() {
     if (scrollRafRef.current !== null) { cancelAnimationFrame(scrollRafRef.current); scrollRafRef.current = null; }
@@ -1810,27 +1757,25 @@ export default function TopicDetailPage() {
   // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
   const MAX_SCROLL_ATTEMPTS = 60;
 
-  function showMessagePulse(targetId: string, element: HTMLElement) {
+  function showMessagePulse(targetId: string, element: HTMLElement, requestId = scrollRequestIdRef.current) {
     if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
     if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
     messagePulseRafRef.current = requestAnimationFrame(() => {
       messagePulseRafRef.current = null;
+      if (requestId !== scrollRequestIdRef.current) return;
       let pulseElement = element;
       if (!pulseElement.isConnected) {
-        const currentCandidates = Array.from(leftPanelRef.current?.querySelectorAll(
-          `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
-        ) ?? []) as HTMLElement[];
+        const currentCandidates = leftPanelRef.current
+          ? findMessageElements(leftPanelRef.current, targetId)
+          : [];
         pulseElement = currentCandidates.find(candidate =>
           candidate.hasAttribute('data-rel-overlay') && candidate.getAttribute('data-msgid') === targetId,
-        ) ?? currentCandidates.find(candidate => candidate.hasAttribute('data-rel-overlay'))
-          ?? currentCandidates[0];
+        ) ?? currentCandidates[0];
       }
       if (!pulseElement?.isConnected) return;
-      const targetElements = Array.from(leftPanelRef.current?.querySelectorAll(
-        pulseElement.hasAttribute('data-rel-overlay')
-          ? `[data-msgid="${targetId}"][data-rel-overlay]`
-          : `[data-msgid="${targetId}"], [data-jump-msgids~="${targetId}"]`
-      ) ?? []);
+      const targetElements = pulseElement.hasAttribute('data-rel-overlay')
+        ? Array.from(leftPanelRef.current?.querySelectorAll(`[data-msgid="${targetId}"][data-rel-overlay]`) ?? [])
+        : findMessageElements(leftPanelRef.current!, targetId);
       const targetRects = targetElements
         .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
         .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
@@ -1847,33 +1792,31 @@ export default function TopicDetailPage() {
       const visualRect = rect;
       setMessagePulse({ element: pulseElement, rect, visualRoot, visualRect });
       messagePulseTimerRef.current = setTimeout(() => {
+        if (requestId !== scrollRequestIdRef.current) return;
         setMessagePulse(null);
         messagePulseTimerRef.current = null;
       }, 500);
     });
   }
 
-  function resolveScrollTargetMessageId(msgId: string): string {
-    return resolveNavigationTargetId(msgId, messagesRef.current, relationsRef.current);
-  }
-
   function findMessageElements(container: HTMLElement, messageId: string): HTMLElement[] {
-    return Array.from(container.querySelectorAll('[data-msgid], [data-jump-msgids]'))
+    const directElements = Array.from(container.querySelectorAll('[data-msgid]'))
       .filter(node => {
         const element = node as HTMLElement;
-        const directId = element.getAttribute('data-msgid');
-        const jumpIds = element.getAttribute('data-jump-msgids')?.split(/\s+/) ?? [];
-        return directId === messageId || jumpIds.includes(messageId);
+        return element.getAttribute('data-msgid') === messageId;
       }) as HTMLElement[];
+    return directElements;
   }
 
-  function scrollMsgToCenter(msgId: string, options?: { resolveTarget?: boolean; dependencyIds?: string[] }) {
-    const targetId = options?.resolveTarget === false ? msgId : resolveScrollTargetMessageId(msgId);
+  function scrollMsgToCenter(msgId: string, options?: { dependencyIds?: string[] }) {
+    const targetId = msgId;
     const dependencyIds = options?.dependencyIds ?? [];
+    const requestId = ++scrollRequestIdRef.current;
     pendingScrollMsgIdRef.current = targetId;
     let attempts = 0;
     const tryScroll = () => {
       attempts++;
+      if (requestId !== scrollRequestIdRef.current) return;
       if (attempts > MAX_SCROLL_ATTEMPTS) {
         pendingScrollMsgIdRef.current = null;
         pendingScrollDependencyIdsRef.current = [];
@@ -1901,13 +1844,13 @@ export default function TopicDetailPage() {
         }),
       );
       if (!dependencyReady) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
-      const candidates = findMessageElements(container, targetId);
       const targetRelation = relationsRef.current.find(relation => relation.id === targetId);
       const targetEdge = edgesRef.current.find(edge => edge.relationMessageId === targetId);
       const isDecorationTarget = targetRelation
         ? ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetRelation.relationType.toUpperCase())
           || getPresentationSpec(targetRelation.relationType).kind === 'inline-badge'
         : ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetEdge?.relationType?.toUpperCase() ?? '');
+      const candidates = findMessageElements(container, targetId);
       const comparisonPair = container.querySelector('[data-comparison-pair]');
       const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
       const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
@@ -1956,6 +1899,7 @@ export default function TopicDetailPage() {
       // Re-read after the inner scroll, then move the outer page if the target is
       // still outside the actual viewport before creating the jump overlay.
       requestAnimationFrame(() => {
+        if (requestId !== scrollRequestIdRef.current) return;
         let currentElement = el;
         if (!currentElement.isConnected) {
           const currentCandidates = findMessageElements(container, targetId);
@@ -1976,11 +1920,11 @@ export default function TopicDetailPage() {
         if (targetOutsideViewport) {
           currentElement.scrollIntoView({ block: 'center', inline: 'nearest' });
           requestAnimationFrame(() => {
-            showMessagePulse(targetId, currentElement);
+            if (requestId === scrollRequestIdRef.current) showMessagePulse(targetId, currentElement, requestId);
           });
           return;
         }
-        showMessagePulse(targetId, currentElement);
+        showMessagePulse(targetId, currentElement, requestId);
       });
       // The left panel handles the inner scroll; the target scrollIntoView above
       // handles the outer page when the panel itself is outside the viewport.
@@ -2013,6 +1957,7 @@ export default function TopicDetailPage() {
 
   function restoreSnapshot(s: FocusSnapshot | null, opts?: { restoreSelection?: boolean }) {
     if (!s) return;
+    scrollRequestIdRef.current++;
     const restoreSel = opts?.restoreSelection !== false; // 默认 true，焦点模式恢复候选区
     if (restoreSel) {
       setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
@@ -2069,6 +2014,19 @@ export default function TopicDetailPage() {
     setComparisonReviewBaseMessages(entry.comparisonReviewBaseMessages);
     setComparisonReviewBaseEdges(entry.comparisonReviewBaseEdges);
     restoreSnapshot(entry.snapshot);
+  }
+
+  function exitAllTemporaryCategories() {
+    const entries = temporaryCategoryStackRef.current.splice(0);
+    const firstEntry = entries[0];
+    if (firstEntry) restoreSnapshot(firstEntry.snapshot);
+    setJoinFilterTargetId(null);
+    setCorrectionFilterTargetId(null);
+    setComparisonMode(false);
+    setComparisonReviewed(false);
+    setComparisonTargetId(null);
+    setComparisonReviewBaseMessages(null);
+    setComparisonReviewBaseEdges(null);
   }
 
   function enterFocus(messageId: string, options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
@@ -5787,51 +5745,24 @@ export default function TopicDetailPage() {
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
   const handleNavigateToMessage = useCallback((messageId: string) => {
+    scrollRequestIdRef.current++;
+    const wasTemporaryCategoryActive = temporaryCategoryStackRef.current.length > 0
+      || joinFilterTargetId !== null;
     const targetMessage = messagesRef.current.find(message => message.id === messageId);
-    const isSpecialTarget = targetMessage?.kind === 'join'
-      || targetMessage?.kind === 'round'
-      || targetMessage?.kind === 'round_result';
-    const isCorrectionTarget = targetMessage?.relationType?.toUpperCase() === 'CORRECT'
-      || relationsRef.current.some(relation => relation.id === messageId && relation.relationType?.toUpperCase() === 'CORRECT')
-      || edgesRef.current.some(edge => edge.relationType?.toUpperCase() === 'CORRECT' && edge.to.messageId === messageId);
-    const allDependencyIds = collectNavigationDisplayDependencies(
-      messageId,
-      messagesRef.current,
-      relationsRef.current,
-      edgesRef.current,
-      !isCorrectionTarget,
-    );
-    const dependencyIds = isSpecialTarget || isCorrectionTarget
-      ? new Set([messageId])
-      : allDependencyIds;
+    const containingClassifyId = findContainingClassifyTopic(messageId);
     const navigationFilterState = navigationVisibilityRef.current;
-    const targetEndpointIds = new Set(Array.from(dependencyIds).filter(id => id !== messageId));
-    const isRenderedDependency = (dependencyId: string) =>
-      renderedMessageIdsRef.current.has(dependencyId)
-      || renderedRelationIdsRef.current.has(dependencyId);
-    let cleanFilteredDependencyIds = navigationFilterState.cleanMode && navigationFilterState.cleanVisibleIds
-      ? Array.from(dependencyIds).filter(dependencyId => {
-          const dependency = messagesRef.current.find(message => message.id === dependencyId);
-          if (!dependency) return false;
-          return dependency.kind === 'relation'
-            ? !navigationFilterState.cleanVisibleIds!.visibleRelIds.has(dependencyId)
-            : !navigationFilterState.cleanVisibleIds!.visibleTextIds.has(dependencyId);
-        })
-      : [];
-    let typeFilteredDependencyIds = Array.from(dependencyIds).filter(dependencyId => {
-      const dependency = messagesRef.current.find(message => message.id === dependencyId);
-      if (!dependency) return false;
-      return (navigationFilterState.msgFilter.hideJoin && dependency.kind === 'join')
-        || (navigationFilterState.msgFilter.hideSettlement
-          && (dependency.kind === 'round' || dependency.kind === 'round_result'));
-    });
-    const targetCleanFiltered = cleanFilteredDependencyIds.includes(messageId);
-    const targetTypeFiltered = typeFilteredDependencyIds.includes(messageId);
-    const canAutoClearTargetFilters = isSpecialTarget && (targetCleanFiltered || targetTypeFiltered);
+    const targetCleanFiltered = navigationFilterState.cleanMode
+      && navigationFilterState.cleanVisibleIds
+      && (targetMessage?.kind === 'relation'
+        ? !navigationFilterState.cleanVisibleIds.visibleRelIds.has(messageId)
+        : !navigationFilterState.cleanVisibleIds.visibleTextIds.has(messageId));
+    const targetTypeFiltered = (navigationFilterState.msgFilter.hideJoin && targetMessage?.kind === 'join')
+      || (navigationFilterState.msgFilter.hideSettlement
+        && (targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result'));
+    const canAutoClearTargetFilters = Boolean(targetCleanFiltered || targetTypeFiltered);
     if (canAutoClearTargetFilters) {
       if (targetCleanFiltered) {
         clearCleanView();
-        cleanFilteredDependencyIds = cleanFilteredDependencyIds.filter(id => id !== messageId);
       }
       if (targetTypeFiltered) {
         setMsgFilter(previous => ({
@@ -5841,37 +5772,28 @@ export default function TopicDetailPage() {
             ? false
             : previous.hideSettlement,
         }));
-        typeFilteredDependencyIds = typeFilteredDependencyIds.filter(id => id !== messageId);
       }
     }
-    const missingDataDependencyIds = Array.from(dependencyIds).filter(dependencyId =>
-      !messagesRef.current.some(message => message.id === dependencyId)
-      && !relationsRef.current.some(relation => relation.id === dependencyId));
-    const notRenderedDependencyIds = Array.from(dependencyIds).filter(dependencyId =>
-      dependencyId !== messageId
-      && !missingDataDependencyIds.includes(dependencyId)
-      && !isRenderedDependency(dependencyId));
-    const unavailableReasons: string[] = [];
-    if (cleanFilteredDependencyIds.length > 0) {
-      unavailableReasons.push(`清爽视图过滤了 ${cleanFilteredDependencyIds.length} 个依赖消息`);
+    if (wasTemporaryCategoryActive) {
+      exitAllTemporaryCategories();
+      if (targetMessage?.kind === 'join') {
+        setClassifyRelMsgId(null);
+        setClassifyKey(k => k + 1);
+      } else if (containingClassifyId && containingClassifyId !== classifyRelMsgId) {
+        setClassifyRelMsgId(containingClassifyId);
+        setClassifyKey(k => k + 1);
+      } else if (!containingClassifyId) {
+        setClassifyRelMsgId(null);
+        setClassifyKey(k => k + 1);
+      }
+    } else {
+      setJoinFilterTargetId(null);
+      if (containingClassifyId && containingClassifyId !== classifyRelMsgId) {
+        setClassifyRelMsgId(containingClassifyId);
+        setClassifyKey(k => k + 1);
+      }
     }
-    if (typeFilteredDependencyIds.length > 0) {
-      unavailableReasons.push(`消息类型过滤了 ${typeFilteredDependencyIds.length} 个依赖消息`);
-    }
-    if (missingDataDependencyIds.length > 0) {
-      unavailableReasons.push(`缺少 ${missingDataDependencyIds.length} 个消息或关系数据`);
-    }
-    if (notRenderedDependencyIds.length > 0) {
-      unavailableReasons.push(`当前画布未显示 ${notRenderedDependencyIds.length} 个目标或依赖消息`);
-    }
-    if (unavailableReasons.length > 0) {
-      operationLog('消息跳转受阻', `target=${messageId}`);
-      showAlert(`无法跳转：${unavailableReasons.join('；')}。请先调整过滤条件或切换到能显示目标消息的画布。`);
-      pendingScrollDependencyIdsRef.current = [];
-      pendingScrollMsgRef.current = null;
-      return;
-    }
-    setJoinFilterTargetId(null);
+    setMessagePulse(null);
     setFocusEntries([]);
     setFocusKey(k => k + 1);
     // Clear candidates and select the target message as whole
@@ -5881,10 +5803,10 @@ export default function TopicDetailPage() {
     setLastClickedMessageId(messageId);
     // Scroll after canvas switch; bump scrollKey so the scroll effect re-triggers even
     // when the target is already on the current canvas (no classifyKey change).
-    pendingScrollDependencyIdsRef.current = Array.from(new Set([messageId, ...targetEndpointIds]));
+    pendingScrollDependencyIdsRef.current = [];
     pendingScrollMsgRef.current = messageId;
     setScrollKey(k => k + 1);
-  }, [classifyRelMsgId, cleanMode, msgFilter, isTemporaryJoinCategory, clearCleanView, showAlert]);
+  }, [classifyRelMsgId, cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert]);
 
   const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
     if (correctionFilterTargetId === null) {
@@ -6340,7 +6262,10 @@ export default function TopicDetailPage() {
                   const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
                   const isCorrectionTarget = scrollTargetMessage?.relationType?.toUpperCase() === 'CORRECT'
                     || scrollTargetRelation?.relationType?.toUpperCase() === 'CORRECT';
-                  setTimeout(() => scrollMsgToCenter(scrollTargetId, { resolveTarget: !isCorrectionTarget }), 100);
+                  const navigationTargetId = isCorrectionTarget
+                    ? scrollTargetId
+                    : resolveNavigationTargetId(scrollTargetId, messages, relations);
+                  setTimeout(() => scrollMsgToCenter(navigationTargetId), 100);
                 }
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
@@ -6533,7 +6458,26 @@ export default function TopicDetailPage() {
                       onMouseDown={handleMessageMouseDown}
                       onMouseUp={handleMessageMouseUp}
                       onContentMouseUp={handleTextMouseUp}
-                      headerLabel={correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
+                      headerLabel={msg.kind === 'join' ? (
+                        <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>
+                          <span
+                            role="link"
+                            tabIndex={0}
+                            onClick={event => { event.stopPropagation(); handleNavigateToMessage(msg.id); }}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                handleNavigateToMessage(msg.id);
+                              }
+                            }}
+                            style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                            title={`跳转到加入消息 ${msg.id} 的当前实际位置`}
+                          >
+                            {msg.id}
+                          </span>
+                        </span>
+                      ) : correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
                         <span style={{ color: '#fbbf24', fontWeight: 600 }}>
                           <span
                             role="link"

@@ -2006,9 +2006,8 @@ function ComparisonGraphPair(props: GraphViewProps) {
     const verticalScroll = verticalScrollRef.current;
     if (!targetId || !agreeViewport || !verticalScroll) return;
     const centerTarget = () => {
-      const target = Array.from(agreeViewport.querySelectorAll<HTMLElement>('[data-msgid], [data-jump-msgids]'))
-        .find(element => element.getAttribute('data-msgid') === targetId
-          || (element.getAttribute('data-jump-msgids')?.split(/\s+/).includes(targetId) ?? false));
+      const target = Array.from(agreeViewport.querySelectorAll<HTMLElement>('[data-msgid]'))
+        .find(element => element.getAttribute('data-msgid') === targetId);
       if (!target) return;
       const targetRect = target.getBoundingClientRect();
       const viewportRect = agreeViewport.getBoundingClientRect();
@@ -3940,7 +3939,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       <span style={{ fontSize: 10, fontWeight: 600, color: "#a78bfa", padding: "1px 4px", borderRadius: 3, background: "rgba(167,139,250,0.15)", flexShrink: 0 }}>{containerTypeLabel}</span>
                       {onNavigateToMessage ? (
                         <span
-                          onClick={(e) => { e.stopPropagation(); onNavigateToMessage(containerId); }}
+                            onClick={(e) => { e.stopPropagation(); onNavigateToMessage(containerId); }}
                           style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
                           title={`跳转到 ${containerTypeLabel}消息 ${containerId}`}
                         >{containerId}</span>

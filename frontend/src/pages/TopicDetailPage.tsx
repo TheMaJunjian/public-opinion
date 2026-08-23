@@ -253,7 +253,7 @@ export default function TopicDetailPage() {
         setLoading(true); setLoadError(null);
         const [topicData, messagesData, relationsData, attentionData, usersData] = await Promise.all([
           api.getTopic(topicId!),
-          api.getMessages(topicId!, { limit: 200 }),
+          api.getAllMessages(topicId!),
           api.getRelations(topicId!, { limit: 200 }),
           api.getAttentionUsers(topicId!),
           api.getUsers ? api.getUsers() : Promise.resolve({ data: [] as User[] }),

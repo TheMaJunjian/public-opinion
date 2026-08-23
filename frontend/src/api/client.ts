@@ -155,6 +155,20 @@ export function getMessages(topicId: string, params?: { page?: number; limit?: n
   return request<import('../types').PaginatedResponse<import('../types').Message>>(`/topics/${topicId}/messages?${qs}`);
 }
 
+export async function getAllMessages(topicId: string, limit = 200) {
+  const firstPage = await getMessages(topicId, { page: 1, limit });
+  if (firstPage.pagination.totalPages <= 1) return firstPage;
+  const pages = await Promise.all(
+    Array.from({ length: firstPage.pagination.totalPages - 1 }, (_, index) =>
+      getMessages(topicId, { page: index + 2, limit }),
+    ),
+  );
+  return {
+    data: [firstPage, ...pages].flatMap(page => page.data),
+    pagination: { ...firstPage.pagination, page: 1, totalPages: 1 },
+  };
+}
+
 export function createMessage(topicId: string, data: {
   kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'ROUND_RESULT' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
@@ -310,6 +324,20 @@ export function getUserMessages(userId: string, params?: { page?: number; limit?
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
   return request<import('../types').PaginatedResponse<import('../types').Message>>(`/users/${userId}/messages?${qs}`);
+}
+
+export async function getAllUserMessages(userId: string, limit = 200) {
+  const firstPage = await getUserMessages(userId, { page: 1, limit });
+  if (firstPage.pagination.totalPages <= 1) return firstPage;
+  const pages = await Promise.all(
+    Array.from({ length: firstPage.pagination.totalPages - 1 }, (_, index) =>
+      getUserMessages(userId, { page: index + 2, limit }),
+    ),
+  );
+  return {
+    data: [firstPage, ...pages].flatMap(page => page.data),
+    pagination: { ...firstPage.pagination, page: 1, totalPages: 1 },
+  };
 }
 
 // ============================================================

@@ -165,7 +165,9 @@ export default function MessageCard({
           <div style={{
             fontWeight: 600, color: '#f1f5f9',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
+            userSelect: isActiveText ? 'text' : 'auto',
+            cursor: isActiveText ? 'text' : 'inherit',
+          }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
             {topicMsgTitle || (isClassifyTopic ? `分类（${topicMsgTargetCount ?? 0}）`
               : isMergeTopic ? `归并（${topicMsgTargetCount ?? 0}）`
               : `总结（${topicMsgTargetCount ?? 0}）`)}
@@ -181,7 +183,7 @@ export default function MessageCard({
       )}
 
       {/* Text selection mode indicator */}
-      {isActiveText && isContentKind(msg.kind) && (
+      {isActiveText && (isContentKind(msg.kind) || isTopicMsg) && (
         <div style={{ fontSize: 11, color: '#0b84ff', marginBottom: 4 }}>
           文本选择模式：拖选记录 start+len；或点击高亮片段
         </div>

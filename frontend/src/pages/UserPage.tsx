@@ -55,7 +55,7 @@ export default function UserPage() {
   useEffect(() => {
     if (!userId) return;
     setError(null);
-    Promise.all([api.getUser(userId), api.getUserMessages(userId, { limit: 200 })])
+    Promise.all([api.getUser(userId), api.getAllUserMessages(userId)])
       .then(([profile, result]) => {
         setUser(profile);
         setMessages(result.data.map(toDemoMessage));

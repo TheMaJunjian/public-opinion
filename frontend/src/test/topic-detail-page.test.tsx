@@ -3,10 +3,11 @@ import { describe, beforeEach, expect, it, vi } from 'vitest';
 import TopicDetailPage from '../pages/TopicDetailPage';
 import type { Message, Relation, Topic, User } from '../types';
 
-const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
-  mockApi: {
+const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => {
+  const mockApi = {
     getTopic: vi.fn(),
     getMessages: vi.fn(),
+    getAllMessages: vi.fn(),
     getRelations: vi.fn(),
     getAttentionUsers: vi.fn().mockResolvedValue({ data: {} }),
     getPointsBalance: vi.fn().mockResolvedValue({ points: { available: 100, locked: 0 }, balance: { amount: 100, debtFrozen: false } }),
@@ -19,10 +20,10 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
     castVote: vi.fn(),
     closeAndSettle: vi.fn(),
     getTopicTagCounts: vi.fn().mockResolvedValue({ topicId: '', counts: {} }),
-  },
-  mockNavigate: vi.fn(),
-  mockGraphView: vi.fn(),
-}));
+  };
+  mockApi.getAllMessages.mockImplementation((...args: Parameters<typeof mockApi.getMessages>) => mockApi.getMessages(...args));
+  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn() };
+});
 
 vi.mock('../api', () => ({ api: mockApi }));
 vi.mock('../context/AuthContext', () => ({

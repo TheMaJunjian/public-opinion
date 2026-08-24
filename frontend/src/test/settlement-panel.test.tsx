@@ -50,6 +50,205 @@ describe('SettlementPanel voting', () => {
     expect(await screen.findByText('余额不足')).toBeInTheDocument();
   });
 
+  it('uses the personal settlement snapshot in the confirmation prompt', async () => {
+    mockApi.getMessageStakes.mockResolvedValue({
+      stakes: [
+        { id: 'stake-1', roundId: 'round-1', side: 'PRO', amount: 12, createdAt: new Date().toISOString(), user: { username: 'tester' } },
+        { id: 'stake-2', roundId: 'round-1', side: 'CON', amount: 11, createdAt: new Date().toISOString(), user: { username: 'other' } },
+      ],
+    });
+    mockApi.getMessageRounds.mockResolvedValue({
+      data: [{
+        id: 'round-1',
+        status: 'VOTING',
+        settlementType: 'TRUTH',
+        weights: { TRUE: 12, FALSE: 11, UNKNOWN: 0 },
+        votes: [],
+      }],
+    });
+    mockApi.getRoundDetail.mockResolvedValue({
+      id: 'round-1',
+      status: 'VOTING',
+      settlementType: 'TRUTH',
+      weights: { TRUE: 12, FALSE: 11, UNKNOWN: 0 },
+      votes: [],
+      personalSettlement: {
+        principal: 13,
+        stakePrincipal: 12,
+        protocolFee: 1,
+        previousAfter: 13,
+        after: 13,
+        change: 0,
+      },
+    });
+
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '结算' }));
+    expect(await screen.findByText(/上一轮结算为 13 点/)).toBeInTheDocument();
+    expect(screen.getByText(/本轮预计结算后贡献点为 23 点/)).toBeInTheDocument();
+    expect(screen.getByText(/本轮预计贡献点变化：收益\s*10\s*点/)).toBeInTheDocument();
+  });
+
+  it('predicts payout for a user backing the FALSE winner', async () => {
+    mockApi.getMessageStakes.mockResolvedValue({
+      stakes: [
+        { id: 'stake-1', roundId: 'round-1', side: 'CON', amount: 11, createdAt: new Date().toISOString(), user: { username: 'tester' } },
+        { id: 'stake-2', roundId: 'round-1', side: 'PRO', amount: 10, createdAt: new Date().toISOString(), user: { username: 'other' } },
+      ],
+    });
+    mockApi.getMessageRounds.mockResolvedValue({
+      data: [{
+        id: 'round-1',
+        status: 'VOTING',
+        settlementType: 'TRUTH',
+        weights: { TRUE: 10, FALSE: 11, UNKNOWN: 0 },
+        votes: [],
+      }],
+    });
+    mockApi.getRoundDetail.mockResolvedValue({
+      id: 'round-1',
+      status: 'VOTING',
+      settlementType: 'TRUTH',
+      weights: { TRUE: 10, FALSE: 11, UNKNOWN: 0 },
+      votes: [],
+      personalSettlement: {
+        principal: 11,
+        stakePrincipal: 11,
+        protocolFee: 0,
+        previousAfter: 11,
+        after: 11,
+        change: 0,
+      },
+    });
+
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '结算' }));
+    expect(await screen.findByText(/本轮预计结算后贡献点为 21 点/)).toBeInTheDocument();
+    expect(screen.getByText(/本轮预计贡献点变化：收益\s*10\s*点/)).toBeInTheDocument();
+  });
+
+  it('uses the current user cumulative contribution, not the other users current-round stake', async () => {
+    mockApi.getMessageStakes.mockResolvedValue({
+      stakes: [
+        { id: 'stake-previous', roundId: 'round-0', side: 'PRO', amount: 10, createdAt: new Date().toISOString(), user: { username: 'tester' } },
+        { id: 'stake-current', roundId: 'round-1', side: 'CON', amount: 11, createdAt: new Date().toISOString(), user: { username: 'other' } },
+      ],
+    });
+    mockApi.getMessageRounds.mockResolvedValue({
+      data: [{
+        id: 'round-1',
+        status: 'VOTING',
+        settlementType: 'TRUTH',
+        previousRoundId: 'round-0',
+        weights: { TRUE: 10, FALSE: 11, UNKNOWN: 0 },
+        votes: [],
+      }, {
+        id: 'round-0',
+        status: 'SETTLED',
+        settlementType: 'TRUTH',
+        result: 'TRUE',
+        weights: { TRUE: 10, FALSE: 0, UNKNOWN: 0 },
+        votes: [],
+      }],
+    });
+    mockApi.getRoundDetail.mockImplementation(async (roundId: string) => ({
+      id: roundId,
+      status: roundId === 'round-1' ? 'VOTING' : 'SETTLED',
+      settlementType: 'TRUTH',
+      previousRoundId: roundId === 'round-1' ? 'round-0' : null,
+      result: roundId === 'round-0' ? 'TRUE' : null,
+      weights: roundId === 'round-1' ? { TRUE: 10, FALSE: 11, UNKNOWN: 0 } : { TRUE: 10, FALSE: 0, UNKNOWN: 0 },
+      votes: [],
+      personalSettlement: roundId === 'round-1' ? {
+        principal: 11,
+        stakePrincipal: 10,
+        protocolFee: 1,
+        previousAfter: 10,
+        after: 10,
+        change: 0,
+      } : undefined,
+    }));
+
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '结算' }));
+    expect(await screen.findByText(/本轮预计结算后贡献点为 0 点/)).toBeInTheDocument();
+    expect(screen.getByText(/本轮预计贡献点变化：损失\s*10\s*点/)).toBeInTheDocument();
+  });
+
+  it('shows overturn when cumulative weights differ from the previous result', async () => {
+    mockApi.getMessageStakes.mockResolvedValue({
+      stakes: [{ id: 'stake-1', roundId: 'round-1', side: 'CON', amount: 5, createdAt: new Date().toISOString(), user: { username: 'tester' } }],
+    });
+    mockApi.getMessageRounds.mockResolvedValue({
+      data: [{
+        id: 'round-1',
+        status: 'VOTING',
+        settlementType: 'TRUTH',
+        previousRoundId: 'round-0',
+        weights: { TRUE: 0, FALSE: 5, UNKNOWN: 0 },
+        votes: [],
+      }, {
+        id: 'round-0',
+        status: 'SETTLED',
+        settlementType: 'TRUTH',
+        result: 'TRUE',
+        weights: { TRUE: 5, FALSE: 0, UNKNOWN: 0 },
+        votes: [],
+      }],
+    });
+    mockApi.getRoundDetail.mockResolvedValue({
+      id: 'round-1',
+      status: 'VOTING',
+      settlementType: 'TRUTH',
+      previousRoundId: 'round-0',
+      weights: { TRUE: 0, FALSE: 5, UNKNOWN: 0 },
+      votes: [],
+    });
+
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    expect(await screen.findByText('推翻 ✅ TRUE → ❌ FALSE')).toBeInTheDocument();
+  });
+
+  it('compares all current weights, including empty weights, for overturn', async () => {
+    mockApi.getMessageRounds.mockResolvedValue({
+      data: [{
+        id: 'round-1',
+        status: 'VOTING',
+        settlementType: 'TRUTH',
+        previousRoundId: 'round-0',
+        weights: { TRUE: 0, FALSE: 0, UNKNOWN: 0 },
+        votes: [],
+      }, {
+        id: 'round-0',
+        status: 'SETTLED',
+        settlementType: 'TRUTH',
+        result: 'TRUE',
+        weights: { TRUE: 5, FALSE: 0, UNKNOWN: 0 },
+        votes: [],
+      }],
+    });
+    mockApi.getRoundDetail.mockResolvedValue({
+      id: 'round-1',
+      status: 'VOTING',
+      settlementType: 'TRUTH',
+      previousRoundId: 'round-0',
+      weights: { TRUE: 0, FALSE: 0, UNKNOWN: 0 },
+      votes: [],
+    });
+
+    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '投票' })).toBeInTheDocument());
+    expect(screen.getByText('推翻 ✅ TRUE → ⚪ UNKNOWN')).toBeInTheDocument();
+  });
+
   it('allows editing a non-positive amount and validates it before submitting', async () => {
     render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
 

@@ -467,9 +467,15 @@ export interface SettlementRoundItem {
   openedAt: string;
   closedAt: string | null;
   note: string | null;
+  settlementPro?: number | null;
+  settlementCon?: number | null;
+  totalProAtSettlement?: number | null;
+  totalConAtSettlement?: number | null;
   votes?: VoteStakeItem[];
   _count?: { votes: number };
   weights?: { TRUE: number; FALSE: number; UNKNOWN: number };
+  roundWeights?: { TRUE: number; FALSE: number; UNKNOWN: number };
+  personalSettlement?: { principal: number; stakePrincipal: number; protocolFee: number; change: number; after: number; previousAfter?: number };
 }
 
 export interface SettlementResult {

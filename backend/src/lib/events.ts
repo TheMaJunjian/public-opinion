@@ -1973,19 +1973,28 @@ async function applyRoundSettled(event: RoundSettledEvent) {
 
   const messageId = round.messageId;
 
-  // ── Clawback: if there's a previous round with a different result, clawback ──
-  if (round.previousRoundId) {
-    await executeClawback(round.previousRoundId, messageId, topicId);
-  }
-
-  // ── Compute total weights from BetPool by settlementType ──
+  // ── Compute settlement weights from every stake in this message/type ──
   const stype = round.settlementType ?? 'TRUTH';
-  const betPool = await prisma.betPool.findUnique({
-    where: { messageId_settlementType: { messageId, settlementType: stype } },
-    select: { lockedPro: true, lockedCon: true },
+  const settlementStakes = await prisma.stake.findMany({
+    where: { messageId, settlementType: stype },
+    select: { side: true, amount: true },
   });
-  const totalPro = betPool?.lockedPro ?? 0;
-  const totalCon = betPool?.lockedCon ?? 0;
+  const settlementVotes = (await prisma.voteStake.findMany({
+    where: { round: { messageId, settlementType: stype } },
+    select: { vote: true, amount: true },
+  })) ?? [];
+  const totalPro = settlementStakes
+    .filter(stake => stake.side === 'PRO')
+    .reduce((sum, stake) => sum + stake.amount, 0)
+    + settlementVotes
+      .filter(vote => vote.vote === 'TRUE')
+      .reduce((sum, vote) => sum + vote.amount, 0);
+  const totalCon = settlementStakes
+    .filter(stake => stake.side === 'CON')
+    .reduce((sum, stake) => sum + stake.amount, 0)
+    + settlementVotes
+      .filter(vote => vote.vote === 'FALSE')
+      .reduce((sum, vote) => sum + vote.amount, 0);
 
   const weights: Record<string, number> = {
     TRUE: totalPro,
@@ -2001,6 +2010,17 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     result = 'FALSE';
   } else {
     result = 'UNKNOWN';
+  }
+
+  // ── Clawback only when the new result overturns the previous result ──
+  if (round.previousRoundId) {
+    const previousRound = await prisma.settlementRound.findUnique({
+      where: { id: round.previousRoundId },
+      select: { result: true },
+    });
+    if (previousRound?.result && previousRound.result !== result) {
+      await executeClawback(round.previousRoundId, messageId, topicId);
+    }
   }
 
   logSettlement(payload.roundId, result, totalPro, totalCon);
@@ -2025,6 +2045,21 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     where: { messageId, settlementType: stype },
     select: { id: true, userId: true, side: true, amount: true },
   });
+  const allVotes = (await prisma.voteStake.findMany({
+    where: { round: { messageId, settlementType: stype } },
+    select: { id: true, userId: true, vote: true, amount: true },
+  })) ?? [];
+  const settlementContributions = [
+    ...allStakes,
+    ...allVotes.map(vote => ({
+      id: vote.id,
+      userId: vote.userId,
+      side: vote.vote === 'TRUE' ? 'PRO' : 'CON',
+      amount: vote.amount,
+    })),
+  ];
+  const totalProAtSettlement = totalPro;
+  const totalConAtSettlement = totalCon;
 
   const now = new Date();
   const ledgerOps: Prisma.PrismaPromise<unknown>[] = [];
@@ -2048,7 +2083,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     const sharedPool = totalCon - creatorReward; // remainder shared among winners
 
     // PRO stakers (including AGREE votes): return stake + proportional share of losing pool
-    for (const stake of allStakes) {
+    for (const stake of settlementContributions) {
       if (stake.side === 'PRO') {
         settlementWinners.add(stake.userId);
         addUserDelta(stake.userId, stake.amount);
@@ -2066,7 +2101,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     }
   } else if (result === 'FALSE') {
     // FALSE wins: CON stakers share the losing pool (PRO stakes)
-    for (const stake of allStakes) {
+    for (const stake of settlementContributions) {
       if (stake.side === 'CON') {
         settlementWinners.add(stake.userId);
         addUserDelta(stake.userId, stake.amount);
@@ -2079,7 +2114,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     }
   } else {
     // UNKNOWN: return all stakes
-    for (const stake of allStakes) {
+    for (const stake of settlementContributions) {
       settlementWinners.add(stake.userId);
       addUserDelta(stake.userId, stake.amount);
     }
@@ -2113,7 +2148,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   // allStakes already includes stakes from every round (query is by messageId +
   // settlementType, not roundId), so there is no need to add prevRoundStakes again.
   const userContributionMap = new Map<string, number>();
-  for (const s of allStakes) {
+  for (const s of settlementContributions) {
     userContributionMap.set(s.userId, (userContributionMap.get(s.userId) ?? 0) + s.amount);
   }
 
@@ -2177,7 +2212,7 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   const losingSide = result === 'TRUE' ? 'CON' : 'PRO';
   const loserContributionMap = new Map<string, number>();
   if (result !== 'UNKNOWN') {
-    for (const s of allStakes) {
+    for (const s of settlementContributions) {
       if (s.side === losingSide) {
         loserContributionMap.set(s.userId, (loserContributionMap.get(s.userId) ?? 0) + s.amount);
       }
@@ -2226,7 +2261,15 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   ledgerOps.push(
     prisma.settlementRound.update({
       where: { id: payload.roundId },
-      data: { status: 'SETTLED', result, closedAt: now, settlementPro: totalPro, settlementCon: totalCon },
+      data: {
+        status: 'SETTLED',
+        result,
+        closedAt: now,
+        settlementPro: totalPro,
+        settlementCon: totalCon,
+        totalProAtSettlement,
+        totalConAtSettlement,
+      },
     }),
   );
 

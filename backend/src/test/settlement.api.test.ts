@@ -580,7 +580,7 @@ describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
 
     (prisma.voteStake.groupBy as jest.Mock).mockResolvedValue([{ vote: 'FALSE', _sum: { amount: 20 } }]);
-    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 50, lockedCon: 30 });
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 50, lockedCon: 80 });
     (prisma.stake.findMany as jest.Mock).mockResolvedValue([
       { id: 's1', userId: 'u1', side: 'PRO', amount: 50 },
       { id: 's2', userId: 'u2', side: 'CON', amount: 30 },
@@ -705,7 +705,7 @@ describe('Phase 4 — Clawback, debt_frozen, and chain overturns', () => {
     });
     (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
     (prisma.voteStake.groupBy as jest.Mock).mockResolvedValue([{ vote: 'FALSE', _sum: { amount: 20 } }]);
-    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 50, lockedCon: 30 });
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 50, lockedCon: 80 });
     // Stakes used for both distribution AND clawback BetPool restoration
     (prisma.stake.findMany as jest.Mock).mockResolvedValue([
       { id: 's1', userId: 'u1', side: 'PRO', amount: 50 },

@@ -158,6 +158,7 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
   const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; user: { username: string } }>>([]);
   const [stakesLoading, setStakesLoading] = useState(false);
   const [prevRoundWeights, setPrevRoundWeights] = useState<{ TRUE: number; FALSE: number } | null>(null);
+  const [prevRoundResult, setPrevRoundResult] = useState<SettlementRoundItem['result']>(null);
 
   useEffect(() => {
     if (detail?.votes) return;
@@ -179,8 +180,14 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
   useEffect(() => {
     if (detail?.previousRoundId) {
       api.getRoundDetail(detail.previousRoundId)
-        .then(d => setPrevRoundWeights(d.weights ?? null))
-        .catch(() => setPrevRoundWeights(null));
+        .then(d => {
+          setPrevRoundWeights(d.weights ?? null);
+          setPrevRoundResult(d.result);
+        })
+        .catch(() => {
+          setPrevRoundWeights(null);
+          setPrevRoundResult(null);
+        });
     }
   }, [detail?.previousRoundId]);
 
@@ -292,7 +299,7 @@ function RoundDetail({ roundId, messageId, round, onClose }: {
       </div>
 
       {/* Previous round link — with clawback amount */}
-      {detail.previousRoundId && (
+      {detail.previousRoundId && detail.result && prevRoundResult && detail.result !== prevRoundResult && (
         <div className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           ↩ 推翻自 {detail.previousRoundId.slice(-8)}
           {prevRoundWeights && (prevRoundWeights.TRUE > 0 || prevRoundWeights.FALSE > 0) && (
@@ -312,6 +319,9 @@ function ChainArrow({ rounds, currentRound }: { rounds: SettlementRoundItem[]; c
   if (!prevRoundId) return <span className="text-gray-300">→</span>;
   const prevRound = rounds.find(r => r.id === prevRoundId);
   if (!prevRound || prevRound.status !== 'SETTLED') return <span className="text-gray-300">→</span>;
+  if (!currentRound.result || !prevRound.result || currentRound.result === prevRound.result) {
+    return <span className="text-gray-300">→</span>;
+  }
   const prevWeights = prevRound.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
   const clawbackTotal = prevWeights.TRUE + prevWeights.FALSE;
   if (clawbackTotal === 0) return <span className="text-gray-300">→</span>;

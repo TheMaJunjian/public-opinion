@@ -81,6 +81,28 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
 }
 
+/** Attach the user when a valid bearer token is present, while keeping public GETs public. */
+export function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  const secret = process.env.JWT_SECRET;
+  if (!authHeader?.startsWith('Bearer ') || !secret) {
+    next();
+    return;
+  }
+  try {
+    const payload = jwt.verify(authHeader.slice(7), secret) as { id: string; username: string; deviceId?: string; publicKey: string | null };
+    req.user = {
+      id: payload.id,
+      username: payload.username,
+      deviceId: payload.deviceId ?? null,
+      publicKey: payload.publicKey ?? null,
+    };
+  } catch {
+    // Public history remains available when an optional token is expired or invalid.
+  }
+  next();
+}
+
 export async function verifySignature(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   if (!req.user) {
     debugLog('Auth', `FAIL code=AUTH_USER_MISSING method=${req.method} path=${req.originalUrl}`);

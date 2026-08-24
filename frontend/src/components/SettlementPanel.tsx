@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../api';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, useOptionalAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
 import { operationLog } from '../utils/debugLog';
 import PromptModal from './PromptModal';
@@ -164,6 +164,17 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
   const hasAnyActive = activeRounds.length > 0;
 
   const titleLabel = filterSettlementType === 'VALUE' ? '💎 价值仲裁' : filterSettlementType === 'TRUTH' ? '⚖️ 真假仲裁' : '⚖️ 结算市场';
+  const settledRounds = rounds.filter(r => r.status === 'SETTLED' && (!filterSettlementType || r.settlementType === filterSettlementType));
+  const allRoundStake = filteredStakes.reduce((sum, stake) => sum + stake.amount, 0);
+  const allRoundPro = filteredStakes.filter(stake => stake.side === 'PRO').reduce((sum, stake) => sum + stake.amount, 0);
+  const allRoundCon = filteredStakes.filter(stake => stake.side === 'CON').reduce((sum, stake) => sum + stake.amount, 0);
+  const allSettledRevenue = settledRounds.reduce((sum, round) => {
+    const pro = round.settlementPro ?? round.weights?.TRUE ?? 0;
+    const con = round.settlementCon ?? round.weights?.FALSE ?? 0;
+    if (round.result === 'TRUE') return sum + con;
+    if (round.result === 'FALSE') return sum + pro;
+    return sum;
+  }, 0);
 
   if (loading) {
     return (
@@ -202,7 +213,7 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
       {totalStaked > 0 && (
         <div>
           <div className="text-xs text-gray-500 mb-1.5">
-            📊 历史累计押注
+            📊 所有已结算轮次累计押注
           </div>
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div className="bg-green-50 border border-green-200 rounded px-3 py-2 text-center">
@@ -230,6 +241,9 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
             topicId={topicId}
           stakes={stakes}
           rounds={rounds}
+          totalRoundStake={allRoundStake}
+          totalRoundPro={allRoundPro}
+          totalRoundCon={allRoundCon}
           entryHighlight={entryHighlight}
           onMessageCreated={onMessageCreated}
           onSettled={(settledId) => {
@@ -240,11 +254,14 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
       ))}
 
       {/* Settled Rounds History */}
-      {rounds.filter(r => r.status === 'SETTLED' && (!filterSettlementType || r.settlementType === filterSettlementType)).length > 0 && (
+      {settledRounds.length > 0 && (
         <div>
           <div className="text-xs font-semibold text-gray-500 mb-2">结算历史（双击查看详情）</div>
+          <div className="text-xs text-gray-600 bg-indigo-50 border border-indigo-200 rounded px-3 py-2 mb-2">
+            所有轮次总押注 {allRoundStake} 点（PRO {allRoundPro}，CON {allRoundCon}）· 总收益 {allSettledRevenue} 点
+          </div>
           <div className="space-y-2">
-            {rounds.filter(r => r.status === 'SETTLED' && (!filterSettlementType || r.settlementType === filterSettlementType)).slice(0, 5).map(round => (
+            {settledRounds.slice(0, 5).map(round => (
               <div key={round.id}>
                 <div
                   className={`bg-gray-50 border rounded px-3 py-2 text-xs cursor-pointer hover:bg-gray-100 transition-colors select-none ${expandedSettledRound === round.id ? 'border-indigo-300' : 'border-gray-200'}`}
@@ -254,7 +271,10 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
                     <span className="text-gray-500 font-mono">{round.id.slice(-6)}</span>
                     <span className={resultColor(round.result)}>{resultLabel(round.result)}</span>
                   </div>
-                  {round.previousRoundId && (
+                  {round.previousRoundId && round.result !== null && (() => {
+                    const previousRound = rounds.find(r => r.id === round.previousRoundId);
+                    return previousRound?.result && previousRound.result !== round.result;
+                  })() && (
                     <div className="text-gray-400 mt-1">
                       ↩ 推翻自 {round.previousRoundId.slice(-6)}
                     </div>
@@ -264,6 +284,9 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
                       {new Date(round.closedAt).toLocaleString('zh-CN')}
                     </div>
                   )}
+                  <div className="text-gray-500 mt-1">
+                    本轮押注 {(round.settlementPro ?? round.weights?.TRUE ?? 0) + (round.settlementCon ?? round.weights?.FALSE ?? 0)} 点 · 收益 {round.result === 'TRUE' ? (round.settlementCon ?? round.weights?.FALSE ?? 0) : round.result === 'FALSE' ? (round.settlementPro ?? round.weights?.TRUE ?? 0) : 0} 点
+                  </div>
                 </div>
                 {expandedSettledRound === round.id && (
                   <div className="mt-1 border border-indigo-200 rounded">
@@ -296,12 +319,15 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
  * ActiveRoundCard — renders one active settlement round with its own vote form.
  * Each round (TRUTH or VALUE) is displayed independently.
  */
-function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighlight, onMessageCreated, onSettled }: {
+function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, totalRoundStake, totalRoundPro, totalRoundCon, entryHighlight, onMessageCreated, onSettled }: {
   round: SettlementRoundItem;
   messageId: string;
   topicId: string;
   stakes: MessageStakes | null;
   rounds: SettlementRoundItem[];
+  totalRoundStake: number;
+  totalRoundPro: number;
+  totalRoundCon: number;
   entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
   onMessageCreated?: (msg: {
     id: string;
@@ -321,6 +347,7 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
   const [voting, setVoting] = useState(false);
   const [settling, setSettling] = useState(false);
   const [localRound, setLocalRound] = useState(round);
+  const [roundDetails, setRoundDetails] = useState<Record<string, SettlementRoundItem>>({});
   const [settleError, setSettleError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -331,6 +358,14 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
   const previousRound = localRound.previousRoundId
     ? rounds.find(r => r.id === localRound.previousRoundId)
     : null;
+
+  useEffect(() => {
+    const relevantRounds = rounds.filter(r => r.settlementType === localRound.settlementType && r.status === 'SETTLED');
+    void Promise.all([
+      ...relevantRounds.map(async r => [r.id, await api.getRoundDetail(r.id)] as const),
+      api.getRoundDetail(localRound.id).then(detail => [localRound.id, detail] as const),
+    ]).then(details => setRoundDetails(Object.fromEntries(details))).catch(() => {});
+  }, [rounds, localRound.settlementType]);
 
   async function handleVote() {
     if (voting || settling) return;
@@ -360,6 +395,84 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
     if (voting || settling) return;
     setConfirmOpen(true);
   }
+
+  const totalStake = weights.TRUE + weights.FALSE;
+  const settlementWeights = { TRUE: totalRoundPro, FALSE: totalRoundCon };
+  const settlementResult = settlementWeights.TRUE > settlementWeights.FALSE
+    ? 'TRUE'
+    : settlementWeights.FALSE > settlementWeights.TRUE
+      ? 'FALSE'
+      : 'UNKNOWN';
+  const winningWeight = settlementResult === 'TRUE' ? settlementWeights.TRUE : settlementResult === 'FALSE' ? settlementWeights.FALSE : 0;
+  const profitPool = settlementResult === 'TRUE' ? settlementWeights.FALSE : settlementResult === 'FALSE' ? settlementWeights.TRUE : 0;
+  const winnerRate = winningWeight > 0 ? Math.round((profitPool / winningWeight) * 100) / 100 : 0;
+  const getMyVotes = (roundItem: SettlementRoundItem) => {
+    if (!currentUser) return [];
+    const roundStakes = (stakes?.stakes ?? []).filter(stake =>
+      (stake.roundId === roundItem.id || !stake.roundId) && stake.user.username === currentUser.username,
+    );
+    const stakeVotes = roundStakes.map(stake => ({
+      vote: (stake.side === 'PRO' ? 'TRUE' : 'FALSE') as 'TRUE' | 'FALSE',
+      amount: stake.amount,
+    }));
+    return stakeVotes;
+  };
+  const getRoundNet = (roundItem: SettlementRoundItem, roundResult: 'TRUE' | 'FALSE' | 'UNKNOWN') => {
+    if (roundResult === 'UNKNOWN') return 0;
+    const roundWeights = {
+      TRUE: roundItem.id === localRound.id ? totalRoundPro : roundItem.totalProAtSettlement ?? roundItem.settlementPro ?? roundItem.weights?.TRUE ?? 0,
+      FALSE: roundItem.id === localRound.id ? totalRoundCon : roundItem.totalConAtSettlement ?? roundItem.settlementCon ?? roundItem.weights?.FALSE ?? 0,
+    };
+    const winnerTotal = roundResult === 'TRUE' ? roundWeights.TRUE : roundWeights.FALSE;
+    const loserTotal = roundResult === 'TRUE' ? roundWeights.FALSE : roundWeights.TRUE;
+    const rate = winnerTotal > 0 ? loserTotal / winnerTotal : 0;
+    const myVotes = getMyVotes(roundItem);
+    const winnerContribution = myVotes.filter(vote => vote.vote === roundResult).reduce((sum, vote) => sum + vote.amount, 0);
+    const loserContribution = myVotes.filter(vote => vote.vote !== roundResult).reduce((sum, vote) => sum + vote.amount, 0);
+    return Math.round(winnerContribution * rate) - loserContribution;
+  };
+  const settledForType = rounds
+    .filter(item => item.status === 'SETTLED' && item.settlementType === localRound.settlementType)
+    .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
+  const rawNets = new Map<string, number>();
+  let cumulativeNet = 0;
+  for (const settledRound of settledForType) {
+    const detail = roundDetails[settledRound.id] ?? settledRound;
+    const rawNet = getRoundNet(detail, detail.result ?? 'UNKNOWN');
+    rawNets.set(detail.id, rawNet);
+    cumulativeNet += rawNet;
+    if (detail.previousRoundId && detail.result && detail.result !== (rounds.find(item => item.id === detail.previousRoundId)?.result ?? null)) {
+      cumulativeNet -= rawNets.get(detail.previousRoundId) ?? 0;
+    }
+  }
+  const personalDetail = roundDetails[localRound.id]?.personalSettlement;
+  const personalStakePrincipal = personalDetail?.stakePrincipal ?? getMyVotes(localRound).reduce((sum, vote) => sum + vote.amount, 0);
+  const personalProtocolFee = personalDetail?.protocolFee ?? 0;
+  const personalPrincipal = personalDetail?.principal ?? personalStakePrincipal + personalProtocolFee;
+  const currentUserCumulativeVotes = rounds
+    .filter(item => item.settlementType === localRound.settlementType)
+    .flatMap(item => getMyVotes(item));
+  const currentUserCumulativeStake = currentUserCumulativeVotes.reduce((sum, vote) => sum + vote.amount, 0);
+  const currentUserWinnerStake = currentUserCumulativeVotes
+    .filter(vote => vote.vote === settlementResult)
+    .reduce((sum, vote) => sum + vote.amount, 0);
+  const currentUserLoserStake = currentUserCumulativeVotes
+    .filter(vote => vote.vote !== settlementResult)
+    .reduce((sum, vote) => sum + vote.amount, 0);
+  const winnerTotal = settlementResult === 'TRUE' ? totalRoundPro : totalRoundCon;
+  const loserTotal = settlementResult === 'TRUE' ? totalRoundCon : totalRoundPro;
+  const currentRoundPayout = settlementResult === 'UNKNOWN'
+    ? currentUserCumulativeStake
+    : currentUserCumulativeStake === 0
+      ? 0
+      : Math.round(currentUserWinnerStake * (1 + (loserTotal / winnerTotal || 0))) - currentUserLoserStake;
+  const previousAfter = personalDetail?.previousAfter ?? personalPrincipal;
+  const projectedAfter = Math.max(0, currentRoundPayout > 0 ? currentRoundPayout : previousAfter + currentRoundPayout);
+  const projectedChange = projectedAfter - previousAfter;
+  const personalSettlementPrompt = currentUser && personalPrincipal > 0
+    ? `截至本轮累计投入贡献 ${personalPrincipal} 点（押注${personalStakePrincipal}点，协议费${personalProtocolFee}点） → 上一轮结算为 ${previousAfter} 点 → 本轮预计结算后贡献点为 ${projectedAfter} 点；本轮预计贡献点变化：${projectedChange >= 0 ? '收益' : '损失'}${Math.abs(projectedChange)} 点。`
+    : '当前用户未贡献押注点';
+  const settlementPrompt = `本轮押注：${totalStake} 点（PRO ${weights.TRUE}，CON ${weights.FALSE}）。\n总押注：${totalRoundStake} 点（PRO ${totalRoundPro}，CON ${totalRoundCon}）。\n结算结果：${settlementResult === 'TRUE' ? '赞同胜出' : settlementResult === 'FALSE' ? '反对胜出' : 'UNKNOWN 平局'}。\n总收益池：${profitPool} 点；\n胜方每点押注收益：${settlementResult === 'UNKNOWN' ? '无（平局，双方贡献点全部返还）' : `${winnerRate} 点`}。\n当前用户贡献结算：${personalSettlementPrompt}`;
 
   async function handleSettleConfirmed() {
     if (voting || settling) return;
@@ -436,8 +549,8 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
 
   const headerEmoji = isValue ? '💎' : '🔵';
   const headerLabel = isValue ? '价值仲裁' : '真假仲裁';
-  const trueLabel = isValue ? '推荐' : 'TRUE';
-  const falseLabel = isValue ? '冷藏' : 'FALSE';
+  const trueLabel = isValue ? '推荐' : '赞同';
+  const falseLabel = isValue ? '冷藏' : '反对';
 
   return (
     <div className="border border-indigo-300 bg-indigo-50 rounded-lg p-3 space-y-3">
@@ -446,9 +559,9 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
           <span className="text-xs font-semibold text-indigo-800">
             {headerEmoji} {headerLabel} · 轮次 {localRound.id.slice(-6)}
           </span>
-          {previousRound && previousRound.result && (
+          {previousRound && previousRound.result && previousRound.result !== settlementResult && (
             <span className="ml-2 text-xs text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">
-              推翻 {previousRound.result === 'TRUE' ? '✅ TRUE' : previousRound.result === 'FALSE' ? '❌ FALSE' : '⚪ UNKNOWN'}
+              推翻 {previousRound.result === 'TRUE' ? '✅ TRUE' : previousRound.result === 'FALSE' ? '❌ FALSE' : '⚪ UNKNOWN'} → {settlementResult === 'TRUE' ? '✅ TRUE' : settlementResult === 'FALSE' ? '❌ FALSE' : '⚪ UNKNOWN'}
             </span>
           )}
         </div>
@@ -557,7 +670,7 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, entryHighl
       <PromptModal
         open={confirmOpen}
         title="确认结算"
-        message="确定要结算此轮次吗？结算后将根据投票权重分配押注池资金，且不可撤销。"
+        message={`${settlementPrompt}\n\n结算后将根据投票权重分配押注池贡献点，可继续发起结算，但本次结算不可撤销。\n确定要结算此轮次吗？`}
         confirmText={settling ? '结算中...' : '确认结算'}
         confirmDisabled={settling}
         cancelText="取消"
@@ -584,16 +697,19 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
 }) {
   const [detail, setDetail] = useState<import('../types').SettlementRoundItem | null>(null);
+  const [previousDetail, setPreviousDetail] = useState<import('../types').SettlementRoundItem | null>(null);
   const [stakes, setStakes] = useState<Array<{ id: string; side: string; amount: number; createdAt: string; roundId?: string | null; user: { username: string } }>>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([
-      api.getRoundDetail(roundId),
-      api.getMessageStakes(messageId),
-    ]).then(([d, s]) => {
+    api.getRoundDetail(roundId).then(async d => {
+      const [previous, s] = await Promise.all([
+        d.previousRoundId ? api.getRoundDetail(d.previousRoundId) : Promise.resolve(null),
+        api.getMessageStakes(messageId),
+      ]);
       setDetail(d);
+      setPreviousDetail(previous);
       setStakes(s.stakes);
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -602,17 +718,19 @@ function SettledRoundDetail({ roundId, messageId, entryHighlight }: {
   if (loading) return <div className="text-xs text-gray-400 p-2">加载中...</div>;
   if (!detail) return <div className="text-xs text-gray-400 p-2">加载失败</div>;
 
-  return <SettledRoundDetailView detail={detail} stakes={stakes} roundId={roundId} entryHighlight={entryHighlight} />;
+  return <SettledRoundDetailView detail={detail} previousDetail={previousDetail} stakes={stakes} roundId={roundId} entryHighlight={entryHighlight} />;
 }
 
 /** Pure render — all data already loaded, no early returns */
-function SettledRoundDetailView({ detail, stakes, roundId, entryHighlight }: {
+function SettledRoundDetailView({ detail, previousDetail, stakes, roundId, entryHighlight }: {
   detail: import('../types').SettlementRoundItem;
+  previousDetail: import('../types').SettlementRoundItem | null;
   stakes: Array<{ id: string; side: string; amount: number; createdAt: string; roundId?: string | null; user: { username: string } }>;
   roundId: string;
   entryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } | null;
 }) {
-  const { user: currentUser } = useAuth();
+  const auth = useOptionalAuth();
+  const currentUser = auth?.user ?? null;
 
   const roundStakes = stakes.filter(s => s.roundId === roundId);
   const entries = roundStakes.map(s => ({
@@ -624,16 +742,9 @@ function SettledRoundDetailView({ detail, stakes, roundId, entryHighlight }: {
   const clawbackPro = prevStakes.filter(s => s.side === 'PRO').reduce((sum, s) => sum + s.amount, 0);
   const clawbackCon = prevStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
 
-  const myVotes = useMemo(() => {
-    const fromVotes = (detail.votes ?? [])
-      .filter(v => currentUser && v.user.username === currentUser.username)
-      .map(v => ({ vote: v.vote, amount: v.amount }));
-    const fromStakes = roundStakes
-      .filter(s => currentUser && s.user.username === currentUser.username)
-      .map(s => ({ vote: (s.side === 'PRO' ? 'TRUE' : 'FALSE') as 'TRUE' | 'FALSE', amount: s.amount }));
-    const voteKeys = new Set(fromVotes.map(v => `${v.vote}_${v.amount}`));
-    return [...fromVotes, ...fromStakes.filter(s => !voteKeys.has(`${s.vote}_${s.amount}`))];
-  }, [detail.votes, roundStakes, currentUser]);
+  const roundWeights = detail.roundWeights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
+  const totalProAtSettlement = detail.totalProAtSettlement ?? null;
+  const totalConAtSettlement = detail.totalConAtSettlement ?? null;
 
   return (
     <div className="p-2 space-y-2 text-xs bg-gray-50 text-gray-700">
@@ -642,12 +753,16 @@ function SettledRoundDetailView({ detail, stakes, roundId, entryHighlight }: {
         <span>{new Date(detail.openedAt).toLocaleString('zh-CN')}</span>
       </div>
 
-      {detail.result && detail.result !== 'UNKNOWN' && (
+      {detail.result && (
         <SettlementSummary
-          weights={detail.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 }}
+          weights={roundWeights}
           result={detail.result}
-          myVotes={myVotes}
-          showPersonal={!!currentUser && myVotes.length > 0}
+          previousResult={previousDetail?.result ?? null}
+          totalProAtSettlement={totalProAtSettlement}
+          totalConAtSettlement={totalConAtSettlement}
+          showPersonal={!!currentUser && Boolean(detail.personalSettlement)}
+          cumulativeWeights={detail.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 }}
+          personalSettlement={detail.personalSettlement}
         />
       )}
 
@@ -706,40 +821,77 @@ function MyStakesInRound({ votes, currentUsername }: { votes: SettlementRoundIte
 }
 
 /** 结算结果摘要 — 纯展示：公开资金流向 + 个人收益 */
-function SettlementSummary({ weights, result, myVotes, showPersonal }: {
+function SettlementSummary({ weights, result, previousResult, totalProAtSettlement, totalConAtSettlement, showPersonal, cumulativeWeights, personalSettlement }: {
   weights: { TRUE: number; FALSE: number };
-  result: 'TRUE' | 'FALSE';
-  myVotes: Array<{ vote: 'TRUE' | 'FALSE'; amount: number }>;
+  result: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  previousResult: 'TRUE' | 'FALSE' | 'UNKNOWN' | null;
+  totalProAtSettlement: number | null;
+  totalConAtSettlement: number | null;
   showPersonal: boolean;
+  cumulativeWeights: { TRUE: number; FALSE: number; UNKNOWN: number };
+  personalSettlement?: { principal: number; stakePrincipal: number; protocolFee: number; change: number; after: number; previousAfter?: number };
 }) {
-  if (weights.TRUE === 0 && weights.FALSE === 0) return null;
+  const totalStake = weights.TRUE + weights.FALSE;
+  const totalAtSettlement = totalProAtSettlement !== null && totalConAtSettlement !== null
+    ? totalProAtSettlement + totalConAtSettlement
+    : null;
+  const resultLabel = result === 'TRUE' ? 'TRUE（PRO 胜出）' : result === 'FALSE' ? 'FALSE（CON 胜出）' : 'UNKNOWN（PRO、CON 相等）';
+  const resultChanged = previousResult !== null && previousResult !== result;
+  const cumulativeTotal = cumulativeWeights.TRUE + cumulativeWeights.FALSE;
 
-  const winnerSide = result === 'TRUE' ? 'PRO' : 'CON';
-  const loserSide = result === 'TRUE' ? 'CON' : 'PRO';
-  const winnerTotal = result === 'TRUE' ? weights.TRUE : weights.FALSE;
+  if (result === 'UNKNOWN') {
+    return (
+      <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1 text-xs">
+        <div className="text-gray-600">本轮本金 {totalStake} 点：PRO 方 {weights.TRUE} 点，CON 方 {weights.FALSE} 点。</div>
+        <div className="text-gray-600">结算累计总计 {cumulativeTotal} 点：PRO 方 {cumulativeWeights.TRUE} 点，CON 方 {cumulativeWeights.FALSE} 点。</div>
+        {totalAtSettlement !== null && (
+          <div className="text-gray-600">本次结算完成时总押注 {totalAtSettlement} 点：PRO 方 {totalProAtSettlement} 点，CON 方 {totalConAtSettlement} 点。</div>
+        )}
+        <div className="text-amber-700">本次结算结果：{resultLabel}。</div>
+        {resultChanged && previousResult && (
+          <div className="text-amber-700">上轮结果：{previousResult}；本轮结果不同，构成推翻，双方所有贡献点返还。</div>
+        )}
+        {showPersonal && personalSettlement && (
+          <div className="text-gray-500 border-t border-gray-100 pt-1 mt-1">
+            截至本轮累计投入贡献 {personalSettlement.principal} 点（押注{personalSettlement.stakePrincipal}点，协议费{personalSettlement.protocolFee}点）
+            {personalSettlement.previousAfter !== undefined && ` → 上一轮结算为 ${personalSettlement.previousAfter} 点`}
+            {` → 本轮结算后贡献点为 ${personalSettlement.after} 点；本轮贡献点变化：${personalSettlement.change >= 0 ? '收益' : '损失'}${Math.abs(personalSettlement.change)} 点。`}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const loserTotal = result === 'TRUE' ? weights.FALSE : weights.TRUE;
+  const winnerTotal = result === 'TRUE' ? weights.TRUE : weights.FALSE;
   const rate = winnerTotal > 0 ? Math.round((loserTotal / winnerTotal) * 100) / 100 : 0;
-
-  const myWinnerTotal = myVotes.filter(v => v.vote === result).reduce((s, v) => s + v.amount, 0);
-  const myLoserTotal = myVotes.filter(v => v.vote !== result).reduce((s, v) => s + v.amount, 0);
-  const myGain = Math.round(myWinnerTotal * rate);
-  const myNet = myGain - myLoserTotal;
 
   return (
     <div className="bg-white rounded border border-gray-200 px-3 py-2 space-y-1 text-xs">
       {/* Public */}
       <div className="text-gray-600">
-        {loserSide} 共计 {loserTotal} 点按 {winnerSide} 共计 {winnerTotal} 点分配，胜方每点收益 {rate} 点
+        本轮本金 {totalStake} 点：PRO 方 {weights.TRUE} 点，CON 方 {weights.FALSE} 点。
       </div>
+      <div className="text-gray-600">
+        结算累计总计 {cumulativeTotal} 点：PRO 方 {cumulativeWeights.TRUE} 点，CON 方 {cumulativeWeights.FALSE} 点。
+      </div>
+      {totalAtSettlement !== null && (
+        <div className="text-gray-600">
+          本次结算完成时总押注 {totalAtSettlement} 点：PRO 方 {totalProAtSettlement} 点，CON 方 {totalConAtSettlement} 点。
+        </div>
+      )}
+      <div className="text-gray-600">
+        本次结算结果：{resultLabel}。累计收益池 {loserTotal} 点；胜方每点押注收益 {rate} 点，胜方贡献本金返还后按权重分配收益。
+      </div>
+      {resultChanged && previousResult && (
+        <div className="text-amber-700">上轮结果：{previousResult}；本轮结果不同，构成推翻，重新分配贡献点。</div>
+      )}
       {/* Personal */}
-      {showPersonal && (
+      {showPersonal && personalSettlement && (
         <div className="text-gray-500 border-t border-gray-100 pt-1 mt-1">
-          {myWinnerTotal > 0 && <span>你投了 {result} {myWinnerTotal} 点 → 收益 {myGain} 点</span>}
-          {myWinnerTotal > 0 && myLoserTotal > 0 && <span className="mx-2">│</span>}
-          {myLoserTotal > 0 && <span>你投了 {result === 'TRUE' ? 'FALSE' : 'TRUE'} {myLoserTotal} 点 → 损失 {myLoserTotal} 点</span>}
-          <span className={`ml-2 font-semibold ${myNet >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-            → 净{myNet >= 0 ? '收益' : '损失'} {Math.abs(myNet)} 点
-          </span>
+          <span>截至本轮累计投入贡献 {personalSettlement.principal} 点（押注{personalSettlement.stakePrincipal}点，协议费{personalSettlement.protocolFee}点）</span>
+          {personalSettlement.previousAfter !== undefined && <span> → 上一轮结算为 {personalSettlement.previousAfter} 点</span>}
+          <span> → 本轮结算后贡献点为 {personalSettlement.after} 点；本轮贡献点变化：{personalSettlement.change >= 0 ? '收益' : '损失'}{Math.abs(personalSettlement.change)} 点</span>
         </div>
       )}
     </div>

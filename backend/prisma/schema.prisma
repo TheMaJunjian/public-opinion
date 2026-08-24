@@ -230,6 +230,8 @@ model SettlementRound {
   note             String?
   settlementPro    Int?
   settlementCon    Int?
+  totalProAtSettlement Int?
+  totalConAtSettlement Int?
   effectiveAt      DateTime?  // when governance requirements were met and carryOut executed
   terminatedByRoundId String?
   terminatedByRound  SettlementRound? @relation("TerminatedRounds", fields: [terminatedByRoundId], references: [id])

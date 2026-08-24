@@ -1,8 +1,10 @@
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
+import { requireAuth, optionalAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { applyEvent } from '../lib/events';
+import { calculatePersonalSettlement } from '../lib/personalSettlement';
+import { isCurrentRoundVote, isVoteBeforeCutoff, sumCumulativeFees, sumCumulativeStakeAmounts } from '../lib/personalSettlementInputs';
 
 const router = Router({ mergeParams: true });
 
@@ -88,7 +90,7 @@ router.get('/api/messages/:id/rounds', async (req: AuthRequest, res: Response, n
 // ============================================================
 // GET /api/rounds/:id — 查询单个轮次详情
 // ============================================================
-router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.get('/api/rounds/:id', optionalAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const roundId = req.params.id as string;
 
@@ -103,6 +105,19 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
       res.status(404).json({ error: '结算轮次不存在' });
       return;
     }
+
+    const roundStakes = (await prisma.stake.findMany({
+      where: { roundId, settlementType: round.settlementType ?? 'TRUTH' },
+      select: { side: true, amount: true },
+    })) ?? [];
+    const roundVotes = (await prisma.voteStake.findMany({
+      where: { roundId },
+      select: { vote: true, amount: true },
+    })) ?? [];
+    const roundPro = roundStakes.filter(stake => stake.side === 'PRO').reduce((sum, stake) => sum + stake.amount, 0)
+      + roundVotes.filter(vote => vote.vote === 'TRUE').reduce((sum, vote) => sum + vote.amount, 0);
+    const roundCon = roundStakes.filter(stake => stake.side === 'CON').reduce((sum, stake) => sum + stake.amount, 0)
+      + roundVotes.filter(vote => vote.vote === 'FALSE').reduce((sum, vote) => sum + vote.amount, 0);
 
     // Compute current weights from BetPool scoped by settlementType
     const stype = round.settlementType ?? 'TRUTH';
@@ -137,8 +152,81 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
     // Filter to only those targeting this message
     const filteredVotes = voteRelations.filter(v => {
       const refs = v.targetRefs as Array<{ messageId?: string }> | undefined;
-      return refs?.some(r => r.messageId === round.messageId);
+      if (!refs?.some(r => r.messageId === round.messageId)) return false;
+      const payload = v.relationPayload as Record<string, unknown> | null;
+      return payload?.roundId === roundId;
     });
+
+    let personalSettlement: {
+      principal: number;
+      stakePrincipal: number;
+      protocolFee: number;
+      change: number;
+      after: number;
+      previousAfter?: number;
+    } | undefined;
+    if (req.user) {
+      const cutoff = round.closedAt ?? new Date();
+      const [userStakes, userLedger] = await Promise.all([
+        prisma.stake.findMany({
+          where: { messageId: round.messageId, settlementType: stype, userId: req.user.id, createdAt: { lte: cutoff } },
+          select: { amount: true },
+        }),
+        prisma.ledgerEntry.findMany({
+          where: { userId: req.user.id, messageId: round.messageId },
+          select: { amount: true, roundId: true, entryType: true, data: true, createdAt: true },
+        }),
+      ]);
+      const stakePrincipal = sumCumulativeStakeAmounts(userStakes, cutoff);
+          const protocolFee = sumCumulativeFees(userLedger, cutoff);
+      const principal = stakePrincipal + protocolFee;
+      const payout = userLedger
+        .filter(entry => entry.entryType === 'SETTLEMENT_PAYOUT' && entry.roundId === roundId)
+        .reduce((sum, entry) => sum + entry.amount, 0);
+      if (stakePrincipal === 0) {
+        personalSettlement = undefined;
+      } else {
+      let previousAfter: number | undefined;
+      if (round.previousRoundId) {
+        const calculateAfter = async (targetRoundId: string): Promise<number | undefined> => {
+          const targetRound = await prisma.settlementRound.findUnique({
+            where: { id: targetRoundId },
+            select: { closedAt: true, previousRoundId: true },
+          });
+          if (!targetRound) return undefined;
+          const targetCutoff = targetRound.closedAt ?? new Date();
+          const targetStakes = await prisma.stake.findMany({
+            where: { messageId: round.messageId, settlementType: stype, userId: req.user!.id, createdAt: { lte: targetCutoff } },
+            select: { amount: true },
+          });
+          const targetStakePrincipal = sumCumulativeStakeAmounts(targetStakes, targetCutoff);
+          const targetProtocolFee = sumCumulativeFees(userLedger, targetCutoff);
+          if (targetStakePrincipal === 0 && targetProtocolFee === 0) return undefined;
+          const targetPayout = userLedger
+            .filter(entry => entry.entryType === 'SETTLEMENT_PAYOUT' && entry.roundId === targetRoundId)
+            .reduce((sum, entry) => sum + entry.amount, 0);
+          const priorAfter = targetRound.previousRoundId
+            ? await calculateAfter(targetRound.previousRoundId)
+            : undefined;
+          return calculatePersonalSettlement({
+            principal: targetStakePrincipal + targetProtocolFee,
+            stakePrincipal: targetStakePrincipal,
+            protocolFee: targetProtocolFee,
+            payout: targetPayout,
+            previousAfter: priorAfter,
+          }).after;
+        };
+        previousAfter = await calculateAfter(round.previousRoundId);
+      }
+      personalSettlement = calculatePersonalSettlement({
+        principal,
+        stakePrincipal,
+        protocolFee,
+        payout,
+        previousAfter,
+      });
+      }
+    }
 
     const weightMap: Record<string, number> = {
       TRUE: betPool?.lockedPro ?? 0,
@@ -171,6 +259,8 @@ router.get('/api/rounds/:id', async (req: AuthRequest, res: Response, next: Next
       totalWeight: round.status === 'SETTLED'
         ? ((settledPro ?? 0) + (settledCon ?? 0))
         : totalWeight,
+      roundWeights: { TRUE: roundPro, FALSE: roundCon, UNKNOWN: 0 },
+      personalSettlement,
     });
   } catch (err) {
     next(err);

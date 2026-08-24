@@ -1719,7 +1719,7 @@ export default function TopicDetailPage() {
       window.removeEventListener('resize', updateLeftPanelMinHeight);
       zoomObserver.disconnect();
     };
-  }, []);
+  }, [loading]);
 
   // Check auth before sending: redirect to login if not logged in
   function requireAuth(): boolean {

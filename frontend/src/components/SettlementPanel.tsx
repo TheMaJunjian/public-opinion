@@ -30,15 +30,19 @@ interface Props {
   filterSettlementType?: 'TRUTH' | 'VALUE';
 }
 
+type PersonalSettlement = NonNullable<SettlementRoundItem['personalSettlement']>;
+
 /**
  * SettlementPanel — 消息结算面板
  * 显示押注池状态、结算轮次、投票和结算操作
  */
 export default function SettlementPanel({ messageId, topicId, highlightRoundId, entryHighlight, onMessageCreated, filterSettlementType }: Props) {
+  const { user: currentUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [stakes, setStakes] = useState<MessageStakes | null>(null);
   const [rounds, setRounds] = useState<SettlementRoundItem[]>([]);
   const [activeRounds, setActiveRounds] = useState<SettlementRoundItem[]>([]);
+  const [latestPersonalSettlement, setLatestPersonalSettlement] = useState<PersonalSettlement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creatingRound, setCreatingRound] = useState(false);
 
@@ -69,8 +73,19 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
         const details = await Promise.all(allActive.map(r => api.getRoundDetail(r.id)));
         if (loadId !== loadIdRef.current) return;
         setActiveRounds(details);
+        setLatestPersonalSettlement(null);
       } else {
         setActiveRounds([]);
+        const latestSettled = roundsData.data.find(r =>
+          r.status === 'SETTLED' && (!filterSettlementType || r.settlementType === filterSettlementType),
+        );
+        if (latestSettled) {
+          const detail = await api.getRoundDetail(latestSettled.id);
+          if (loadId !== loadIdRef.current) return;
+          setLatestPersonalSettlement(detail.personalSettlement ?? null);
+        } else {
+          setLatestPersonalSettlement(null);
+        }
       }
     } catch (e: unknown) {
       if (loadId !== loadIdRef.current) return;
@@ -87,12 +102,12 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { messageId?: string };
       if (!detail.messageId || detail.messageId === messageId) {
-        api.getMessageStakes(messageId).then(setStakes).catch(() => {});
+        void load();
       }
     };
     window.addEventListener('stakes-refresh', handler);
     return () => window.removeEventListener('stakes-refresh', handler);
-  }, [messageId]);
+  }, [messageId, load]);
 
   // Auto-expand highlighted round from points-navigate
   useEffect(() => {
@@ -168,13 +183,28 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
   const allRoundStake = filteredStakes.reduce((sum, stake) => sum + stake.amount, 0);
   const allRoundPro = filteredStakes.filter(stake => stake.side === 'PRO').reduce((sum, stake) => sum + stake.amount, 0);
   const allRoundCon = filteredStakes.filter(stake => stake.side === 'CON').reduce((sum, stake) => sum + stake.amount, 0);
-  const allSettledRevenue = settledRounds.reduce((sum, round) => {
-    const pro = round.settlementPro ?? round.weights?.TRUE ?? 0;
-    const con = round.settlementCon ?? round.weights?.FALSE ?? 0;
-    if (round.result === 'TRUE') return sum + con;
-    if (round.result === 'FALSE') return sum + pro;
-    return sum;
-  }, 0);
+  const currentUserStakes = currentUser
+    ? filteredStakes.filter(stake => stake.user.username === currentUser.username)
+    : [];
+  const currentUserStake = currentUserStakes.reduce((sum, stake) => sum + stake.amount, 0);
+  const currentUserProStake = currentUserStakes.filter(stake => stake.side === 'PRO').reduce((sum, stake) => sum + stake.amount, 0);
+  const currentUserConStake = currentUserStakes.filter(stake => stake.side === 'CON').reduce((sum, stake) => sum + stake.amount, 0);
+  const projectedResult = allRoundPro > allRoundCon ? 'TRUE' : allRoundCon > allRoundPro ? 'FALSE' : 'UNKNOWN';
+  const projectedWinnerTotal = projectedResult === 'TRUE' ? allRoundPro : allRoundCon;
+  const projectedLoserTotal = projectedResult === 'TRUE' ? allRoundCon : allRoundPro;
+  const projectedProfit = projectedWinnerTotal > 0 ? projectedLoserTotal / projectedWinnerTotal : 0;
+  const projectedPayout = projectedResult === 'UNKNOWN'
+    ? currentUserStake
+    : Math.round((projectedResult === 'TRUE' ? currentUserProStake : currentUserConStake) * (1 + projectedProfit))
+      - (projectedResult === 'TRUE' ? currentUserConStake : currentUserProStake);
+  const personalSettlement = activeRounds[0]?.personalSettlement ?? latestPersonalSettlement;
+  const investedContribution = personalSettlement?.principal ?? currentUserStake;
+  const projectedAfter = activeRounds.length > 0
+    ? Math.max(0, projectedPayout)
+    : personalSettlement?.after ?? currentUserStake;
+  const projectedChange = activeRounds.length > 0
+    ? projectedAfter - investedContribution
+    : personalSettlement?.change ?? 0;
 
   if (loading) {
     return (
@@ -258,7 +288,10 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
         <div>
           <div className="text-xs font-semibold text-gray-500 mb-2">结算历史（双击查看详情）</div>
           <div className="text-xs text-gray-600 bg-indigo-50 border border-indigo-200 rounded px-3 py-2 mb-2">
-            所有轮次总押注 {allRoundStake} 点（PRO {allRoundPro}，CON {allRoundCon}）· 总收益 {allSettledRevenue} 点
+            所有轮次总押注 {allRoundStake} 点（PRO {allRoundPro}，CON {allRoundCon}）·{' '}
+            {currentUser
+              ? `当前用户投入 ${investedContribution} 点 → ${activeRounds.length > 0 ? '预计结算后' : '当前'}贡献点 ${projectedAfter} 点，${projectedChange >= 0 ? '收益' : '损失'}${Math.abs(projectedChange)} 点`
+              : '当前用户未登录，无法显示个人变化'}
           </div>
           <div className="space-y-2">
             {settledRounds.slice(0, 5).map(round => (
@@ -417,34 +450,6 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, totalRound
     }));
     return stakeVotes;
   };
-  const getRoundNet = (roundItem: SettlementRoundItem, roundResult: 'TRUE' | 'FALSE' | 'UNKNOWN') => {
-    if (roundResult === 'UNKNOWN') return 0;
-    const roundWeights = {
-      TRUE: roundItem.id === localRound.id ? totalRoundPro : roundItem.totalProAtSettlement ?? roundItem.settlementPro ?? roundItem.weights?.TRUE ?? 0,
-      FALSE: roundItem.id === localRound.id ? totalRoundCon : roundItem.totalConAtSettlement ?? roundItem.settlementCon ?? roundItem.weights?.FALSE ?? 0,
-    };
-    const winnerTotal = roundResult === 'TRUE' ? roundWeights.TRUE : roundWeights.FALSE;
-    const loserTotal = roundResult === 'TRUE' ? roundWeights.FALSE : roundWeights.TRUE;
-    const rate = winnerTotal > 0 ? loserTotal / winnerTotal : 0;
-    const myVotes = getMyVotes(roundItem);
-    const winnerContribution = myVotes.filter(vote => vote.vote === roundResult).reduce((sum, vote) => sum + vote.amount, 0);
-    const loserContribution = myVotes.filter(vote => vote.vote !== roundResult).reduce((sum, vote) => sum + vote.amount, 0);
-    return Math.round(winnerContribution * rate) - loserContribution;
-  };
-  const settledForType = rounds
-    .filter(item => item.status === 'SETTLED' && item.settlementType === localRound.settlementType)
-    .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
-  const rawNets = new Map<string, number>();
-  let cumulativeNet = 0;
-  for (const settledRound of settledForType) {
-    const detail = roundDetails[settledRound.id] ?? settledRound;
-    const rawNet = getRoundNet(detail, detail.result ?? 'UNKNOWN');
-    rawNets.set(detail.id, rawNet);
-    cumulativeNet += rawNet;
-    if (detail.previousRoundId && detail.result && detail.result !== (rounds.find(item => item.id === detail.previousRoundId)?.result ?? null)) {
-      cumulativeNet -= rawNets.get(detail.previousRoundId) ?? 0;
-    }
-  }
   const personalDetail = roundDetails[localRound.id]?.personalSettlement;
   const personalStakePrincipal = personalDetail?.stakePrincipal ?? getMyVotes(localRound).reduce((sum, vote) => sum + vote.amount, 0);
   const personalProtocolFee = personalDetail?.protocolFee ?? 0;

@@ -8,6 +8,10 @@ html, body, #root {
   padding: 0;
 }
 
+html {
+  scrollbar-gutter: stable;
+}
+
 /* Preview mode: greyscale overlay for rejected classify/summary view.
    Messages remain visible but visually distinct from active content. */
 .preview-mode {

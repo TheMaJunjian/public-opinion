@@ -87,7 +87,11 @@ type FocusEntry = {
   topicRelMsgId?: string;
 };
 
-export default function TopicDetailPage() {
+interface TopicDetailPageProps {
+  topControlsFrozen?: boolean;
+}
+
+export default function TopicDetailPage({ topControlsFrozen = false }: TopicDetailPageProps) {
   const { topicId } = useParams<{ topicId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -1557,12 +1561,15 @@ export default function TopicDetailPage() {
   const REVIEW_RIGHT_PX = 380;
   const VIEWER_RIGHT_PX = 300;
   const MAX_RIGHT_PX = 500;
-  const getMinimumContainerWidth = () => Math.max(window.innerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12);
+  const getAvailableWidth = () => document.documentElement.clientWidth || window.innerWidth;
+  const getMinimumContainerWidth = () => Math.max(getAvailableWidth(), MIN_LEFT_PX + MIN_RIGHT_PX + 12);
   const [containerWidth, setContainerWidth] = useState(() => {
     const saved = localStorage.getItem('topicWidth');
-    return Math.max(saved ? Number(saved) : 0, getMinimumContainerWidth());
+    const savedWidth = saved ? Number(saved) : 0;
+    const availableWidth = getAvailableWidth();
+    return Math.max(savedWidth > 0 && savedWidth <= availableWidth ? savedWidth : 0, getMinimumContainerWidth());
   });
-  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const effectiveContainerWidth = Math.min(containerWidth, getAvailableWidth());
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startLeftPx: number } | null>(null);
@@ -1585,22 +1592,28 @@ export default function TopicDetailPage() {
   // Persist containerWidth to localStorage
   useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
   useEffect(() => {
-    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
-    window.addEventListener('resize', updateViewportWidth);
-    return () => window.removeEventListener('resize', updateViewportWidth);
+    const syncContainerWidth = () => {
+      const availableWidth = getAvailableWidth();
+      setContainerWidth(currentWidth => currentWidth > availableWidth ? availableWidth : currentWidth);
+    };
+    const frame = requestAnimationFrame(() => requestAnimationFrame(syncContainerWidth));
+    window.addEventListener('resize', syncContainerWidth);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', syncContainerWidth);
+    };
   }, []);
-
   useEffect(() => {
     if (!comparisonReviewed) return;
     const minimumReviewWidth = MIN_LEFT_PX + REVIEW_RIGHT_PX + 12;
-    const nextWidth = Math.max(containerWidth, minimumReviewWidth, getMinimumContainerWidth());
+    const nextWidth = Math.max(getAvailableWidth(), minimumReviewWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12);
     setContainerWidth(nextWidth);
     setLeftFlex(TOTAL_FLEX * MIN_LEFT_PX / (nextWidth - 12));
   }, [comparisonReviewed]);
 
   useEffect(() => {
     if (!isPreloaded) return;
-    const nextWidth = Math.max(viewportWidth, MIN_LEFT_PX + VIEWER_RIGHT_PX + 12);
+    const nextWidth = Math.max(getAvailableWidth(), MIN_LEFT_PX + VIEWER_RIGHT_PX + 12);
     const nextLeftWidth = nextWidth - VIEWER_RIGHT_PX - 12;
     setContainerWidth(nextWidth);
     setLeftFlex(TOTAL_FLEX * nextLeftWidth / (nextWidth - 12));
@@ -1685,7 +1698,10 @@ export default function TopicDetailPage() {
     };
     const syncFixedScrollToPanel = () => {
       const comparisonViewport = panel.querySelector<HTMLElement>('[data-comparison-viewport]');
-      const source = comparisonViewport && getHorizontalMax(comparisonViewport) > 0 ? comparisonViewport : panel;
+      const source = comparisonViewport && getHorizontalMax(comparisonViewport) > 0
+        ? comparisonViewport
+        : panel;
+      if (!source) return;
       const progress = Math.max(0, Math.min(1, getScrollProgress(source)));
       fixedScroll.scrollLeft = getHorizontalMax(fixedScroll) * progress;
     };
@@ -6142,8 +6158,8 @@ export default function TopicDetailPage() {
   return (
     <>
     <ErrorBoundary>
-    <div style={{ minHeight: "100%", minWidth: Math.max(containerWidth, viewportWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
-      <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0 }}>
+    <div style={{ minHeight: "100%", width: "100%", maxWidth: "100%", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "clip" }}>
+      <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, zIndex: 40 } : {}) }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
@@ -6195,7 +6211,7 @@ export default function TopicDetailPage() {
         )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", minWidth: containerWidth }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", minWidth: effectiveContainerWidth }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
           <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>

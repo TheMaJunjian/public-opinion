@@ -15,6 +15,7 @@ const TutorialModal = lazy(() => import('./components/TutorialModal'));
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [topControlsFrozen, setTopControlsFrozen] = useState(false);
   const [interfaceZoom, setInterfaceZoom] = useState(1);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
   const handleGestureConfirm = (direction: GestureDirection, target: HTMLElement | null, symbol: ShortcutSymbol) => {
@@ -61,7 +62,7 @@ export default function App() {
     <AuthProvider>
       <Router>
         <div
-          className="min-h-screen min-w-fit flex flex-col bg-[#101010]"
+          className="min-h-screen w-full min-w-0 flex flex-col bg-[#101010]"
           style={{
             transform: `scale(${interfaceZoom})`,
             transformOrigin: 'top left',
@@ -73,6 +74,8 @@ export default function App() {
           <Navbar
             onOpenViewer={() => setViewerOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
+            topControlsFrozen={topControlsFrozen}
+            onToggleTopControls={() => setTopControlsFrozen(!topControlsFrozen)}
           />
           <main className="flex-1">
             <Suspense fallback={routeFallback}>
@@ -80,7 +83,7 @@ export default function App() {
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/" element={<HomePage />} />
-                <Route path="/topics/:topicId" element={<TopicDetailPage />} />
+                <Route path="/topics/:topicId" element={<TopicDetailPage topControlsFrozen={topControlsFrozen} />} />
               </Routes>
             </Suspense>
           </main>

@@ -64,7 +64,7 @@ export default function App() {
         <div
           className="min-h-screen min-w-0 flex flex-col bg-[#101010]"
           style={{
-            transform: `scale(${interfaceZoom})`,
+            transform: interfaceZoom === 1 ? 'none' : `scale(${interfaceZoom})`,
             transformOrigin: 'top left',
             width: 'max-content',
             minWidth: `${100 / interfaceZoom}%`,

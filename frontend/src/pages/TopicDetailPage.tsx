@@ -96,6 +96,26 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const relationBarRef = useRef<HTMLDivElement>(null);
+  const [relationControlsPinned, setRelationControlsPinned] = useState(true);
+
+  useEffect(() => {
+    const relationBar = relationBarRef.current;
+    if (!relationBar) return;
+
+    const updatePinnedState = () => {
+      setRelationControlsPinned(relationBar.getBoundingClientRect().right <= window.innerWidth + 1);
+    };
+
+    updatePinnedState();
+    const observer = new ResizeObserver(updatePinnedState);
+    observer.observe(relationBar);
+    window.addEventListener('resize', updatePinnedState);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updatePinnedState);
+    };
+  }, []);
 
   const [topic, setTopic] = useState<Topic | null>(null);
   const [messages, setMessages] = useState<DemoMessage[]>([]);
@@ -1569,7 +1589,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     const availableWidth = getAvailableWidth();
     return Math.max(savedWidth > 0 && savedWidth <= availableWidth ? savedWidth : 0, getMinimumContainerWidth());
   });
-  const effectiveContainerWidth = Math.min(containerWidth, getAvailableWidth());
+  const effectiveContainerWidth = Math.max(containerWidth, getAvailableWidth());
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startLeftPx: number } | null>(null);
@@ -1594,7 +1614,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   useEffect(() => {
     const syncContainerWidth = () => {
       const availableWidth = getAvailableWidth();
-      setContainerWidth(currentWidth => currentWidth > availableWidth ? availableWidth : currentWidth);
+      setContainerWidth(currentWidth => Math.max(currentWidth, availableWidth));
     };
     const frame = requestAnimationFrame(() => requestAnimationFrame(syncContainerWidth));
     window.addEventListener('resize', syncContainerWidth);
@@ -1637,7 +1657,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       const comparisonWidths = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'))
         .map(viewport => viewport.scrollWidth);
       const contentWidth = Math.max(panel.scrollWidth, ...comparisonWidths, 0) * scale;
-      if (visibleBottom <= visibleTop || visibleWidth <= 0 || contentWidth <= visibleWidth + 1) {
+      if (visibleBottom <= visibleTop || visibleWidth <= 0 || contentWidth <= rect.width + 1) {
         setFixedHorizontalScroll(null);
         return;
       }
@@ -5918,13 +5938,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       const dx = ev.clientX - splitterDragRef.current.startX;
       const containerW = panelContainerRef.current.clientWidth;
       const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
-      if (!comparisonReviewed) {
-        setLeftFlex(containerW > 12 ? TOTAL_FLEX * desiredLeftPx / (containerW - 12) : leftFlex);
-        requestAnimationFrame(() => restoreHorizontalScrollPosition());
-        return;
-      }
       const desiredRightPx = Math.max(MIN_RIGHT_PX, Math.min(MAX_RIGHT_PX, containerW - 12 - desiredLeftPx));
-      const nextWidth = Math.max(getMinimumContainerWidth(), desiredLeftPx + desiredRightPx + 12);
+      const nextWidth = Math.max(desiredLeftPx + desiredRightPx + 12, getMinimumContainerWidth());
       setContainerWidth(nextWidth);
       setLeftFlex(TOTAL_FLEX * desiredLeftPx / (nextWidth - 12));
       requestAnimationFrame(() => restoreHorizontalScrollPosition());
@@ -5956,13 +5971,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       const dx = t.clientX - splitterDragRef.current.startX;
       const containerW = panelContainerRef.current.clientWidth;
       const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
-      if (!comparisonReviewed) {
-        setLeftFlex(containerW > 12 ? TOTAL_FLEX * desiredLeftPx / (containerW - 12) : leftFlex);
-        requestAnimationFrame(() => restoreHorizontalScrollPosition());
-        return;
-      }
       const desiredRightPx = Math.max(MIN_RIGHT_PX, Math.min(MAX_RIGHT_PX, containerW - 12 - desiredLeftPx));
-      const nextWidth = Math.max(getMinimumContainerWidth(), desiredLeftPx + desiredRightPx + 12);
+      const nextWidth = Math.max(desiredLeftPx + desiredRightPx + 12, getMinimumContainerWidth());
       setContainerWidth(nextWidth);
       setLeftFlex(TOTAL_FLEX * desiredLeftPx / (nextWidth - 12));
       requestAnimationFrame(() => restoreHorizontalScrollPosition());
@@ -6158,8 +6168,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   return (
     <>
     <ErrorBoundary>
-    <div style={{ minHeight: "100%", width: "100%", maxWidth: "100%", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "clip" }}>
-      <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, zIndex: 40 } : {}) }}>
+    <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
+      <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, zIndex: 40 } : {}) }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
@@ -6167,8 +6177,9 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
             </button>
           </>}
         </div>
+        <div aria-hidden="true" style={{ flex: 1, minWidth: 0 }} />
         {!isPreloaded && (
-        <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+        <div style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", ...(relationControlsPinned ? { position: "sticky", right: 0, zIndex: 41 } : {}) }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
             <button key={rt} onClick={() => {

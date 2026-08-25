@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import PointsBadge from './PointsBadge';
 
@@ -13,6 +14,37 @@ interface NavbarProps {
 export default function Navbar({ onOpenViewer, onOpenTutorial, topControlsFrozen = false, onToggleTopControls }: NavbarProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const navRef = useRef<HTMLElement>(null);
+  const leftControlsRef = useRef<HTMLDivElement>(null);
+  const rightControlsRef = useRef<HTMLDivElement>(null);
+  const [rightControlsPinned, setRightControlsPinned] = useState(true);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+
+    const updatePinnedState = () => {
+      const leftControls = leftControlsRef.current;
+      const rightControls = rightControlsRef.current;
+      if (!leftControls || !rightControls) return;
+
+      const navRect = nav.getBoundingClientRect();
+      const leftRect = leftControls.getBoundingClientRect();
+      const rightRect = rightControls.getBoundingClientRect();
+      const normalRight = navRect.left + rightControls.offsetLeft + rightRect.width;
+      const pinnedLeft = Math.min(normalRight, window.innerWidth) - rightRect.width;
+      setRightControlsPinned(leftRect.right + 16 <= pinnedLeft);
+    };
+
+    updatePinnedState();
+    const observer = new ResizeObserver(updatePinnedState);
+    observer.observe(nav);
+    window.addEventListener('resize', updatePinnedState);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updatePinnedState);
+    };
+  }, []);
 
   async function handleLogout() {
     await logout();
@@ -20,8 +52,8 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, topControlsFrozen
   }
 
   return (
-    <nav className={`relative bg-indigo-700 text-white px-6 py-3 flex items-center justify-between shadow-md${topControlsFrozen ? ' sticky top-0 z-50' : ''}`}>
-      <div className="relative flex items-center gap-4">
+    <nav ref={navRef} className={`relative bg-indigo-700 text-white px-6 py-3 flex items-center shadow-md${topControlsFrozen ? ' sticky top-0 z-50' : ''}`}>
+      <div ref={leftControlsRef} className="relative flex shrink-0 items-center gap-4">
         <Link to="/" className="flex flex-col leading-tight hover:opacity-90 transition-opacity">
           <span className="text-xl font-bold tracking-widest">公论</span>
           <span className="text-xs text-indigo-300 tracking-wide">一切记录在案，是非自有公论</span>
@@ -49,7 +81,8 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, topControlsFrozen
           {topControlsFrozen ? '📍' : '📌'}
         </button>
       </div>
-      <div className="flex items-center gap-4">
+      <div aria-hidden="true" className="flex-1 min-w-4" />
+      <div ref={rightControlsRef} className={`${rightControlsPinned ? 'sticky right-0' : ''} z-10 flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4`}>
         {user ? (
           <>
             <button

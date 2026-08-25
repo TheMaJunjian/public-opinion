@@ -62,11 +62,12 @@ export default function App() {
     <AuthProvider>
       <Router>
         <div
-          className="min-h-screen w-full min-w-0 flex flex-col bg-[#101010]"
+          className="min-h-screen min-w-0 flex flex-col bg-[#101010]"
           style={{
             transform: `scale(${interfaceZoom})`,
             transformOrigin: 'top left',
-            width: `${100 / interfaceZoom}%`,
+            width: 'max-content',
+            minWidth: `${100 / interfaceZoom}%`,
             minHeight: `${100 / interfaceZoom}vh`,
           }}
         >

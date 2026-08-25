@@ -71,10 +71,9 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, topControlsFrozen
           aria-label={topControlsFrozen ? '解冻顶部控件' : '冻结顶部控件'}
           aria-pressed={topControlsFrozen}
           title={topControlsFrozen ? '解冻教程、退出和关系类型控件' : '冻结教程、退出和关系类型控件'}
-          className="absolute left-[calc(100%+8px)] top-full z-[60] flex h-6 w-6 items-center justify-center rounded-full border text-xs shadow-md"
+          className="absolute left-[calc(100%+8px)] top-full z-[60] flex h-6 w-6 items-center justify-center rounded-full text-xs shadow-md"
           style={{
-            borderColor: '#666',
-            background: 'linear-gradient(to bottom, #4338ca 0%, #4338ca 50%, #222 50%, #222 100%)',
+            background: 'transparent',
             color: 'rgba(255,255,255,0.7)',
           }}
         >

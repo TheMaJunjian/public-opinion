@@ -6517,24 +6517,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
                       onMouseUp={handleMessageMouseUp}
                       onContentMouseUp={handleTextMouseUp}
                       headerLabel={msg.kind === 'join' ? (
-                        <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>
-                          <span
-                            role="link"
-                            tabIndex={0}
-                            onClick={event => { event.stopPropagation(); handleNavigateToMessage(msg.id); }}
-                            onKeyDown={event => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                handleNavigateToMessage(msg.id);
-                              }
-                            }}
-                            style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
-                            title={`跳转到加入消息 ${msg.id} 的当前实际位置`}
-                          >
-                            {msg.id}
-                          </span>
-                        </span>
+                        <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>{msg.id}</span>
                       ) : correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
                         <span style={{ color: '#fbbf24', fontWeight: 600 }}>
                           <span
@@ -6675,7 +6658,29 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
                         </div>
                       ) : undefined}
                     >
-                      {msg.relationType === 'correct' ? (
+                      {msg.kind === 'join' ? (
+                        <div style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <span>目标 ID：</span>
+                          {(msg.joinInfo?.targetIds ?? []).length > 0 ? msg.joinInfo!.targetIds.map(targetId => (
+                            <button
+                              key={targetId}
+                              type="button"
+                              onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
+                              style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace' }}
+                              title={`跳转到目标消息 ${targetId}`}
+                            >{targetId}</button>
+                          )) : <span>无</span>}
+                          <span>容器 ID：</span>
+                          {msg.joinInfo?.containerId ? (
+                            <button
+                              type="button"
+                              onClick={event => { event.stopPropagation(); handleNavigateToMessage(msg.joinInfo!.containerId); }}
+                              style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(16,185,129,0.45)', background: 'rgba(16,185,129,0.16)', color: '#a7f3d0', cursor: 'pointer', fontFamily: 'monospace' }}
+                              title={`跳转到容器消息 ${msg.joinInfo.containerId}`}
+                            >{msg.joinInfo.containerId}</button>
+                          ) : <span>无</span>}
+                        </div>
+                      ) : msg.relationType === 'correct' ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                           <div style={{ fontSize: 12, color: '#fbbf24' }}>
                             ✏ {msg.author} 更正了消息

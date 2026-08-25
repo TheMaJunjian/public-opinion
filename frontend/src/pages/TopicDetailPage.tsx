@@ -1828,9 +1828,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       const visualRect = rect;
       setMessagePulse({ element: pulseElement, rect, visualRoot, visualRect });
       messagePulseTimerRef.current = setTimeout(() => {
-        if (requestId !== scrollRequestIdRef.current) return;
-        setMessagePulse(null);
-        messagePulseTimerRef.current = null;
+        setMessagePulse(current => current?.element === pulseElement ? null : current);
+        if (requestId === scrollRequestIdRef.current) messagePulseTimerRef.current = null;
       }, 500);
     });
   }
@@ -3057,24 +3056,39 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   async function createJoinRelationsForContainer(
     containerId: string,
     _containerType: string,
-    targetMids: string[],
+    targetMids: Array<string | TargetRef>,
   ) {
     const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'READ', 'UNREAD', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
     const invalidTarget = targetMids
-      .map(id => msgMap.get(id))
+      .map(target => {
+        const id = typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId;
+        return msgMap.get(id);
+      })
       .find(message => message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? ''));
     if (invalidTarget) {
       setSendError('加入消息的目标不能是绑定在其他消息上的装饰关系消息');
       return false;
     }
     const joinStake = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
-    for (const tgtMid of targetMids) {
+    for (const target of targetMids) {
       try {
+        const tgtMid = typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId;
+        const targetMessage = msgMap.get(tgtMid);
+        const targetRelationType = targetMessage?.kind === 'relation'
+          ? targetMessage.relationType?.toUpperCase()
+          : undefined;
+        const targetRef: TargetRef = typeof target === 'string'
+          ? targetRelationType && containerRelationTypes.has(targetRelationType)
+            ? { kind: 'relation', relationId: tgtMid }
+            : { kind: 'message', messageId: tgtMid }
+          : target;
         const existingJoin = relationsRef.current.find(relation =>
           relation.relationType?.toUpperCase() === 'JOIN' &&
           relation.sourceMessageId === containerId &&
           relation.targetRefs.some(ref =>
-            (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === tgtMid
+            targetRef.kind === 'relation'
+              ? ref.kind === 'relation' && ref.relationId === tgtMid
+              : (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === tgtMid
           )
         );
         const relation = existingJoin
@@ -3087,7 +3101,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           : await api.createRelation(topicId!, {
               relationType: 'JOIN',
               sourceMessageId: containerId,
-              targetRefs: [{ kind: 'message', messageId: tgtMid }],
+              targetRefs: [targetRef],
               payload: {},
               stakeAmount: joinStake,
             });
@@ -3095,9 +3109,10 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         if (relation.relationType?.toUpperCase() === 'JOIN') {
           const source = relationsRef.current.find(item => item.id === containerId);
           if (source) {
-            const targetRef: TargetRef = { kind: 'message', messageId: tgtMid };
             const hasTarget = source.targetRefs.some(ref =>
-              ref.kind !== 'relation' && ref.messageId === tgtMid
+              targetRef.kind === 'relation'
+                ? ref.kind === 'relation' && ref.relationId === tgtMid
+                : ref.kind !== 'relation' && ref.messageId === tgtMid
             );
             if (!hasTarget) {
               const updatedSource = { ...source, targetRefs: [...source.targetRefs, targetRef] };
@@ -3114,7 +3129,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           }
         }
       } catch (e) {
-        operationLog('加入分类失败', `containerId=${containerId.slice(-6)} target=${tgtMid.slice(-6)} error=${String(e)}`);
+        operationLog('加入分类失败', `containerId=${containerId.slice(-6)} target=${typeof target === 'string' ? target.slice(-6) : (target.kind === 'relation' ? target.relationId : target.messageId).slice(-6)} error=${String(e)}`);
         throw e;
       }
     }
@@ -3781,7 +3796,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           setEdges(prev => [...prev, ...newEdges]);
         }
         // Create join relations for each target
-        await createJoinRelationsForContainer(backendRel.id, 'CLASSIFY', edgeTargetIds);
+        await createJoinRelationsForContainer(backendRel.id, 'CLASSIFY', targetRefs);
       } catch (e: any) {
         showAlert(`建立关系失败: ${e?.message ?? e}`);
         return;

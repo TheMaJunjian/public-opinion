@@ -365,19 +365,37 @@ function targetIsOwnedByContainer(
   relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'>[],
   effectiveJoinRelationIds: Set<string>,
 ): boolean {
+  const normalizedTargetRef = normalizeContainerTargetRef(targetRef, relations);
   const matchingJoins = relations.filter(relation =>
     relation.relationType?.toUpperCase() === 'JOIN' &&
     (relation.targetRefs ?? []).some(candidate =>
-      candidate.kind === targetRef.kind &&
-      (candidate.kind === 'relation'
-        ? targetRef.kind === 'relation' && candidate.relationId === targetRef.relationId
-        : targetRef.kind !== 'relation' && candidate.messageId === targetRef.messageId)
+      sameTargetRef(normalizeContainerTargetRef(candidate, relations), normalizedTargetRef)
     )
   );
   if (matchingJoins.length === 0) return true;
   return matchingJoins.some(join =>
     join.sourceMessageId === containerId && effectiveJoinRelationIds.has(join.id)
   );
+}
+
+function normalizeContainerTargetRef(
+  targetRef: TargetRef,
+  relations: Pick<Relation, 'id' | 'relationType'>[],
+): TargetRef {
+  if (targetRef.kind === 'relation') return targetRef;
+  const targetRelation = relations.find(relation => relation.id === targetRef.messageId);
+  const targetType = targetRelation?.relationType?.toUpperCase();
+  if (targetType === 'CLASSIFY' || targetType === 'MERGE' || targetType === 'ARRANGE' || targetType === 'SUMMARY') {
+    return { kind: 'relation', relationId: targetRef.messageId };
+  }
+  return targetRef;
+}
+
+function sameTargetRef(left: TargetRef, right: TargetRef): boolean {
+  if (left.kind === 'relation' || right.kind === 'relation') {
+    return left.kind === 'relation' && right.kind === 'relation' && left.relationId === right.relationId;
+  }
+  return left.messageId === right.messageId;
 }
 
 export function collectContainerVisibleIds(
@@ -400,10 +418,11 @@ export function collectContainerVisibleIds(
 
   for (const ref of container.targetRefs ?? []) {
     if (!targetIsOwnedByContainer(containerId, ref, relations, effectiveJoinRelationIds)) continue;
-    if (ref.kind === 'relation') {
-      relationIds.add(ref.relationId);
+    const normalizedRef = normalizeContainerTargetRef(ref, relations);
+    if (normalizedRef.kind === 'relation') {
+      relationIds.add(normalizedRef.relationId);
     } else {
-      textIds.add(ref.messageId);
+      textIds.add(normalizedRef.messageId);
     }
   }
 
@@ -415,10 +434,11 @@ export function collectContainerVisibleIds(
     if (rejectedJoinRelationIds.has(relation.id)) continue;
     if (!effectiveJoinRelationIds.has(relation.id)) continue;
     for (const ref of relation.targetRefs ?? []) {
-      if (ref.kind === 'relation') {
-        relationIds.add(ref.relationId);
+      const normalizedRef = normalizeContainerTargetRef(ref, relations);
+      if (normalizedRef.kind === 'relation') {
+        relationIds.add(normalizedRef.relationId);
       } else {
-        textIds.add(ref.messageId);
+        textIds.add(normalizedRef.messageId);
       }
     }
   }
@@ -444,8 +464,9 @@ export function collectOwnedByRelation(
 
   for (const targetRef of relation.targetRefs ?? []) {
     if (!targetIsOwnedByContainer(relationId, targetRef, [...relationById.values()], effectiveJoinRelationIds)) continue;
-    if (targetRef.kind === 'relation') relationIds.add(targetRef.relationId);
-    else textIds.add(targetRef.messageId);
+    const normalizedRef = normalizeContainerTargetRef(targetRef, [...relationById.values()]);
+    if (normalizedRef.kind === 'relation') relationIds.add(normalizedRef.relationId);
+    else textIds.add(normalizedRef.messageId);
   }
   const relType = relation.relationType.toUpperCase();
   if (relType === 'ARRANGE' && relation.sourceMessageId) {
@@ -488,13 +509,14 @@ export function collectOwnedByRelation(
     if (rejectedJoinRelationIds && rejectedJoinRelationIds.size > 0 && rejectedJoinRelationIds.has(joinRel.id)) continue;
     if (!effectiveJoinRelationIds.has(joinRel.id)) continue;
     for (const targetRef of joinRel.targetRefs ?? []) {
-      if (targetRef.kind === 'message' || targetRef.kind === 'text-fragment') {
-        textIds.add(targetRef.messageId);
-      } else if (targetRef.kind === 'relation') {
-        relationIds.add(targetRef.relationId);
-        const targetRelation = relationById.get(targetRef.relationId);
+      const normalizedRef = normalizeContainerTargetRef(targetRef, [...relationById.values()]);
+      if (normalizedRef.kind === 'message' || normalizedRef.kind === 'text-fragment') {
+        textIds.add(normalizedRef.messageId);
+      } else if (normalizedRef.kind === 'relation') {
+        relationIds.add(normalizedRef.relationId);
+        const targetRelation = relationById.get(normalizedRef.relationId);
         if (targetRelation && (targetRelation.relationType?.toUpperCase() === 'CLASSIFY' || targetRelation.relationType?.toUpperCase() === 'MERGE' || targetRelation.relationType?.toUpperCase() === 'ARRANGE' || targetRelation.relationType?.toUpperCase() === 'SUMMARY')) {
-          const nested = collectOwnedByRelation(targetRef.relationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
+          const nested = collectOwnedByRelation(normalizedRef.relationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
           nested.textIds.forEach(id => textIds.add(id));
           nested.relationIds.forEach(id => relationIds.add(id));
         }

@@ -533,6 +533,21 @@ describe('消息加入/移出分类', () => {
 // ========================= 治理消息多目标 =========================
 
 describe('分类视图可见性', () => {
+  it('兼容历史错误的容器 message ref，并将归并归属到分类', () => {
+    const relations = [
+      { id: 'merge-1', relationType: 'MERGE', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+      { id: 'classify-1', relationType: 'CLASSIFY', targetRefs: [{ kind: 'message', messageId: 'merge-1' }] },
+      { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1', targetRefs: [{ kind: 'message', messageId: 'merge-1' }] },
+    ] as any;
+
+    const owned = collectOwnedByRelation('classify-1', new Map(relations.map((relation: any) => [relation.id, relation])));
+    const visible = collectContainerVisibleIds('classify-1', relations, new Set(), new Set());
+
+    expect(owned.relationIds.has('merge-1')).toBe(true);
+    expect(owned.textIds.has('msg-1')).toBe(true);
+    expect(visible.relationIds.has('merge-1')).toBe(true);
+  });
+
   it('JOIN 归属的消息应出现在当前分类视图中', () => {
     const relations = [
       { id: 'classify-1', relationType: 'CLASSIFY', targetRefs: [{ kind: 'message', messageId: 'msg-1' }, { kind: 'message', messageId: 'msg-2' }] },

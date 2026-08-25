@@ -1341,6 +1341,12 @@ function buildFrameBlocks(params: {
   for (const block of blocks) {
     for (const other of blocks) {
       if (block.relMsgId === other.relMsgId) continue;
+      // An explicit edge from `other` to `block` already establishes that
+      // `block` is nested inside `other`; shared cards must not infer the
+      // reverse relationship and create a frame hierarchy cycle.
+      const otherTargetsBlock = (edgesByRelMsg.get(other.relMsgId) ?? [])
+        .some(edge => edge.to.messageId === block.relMsgId);
+      if (otherTargetsBlock) continue;
       const otherRelMsgIds = new Set(blocks.filter(b => b.relMsgId !== other.relMsgId).map(b => b.relMsgId));
       const otherTextCards = new Set([...other.cardIds].filter(id => !otherRelMsgIds.has(id)));
       if (otherTextCards.size === 0) continue;

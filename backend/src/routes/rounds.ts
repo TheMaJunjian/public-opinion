@@ -126,7 +126,7 @@ router.get('/api/rounds/:id', optionalAuth, async (req: AuthRequest, res: Respon
       select: { lockedPro: true, lockedCon: true },
     });
 
-    // Query AGREE/DISAGREE pure-stance relations targeting this message (replaces VoteStake)
+    // Query pure-stance relations targeting this message (replaces VoteStake)
     const messageTopic = await prisma.message.findUnique({
       where: { id: round.messageId },
       select: { topicId: true },
@@ -134,7 +134,7 @@ router.get('/api/rounds/:id', optionalAuth, async (req: AuthRequest, res: Respon
     const voteRelations = await prisma.message.findMany({
       where: {
         kind: 'RELATION',
-        relationType: { in: ['AGREE', 'DISAGREE'] },
+        relationType: { in: stype === 'VALUE' ? ['RECOMMEND', 'ARCHIVE'] : ['AGREE', 'DISAGREE'] },
         relSourceId: null,
         topicId: messageTopic?.topicId,
       },
@@ -247,7 +247,7 @@ router.get('/api/rounds/:id', optionalAuth, async (req: AuthRequest, res: Respon
         const payload = v.relationPayload as Record<string, unknown> | null;
         return {
           id: v.id,
-          vote: v.relationType === 'AGREE' ? 'TRUE' : 'FALSE',
+          vote: (v.relationType === 'AGREE' || v.relationType === 'RECOMMEND') ? 'TRUE' : 'FALSE',
           amount: (payload?.amount as number) ?? 0,
           createdAt: v.createdAt,
           user: v.createdBy,

@@ -488,6 +488,11 @@ export interface SettlementResult {
   weights: { TRUE: number; FALSE: number; UNKNOWN: number };
   totalPro: number;
   totalCon: number;
+  resultMessage?: {
+    id: string;
+    createdAt: string;
+    createdBy?: { username?: string | null } | null;
+  };
   affectedUsers: number;
 }
 

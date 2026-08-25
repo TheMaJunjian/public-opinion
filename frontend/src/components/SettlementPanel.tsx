@@ -36,7 +36,7 @@ type PersonalSettlement = NonNullable<SettlementRoundItem['personalSettlement']>
  * SettlementPanel — 消息结算面板
  * 显示押注池状态、结算轮次、投票和结算操作
  */
-export default function SettlementPanel({ messageId, topicId, highlightRoundId, entryHighlight, onMessageCreated, filterSettlementType }: Props) {
+export default function SettlementPanel({ messageId, highlightRoundId, entryHighlight, onMessageCreated, filterSettlementType }: Props) {
   const { user: currentUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [stakes, setStakes] = useState<MessageStakes | null>(null);
@@ -268,7 +268,6 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
           key={round.id}
           round={round}
           messageId={messageId}
-            topicId={topicId}
           stakes={stakes}
           rounds={rounds}
           totalRoundStake={allRoundStake}
@@ -352,10 +351,9 @@ export default function SettlementPanel({ messageId, topicId, highlightRoundId, 
  * ActiveRoundCard — renders one active settlement round with its own vote form.
  * Each round (TRUTH or VALUE) is displayed independently.
  */
-function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, totalRoundStake, totalRoundPro, totalRoundCon, entryHighlight, onMessageCreated, onSettled }: {
+function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, totalRoundPro, totalRoundCon, entryHighlight, onMessageCreated, onSettled }: {
   round: SettlementRoundItem;
   messageId: string;
-  topicId: string;
   stakes: MessageStakes | null;
   rounds: SettlementRoundItem[];
   totalRoundStake: number;
@@ -492,34 +490,9 @@ function ActiveRoundCard({ round, messageId, topicId, stakes, rounds, totalRound
       const resultContent = result.resultContent
         ?? `${settlementLabel}完成：目标消息 ${messageId.slice(-8)}；结果：${resultLabel}（${result.result}）；TRUE 权重 ${result.weights.TRUE}，FALSE 权重 ${result.weights.FALSE}`;
 
-      let resultMsgId = `settle-${localRound.id}`;
-      let resultCreatedAt = new Date().toISOString();
-      let resultAuthor = '';
-      if (topicId) {
-        try {
-          const created = await api.createMessage(topicId, {
-            kind: 'ROUND_RESULT',
-            contentType: 'TEXT',
-            content: resultContent,
-            targetMessageId: messageId,
-            settlementType: localRound.settlementType,
-            relationPayload: {
-              roundId: localRound.id,
-              result: result.result,
-              weights: result.weights,
-              totalPro: result.totalPro,
-              totalCon: result.totalCon,
-              settlementType: localRound.settlementType,
-            },
-          });
-          resultMsgId = created.id;
-          resultCreatedAt = created.createdAt;
-          resultAuthor = created.createdBy?.username ?? '';
-        } catch (createErr) {
-          console.warn('ROUND_RESULT 创建失败（结算已完成）', { roundId: localRound.id, messageId, createErr });
-          setSettleError('结算已完成，但结果消息发送失败，请刷新后重试');
-        }
-      }
+      const resultMsgId = result.resultMessage?.id ?? `settle-${localRound.id}`;
+      const resultCreatedAt = result.resultMessage?.createdAt ?? new Date().toISOString();
+      const resultAuthor = result.resultMessage?.createdBy?.username ?? '';
 
       if (onMessageCreated) {
         onMessageCreated({

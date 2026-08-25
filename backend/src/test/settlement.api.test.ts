@@ -210,6 +210,42 @@ describe('GET /api/rounds/:id', () => {
     expect(res.body.weights.FALSE).toBe(50);
     expect(res.body.weights.UNKNOWN).toBe(0);
   });
+
+  it('returns VALUE stance relations as TRUE/FALSE votes', async () => {
+    (prisma.settlementRound.findUnique as jest.Mock).mockResolvedValue({
+      ...mockRound,
+      settlementType: 'VALUE',
+    });
+    (prisma.betPool.findUnique as jest.Mock).mockResolvedValue({ lockedPro: 7, lockedCon: 4 });
+    (prisma.message.findUnique as jest.Mock).mockResolvedValue({ topicId: 'topic-1' });
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([
+      {
+        id: 'recommend-1',
+        relationType: 'RECOMMEND',
+        relationPayload: { roundId: 'round-1', amount: 7 },
+        targetRefs: [{ messageId: 'msg-1' }],
+        createdAt: new Date(),
+        createdBy: { id: 'user-1', username: 'settler' },
+      },
+      {
+        id: 'archive-1',
+        relationType: 'ARCHIVE',
+        relationPayload: { roundId: 'round-1', amount: 4 },
+        targetRefs: [{ messageId: 'msg-1' }],
+        createdAt: new Date(),
+        createdBy: { id: 'user-2', username: 'reviewer' },
+      },
+    ]);
+
+    const res = await request(app).get('/api/rounds/round-1');
+
+    expect(res.status).toBe(200);
+    expect(res.body._count.votes).toBe(2);
+    expect(res.body.votes.map((vote: { id: string; vote: string }) => [vote.id, vote.vote])).toEqual([
+      ['recommend-1', 'TRUE'],
+      ['archive-1', 'FALSE'],
+    ]);
+  });
 });
 
 // ─── POST /api/rounds/:id/votes ─────────────────────────────────────────

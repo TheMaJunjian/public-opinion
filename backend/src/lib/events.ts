@@ -2288,7 +2288,34 @@ async function applyRoundSettled(event: RoundSettledEvent) {
   const targetPreview = (message?.content ?? '').trim().replace(/\s+/g, ' ').slice(0, 120) || `消息 ${messageId.slice(-8)}`;
   const resultContent = `${settlementLabel}完成：目标消息「${targetPreview}」；结果：${resultLabel}（${result}）；TRUE 权重 ${totalPro}，FALSE 权重 ${totalCon}，总押注 ${totalPool}`;
 
-  await prisma.$transaction(ledgerOps);
+  ledgerOps.push(
+    prisma.message.create({
+      data: {
+        topicId,
+        createdById: actorId,
+        kind: 'ROUND_RESULT',
+        contentType: 'TEXT',
+        content: resultContent,
+        targetRefs: [{ messageId }],
+        relationPayload: {
+          roundId: payload.roundId,
+          result,
+          weights,
+          totalPro,
+          totalCon,
+          settlementType: stype,
+        },
+      },
+      include: { createdBy: { select: { id: true, username: true } } },
+    }),
+  );
+
+  const transactionResults = await prisma.$transaction(ledgerOps);
+  const resultMessage = transactionResults[transactionResults.length - 1] as {
+    id: string;
+    createdAt: Date;
+    createdBy?: { username?: string | null } | null;
+  } | undefined;
 
   const delegationReward = await reconcileDelegationReward(messageId, payload.roundId, topicId);
 
@@ -2319,6 +2346,13 @@ async function applyRoundSettled(event: RoundSettledEvent) {
     totalCon,
     dust,
     delegationReward,
+    ...(resultMessage ? {
+      resultMessage: {
+        id: resultMessage.id,
+        createdAt: resultMessage.createdAt,
+        createdBy: resultMessage.createdBy,
+      },
+    } : {}),
     affectedUsers: affectedUsers.length,
   };
 }

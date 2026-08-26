@@ -63,6 +63,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
         </Link>
         <button
           type="button"
+          data-guide-button="true"
           onClick={guideEnabled ? onOpenGuide : undefined}
           disabled={!guideEnabled}
           aria-disabled={!guideEnabled}

@@ -31,6 +31,7 @@ export default function RegisterPage() {
       const publicKey = JSON.stringify(pubJwk);
 
       await register(normalizedUsername, password, publicKey);
+      localStorage.setItem('registration-guide-pending', 'true');
       navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '注册失败，请重试');

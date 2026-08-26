@@ -21,6 +21,7 @@ import TopicRightPanel from '../components/TopicRightPanel';
 import LeaderboardModal from '../components/LeaderboardModal';
 import PromptModal from '../components/PromptModal';
 import { MessageJumpOverlay } from '../components/PopupOverlay';
+import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
@@ -96,7 +97,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   const { topicId } = useParams<{ topicId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, logout, loading: authLoading } = useAuth();
   const relationBarRef = useRef<HTMLDivElement>(null);
   const [relationControlsPinned, setRelationControlsPinned] = useState(true);
 
@@ -127,6 +128,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   const [attentionUsersByTarget, setAttentionUsersByTarget] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showUnauthenticatedNotice, setShowUnauthenticatedNotice] = useState(false);
+  const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
   // Per-message stake counts, split by TRUTH/VALUE settlement type
   const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
   const [messageBettorCounts, setMessageBettorCounts] = useState<Record<string, number>>({});
@@ -304,6 +307,18 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     load();
     return () => { cancelled = true; };
   }, [topicId, leaderboardRefreshVersion]);
+
+  useEffect(() => {
+    if (loading || authLoading || loadError || isPreloaded) return;
+    if (!user) {
+      setShowUnauthenticatedNotice(true);
+      return;
+    }
+    if (localStorage.getItem('registration-guide-pending') === 'true') {
+      localStorage.removeItem('registration-guide-pending');
+      setShowRegistrationGuide(true);
+    }
+  }, [authLoading, isPreloaded, loadError, loading, user]);
 
   // Messages that have no DOM element in the non-linear graph view.
   // Mirror of GraphView's hiddenTargetIds logic — used to decide whether
@@ -6990,6 +7005,17 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       </div>
     </div>
     </ErrorBoundary>
+    <PromptModal
+      open={showUnauthenticatedNotice}
+      title="当前未登录"
+      message="当前未登录，只能查看消息，无法发送消息。登录、注册按钮在右上角，登录后可参与讨论。"
+      confirmText="已阅"
+      onConfirm={() => setShowUnauthenticatedNotice(false)}
+    />
+    <RegistrationGuideHint
+      open={showRegistrationGuide}
+      onClose={() => setShowRegistrationGuide(false)}
+    />
     {fixedHorizontalScroll && createPortal(
       <div
         ref={fixedHorizontalScrollRef}
@@ -7018,7 +7044,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       open={alertMessage !== null}
       title="提示"
       message={alertMessage ?? ''}
-      confirmText="我知道了"
+      confirmText="已阅"
       onConfirm={() => setAlertMessage(null)}
     />
 

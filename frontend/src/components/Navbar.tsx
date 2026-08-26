@@ -6,12 +6,13 @@ import PointsBadge from './PointsBadge';
 interface NavbarProps {
   onOpenViewer?: () => void;
   onOpenTutorial?: () => void;
+  onOpenGuide?: () => void;
   topControlsFrozen?: boolean;
   onToggleTopControls?: () => void;
 }
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
-export default function Navbar({ onOpenViewer, onOpenTutorial, topControlsFrozen = false, onToggleTopControls }: NavbarProps) {
+export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, topControlsFrozen = false, onToggleTopControls }: NavbarProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const navRef = useRef<HTMLElement>(null);
@@ -59,8 +60,15 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, topControlsFrozen
           <span className="text-xs text-indigo-300 tracking-wide">一切记录在案，是非自有公论</span>
         </Link>
         <button
+          onClick={onOpenGuide}
+          className="ml-8 text-amber-200 hover:text-white text-sm font-medium transition-colors"
+          title="开始入门引导"
+        >
+          引导
+        </button>
+        <button
           onClick={onOpenTutorial}
-          className="ml-8 text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
           title="打开教程"
         >
           教程

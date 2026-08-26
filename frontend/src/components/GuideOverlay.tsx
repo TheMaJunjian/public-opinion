@@ -1,0 +1,225 @@
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+
+interface GuideTargetDetail {
+  messageId: string;
+  title?: string;
+}
+
+type BubblePlacement = 'right' | 'left' | 'top' | 'bottom';
+type BubblePosition = {
+  top: number;
+  left: number;
+  placement: BubblePlacement;
+  tailOffset: number;
+  tailVisible: boolean;
+  diagonalTail?: { path: string; outlinePath: string };
+};
+type TailSegment = [{ x: number; y: number }, { x: number; y: number }];
+function getBubblePosition(rect: DOMRect): BubblePosition {
+  const width = Math.min(390, window.innerWidth - 32);
+  const height = 300;
+  const gap = 24;
+  const margin = 16;
+  const tailLength = 31;
+  const tailHalfWidth = 12;
+  const tailLandingHalfWidth = 16;
+  const tailCornerInset = 52;
+  const tailLandingOverlap = 1;
+  const boundaryRatios = [0.12, 0.24, 0.36, 0.5, 0.64, 0.76, 0.88];
+  const candidates: Array<{ left: number; top: number; placement: BubblePlacement; tailOffset: number; targetPoint: { x: number; y: number }; tail: { left: number; top: number; right: number; bottom: number } }> = [];
+  for (const ratio of boundaryRatios) {
+    const y = rect.top + rect.height * ratio;
+    const x = rect.left + rect.width * ratio;
+    candidates.push(
+      { left: rect.right + gap, top: y - height / 2, placement: 'right', tailOffset: 0, targetPoint: { x: rect.right, y }, tail: { left: rect.right + gap - tailLength, top: y - tailHalfWidth, right: rect.right + gap, bottom: y + tailHalfWidth } },
+      { left: rect.left - width - gap, top: y - height / 2, placement: 'left', tailOffset: 0, targetPoint: { x: rect.left, y }, tail: { left: rect.left - gap, top: y - tailHalfWidth, right: rect.left - gap + tailLength, bottom: y + tailHalfWidth } },
+      { left: x - width / 2, top: rect.top - height - gap, placement: 'top', tailOffset: 0, targetPoint: { x, y: rect.top }, tail: { left: x - tailHalfWidth, top: rect.top - gap, right: x + tailHalfWidth, bottom: rect.top - gap + tailLength } },
+      { left: x - width / 2, top: rect.bottom + gap, placement: 'bottom', tailOffset: 0, targetPoint: { x, y: rect.bottom }, tail: { left: x - tailHalfWidth, top: rect.bottom + gap - tailLength, right: x + tailHalfWidth, bottom: rect.bottom + gap } },
+    );
+  }
+  const makeTailSegments = (candidate: typeof candidates[number]): TailSegment[] => {
+    const isHorizontal = candidate.placement === 'top' || candidate.placement === 'bottom';
+    const attachesAtPositiveSide = candidate.targetPoint.x >= rect.left + rect.width / 2;
+    const anchorX = isHorizontal ? (attachesAtPositiveSide ? candidate.left + width - tailCornerInset : candidate.left + tailCornerInset) : (candidate.placement === 'right' ? candidate.left : candidate.left + width);
+    const anchorY = isHorizontal ? (candidate.placement === 'bottom' ? candidate.top : candidate.top + height) : (candidate.targetPoint.y >= rect.top + rect.height / 2 ? candidate.top + height - tailCornerInset : candidate.top + tailCornerInset);
+    const inward = candidate.placement === 'right' ? { x: 1, y: 0 }
+      : candidate.placement === 'left' ? { x: -1, y: 0 }
+        : candidate.placement === 'bottom' ? { x: 0, y: 1 }
+          : { x: 0, y: -1 };
+    const landing = { x: anchorX + inward.x * tailLandingOverlap, y: anchorY + inward.y * tailLandingOverlap };
+    const first = isHorizontal ? { x: landing.x - tailLandingHalfWidth, y: landing.y } : { x: landing.x, y: landing.y - tailLandingHalfWidth };
+    const second = isHorizontal ? { x: landing.x + tailLandingHalfWidth, y: landing.y } : { x: landing.x, y: landing.y + tailLandingHalfWidth };
+    const outward = candidate.placement === 'right' ? { x: 1, y: 0 }
+      : candidate.placement === 'left' ? { x: -1, y: 0 }
+        : candidate.placement === 'bottom' ? { x: 0, y: 1 }
+          : { x: 0, y: -1 };
+    const start = { x: candidate.targetPoint.x + outward.x * 0.5, y: candidate.targetPoint.y + outward.y * 0.5 };
+    return [[start, first], [start, second]];
+  };
+  const selected = candidates.find(candidate => {
+    const bubble = { left: candidate.left, top: candidate.top, right: candidate.left + width, bottom: candidate.top + height };
+    const inViewport = bubble.left >= margin && bubble.top >= margin && bubble.right <= window.innerWidth - margin && bubble.bottom <= window.innerHeight - margin;
+    return inViewport;
+  }) ?? candidates[3];
+  const diagonalTailVisible = true;
+  const left = Math.max(margin, Math.min(selected.left, window.innerWidth - width - margin));
+  const top = Math.max(margin, Math.min(selected.top, window.innerHeight - height - margin));
+  const positionedSelected = { ...selected, left, top };
+  const diagonalTail = makeTailSegments(positionedSelected);
+  const targetPoint = selected.placement === 'right' || selected.placement === 'left'
+    ? selected.tail.top + tailHalfWidth
+    : selected.tail.left + tailHalfWidth;
+  return {
+    left,
+    top,
+    placement: selected.placement,
+    tailVisible: false,
+    tailOffset: selected.placement === 'right' || selected.placement === 'left'
+      ? Math.max(12, Math.min(height - 12, targetPoint - top))
+      : Math.max(12, Math.min(width - 12, targetPoint - left)),
+    diagonalTail: diagonalTailVisible ? {
+      path: `M ${diagonalTail[0][0].x} ${diagonalTail[0][0].y} L ${diagonalTail[0][1].x} ${diagonalTail[0][1].y} L ${diagonalTail[1][1].x} ${diagonalTail[1][1].y} Z`,
+      outlinePath: `M ${diagonalTail[0][0].x} ${diagonalTail[0][0].y} L ${diagonalTail[0][1].x} ${diagonalTail[0][1].y} M ${diagonalTail[0][0].x} ${diagonalTail[0][0].y} L ${diagonalTail[1][1].x} ${diagonalTail[1][1].y}`,
+    } : undefined,
+  };
+}
+
+export default function GuideOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [target, setTarget] = useState<GuideTargetDetail | null>(null);
+  const targetRef = useRef<GuideTargetDetail | null>(null);
+  const highlightedElementRef = useRef<HTMLElement | null>(null);
+  const [completed, setCompleted] = useState(false);
+  const [visibilityHint, setVisibilityHint] = useState('正在定位目标消息…');
+  const [bubblePosition, setBubblePosition] = useState<BubblePosition | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onSelectionComplete = () => {
+      setCompleted(true);
+      window.dispatchEvent(new Event('guide-clear-visuals'));
+    };
+    window.addEventListener('guide-selection-complete', onSelectionComplete);
+    const onTarget = (event: Event) => {
+      const detail = (event as CustomEvent<GuideTargetDetail>).detail;
+      targetRef.current = detail;
+      setTarget(detail);
+      let attempts = 0;
+      const locate = () => {
+        const element = document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(detail.messageId)}"]`);
+        if (!element && attempts++ < 12) { window.setTimeout(locate, 120); return; }
+        if (!element) { setVisibilityHint('暂时找不到目标消息，请保持在当前主题后重试。'); return; }
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        highlightedElementRef.current = element;
+        element.style.boxShadow = '0 0 0 3px #facc15, 0 0 22px rgba(250,204,21,0.65)';
+        setBubblePosition(getBubblePosition(element.getBoundingClientRect()));
+        setVisibilityHint('目标消息已定位在左侧结构图。选择暂存区位于右侧，如看不到请滚动右侧面板；界面过窄时请先缩小界面。');
+      };
+      locate();
+    };
+    window.addEventListener('guide-target-ready', onTarget);
+    window.dispatchEvent(new Event('guide-start'));
+    return () => {
+      if (highlightedElementRef.current) highlightedElementRef.current.style.boxShadow = '';
+      window.removeEventListener('guide-selection-complete', onSelectionComplete);
+      window.removeEventListener('guide-target-ready', onTarget);
+      window.dispatchEvent(new Event('guide-stop'));
+    };
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const clearHighlight = () => {
+      if (highlightedElementRef.current) highlightedElementRef.current.style.boxShadow = '';
+    };
+    window.addEventListener('guide-clear-visuals', clearHighlight);
+    return () => window.removeEventListener('guide-clear-visuals', clearHighlight);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || completed) return;
+    const updateHint = () => {
+      const targetElement = target?.messageId
+        ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
+        : null;
+      const rightPanel = document.querySelector<HTMLElement>('[data-guide-right-panel="true"]');
+      if (!targetElement || !rightPanel) return;
+      const targetRect = targetElement.getBoundingClientRect();
+      const rightRect = rightPanel.getBoundingClientRect();
+      const targetVisible = targetRect.bottom > 0 && targetRect.top < window.innerHeight;
+      const rightVisible = rightRect.bottom > 0 && rightRect.top < window.innerHeight && rightRect.left < window.innerWidth;
+      setBubblePosition(getBubblePosition(targetRect));
+      if (!targetVisible) setVisibilityHint('目标消息当前不在可视区域，请滚动左侧结构图。');
+      else if (!rightVisible) setVisibilityHint('目标消息已定位。请滚动右侧面板查看选择暂存区；界面过窄时请先缩小界面。');
+    };
+    updateHint();
+    const timer = window.setInterval(updateHint, 500);
+    return () => window.clearInterval(timer);
+  }, [open, completed, target?.messageId]);
+
+  if (!open) return null;
+
+  if (completed) {
+    return createPortal(
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,0.72)' }}>
+        <div role="dialog" aria-modal="true" style={{ width: 'min(420px, calc(100vw - 32px))', padding: 24, border: '1px solid #86efac', borderRadius: 12, background: '#18181b', color: '#f4f4f5', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', textAlign: 'center' }}>
+          <div style={{ fontSize: 30, color: '#86efac' }}>✓</div>
+          <h2 style={{ margin: '8px 0', fontSize: 18 }}>已完成引导</h2>
+          <p style={{ margin: 0, color: '#d4d4d8', fontSize: 13, lineHeight: 1.7 }}>选择消息这一步已完成。后续赞同/反对和结算步骤将在后续版本逐步加入。</p>
+          <button type="button" onClick={onClose} style={{ marginTop: 18, padding: '7px 20px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer' }}>完成</button>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
+  return createPortal(
+    <div data-guide-overlay="true" style={{ position: 'fixed', inset: 0, zIndex: 900, pointerEvents: 'none' }}>
+      {bubblePosition?.diagonalTail && (
+        <svg aria-hidden="true" width="100%" height="100%" viewBox={`0 0 ${window.innerWidth} ${window.innerHeight}`} style={{ position: 'fixed', inset: 0, zIndex: 2, overflow: 'visible', pointerEvents: 'none' }}>
+          <rect x={bubblePosition.left} y={bubblePosition.top} width={Math.min(390, window.innerWidth - 32)} height="300" rx="16" fill="rgba(24,24,27,0.96)" stroke="#facc15" strokeWidth="1" />
+          <path d={bubblePosition.diagonalTail.path} fill="rgba(24,24,27,0.96)" stroke="none" />
+          <path d={bubblePosition.diagonalTail.outlinePath} fill="none" stroke="#facc15" strokeWidth="1" strokeLinecap="butt" />
+        </svg>
+      )}
+      <div data-guide-bubble="true" style={{
+        position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: 'min(390px, calc(100vw - 32px))', height: 300, boxSizing: 'border-box',
+        padding: '15px 18px', border: 0, borderRadius: 16,
+        background: 'transparent', color: '#f4f4f5',
+        boxShadow: 'none', pointerEvents: 'auto',
+      }}>
+        <div style={{
+          position: 'absolute', width: 32, height: 24, background: '#facc15', zIndex: 1,
+          display: bubblePosition?.tailVisible === false ? 'none' : undefined,
+          ...(bubblePosition?.placement === 'left' ? { right: -31, top: (bubblePosition.tailOffset - 12), clipPath: 'polygon(0 0, 0 100%, 100% 34%)' } :
+            bubblePosition?.placement === 'top' ? { width: 24, height: 32, left: (bubblePosition.tailOffset - 12), bottom: -31, clipPath: 'polygon(0 0, 100% 0, 68% 100%)' } :
+              bubblePosition?.placement === 'bottom' ? { width: 24, height: 32, left: (bubblePosition.tailOffset - 12), top: -31, clipPath: 'polygon(0 100%, 100% 100%, 32% 0)' } :
+                { left: -31, top: ((bubblePosition?.tailOffset ?? 12) - 12), clipPath: 'polygon(100% 0, 100% 100%, 0 66%)' }),
+        }}>
+          <div style={{
+            position: 'absolute', background: 'rgba(24,24,27,0.96)', zIndex: 1,
+            ...(bubblePosition?.placement === 'left' ? { width: 32, height: 20, left: -1, top: 2, clipPath: 'polygon(0 0, 0 100%, 100% 34%)' } :
+              bubblePosition?.placement === 'top' ? { width: 20, height: 32, left: 2, top: -1, clipPath: 'polygon(0 0, 100% 0, 68% 100%)' } :
+                bubblePosition?.placement === 'bottom' ? { width: 20, height: 32, left: 2, bottom: -1, clipPath: 'polygon(0 100%, 100% 100%, 32% 0)' } :
+                  { width: 32, height: 20, right: -1, top: 2, clipPath: 'polygon(100% 0, 100% 100%, 0 66%)' }),
+          }} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <strong style={{ color: '#fde68a' }}>选择消息</strong>
+          <button type="button" onClick={onClose} style={{ border: 0, background: 'transparent', color: '#a1a1aa', cursor: 'pointer', fontSize: 18 }} aria-label="关闭引导">×</button>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
+          <div style={{ color: '#a1a1aa', fontSize: 11 }}>操作</div>
+          <div>单击选择消息</div>
+          <div style={{ marginTop: 8, color: '#fcd34d', fontSize: 12 }}>提示</div>
+          <div>单击选中，再次单击取消选中；双击空白区域可取消所有选中。</div>
+          <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 12 }}>说明</div>
+          <div>{visibilityHint}</div>
+          {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息：{target.messageId}</div>}
+          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>提醒：选中后，本步入门引导完成。</div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}

@@ -607,6 +607,50 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
 
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [guideActive, setGuideActive] = useState(false);
+  const guideTargetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const startGuide = () => {
+      const target = messages.find(message => isContentKind(message.kind));
+      if (!target) return;
+      guideTargetIdRef.current = target.id;
+      setGuideActive(true);
+      setViewMode('graph');
+      window.dispatchEvent(new CustomEvent('guide-target-ready', {
+        detail: { messageId: target.id, title: target.content.slice(0, 40) },
+      }));
+      setTimeout(() => scrollMsgToCenter(target.id), 100);
+    };
+    const stopGuide = () => {
+      guideTargetIdRef.current = null;
+      setGuideActive(false);
+      if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+      if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+      setMessagePulse(null);
+    };
+    const clearGuideVisuals = () => {
+      if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+      if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+      setMessagePulse(null);
+    };
+    window.addEventListener('guide-start', startGuide);
+    window.addEventListener('guide-stop', stopGuide);
+    window.addEventListener('guide-clear-visuals', clearGuideVisuals);
+    return () => {
+      window.removeEventListener('guide-start', startGuide);
+      window.removeEventListener('guide-stop', stopGuide);
+      window.removeEventListener('guide-clear-visuals', clearGuideVisuals);
+    };
+  }, [messages]);
+
+  useEffect(() => {
+    if (!guideActive) return;
+    const targetId = guideTargetIdRef.current;
+    const selected = targetId ? draftUnits.some(unit => unit.messageId === targetId && unit.selection.kind === 'whole') : false;
+    window.dispatchEvent(new CustomEvent('guide-selection-changed', { detail: { messageId: targetId, selected } }));
+    if (selected) window.dispatchEvent(new Event('guide-selection-complete'));
+  }, [draftUnits, guideActive]);
 
   const handleSettlementMessageCreated = useCallback((m: any) => {
     const normalized = { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' };

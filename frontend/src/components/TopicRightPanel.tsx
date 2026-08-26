@@ -274,7 +274,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     );
   }
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: p.minWidth, boxSizing: "border-box" }}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} data-guide-right-panel="true" style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: p.minWidth, boxSizing: "border-box" }}>
       {renderComparisonHeader()}
       {p.isPreviewMode && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>

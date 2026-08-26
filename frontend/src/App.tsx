@@ -11,10 +11,12 @@ const HomePage = lazy(() => import('./pages/HomePage'));
 const TopicDetailPage = lazy(() => import('./pages/TopicDetailPage'));
 const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 const TutorialModal = lazy(() => import('./components/TutorialModal'));
+const GuideOverlay = lazy(() => import('./components/GuideOverlay'));
 
 export default function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [topControlsFrozen, setTopControlsFrozen] = useState(false);
   const [interfaceZoom, setInterfaceZoom] = useState(1);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
@@ -75,6 +77,7 @@ export default function App() {
           <Navbar
             onOpenViewer={() => setViewerOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
+            onOpenGuide={() => setGuideOpen(true)}
             topControlsFrozen={topControlsFrozen}
             onToggleTopControls={() => setTopControlsFrozen(!topControlsFrozen)}
           />
@@ -103,6 +106,11 @@ export default function App() {
                 open={tutorialOpen}
                 onClose={() => setTutorialOpen(false)}
               />
+            </Suspense>
+          )}
+          {guideOpen && (
+            <Suspense fallback={null}>
+              <GuideOverlay open={guideOpen} onClose={() => setGuideOpen(false)} />
             </Suspense>
           )}
         </div>

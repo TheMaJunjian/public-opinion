@@ -18,10 +18,11 @@ type BubblePosition = {
 };
 type GuideStage = 'message-compose' | 'message-contribution' | 'message-consumption' | 'message-send' | 'message' | 'staging' | 'stance' | 'contribution' | 'consumption' | 'send' | 'settlement-view' | 'settle' | 'settlement-confirm' | 'settlement-confirm-action' | 'settlement-history';
 type TailSegment = [{ x: number; y: number }, { x: number; y: number }];
+type GuideMaskRect = { top: number; left: number; width: number; height: number };
 type GuideCopy = { title: string; operation: string; prompt: string; description: string; reminder: string };
 const GUIDE_COPY: Record<GuideStage, GuideCopy> = {
   'message-compose': { title: '输入文本消息内容', operation: '在输入框中输入消息内容', prompt: '输入你认为正确的内容。', description: '正确的内容会获得收益，错误的内容会付出代价。', reminder: '提醒：点击下一步进入文本消息贡献点调整。' },
-  'message-contribution': { title: '调整文本消息贡献点', operation: '调整文本消息贡献点押注', prompt: '文本消息的贡献点押注数值会影响本次发送消耗。', description: '调整发送这条文本消息消耗的贡献点，确认发送时的贡献点押注数值。', reminder: '提醒：点击下一步查看文本消息贡献点消耗。' },
+  'message-contribution': { title: '调整文本消息贡献点', operation: '调整文本消息贡献点押注', prompt: '文本消息的贡献点押注数值会影响本次发送消耗。', description: '调整发送这条文本消息消耗的贡献点，确认发送时的贡献点押注数值，不能低于最低限制。', reminder: '提醒：点击下一步查看文本消息贡献点消耗。' },
   'message-consumption': { title: '查看文本消息消耗', operation: '查看文本消息消耗并点击下一步', prompt: '确认发送后的总消耗和预计剩余贡献点。', description: '查看这条文本消息发送将消耗的贡献点，以及发送后的预计剩余点数。查看完成后点击下一步。', reminder: '提醒：点击下一步进入文本消息发送。' },
   'message-send': { title: '发送文本消息', operation: '点击发送按钮', prompt: '点击发送，创建文本消息。', description: '发送按钮可以点击时，世界已经准备好聆听你的声音。', reminder: '提醒：点击发送按钮，继续下一步。' },
   message: { title: '选择目标消息', operation: '单击选择消息', prompt: '单击选中，再次单击取消选中；双击空白区域可取消所有选中。', description: '目标消息已定位，请单击它加入选择暂存区。', reminder: '提醒：选中后继续下一步。' },
@@ -115,6 +116,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   const guideStageRef = useRef<GuideStage>('message');
   const settlementRoundIdRef = useRef<string | null>(null);
   guideStageRef.current = guideStage;
+  const [guideMaskRect, setGuideMaskRect] = useState<GuideMaskRect | null>(null);
   const [bubblePosition, setBubblePosition] = useState<BubblePosition | null>(null);
   const [messageDraftReady, setMessageDraftReady] = useState(false);
   const [invalidAction, setInvalidAction] = useState<{ left: number; top: number } | null>(null);
@@ -392,10 +394,12 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           : null;
       const rightPanel = document.querySelector<HTMLElement>('[data-guide-right-panel="true"]');
       if (!targetElement || !rightPanel) {
+        setGuideMaskRect(null);
         if (guideStage === 'settlement-history') setBubblePosition(null);
         return;
       }
       const targetRect = targetElement instanceof DOMRect ? targetElement : targetElement.getBoundingClientRect();
+      setGuideMaskRect({ top: targetRect.top, left: targetRect.left, width: targetRect.width, height: targetRect.height });
       setBubblePosition(current => getBubblePosition(targetRect, current?.height ?? 340));
     };
     updateHint();
@@ -470,6 +474,9 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
 
   return createPortal(
     <div data-guide-overlay="true" style={{ position: 'fixed', inset: 0, zIndex: 3100, pointerEvents: 'none' }}>
+      {guideMaskRect && (
+        <div aria-hidden="true" style={{ position: 'fixed', top: guideMaskRect.top, left: guideMaskRect.left, width: guideMaskRect.width, height: guideMaskRect.height, zIndex: 1, pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.14)' }} />
+      )}
       {invalidAction && (
         <div role="status" style={{ position: 'fixed', left: invalidAction.left, top: invalidAction.top, transform: 'translate(-50%, -120%)', zIndex: 5, padding: '5px 9px', borderRadius: 5, background: '#7f1d1d', color: '#fee2e2', fontSize: 12, whiteSpace: 'nowrap', boxShadow: '0 4px 14px rgba(0,0,0,0.35)' }}>
           当前步骤不可操作

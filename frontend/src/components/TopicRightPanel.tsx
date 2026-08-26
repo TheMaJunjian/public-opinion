@@ -389,7 +389,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         </div>
       )}
 
-      {p.user && (
+      <>
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontWeight: 600 }}>输入框（消息与关系设置）</div>
           {p.hasSecondaryRelationSelector && (() => {
@@ -502,7 +502,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           {renderSendControls()}
           </div>
         </div>
-      )}
+      </>
 
       <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
         <div style={{ fontWeight: 600 }}>焦点</div>

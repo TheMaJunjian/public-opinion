@@ -15,6 +15,7 @@ type BubblePosition = {
   tailVisible: boolean;
   diagonalTail?: { path: string; outlinePath: string };
 };
+type GuideStage = 'message' | 'staging';
 type TailSegment = [{ x: number; y: number }, { x: number; y: number }];
 function getBubblePosition(rect: DOMRect): BubblePosition {
   const width = Math.min(390, window.innerWidth - 32);
@@ -90,13 +91,16 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   const targetRef = useRef<GuideTargetDetail | null>(null);
   const highlightedElementRef = useRef<HTMLElement | null>(null);
   const [completed, setCompleted] = useState(false);
+  const [guideStage, setGuideStage] = useState<GuideStage>('message');
   const [visibilityHint, setVisibilityHint] = useState('正在定位目标消息…');
   const [bubblePosition, setBubblePosition] = useState<BubblePosition | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setCompleted(false);
+    setGuideStage('message');
     const onSelectionComplete = () => {
-      setCompleted(true);
+      setGuideStage('staging');
       window.dispatchEvent(new Event('guide-clear-visuals'));
     };
     window.addEventListener('guide-selection-complete', onSelectionComplete);
@@ -125,7 +129,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       window.removeEventListener('guide-target-ready', onTarget);
       window.dispatchEvent(new Event('guide-stop'));
     };
-  }, [open, onClose]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -137,11 +141,23 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   }, [open]);
 
   useEffect(() => {
+    if (!open || completed || guideStage !== 'staging') return;
+    const stagingElement = document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]');
+    if (!stagingElement) return;
+    stagingElement.style.boxShadow = '0 0 0 3px #facc15, 0 0 22px rgba(250,204,21,0.65)';
+    return () => {
+      stagingElement.style.boxShadow = '';
+    };
+  }, [open, completed, guideStage]);
+
+  useEffect(() => {
     if (!open || completed) return;
     const updateHint = () => {
-      const targetElement = target?.messageId
-        ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
-        : null;
+      const targetElement = guideStage === 'staging'
+        ? document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')
+        : target?.messageId
+          ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
+          : null;
       const rightPanel = document.querySelector<HTMLElement>('[data-guide-right-panel="true"]');
       if (!targetElement || !rightPanel) return;
       const targetRect = targetElement.getBoundingClientRect();
@@ -149,13 +165,14 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       const targetVisible = targetRect.bottom > 0 && targetRect.top < window.innerHeight;
       const rightVisible = rightRect.bottom > 0 && rightRect.top < window.innerHeight && rightRect.left < window.innerWidth;
       setBubblePosition(getBubblePosition(targetRect));
-      if (!targetVisible) setVisibilityHint('目标消息当前不在可视区域，请滚动左侧结构图。');
+      if (guideStage === 'staging') setVisibilityHint('消息已经加入选择暂存区，当目标集合为空时，选择暂存区中存在的消息被视为已加入目标集合。');
+      else if (!targetVisible) setVisibilityHint('目标消息当前不在可视区域，请滚动左侧结构图。');
       else if (!rightVisible) setVisibilityHint('目标消息已定位。请滚动右侧面板查看选择暂存区；界面过窄时请先缩小界面。');
     };
     updateHint();
     const timer = window.setInterval(updateHint, 500);
     return () => window.clearInterval(timer);
-  }, [open, completed, target?.messageId]);
+  }, [open, completed, guideStage, target?.messageId]);
 
   if (!open) return null;
 
@@ -205,20 +222,21 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <strong style={{ color: '#fde68a' }}>选择消息</strong>
+          <strong style={{ color: '#fde68a' }}>{guideStage === 'staging' ? '消息已加入选择暂存区' : '选择消息'}</strong>
           <button type="button" onClick={onClose} style={{ border: 0, background: 'transparent', color: '#a1a1aa', cursor: 'pointer', fontSize: 18 }} aria-label="关闭引导">×</button>
         </div>
         <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
           <div style={{ color: '#a1a1aa', fontSize: 11 }}>操作</div>
-          <div>单击选择消息</div>
+          <div>{guideStage === 'staging' ? '请查看右侧选择暂存区' : '单击选择消息'}</div>
           <div style={{ marginTop: 8, color: '#fcd34d', fontSize: 12 }}>提示</div>
-          <div>单击选中，再次单击取消选中；双击空白区域可取消所有选中。</div>
+          <div>{guideStage === 'staging' ? '消息已加入选择暂存区，点击相关按钮可将选择暂存区中的所有消息加入来源集合或目标集合。' : '单击选中，再次单击取消选中；双击空白区域可取消所有选中。'}</div>
           <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 12 }}>说明</div>
           <div>{visibilityHint}</div>
           {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息ID：{target.messageId}</div>}
           {target?.title && <div style={{ marginTop: 4, color: '#d4d4d8', fontSize: 12, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>目标消息内容：{target.title}</div>}
-          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>提醒：选中后，本步入门引导完成。</div>
+          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{guideStage === 'staging' ? '提醒：点击下一步继续。' : '提醒：选中后继续下一步。'}</div>
         </div>
+        {guideStage === 'staging' && <button type="button" onClick={() => { setCompleted(true); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
       </div>
     </div>,
     document.body,

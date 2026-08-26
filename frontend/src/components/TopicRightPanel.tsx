@@ -281,7 +281,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           ⚠ 预览模式 — 该分类已被反对，无法发送消息或修改
         </div>
       )}
-      <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
+      <div data-guide-selection-staging="true" style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
           <div style={{ fontWeight: 600 }}>选择暂存区</div>
           <div style={{ display: "flex", gap: 8, fontSize: 12 }}>

@@ -4724,7 +4724,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       return newMessageContent.trim().length > 0
         ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
-        : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+        : `建立纯站队「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
     if (isArrangeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";

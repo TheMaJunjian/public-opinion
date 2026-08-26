@@ -167,6 +167,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           <>
             <span style={{ fontSize: 11, color: "#888" }}>文本:</span>
             <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
+              data-guide-contribution-stake="true"
               onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
               style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
           </>
@@ -175,6 +176,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           <>
             <span style={{ fontSize: 11, color: "#888" }}>押注:</span>
             <input type="number" min={10} max={p.availablePoints} value={p.stakeAmount}
+              data-guide-contribution-stake="true"
               onChange={e => { const raw = e.target.value; if (raw === '') { p.setStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setStakeAmount(Math.min(v, p.availablePoints)); }}
               style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: "1px solid #555", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
           </>
@@ -184,6 +186,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           <>
             <span style={{ fontSize: 11, color: "#888" }}>{p.hasTextContent && !p.isClassifyType && !p.isSummaryType && !p.isMergeType && !p.isGovernanceOrOpsType && !(p.draftHasRelationTarget && p.relationType === "correct") && !(p.isTagWithQuickAnnotate && p.hasTargetsAvailable) ? '+关系:' : '押注:'}</span>
             <input type="number" min={p.effectiveMinStake} max={p.availablePoints} value={p.relStakeAmount}
+              data-guide-contribution-stake="true"
               onChange={e => { const raw = e.target.value; if (raw === '') { p.setRelStakeAmount(''); return; } const v = parseInt(raw); if (isNaN(v)) return; p.setRelStakeAmount(Math.min(v, p.availablePoints)); }}
               style={{ width: 48, padding: "2px 4px", borderRadius: 4, border: typeof p.relStakeAmount === 'number' && p.relStakeAmount < p.effectiveMinStake ? "1px solid #f87171" : "1px solid #666", background: "#1a1a1a", color: "#eee", fontSize: 12, textAlign: "center" }} />
             {p.subType && p.subTypeStakeMap.current[p.subType] && p.subTypeStakeMap.current[p.subType] > (p.relationStakeMap.current[(p.relationType ?? '').toUpperCase()] ?? 0) && (

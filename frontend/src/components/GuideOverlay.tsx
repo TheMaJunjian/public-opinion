@@ -500,7 +500,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         <div role="dialog" aria-modal="true" style={{ width: 'min(420px, calc(100vw - 32px))', padding: 24, border: '1px solid #86efac', borderRadius: 12, background: '#18181b', color: '#f4f4f5', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', textAlign: 'center' }}>
           <div style={{ fontSize: 30, color: '#86efac' }}>✓</div>
           <h2 style={{ margin: '8px 0', fontSize: 18 }}>与会者引导完成</h2>
-          <p style={{ margin: 0, color: '#d4d4d8', fontSize: 13, lineHeight: 1.7 }}>接下来，请对世界做出重要指示：\n你认为贡献点或超越比特币吗？</p>
+          <p style={{ margin: 0, color: '#d4d4d8', fontSize: 13, lineHeight: 1.7 }}>接下来，请对世界做出重要指示。<br />比如：你认为贡献点能超越比特币吗？</p>
           <button type="button" onClick={onClose} style={{ marginTop: 18, padding: '7px 20px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer' }}>完成</button>
         </div>
       </div>,

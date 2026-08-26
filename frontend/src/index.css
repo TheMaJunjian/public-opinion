@@ -48,6 +48,10 @@ html {
 }
 
 @media (max-width: 768px) {
+  .guide-bubble {
+    padding-bottom: 64px !important;
+  }
+
   .top-controls-frozen {
     width: 100vw !important;
     max-width: 100vw;

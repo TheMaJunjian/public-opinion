@@ -489,7 +489,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           <path d={bubblePosition.diagonalTail.outlinePath} fill="none" stroke="#facc15" strokeWidth="1" strokeLinecap="butt" />
         </svg>
       )}
-      <div key={guideStage} ref={bubbleRef} data-guide-bubble="true" style={{
+      <div key={guideStage} ref={bubbleRef} data-guide-bubble="true" className="guide-bubble" style={{
         position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: `min(${BUBBLE_MAX_WIDTH}px, calc(100vw - 32px))`, height: 'auto', minHeight: 0, boxSizing: 'border-box',
         padding: '15px 18px 32px', border: 0, borderRadius: 16,
         background: 'transparent', color: '#f4f4f5',

@@ -12,7 +12,7 @@ async function main() {
   console.log('[replay] 开始重放 AuditLog...');
   const state = await replay();
 
-  console.log(`[replay] 重放完成: ${state.balances.size} 用户, ${state.stakeTotals.size} 消息押注, ${state.rounds.size} 结算轮次`);
+  console.log(`[replay] 重放完成: ${state.balances.size} 与会者, ${state.stakeTotals.size} 消息押注, ${state.rounds.size} 结算轮次`);
 
   console.log('[verify] 开始对比数据库...');
   const report = await verify(state);

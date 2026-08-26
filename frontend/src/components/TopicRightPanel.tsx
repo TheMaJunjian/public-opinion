@@ -257,10 +257,10 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           <div style={{ fontWeight: 600, color: "#e2e8f0" }}>只读阅览</div>
           <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.6 }}>当前为导出数据阅览模式，不支持发送消息、建立关系或结算操作。</div>
           <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
-            当前用户
+            当前与会者
             <input
               list="viewer-user-options"
-              placeholder="输入用户名"
+              placeholder="输入与会者名"
               value={p.viewerUsername ?? ""}
               onChange={event => p.onViewerUsernameChange?.(event.target.value)}
               style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#eee", fontSize: 12 }}
@@ -480,7 +480,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
             const placeholderText = isCustomSubType ? "输入自定义理由（最长20字）"
               : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
               : textAreaDisabled
-              ? (p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
+              ? (p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为与会者-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
               : p.isClassifyType ? "输入分类名称（不能为空）"
               : p.isSummaryType ? "输入总结内容（不能为空）"
               : p.isArrangeType ? "可选：输入文本消息加入排列框架"
@@ -526,13 +526,13 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
               const notifyUsers = m.relationType === 'notify'
                 ? (Array.isArray(m.relationPayload?.notifyUsers) && m.relationPayload.notifyUsers.length > 0
                   ? m.relationPayload.notifyUsers
-                  : (m.relationPayload?.notifyUserIds ?? []).map(id => ({ id, username: `用户 ${id}` })))
+                  : (m.relationPayload?.notifyUserIds ?? []).map(id => ({ id, username: `与会者 ${id}` })))
                 : [];
               return (
                 <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>
                   {m.id}：{m.content}
                   {notifyUsers.length > 0 && (
-                    <span>（通知用户：{notifyUsers.map((notifyUser, index) => (
+                    <span>（通知与会者：{notifyUsers.map((notifyUser, index) => (
                       <span key={notifyUser.id}>
                         {index > 0 && '、'}
                         <span onClick={() => navigate(`/topics/${p.topicId}?sender=${encodeURIComponent(notifyUser.username)}`)} style={{ color: '#a5f3fc', textDecoration: 'underline', cursor: 'pointer' }}>

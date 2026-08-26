@@ -60,11 +60,11 @@ export default function UserPage() {
         setUser(profile);
         setMessages(result.data.map(toDemoMessage));
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : '用户页加载失败'));
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : '与会者页加载失败'));
   }, [userId]);
 
   if (error) return <div className="p-6 text-red-600">{error}</div>;
-  if (!user) return <div className="p-6 text-gray-500">加载用户页...</div>;
+  if (!user) return <div className="p-6 text-gray-500">加载与会者页...</div>;
 
   const filteredMessages = cleanVisibleIds
     ? messages.filter(message => cleanVisibleIds.visibleTextIds.has(message.id))
@@ -96,7 +96,7 @@ export default function UserPage() {
             ctx={{ relType: message.relationType ?? null }}
           />
         ))}
-        {filteredMessages.length === 0 && <div style={{ fontSize: 12, color: '#9ca3af' }}>该用户尚未发送消息。</div>}
+        {filteredMessages.length === 0 && <div style={{ fontSize: 12, color: '#9ca3af' }}>该与会者尚未发送消息。</div>}
       </div>
     </div>
   );

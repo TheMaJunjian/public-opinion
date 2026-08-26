@@ -462,7 +462,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
           distinct: ['userId'],
         });
         if (targetStakeUsers.length >= 2) {
-          res.status(409).json({ error: '目标消息已有第二位用户押注，不允许再发送更正消息' });
+          res.status(409).json({ error: '目标消息已有第二位与会者押注，不允许再发送更正消息' });
           return;
         }
       }
@@ -547,7 +547,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
           distinct: ['userId'],
         });
         if (targetStakeUsers.length >= 2) {
-          res.status(409).json({ error: '目标消息已有第二位用户押注，不允许再发送更正消息' });
+          res.status(409).json({ error: '目标消息已有第二位与会者押注，不允许再发送更正消息' });
           return;
         }
       }
@@ -632,7 +632,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
     if (data.relationType === 'PROPOSAL' && data.payload?.operationType === 'RECHARGE') {
       const recipientUserId = data.payload.recipientUserId;
       if (!recipientUserId) {
-        res.status(400).json({ error: '充值分账提案必须指定用户' });
+        res.status(400).json({ error: '充值分账提案必须指定与会者' });
         return;
       }
       const recipient = await prisma.user.findUnique({
@@ -640,7 +640,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         select: { id: true },
       });
       if (!recipient) {
-        res.status(400).json({ error: `指定用户不存在：${recipientUserId}` });
+        res.status(400).json({ error: `指定与会者不存在：${recipientUserId}` });
         return;
       }
     }
@@ -651,7 +651,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         .map(ref => ref.messageId);
       const attentionUsers = await getAttentionUsersByTargetIds(topicId, targetMessageIds);
       if (targetMessageIds.length === 0 || !targetMessageIds.every(id => (attentionUsers.get(id)?.size ?? 0) > 0)) {
-        res.status(400).json({ error: '通知目标没有关注用户，无法发送通知' });
+        res.status(400).json({ error: '通知目标没有关注与会者，无法发送通知' });
         return;
       }
     }

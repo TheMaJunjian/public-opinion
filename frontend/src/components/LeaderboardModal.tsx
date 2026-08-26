@@ -222,7 +222,7 @@ export default function LeaderboardModal({
       }
     }
 
-    // 总收入（估算）：充值收入 + 该用户消息被押注总额。
+    // 总收入（估算）：充值收入 + 该与会者消息被押注总额。
     for (const message of messages) {
       if (!isContentKind(message.kind)) continue;
       const totalStake = getStakeTotal(stakeCounts[message.id]);
@@ -435,7 +435,7 @@ export default function LeaderboardModal({
               fontSize: 12,
             }}
           >
-            用户榜
+            人榜
           </button>
           <button
             onClick={() => setTab('message')}
@@ -482,7 +482,7 @@ export default function LeaderboardModal({
                 type="text"
                 value={userKeyword}
                 onChange={(e) => setUserKeyword(e.target.value)}
-                placeholder="搜索用户ID/用户名"
+                placeholder="搜索与会者ID/与会者名"
                 style={{ minWidth: 180, background: '#0b1220', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}
               />
               {userSort === 'netSupportRate' && (
@@ -497,15 +497,15 @@ export default function LeaderboardModal({
                   />
                 </label>
               )}
-              <span style={{ fontSize: 11, color: '#64748b' }}>总收入（估算）= 充值收入 + 该用户消息被押注总额</span>
+              <span style={{ fontSize: 11, color: '#64748b' }}>总收入（估算）= 充值收入 + 该与会者消息被押注总额</span>
             </div>
             <div style={{ overflow: 'auto', padding: 12 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ color: '#94a3b8', textAlign: 'left' }}>
                     <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>#</th>
-                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>用户ID</th>
-                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>用户</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>与会者ID</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>与会者</th>
                     <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>充值收入</th>
                     <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>发送消息数</th>
                     <th style={{ padding: '6px 8px', borderBottom: '1px solid #243041' }}>被站队贡献点</th>

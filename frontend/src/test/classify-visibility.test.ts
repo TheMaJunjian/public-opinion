@@ -346,7 +346,7 @@ describe('消息加入/移出分类', () => {
     expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(['join-new']))).toEqual(new Set(['join-old']));
   });
 
-  it('当前用户最新发送或赞同的 JOIN 决定个人布局归属', () => {
+  it('当前与会者最新发送或赞同的 JOIN 决定个人布局归属', () => {
     const relations = [
       { id: 'join-b-msg', relationType: 'JOIN', sourceMessageId: 'classify-b', createdAt: '2026-01-01', createdBy: { username: 'alice' }, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
       { id: 'join-c-msg', relationType: 'JOIN', sourceMessageId: 'classify-c', createdAt: '2026-01-02', createdBy: { username: 'bob' }, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },

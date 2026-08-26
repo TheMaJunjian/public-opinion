@@ -275,7 +275,7 @@ describe('SettlementPanel voting', () => {
 
     render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
 
-    expect(await screen.findByText(/当前用户投入 11 点 → 当前贡献点 18 点，收益7 点/)).toBeInTheDocument();
+    expect(await screen.findByText(/当前与会者投入 11 点 → 当前贡献点 18 点，收益7 点/)).toBeInTheDocument();
   });
 
   it('calculates active projection change from invested contribution', async () => {
@@ -299,7 +299,7 @@ describe('SettlementPanel voting', () => {
 
     render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
 
-    expect(await screen.findByText(/当前用户投入 13 点 → 预计结算后贡献点 11 点，损失2 点/)).toBeInTheDocument();
+    expect(await screen.findByText(/当前与会者投入 13 点 → 预计结算后贡献点 11 点，损失2 点/)).toBeInTheDocument();
   });
 
   it('shows overturn when cumulative weights differ from the previous result', async () => {

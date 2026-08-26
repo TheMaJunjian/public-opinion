@@ -35,7 +35,7 @@ export function errorHandler(
     return;
   }
 
-  // 已知业务错误 → 映射到合适的 HTTP 状态码和用户可理解的提示
+  // 已知业务错误 → 映射到合适的 HTTP 状态码和与会者可理解的提示
   if (err instanceof Error) {
     // 402 Payment Required — 余额/点数不足
     if (err.message.startsWith('贡献点余额不足')) {
@@ -73,7 +73,7 @@ export function errorHandler(
     if (err.message === 'Account not found') {
       res.status(404).json({
         error: '账户不存在',
-        detail: '未找到你的贡献点账户。如果你是新注册用户，请稍等片刻后重试。',
+        detail: '未找到你的贡献点账户。如果你是新注册与会者，请稍等片刻后重试。',
       });
       return;
     }

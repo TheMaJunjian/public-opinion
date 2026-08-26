@@ -26,7 +26,7 @@
 | `@vitest/coverage-v8` | ^2.1.9 | 代码覆盖率报告 |
 | `@testing-library/react` | ^16.3.0 | React 组件测试工具 |
 | `@testing-library/jest-dom` | ^6.6.3 | DOM 断言扩展（`toBeInTheDocument()` 等） |
-| `@testing-library/user-event` | ^14.5.2 | 模拟用户交互 |
+| `@testing-library/user-event` | ^14.5.2 | 模拟与会者交互 |
 | `jsdom` | ^25.0.1 | 浏览器环境模拟 |
 
 ### 后端测试（`backend/`）
@@ -230,7 +230,7 @@ describe('MyComponent', () => {
 | `topic-detail-page.test.tsx` | 18 | TopicDetailPage 页面交互 |
 | `types.test.ts` | 17 | 关系类型、TargetRef 和 PresentationSpec 辅助函数 |
 | `useCleanView.test.ts` | 13 | 清爽视图过滤 hook |
-| `userFilteredEdges.test.ts` | 29 | 用户过滤边和隐藏关系计算 |
+| `userFilteredEdges.test.ts` | 29 | 与会者过滤边和隐藏关系计算 |
 
 ---
 

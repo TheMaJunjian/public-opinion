@@ -577,7 +577,7 @@ export interface StanceHistoryResponse {
 /**
  * 清爽视图过滤器规则 — 可组合的多维过滤条件。
  * 每条规则是一个独立判断函数，所有规则之间为 AND 关系。
- * 用户可以自由组合规则来投影消息图的不同切片。
+ * 与会者可以自由组合规则来投影消息图的不同切片。
  */
 export type CleanFilterRule =
   | { id: string; kind: 'sender'; username: string }

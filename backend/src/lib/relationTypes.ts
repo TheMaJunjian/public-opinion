@@ -36,14 +36,14 @@ export const RELATION_TYPES = [
   'ANNOTATION',   // 注释
   'REFERENCE',    // 引用
   'REPLY',        // 回复
-  'NOTIFY',       // 通知回复目标消息相关用户
+  'NOTIFY',       // 通知回复目标消息相关与会者
   'AGREE',        // 赞同（有附带文本消息时，视为支持）
   'DISAGREE',     // 反对（有附带文本消息时，视为反驳）
   'TAG',          // 标注（消息旁的装饰标签，内容不能为空）
   'READ',         // 已读标注（仅协议费，不押注）
   'UNREAD',       // 未读标注（仅协议费，不押注）
   'CORRECT',      // 更正
-  'ARRANGE',      // 排列（用户对消息的关系；所有目标均存储在 targetRefs 中；payload.targetLayout 控制排列方向）
+  'ARRANGE',      // 排列（与会者对消息的关系；所有目标均存储在 targetRefs 中；payload.targetLayout 控制排列方向）
   'CLASSIFY',     // 分类
   'MERGE',        // 归并
   'SUMMARY',      // 总结

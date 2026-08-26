@@ -43,7 +43,7 @@ function auth(token: string) {
 
 // ─── Tests ────────────────────────────────────────────────────
 
-describe('E2E — 完整用户流程（模拟所有前端操作）', () => {
+describe('E2E — 完整与会者流程（模拟所有前端操作）', () => {
   let alice: { token: string; userId: string };
   let bob: { token: string; userId: string };
   let topicId: string;
@@ -67,7 +67,7 @@ describe('E2E — 完整用户流程（模拟所有前端操作）', () => {
       }
       await prisma.topic.deleteMany({ where: { id: oldTopic.id } }).catch(() => {});
     }
-    // 删除测试用户
+    // 删除测试与会者
     const oldUsers = await prisma.user.findMany({
       where: { username: { in: ['e2e_alice', 'e2e_bob'] } },
       select: { id: true },

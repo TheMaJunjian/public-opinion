@@ -30,7 +30,7 @@ await prisma.auditLog.updateMany({
 
 - `data` 字段结构松散，每种 action 的 payload 字段名不统一
 - 前端 `ACTION_LABELS` 不完整，缺少 `VOTE_CAST`、`RELATION_SUPERSEDED`、`RELATION_TARGETS_UPDATED`、`POINT_TRANSFERRED`
-- API 只支持 `topicId` 过滤，无法按 action/用户/实体过滤
+- API 只支持 `topicId` 过滤，无法按 action/与会者/实体过滤
 - `AuditLog` 表无索引
 
 ---
@@ -82,7 +82,7 @@ backend/src/lib/
 
 | Action | 中文标签 | entityType |
 |--------|---------|------------|
-| USER_REGISTERED | 用户注册 | User |
+| USER_REGISTERED | 与会者注册 | User |
 | TOPIC_CREATED | 创建议题 | Topic |
 | TOPIC_ARCHIVED | 归档议题 | Topic |
 | TOPIC_REOPENED | 重开议题 | Topic |

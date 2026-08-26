@@ -257,7 +257,7 @@ function RuleEditor({ rule, onChange, onConfirm, onCancel }: RuleEditorProps) {
     case 'sender':
       return (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>输入用户名：</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>输入与会者名：</div>
           <input
             autoFocus
             value={(rule as { username: string }).username}

@@ -2354,7 +2354,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       const ids = Array.isArray(message.relationPayload?.notifyUserIds)
         ? message.relationPayload.notifyUserIds.filter((id): id is string => typeof id === 'string')
         : [];
-      if (ids.length > 0) result.set(message.id, Array.from(new Set(ids), id => ({ id, username: `用户 ${id}` })));
+      if (ids.length > 0) result.set(message.id, Array.from(new Set(ids), id => ({ id, username: `与会者 ${id}` })));
     }
     return result;
   }, [messages]);
@@ -3173,7 +3173,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         .filter(user => user && typeof user.username === 'string')
         .map(user => user.username);
       const legacyIds = relationMessage?.relationPayload?.notifyUserIds ?? [];
-      return `${names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '用户'}：通知`;
+      return `${names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '与会者'}：通知`;
     }
     const labelText = (e: DemoEdge, author: string) => {
       if (e.relationType === "notify") return notifyEdgeLabel(e);
@@ -3924,13 +3924,13 @@ function GraphViewCanvas(props: GraphViewProps) {
               )}
               {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
                 <div style={{ marginTop: 6, fontSize: 11, color: '#67e8f9' }}>
-                  通知用户：
+                  通知与会者：
                   {notifyUsersByRelationMsg.get(msg.id)!.map((notifyUser, index) => (
                     <React.Fragment key={notifyUser.id}>
                       {index > 0 && '、'}
                       <span
                         style={{ color: '#a5f3fc' }}
-                        title={`通知用户 ${notifyUser.username}`}
+                        title={`通知与会者 ${notifyUser.username}`}
                       >
                         {notifyUser.username}
                       </span>

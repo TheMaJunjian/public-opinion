@@ -35,7 +35,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 |---|--------|------|------|
 | 0.1.1 | 注册成功 | `POST /auth/register` `{"username":"alice","password":"123456"}` | 返回 201，user 含 id/username，自动获 2000 点注册奖励 |
 | 0.1.2 | 重复注册 | 再用相同 username 注册 | 返回 409，"该资源已存在" |
-| 0.1.3 | 用户名校验 | username="a" | 返回 400，"用户名至少 2 个字符" |
+| 0.1.3 | 与会者名校验 | username="a" | 返回 400，"与会者名至少 2 个字符" |
 | 0.1.4 | 密码校验 | password="123" | 返回 400，"密码至少 6 个字符" |
 
 ### 0.2 登录与 JWT
@@ -43,8 +43,8 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
 | 0.2.1 | 登录成功 | `POST /auth/login` `{"username":"alice","password":"123456"}` | 返回 200，含 token 和 user |
-| 0.2.2 | 密码错误 | password="wrong" | 返回 401，"用户名或密码错误" |
-| 0.2.3 | 不存在的用户 | username="nobody" | 返回 401 |
+| 0.2.2 | 密码错误 | password="wrong" | 返回 401，"与会者名或密码错误" |
+| 0.2.3 | 不存在的与会者 | username="nobody" | 返回 401 |
 | 0.2.4 | 无 token 访问受保护 API | `GET /points/balance`（无 Authorization） | 返回 401，"未提供认证令牌" |
 | 0.2.5 | 错误 token 访问 | Bearer 随意字符串 | 返回 401，"令牌无效或已过期" |
 
@@ -68,7 +68,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 1.1.1 | 注册获 2000 点 | 注册新用户 bob/123456 | 注册成功 |
+| 1.1.1 | 注册获 2000 点 | 注册新与会者 bob/123456 | 注册成功 |
 | 1.1.2 | 查询余额 | bob 登录后 `GET /points/balance` | available=2000, locked=0, balance.amount=2000, debtFrozen=false |
 | 1.1.3 | 查询流水 | bob 登录后 `GET /points/transactions` | 有 1 条 MINT 类型记录，amount=+2000，reason="REGISTRATION_BONUS" |
 | 1.1.4 | 查询流水无认证 | `GET /points/transactions` 无 token | 返回 401 |
@@ -158,7 +158,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 |---|--------|------|------|
 | 3.1.1 | 发起结算 | `POST /messages/{msgId}/rounds` `{}` | 返回 201，status="VOTING" |
 | 3.1.2 | 并发约束 | 对同一消息再次 `POST /messages/{msgId}/rounds` | 返回错误，"该消息已有进行中的结算轮次" |
-| 3.1.3 | 负债冻结用户 | debt_frozen=true 的用户发起 | 返回 403，"账户负债冻结" |
+| 3.1.3 | 负债冻结与会者 | debt_frozen=true 的与会者发起 | 返回 403，"账户负债冻结" |
 | 3.1.4 | 消息不存在 | msgId 不存在 | 返回 404 |
 | 3.1.5 | 可选备注 | `{"note":"测试轮次"}` | 返回 201，round.note="测试轮次" |
 
@@ -169,13 +169,13 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 | 3.2.1 | 投 TRUE | `POST /rounds/{roundId}/votes` `{"vote":"TRUE","amount":10}` | 返回 201，newAvailable 减少 10 |
 | 3.2.2 | 投 FALSE | `POST /rounds/{roundId}/votes` `{"vote":"FALSE","amount":5}` | 返回 201 |
 | 3.2.3 | 平局结果 | 不提交 UNKNOWN 投票；让 TRUE/FALSE 权重相等后结算 | 返回 result="UNKNOWN" |
-| 3.2.4 | 多次投票（同一用户） | 同一用户投 TRUE 10 → TRUE 5 | 两次均成功，累计 15 |
-| 3.2.5 | 改变投票方向 | 同一用户先投 TRUE 10 → FALSE 5 | 两次均成功，两条 VoteStake 记录 |
+| 3.2.4 | 多次投票（同一与会者） | 同一与会者投 TRUE 10 → TRUE 5 | 两次均成功，累计 15 |
+| 3.2.5 | 改变投票方向 | 同一与会者先投 TRUE 10 → FALSE 5 | 两次均成功，两条 VoteStake 记录 |
 | 3.2.6 | 投票金额 < 1 | amount=0 | 返回 400 |
 | 3.2.7 | 轮次不存在 | roundId 不存在 | 返回 404 |
 | 3.2.8 | 轮次非 VOTING | 对 SETTLED 轮次投票 | 返回错误 |
 | 3.2.9 | 余额不足 | amount=99999 | 返回错误 |
-| 3.2.10 | 负债冻结 | debt_frozen=true 用户 | 返回 403 错误 |
+| 3.2.10 | 负债冻结 | debt_frozen=true 与会者 | 返回 403 错误 |
 
 ### 3.3 查询轮次
 
@@ -194,7 +194,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 | 3.4.3 | UNKNOWN 平局 | 场景：TRUE 和 FALSE 投票权重相等 | result="UNKNOWN"，所有押注退回 |
 | 3.4.4 | 非发起者结算 | 用非 round 创建者的 token 调用 | 返回 403，"只有轮次发起者可以结算" |
 | 3.4.5 | 重复结算 | 对已 SETTLED 的轮次再次调用 | 返回错误 |
-| 3.4.6 | 结算后余额变化 | 结算后查看各用户 `GET /points/balance` | 赢家余额增加（返本+分红），输家余额不变（已扣） |
+| 3.4.6 | 结算后余额变化 | 结算后查看各与会者 `GET /points/balance` | 赢家余额增加（返本+分红），输家余额不变（已扣） |
 | 3.4.7 | 流水记录 | 结算后 `GET /points/transactions` | 出现 UNLOCK/SPEND 类型记录，含 settlementResult 信息 |
 | 3.4.8 | 轮次状态 | `GET /rounds/{roundId}` | status="SETTLED"，result 非 null，closedAt 非 null |
 
@@ -224,7 +224,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 | 3.7.1 | Compact 模式 | SettlementPanel 下方的 RoundHistory compact | 显示最新结算结果 |
 | 3.7.2 | 链可视化 | 多轮次消息的 chain 显示 | 以圆角标签链显示 TRUE → FALSE → UNKNOWN |
 | 3.7.3 | 点击展开详情 | 点击链中的某一轮次 | 展开详情：状态、结果、权重条、投票记录列表 |
-| 3.7.4 | 投票记录明细 | 展开某轮次后查看 | 显示每个投票用户的 username、方向、金额 |
+| 3.7.4 | 投票记录明细 | 展开某轮次后查看 | 显示每个投票与会者的 username、方向、金额 |
 
 ---
 
@@ -232,9 +232,9 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 ### 4.1 完整结算流程（端到端）
 
-**场景**：3 个用户围绕一条消息完成押注→结算→推翻的完整生命周期。
+**场景**：3 个与会者围绕一条消息完成押注→结算→推翻的完整生命周期。
 
-| 步骤 | 用户 | 操作 | 预期 |
+| 步骤 | 与会者 | 操作 | 预期 |
 |------|------|------|------|
 | 1 | alice | 注册 alice/123456，登录 | 余额 2000 |
 | 2 | bob | 注册 bob/123456，登录 | 余额 2000 |
@@ -258,7 +258,7 @@ function Get-Token { param($u,$p); (Invoke-RestMethod "$BASE/auth/login" -Method
 
 | # | 测试项 | 操作 | 预期 |
 |---|--------|------|------|
-| 4.2.1 | 正常用户不冻结 | 查看任意新用户 Balance | debtFrozen=false |
+| 4.2.1 | 正常与会者不冻结 | 查看任意新与会者 Balance | debtFrozen=false |
 | 4.2.2 | 余额为负时冻结 | 结算后 Clawback 导致 balance<0 | debtFrozen=true |
 
 ### 4.3 审计日志完整性

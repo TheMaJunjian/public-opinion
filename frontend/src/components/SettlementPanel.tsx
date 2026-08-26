@@ -289,8 +289,8 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
           <div className="text-xs text-gray-600 bg-indigo-50 border border-indigo-200 rounded px-3 py-2 mb-2">
             所有轮次总押注 {allRoundStake} 点（PRO {allRoundPro}，CON {allRoundCon}）·{' '}
             {currentUser
-              ? `当前用户投入 ${investedContribution} 点 → ${activeRounds.length > 0 ? '预计结算后' : '当前'}贡献点 ${projectedAfter} 点，${projectedChange >= 0 ? '收益' : '损失'}${Math.abs(projectedChange)} 点`
-              : '当前用户未登录，无法显示个人变化'}
+              ? `当前与会者投入 ${investedContribution} 点 → ${activeRounds.length > 0 ? '预计结算后' : '当前'}贡献点 ${projectedAfter} 点，${projectedChange >= 0 ? '收益' : '损失'}${Math.abs(projectedChange)} 点`
+              : '当前与会者未登录，无法显示个人变化'}
           </div>
           <div className="space-y-2">
             {settledRounds.slice(0, 5).map(round => (
@@ -475,8 +475,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   const projectedChange = projectedAfter - previousAfter;
   const personalSettlementPrompt = currentUser && personalPrincipal > 0
     ? `截至本轮累计投入贡献 ${personalPrincipal} 点（押注${personalStakePrincipal}点，协议费${personalProtocolFee}点） → 上一轮结算为 ${previousAfter} 点 → 本轮预计结算后贡献点为 ${projectedAfter} 点；本轮预计贡献点变化：${projectedChange >= 0 ? '收益' : '损失'}${Math.abs(projectedChange)} 点。`
-    : '当前用户未贡献押注点';
-  const settlementPrompt = `本轮押注：${totalStake} 点（PRO ${weights.TRUE}，CON ${weights.FALSE}）。\n总押注：${totalRoundStake} 点（PRO ${totalRoundPro}，CON ${totalRoundCon}）。\n结算结果：${settlementResult === 'TRUE' ? '赞同胜出' : settlementResult === 'FALSE' ? '反对胜出' : 'UNKNOWN 平局'}。\n总收益池：${profitPool} 点；\n胜方每点押注收益：${settlementResult === 'UNKNOWN' ? '无（平局，双方贡献点全部返还）' : `${winnerRate} 点`}。\n当前用户贡献结算：${personalSettlementPrompt}`;
+    : '当前与会者未贡献押注点';
+  const settlementPrompt = `本轮押注：${totalStake} 点（PRO ${weights.TRUE}，CON ${weights.FALSE}）。\n总押注：${totalRoundStake} 点（PRO ${totalRoundPro}，CON ${totalRoundCon}）。\n结算结果：${settlementResult === 'TRUE' ? '赞同胜出' : settlementResult === 'FALSE' ? '反对胜出' : 'UNKNOWN 平局'}。\n总收益池：${profitPool} 点；\n胜方每点押注收益：${settlementResult === 'UNKNOWN' ? '无（平局，双方贡献点全部返还）' : `${winnerRate} 点`}。\n当前与会者贡献结算：${personalSettlementPrompt}`;
 
   async function handleSettleConfirmed() {
     if (voting || settling) return;
@@ -783,7 +783,7 @@ function SettledRoundDetailView({ detail, previousDetail, stakes, roundId, entry
   );
 }
 
-/** 我的押注 — 当前用户在活跃轮次中的投票 */
+/** 我的押注 — 当前与会者在活跃轮次中的投票 */
 function MyStakesInRound({ votes, currentUsername }: { votes: SettlementRoundItem['votes']; currentUsername: string }) {
   if (!votes) return null;
   const myVotes = votes.filter(v => v.user.username === currentUsername);

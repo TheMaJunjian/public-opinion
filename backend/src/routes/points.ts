@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-// GET /api/points/balance — 查询当前用户贡献点余额和账户状态
+// GET /api/points/balance — 查询当前与会者贡献点余额和账户状态
 router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
@@ -61,7 +61,7 @@ router.get('/balance', requireAuth, async (req: AuthRequest, res: Response, next
   }
 });
 
-// GET /api/points/transactions — 查询当前用户贡献点流水
+// GET /api/points/transactions — 查询当前与会者贡献点流水
 router.get('/transactions', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;

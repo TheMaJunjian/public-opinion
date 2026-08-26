@@ -23,7 +23,7 @@ router.get('/api/users/:id', async (req: Request, res: Response, next: NextFunct
       select: { id: true, username: true, createdAt: true },
     });
     if (!user) {
-      res.status(404).json({ error: '用户不存在' });
+      res.status(404).json({ error: '与会者不存在' });
       return;
     }
     res.json(user);

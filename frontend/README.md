@@ -86,7 +86,7 @@ src/
     mock.ts     # Mock 数据（含示例树型讨论）
     index.ts    # API 统一入口（真实后端）
   context/
-    AuthContext.tsx    # 用户认证状态（localStorage 持久化）
+    AuthContext.tsx    # 与会者认证状态（localStorage 持久化）
   utils/
     graph.ts          # 图关系、立场和焦点子图计算
   types/

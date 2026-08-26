@@ -33,7 +33,7 @@ const GUIDE_COPY: Record<GuideStage, GuideCopy> = {
   send: { title: '发送站队关系消息', operation: '点击发送按钮', prompt: '点击发送按钮后，系统会提交这条站队关系消息。', description: '贡献点设置和消耗确认完成后，点击发送按钮提交站队关系消息。', reminder: '提醒：点击发送按钮进入下一步。' },
   'settlement-view': { title: '进入结算', operation: '点击消息卡片上的结算入口', prompt: '结算入口用于打开当前消息的结算面板。', description: '发送成功后，点击消息卡片上的结算入口查看结算面板。', reminder: '提醒：点击结算入口进入下一步。' },
   settle: { title: '点击结算', operation: '点击结算按钮', prompt: '结算按钮会打开确认弹窗，请继续查看弹窗内容。', description: '结算面板已打开，点击结算按钮查看结算确认提示。', reminder: '提醒：点击结算按钮查看确认提示。' },
-  'settlement-confirm': { title: '查看结算确认提示', operation: '查看确认弹窗中的提示信息，然后点击引导窗口中的下一步', prompt: '确认弹窗会展示本轮结算结果、收益池和当前用户贡献点变化；查看完成后点击下一步。', description: '请查看结算确认弹窗中的结算结果和贡献点提示，查看完成后点击引导窗口中的下一步。', reminder: '提醒：查看提示信息后点击下一步。' },
+  'settlement-confirm': { title: '查看结算确认提示', operation: '查看确认弹窗中的提示信息，然后点击引导窗口中的下一步', prompt: '确认弹窗会展示本轮结算结果、收益池和当前与会者贡献点变化；查看完成后点击下一步。', description: '请查看结算确认弹窗中的结算结果和贡献点提示，查看完成后点击引导窗口中的下一步。', reminder: '提醒：查看提示信息后点击下一步。' },
   'settlement-confirm-action': { title: '确认结算', operation: '点击确认结算按钮', prompt: '确认弹窗中的信息已查看，点击确认结算后等待结算完成。', description: '确认弹窗提示信息已查看，请点击确认结算按钮。', reminder: '提醒：点击确认结算后，等待结算完成。' },
   'settlement-history': { title: '查看结算历史', operation: '双击对应历史结算记录展开详细信息', prompt: '双击对应的历史结算记录，可以展开查看本轮详细结算信息。', description: '结算已完成，请双击对应的历史结算记录展开详细信息，然后点击引导窗口中的完成。', reminder: '提醒：双击记录查看详情，然后点击完成。' },
 };

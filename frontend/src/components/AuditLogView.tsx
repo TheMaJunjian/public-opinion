@@ -4,7 +4,7 @@ import { api } from '../api';
 import type { AuditLogEntry } from '../types';
 
 const ACTION_LABELS: Record<string, string> = {
-  USER_REGISTERED: '用户注册',
+  USER_REGISTERED: '与会者注册',
   TOPIC_CREATED: '创建议题',
   TOPIC_ARCHIVED: '归档议题',
   TOPIC_REOPENED: '重开议题',
@@ -44,7 +44,7 @@ function entityLinkLabel(entityType: string, entityId: string | null): string | 
   switch (entityType) {
     case 'Message': return `消息 #${short}`;
     case 'Topic': return `议题 #${short}`;
-    case 'User': return `用户 #${short}`;
+    case 'User': return `与会者 #${short}`;
     case 'Stake': return `押注 #${short}`;
     case 'VoteStake': return `投票 #${short}`;
     case 'SettlementRound': return `轮次 #${short}`;

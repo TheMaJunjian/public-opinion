@@ -625,7 +625,7 @@ async function executeRevenueDistribution(actorId: string, topicId: string, mess
     entityType: 'RevenuePool',
     entityId: pool.id,
     topicId,
-    summary: `收入分配：${contributorAmount} 点分给 ${distOps.length} 位用户`,
+    summary: `收入分配：${contributorAmount} 点分给 ${distOps.length} 位与会者`,
     details: { messageId, totalPool: totalBalance, contributorAmount, retainedAmount, recipientCount: distOps.length, contributorShare, distributions: distOps.map(d => ({ userId: d.userId, amount: d.amount })) },
   });
 }
@@ -1029,7 +1029,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     const attentionUsers = await getAttentionUsersByTargetIds(topicId, messageIds);
     const attentionUserIds = new Set([...attentionUsers.values()].flatMap(users => [...users]));
     if (messageIds.length === 0 || attentionUserIds.size === 0 || messageIds.some(id => !attentionUsers.has(id))) {
-      throw new Error('通知目标没有关注用户，无法发送通知');
+      throw new Error('通知目标没有关注与会者，无法发送通知');
     }
     const notifyUsers = await prisma.user.findMany({
       where: { id: { in: [...attentionUserIds] } },
@@ -1041,7 +1041,7 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
       notifyUsers,
     };
     const note = typeof rpForCreate?.content === 'string' ? rpForCreate.content : '回复通知';
-    persistedRelationContent = `${note}\n通知用户：${[...attentionUserIds].map(id => `用户 ${id}`).join('、')}；目标：${targetLabels.join('、')}`;
+    persistedRelationContent = `${note}\n通知与会者：${[...attentionUserIds].map(id => `与会者 ${id}`).join('、')}；目标：${targetLabels.join('、')}`;
   }
   let joinContainerUpdate: { id: string; targetRefs: Prisma.InputJsonValue } | null = null;
   if (effectiveRelationType.toUpperCase() === 'JOIN' && effectiveSourceMessageId) {
@@ -1397,7 +1397,7 @@ async function applyPointsRecharged(event: PointsRechargedEvent) {
   const poolAfter = payload.revenuePoolShare > 0 ? await prisma.revenuePool.findFirst() : pool;
   await writeAuditLog({
     actorId, action: 'POINT_MINTED', entityType: 'PointTransaction', entityId: recipientUserId,
-    summary: `充值分账 ${userAmount} 点给用户 ${recipientUserId.slice(-8)}`,
+    summary: `充值分账 ${userAmount} 点给与会者 ${recipientUserId.slice(-8)}`,
     details: { amount: userAmount, creditedAmount: userAmount, recipientUserId, reason: 'RECHARGE', totalAmount: payload.amount, revenuePoolShare: payload.revenuePoolShare }, signature,
   });
   if (payload.revenuePoolShare > 0) {
@@ -1477,7 +1477,7 @@ async function applyPointTransferred(event: PointTransferredEvent) {
     action: 'POINT_TRANSFERRED',
     entityType: 'PointTransaction',
     entityId: payload.fromUserId,
-    summary: `转移 ${payload.amount} 点给用户`,
+    summary: `转移 ${payload.amount} 点给与会者`,
     details: { from: payload.fromUserId, to: payload.toUserId, amount: payload.amount, note: payload.note },
   });
 

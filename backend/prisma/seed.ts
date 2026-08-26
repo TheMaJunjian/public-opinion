@@ -37,7 +37,7 @@ async function main() {
         data: { userId: defaultUserId, entryType: 'MINT_INITIAL', amount: REGISTRATION_BONUS, balanceAfter: REGISTRATION_BONUS, data: { reason: 'REGISTRATION_BONUS' } },
       }),
       prisma.auditLog.create({
-        data: { actorId: defaultUserId, action: 'USER_REGISTERED', entityType: 'User', entityId: defaultUserId, data: { summary: `用户 ${DEFAULT_USERNAME} 注册`, details: { username: DEFAULT_USERNAME }, version: 1 } },
+        data: { actorId: defaultUserId, action: 'USER_REGISTERED', entityType: 'User', entityId: defaultUserId, data: { summary: `与会者 ${DEFAULT_USERNAME} 注册`, details: { username: DEFAULT_USERNAME }, version: 1 } },
       }),
       prisma.auditLog.create({
         data: { actorId: defaultUserId, action: 'POINT_MINTED', entityType: 'PointTransaction', entityId: defaultUserId, data: { summary: `注册奖励 ${REGISTRATION_BONUS} 点`, details: { amount: REGISTRATION_BONUS, reason: 'REGISTRATION_BONUS' }, version: 1 } },
@@ -72,7 +72,7 @@ async function main() {
         revenueDistribution: {       // 收入池分配规则
           trigger: 'manual',         // 触发方式: manual | per_settlement | threshold
           thresholdAmount: 1000,     // threshold 模式：池余额 ≥ 此值时自动分配
-          contributorShare: 0.5,     // 按贡献点持有比例分配给用户
+          contributorShare: 0.5,     // 按贡献点持有比例分配给与会者
           auditorShare: 0.2,         // 审计节点份额（暂留池中）
           publicPoolShare: 0.3,      // 公共池份额（暂留池中）
         },

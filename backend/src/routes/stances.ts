@@ -63,7 +63,7 @@ function latestMatchingRelation(stake: StakeRecord, candidates: RelationCandidat
 }
 
 /**
- * GET /api/users/:id/stances — 查询用户的贡献点消耗历史
+ * GET /api/users/:id/stances — 查询与会者的贡献点消耗历史
  *
  * 面板记录以 Stake 为准：站队、立场、表态都是贡献点消耗记录，
  * 再根据 settlementType、side 和关联关系消息还原显示语义。

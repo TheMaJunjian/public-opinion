@@ -22,7 +22,7 @@ function notifyLabel(edge: DemoEdge, messages: DemoMessage[]) {
   const users = notifyUsersForEdge(edge, messages);
   const names = users.map(user => user.username);
   const legacyIds = relationMessage?.relationPayload?.notifyUserIds ?? [];
-  return names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '用户';
+  return names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '与会者';
 }
 
 function notifyUserLinks(edge: DemoEdge, messages: DemoMessage[], navigate: (to: string) => void, topicId?: string) {

@@ -1,6 +1,6 @@
 # 公论 (GongLun) 后端 API
 
-公论是一个结构化讨论系统，支持用户在分类下发布消息并通过显式关系（支持、反对、引用等）建立观点网络。本文档为 MVP 后端部署与测试指南。
+公论是一个结构化讨论系统，支持与会者在分类下发布消息并通过显式关系（支持、反对、引用等）建立观点网络。本文档为 MVP 后端部署与测试指南。
 
 ---
 
@@ -81,7 +81,7 @@ npm run dev
 ### 认证 `/api/auth`
 | 方法 | 路径 | 需认证 | 说明 |
 |------|------|--------|------|
-| POST | `/api/auth/register` | 否 | 注册（用户名+密码） |
+| POST | `/api/auth/register` | 否 | 注册（与会者名+密码） |
 | POST | `/api/auth/login` | 否 | 登录，返回 JWT |
 | POST | `/api/auth/logout` | 是 | 登出（客户端删除令牌） |
 
@@ -111,7 +111,7 @@ npm run dev
 
 > 以下示例使用 [HTTPie](https://httpie.io/)。也可直接在 http://localhost:3000/api-docs 使用 Swagger UI 交互测试。
 
-### 步骤 1：注册用户
+### 步骤 1：注册与会者
 
 ```bash
 http POST localhost:3000/api/auth/register \

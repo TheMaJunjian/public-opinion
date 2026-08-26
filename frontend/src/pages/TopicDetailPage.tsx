@@ -484,7 +484,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     if (secondaryRelationType === '终止结算' || secondaryRelationType === '分配收入') {
       setNewMessageContent('');
     } else if (secondaryRelationType === '充值分账') {
-      setNewMessageContent('充值总额=1000\n收入池分成=100\n指定用户=user-id');
+      setNewMessageContent('充值总额=1000\n收入池分成=100\n指定与会者=user-id');
     } else if (secondaryRelationType === '运营收入注入') {
       setNewMessageContent('收入金额=1000\n来源=服务收入');
     }
@@ -798,7 +798,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       mergeStakeSnapshot(messageId, stakes);
       const bettors = new Set(stakes.stakes.map(stake => stake.user.id || stake.user.username)).size;
       if (bettors >= 2) {
-        showAlert('目标消息已有第二位用户押注，不能再发送更正消息');
+        showAlert('目标消息已有第二位与会者押注，不能再发送更正消息');
         return true;
       }
     } catch {
@@ -4210,12 +4210,12 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
         const amount = Number(readProposalField(['充值总额', '总额', 'amount']));
         const revenuePoolShare = Number(readProposalField(['收入池分成', '分成', 'revenuePoolShare']));
-        const recipientUserId = readProposalField(['指定用户', 'recipientUserId']);
+        const recipientUserId = readProposalField(['指定与会者', 'recipientUserId']);
         if (!Number.isInteger(amount) || amount <= 0 || !Number.isInteger(revenuePoolShare) || revenuePoolShare < 0 || revenuePoolShare > amount || !recipientUserId) {
-          setSendError('充值分账提案格式：充值总额=1000；收入池分成=100；指定用户=user-id');
+          setSendError('充值分账提案格式：充值总额=1000；收入池分成=100；指定与会者=user-id');
           return;
         }
-        proposalContent = `充值分账提案\n充值总额：${amount}\n收入池分成：${revenuePoolShare}\n指定用户：${recipientUserId}`;
+        proposalContent = `充值分账提案\n充值总额：${amount}\n收入池分成：${revenuePoolShare}\n指定与会者：${recipientUserId}`;
         payloadExtraForOperation = { operationType: 'RECHARGE', amount, revenuePoolShare, recipientUserId };
       }
       if (relationType === 'proposal' && secondaryRelationType === '运营收入注入') {
@@ -4559,7 +4559,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     if (secondaryRelationType === '充值分账') {
       const amount = Number(read(['充值总额', '总额', 'amount']));
       const share = Number(read(['收入池分成', '分成', 'revenuePoolShare']));
-      return !Number.isInteger(amount) || amount <= 0 || !Number.isInteger(share) || share < 0 || share > amount || !read(['指定用户', 'recipientUserId']);
+      return !Number.isInteger(amount) || amount <= 0 || !Number.isInteger(share) || share < 0 || share > amount || !read(['指定与会者', 'recipientUserId']);
     }
     if (secondaryRelationType === '运营收入注入') {
       const amount = Number(read(['收入金额', '金额', 'amount']));
@@ -4690,9 +4690,9 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
     if (isNotifyType) {
-      if (!hasAttentionNotifyTarget) return '请选择已有关注用户的目标消息';
+      if (!hasAttentionNotifyTarget) return '请选择已有关注与会者的目标消息';
       if (sourceUnits.length === 0 && newMessageContent.trim().length === 0) return '请输入通知内容或选择来源消息';
-      return `发送通知（通知目标消息的关注用户）`;
+      return `发送通知（通知目标消息的关注与会者）`;
     }
     if (isGovernanceOrOpsType) {
       const govTypeLabel = relationType === "proposal" ? "提案" : relationType === "code_change" ? "代码" : "运营";
@@ -4705,7 +4705,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         return '发送分配收入提案（将当前收入池余额按规则分配给社区成员）';
       }
       if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
-        return '发送充值分账提案（提交后验证指定用户）';
+        return '发送充值分账提案（提交后验证指定与会者）';
       }
       // 终止结算
       if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
@@ -4783,7 +4783,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       ? "完成委托格式无效，请填写分配数量或分配比例，并选择一条委托关系"
       : "创建委托格式无效，请填写报酬数量和委托内容";
     if (hasInvalidProposalFormat) return secondaryRelationType === '充值分账'
-      ? "充值分账格式无效，请填写充值总额、收入池分成和指定用户"
+      ? "充值分账格式无效，请填写充值总额、收入池分成和指定与会者"
       : "运营收入提案格式无效，请填写收入金额和来源";
     if (relationType === 'tag' && secondaryRelationType === 'none') return "请先选择推荐、冷藏、已读、未读或已有标签";
     if (!hasTargetsAvailable && relationType !== null && !isClassifyType && !isGovernanceOrOpsType) return "请先选择目标消息";
@@ -6085,7 +6085,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     return <PromptModal
       open
       title="正在加载"
-      message="正在加载主题数据，请稍候…"
+      message="正在加载消息数据，请稍候…"
       hideActions
       onConfirm={() => undefined}
     />;
@@ -6352,7 +6352,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
                     setShowLeaderboard(true);
                   }}
                   style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#3f2a06", color: "#fbbf24", fontSize: 12, cursor: "pointer" }}
-                  title="查看用户榜与消息榜"
+                  title="查看人榜与消息榜"
                 >
                   排行榜
                 </button>
@@ -6455,7 +6455,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
                 <div>{isInsideClassify ? `当前${classifyKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
                 <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 360, lineHeight: 1.6 }}>
-                  {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : focusEntries.length > 0 ? "当前焦点范围内没有匹配的消息。尝试退出焦点或调整过滤规则。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他用户可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
+                  {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : focusEntries.length > 0 ? "当前焦点范围内没有匹配的消息。尝试退出焦点或调整过滤规则。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他与会者可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
                 </div>
                 {isInsideClassify && (
                   <button onClick={() => exitClassifyTopic()} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>

@@ -216,8 +216,8 @@ export function formatReport(report: VerifyReport): string {
   lines.push(`  其他锁定余额:       replay=${report.aggregate.otherLockedReplay.toLocaleString()} db=${report.aggregate.otherLockedDb.toLocaleString()}`);
   lines.push(`  收入池余额 (replay): ${report.aggregate.revenuePoolBalance.toLocaleString()}`);
   lines.push(`  收入池余额 (db):     ${report.aggregate.revenuePoolDb.toLocaleString()}`);
-  lines.push(`  用户结算损失记录:  ${report.aggregate.totalLostDb.toLocaleString()}`);
-  lines.push(`  用户结算收益记录:  ${report.aggregate.totalEarnedDb.toLocaleString()}`);
+  lines.push(`  与会者结算损失记录:  ${report.aggregate.totalLostDb.toLocaleString()}`);
+  lines.push(`  与会者结算收益记录:  ${report.aggregate.totalEarnedDb.toLocaleString()}`);
   lines.push(`  总量公式: ${report.aggregate.totalMintedReplay.toLocaleString()} = ${report.aggregate.totalBalanceDb.toLocaleString()} + ${report.aggregate.totalLockedDb.toLocaleString()} + ${report.aggregate.revenuePoolDb.toLocaleString()}`);
   lines.push(`  总量公式校验:      ${report.aggregate.supplyConservation ? '✅' : '❌'}`);
   lines.push(`  守恒: ${report.aggregate.conservation ? '✅' : '❌'}`);

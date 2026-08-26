@@ -269,8 +269,8 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
       : [];
     const notifyLabels = notifyUsers.length > 0
       ? notifyUsers.map(user => user.username)
-      : notifyUserIds.map(id => `用户 ${id}`);
-    content = `回复通知：${notifyLabels.length > 0 ? notifyLabels.join('、') : '无匹配用户'}\n目标：${targetSummary}`;
+      : notifyUserIds.map(id => `与会者 ${id}`);
+    content = `回复通知：${notifyLabels.length > 0 ? notifyLabels.join('、') : '无匹配与会者'}\n目标：${targetSummary}`;
   } else if (relType === 'recommend' || relType === 'archive') {
     const st = (relation.payload as Record<string, unknown> | null)?.subType as string | undefined;
     const stLabel = st ? (st === 'CUSTOM' ? ((relation.payload as Record<string, unknown> | null)?.customLabel as string | undefined || '自定义') : subTypeLabel(st)) : '';

@@ -1,8 +1,8 @@
 # Demo 理解与验收基线（工程可执行规格·深度版）
 
-> **版本**：2026-05-03（深度修订版）  
-> **来源**：基于 `docs/demo/赞同反对支持反驳与焦点与回复与引用与注释关系非线性结构显示和交互3.tsx` 及用户反馈全量分析。  
-> 本文档以"工程可执行规格"为目标：每个函数/状态/交互事件均有独立条目，含输入、输出、状态读写、副作用及用户可见影响。
+> **版本**：2026-05-03（深度修订版）
+> **来源**：基于 `docs/demo/赞同反对支持反驳与焦点与回复与引用与注释关系非线性结构显示和交互3.tsx` 及与会者反馈全量分析。
+> 本文档以"工程可执行规格"为目标：每个函数/状态/交互事件均有独立条目，含输入、输出、状态读写、副作用及与会者可见影响。
 
 ---
 
@@ -95,39 +95,39 @@ type TargetRef =
 - **输出**：设置 `topic`, `messages`, `relations`, `msgTotalPages`
 - **状态读写**：读 `topicId`/`msgPage`；写 `loading`, `error`, `topic`, `messages`, `relations`, `msgTotalPages`
 - **副作用**：并行调用 3 个 API（`getTopic`, `getMessages`, `getRelations`）
-- **用户可见**：加载完成后左侧显示消息卡片，右侧显示关系列表
+- **与会者可见**：加载完成后左侧显示消息卡片，右侧显示关系列表
 
 ### 2.2 `TopicDetailPage` — 候选区管理
 
 #### `handleClickMessage(id: string)`
-- **触发**：用户单击消息卡片
+- **触发**：与会者单击消息卡片
 - **逻辑**：若 `draft` 中已有同 ID 的 `message` 条目 → 移除（取消选中）；否则追加 `{ type: 'message', id }`
 - **状态写**：`draft`
-- **用户可见**：卡片边框 indigo 高亮 ↔ 普通，右侧候选区条目增减
+- **与会者可见**：卡片边框 indigo 高亮 ↔ 普通，右侧候选区条目增减
 
 #### `handleClickRelation(id: string)`
-- **触发**：用户点击边标签或装饰 badge
+- **触发**：与会者点击边标签或装饰 badge
 - **逻辑**：与 `handleClickMessage` 类似，对 `type='relation'` 条目做切换
 - **状态写**：`draft`
-- **用户可见**：边标签 / badge 高亮切换，候选区出现关系条目
+- **与会者可见**：边标签 / badge 高亮切换，候选区出现关系条目
 
 #### `handleSelectFragment(messageId, text, hash)`
-- **触发**：用户在文本选择模式下拖选文字后 `mouseup`
+- **触发**：与会者在文本选择模式下拖选文字后 `mouseup`
 - **逻辑**：切换 `type='text-fragment'` 条目（相同 messageId + text 则移除，否则追加）
 - **状态写**：`draft`
-- **用户可见**：候选区出现片段条目
+- **与会者可见**：候选区出现片段条目
 
 #### `handleClearAll()`
 - **触发**：清空按钮、单击视图空白区域
 - **逻辑**：`draft = []`, `sources = []`, `targets = []`, `textSelectionModeId = null`
 - **状态写**：`draft`, `sources`, `targets`, `textSelectionModeId`
-- **用户可见**：候选区/来源/目标全部清空；所有卡片边框恢复普通色；文本选择模式退出
+- **与会者可见**：候选区/来源/目标全部清空；所有卡片边框恢复普通色；文本选择模式退出
 
 #### `handleBlankClick(e: React.MouseEvent)`
-- **触发**：用户点击左侧视图的空白区域（非卡片、非标签）
+- **触发**：与会者点击左侧视图的空白区域（非卡片、非标签）
 - **逻辑**：检查 `e.target === e.currentTarget`（确保点击在容器自身而非子元素）→ 调 `handleClearAll()`
 - **状态写**：同 `handleClearAll()`
-- **用户可见**：同 `handleClearAll()`
+- **与会者可见**：同 `handleClearAll()`
 
 ### 2.3 `TopicDetailPage` — 集合转移
 
@@ -156,7 +156,7 @@ type TargetRef =
     focusMessageId = ''
   ```
 - **状态写**：`focusMode`, `focusMessageId`
-- **用户可见**：焦点模式开启时，若候选区有消息，视图立即筛选到该消息周围；否则显示全量消息
+- **与会者可见**：焦点模式开启时，若候选区有消息，视图立即筛选到该消息周围；否则显示全量消息
 
 ### 2.5 `computeLayout(messages, relations, visibleMessageIds)` — 布局
 
@@ -217,7 +217,7 @@ type TargetRef =
 ### 3.1 单击消息卡片（single click）
 
 ```
-用户单击消息卡片
+与会者单击消息卡片
   → React onClick (仅在 !textMode 时绑定)
   → handleClickMessage(msgId)
     → draft.find(d => d.type='message' && d.id=msgId)
@@ -228,7 +228,7 @@ type TargetRef =
 ### 3.2 双击消息卡片（double click）
 
 ```
-用户双击消息卡片
+与会者双击消息卡片
   → React onDoubleClick
   → handleDoubleClick(msgId, e)
     → e.preventDefault() (阻止双击选文字默认行为)
@@ -241,7 +241,7 @@ type TargetRef =
 ### 3.3 文本拖选（drag-select）
 
 ```
-用户在 textMode 消息卡片上拖选文字 → mouseup
+与会者在 textMode 消息卡片上拖选文字 → mouseup
   → handleMouseUp(msgId)
     → textSelectionModeId !== msgId → 忽略
     → window.getSelection()
@@ -255,7 +255,7 @@ type TargetRef =
 ### 3.4 单击空白区域（blank click）
 
 ```
-用户点击左侧视图的空白区域（不在任何卡片/标签上）
+与会者点击左侧视图的空白区域（不在任何卡片/标签上）
   → onClick 事件冒泡到最外层容器
   → e.target === e.currentTarget (确认是空白区域)
   → handleClearAll()
@@ -270,7 +270,7 @@ type TargetRef =
 ### 3.5 单击边标签 / 装饰 badge（relation click）
 
 ```
-用户点击图视图边标签 或 列表视图装饰 badge
+与会者点击图视图边标签 或 列表视图装饰 badge
   → e.stopPropagation() (阻止冒泡到卡片 onClick)
   → onClickRelation(relationId)
     → handleClickRelation(relationId)
@@ -301,7 +301,7 @@ type TargetRef =
 ### 3.8 焦点模式开启（含候选区语义）
 
 ```
-用户点击"开启"按钮:
+与会者点击"开启"按钮:
   → handleFocusToggle()
     → !focusMode:
       → setFocusMode(true)
@@ -713,4 +713,4 @@ export const RELATION_TYPES = [
 
 ---
 
-*本文档由 Copilot Agent 根据 demo 代码深度分析与用户需求生成，版本: 2026-05-03（第三次修订：edge-decoration 线性视图修复 + 空白点击修复）*
+*本文档由 Copilot Agent 根据 demo 代码深度分析与与会者需求生成，版本: 2026-05-03（第三次修订：edge-decoration 线性视图修复 + 空白点击修复）*

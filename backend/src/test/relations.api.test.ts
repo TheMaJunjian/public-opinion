@@ -979,7 +979,7 @@ describe('POST /api/topics/:topicId/relations — CORRECT single-target validati
         payload: { correctionContent: 'Corrected world' },
       });
     expect(res.status).toBe(409);
-    expect(res.body.error).toContain('第二位用户押注');
+    expect(res.body.error).toContain('第二位与会者押注');
   });
 
   it('rejects CORRECT targeting the whole message', async () => {

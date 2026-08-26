@@ -12,15 +12,15 @@ const router = Router();
 const registerSchema = z.object({
   username: z
     .string()
-    .min(2, '用户名至少 2 个字符')
-    .max(30, '用户名最多 30 个字符')
-    .regex(/^[a-zA-Z0-9_\u4e00-\u9fa5]+$/, '用户名只能包含字母、数字、下划线或汉字'),
+    .min(2, '与会者名至少 2 个字符')
+    .max(30, '与会者名最多 30 个字符')
+    .regex(/^[a-zA-Z0-9_\u4e00-\u9fa5]+$/, '与会者名只能包含字母、数字、下划线或汉字'),
   password: z.string().max(100, '密码最多 100 个字符'),
   publicKey: z.string().nullable().optional(),
 });
 
 const loginSchema = z.object({
-  username: z.string().min(1, '请输入用户名'),
+  username: z.string().min(1, '请输入与会者名'),
   password: z.string().min(1, '请输入密码'),
   deviceId: z.string().min(1).max(200).optional(),
   publicKey: z.string().min(1).optional(),
@@ -32,7 +32,7 @@ const signingKeySchema = z.object({
   deviceId: z.string().min(1).max(200),
 });
 
-// POST /api/auth/register — 用户注册
+// POST /api/auth/register — 与会者注册
 router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { username, password, publicKey } = registerSchema.parse(req.body);
@@ -53,7 +53,7 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
   }
 });
 
-// POST /api/auth/login — 用户登录，返回 JWT
+// POST /api/auth/login — 与会者登录，返回 JWT
 router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { username, password, deviceId: requestedDeviceId, publicKey: requestedPublicKey } = loginSchema.parse(req.body);
@@ -61,13 +61,13 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
     const user = await prisma.user.findUnique({ where: { username } });
 
     if (!user) {
-      res.status(401).json({ error: '用户名或密码错误' });
+      res.status(401).json({ error: '与会者名或密码错误' });
       return;
     }
 
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
-      res.status(401).json({ error: '用户名或密码错误' });
+      res.status(401).json({ error: '与会者名或密码错误' });
       return;
     }
 

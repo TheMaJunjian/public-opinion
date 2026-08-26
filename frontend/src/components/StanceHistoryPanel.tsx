@@ -36,7 +36,7 @@ type TabKey = 'relations' | 'stakes' | 'tags';
 const STANCE_PAGE_SIZE = 50;
 
 /**
- * StanceHistoryPanel — 用户表态历史面板
+ * StanceHistoryPanel — 与会者表态历史面板
  * 站队（赞同/反对/赞同自己） + 立场（发消息消耗的贡献点） + 表态（标注）
  */
 export default function StanceHistoryPanel({ userId, topicId }: Props) {

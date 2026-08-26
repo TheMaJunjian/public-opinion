@@ -1,5 +1,5 @@
 import { BrowserRouter, HashRouter, Routes, Route } from 'react-router-dom';
-import { Suspense, lazy, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import Navbar from './components/Navbar';
 import GestureShortcutManager from './components/GestureShortcutManager';
@@ -13,13 +13,23 @@ const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 const TutorialModal = lazy(() => import('./components/TutorialModal'));
 const GuideOverlay = lazy(() => import('./components/GuideOverlay'));
 
-export default function App() {
+function AppContent() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [guideEnabled, setGuideEnabled] = useState(false);
   const [topControlsFrozen, setTopControlsFrozen] = useState(false);
   const [interfaceZoom, setInterfaceZoom] = useState(1);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
+
+  useEffect(() => {
+    const handleGuideAvailability = (event: Event) => {
+      setGuideEnabled(Boolean((event as CustomEvent<{ enabled?: boolean }>).detail?.enabled));
+    };
+    window.addEventListener('guide-availability-changed', handleGuideAvailability);
+    return () => window.removeEventListener('guide-availability-changed', handleGuideAvailability);
+  }, []);
+
   const handleGestureConfirm = (direction: GestureDirection, target: HTMLElement | null, symbol: ShortcutSymbol) => {
     if (symbol === 'zoom-in' || symbol === 'zoom-out') {
       setInterfaceZoom(currentZoom => {
@@ -61,8 +71,7 @@ export default function App() {
   );
 
   return (
-    <AuthProvider>
-      <Router>
+    <Router>
         <div
           className="min-h-screen min-w-0 flex flex-col bg-[#101010]"
           style={{
@@ -77,7 +86,8 @@ export default function App() {
           <Navbar
             onOpenViewer={() => setViewerOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
-            onOpenGuide={() => setGuideOpen(true)}
+            onOpenGuide={() => { if (guideEnabled) setGuideOpen(true); }}
+            guideEnabled={guideEnabled}
             topControlsFrozen={topControlsFrozen}
             onToggleTopControls={() => setTopControlsFrozen(!topControlsFrozen)}
           />
@@ -114,7 +124,14 @@ export default function App() {
             </Suspense>
           )}
         </div>
-      </Router>
+    </Router>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
     </AuthProvider>
   );
 }

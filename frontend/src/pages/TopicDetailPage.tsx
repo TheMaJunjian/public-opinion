@@ -742,6 +742,18 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   const [settlementOpenType, setSettlementOpenType] = useState<'TRUTH' | 'VALUE' | null>(null);
   const [comparisonMode, setComparisonMode] = useState(false);
   const [comparisonReviewed, setComparisonReviewed] = useState(false);
+
+  useEffect(() => {
+    const syncGuideAvailability = () => {
+      const token = localStorage.getItem('token');
+      const enabled = Boolean(user && token && !isPreloaded && !isPreviewMode && !comparisonMode && !comparisonReviewed);
+      window.dispatchEvent(new CustomEvent('guide-availability-changed', { detail: { enabled } }));
+    };
+    syncGuideAvailability();
+    return () => {
+      window.dispatchEvent(new CustomEvent('guide-availability-changed', { detail: { enabled: false } }));
+    };
+  }, [user, isPreloaded, isPreviewMode, comparisonMode, comparisonReviewed]);
   const [comparisonTargetId, setComparisonTargetId] = useState<string | null>(null);
   const [comparisonSide, setComparisonSide] = useState<'agree' | 'disagree'>('agree');
   const [comparisonReviewBaseMessages, setComparisonReviewBaseMessages] = useState<DemoMessage[] | null>(null);

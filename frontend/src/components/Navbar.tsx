@@ -8,12 +8,13 @@ interface NavbarProps {
   onOpenViewer?: () => void;
   onOpenTutorial?: () => void;
   onOpenGuide?: () => void;
+  guideEnabled?: boolean;
   topControlsFrozen?: boolean;
   onToggleTopControls?: () => void;
 }
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
-export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, topControlsFrozen = false, onToggleTopControls }: NavbarProps) {
+export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guideEnabled = false, topControlsFrozen = false, onToggleTopControls }: NavbarProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const navRef = useRef<HTMLElement>(null);
@@ -61,8 +62,11 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, topC
           <span className="text-xs text-indigo-300 tracking-wide">一切记录在案，是非自有公论</span>
         </Link>
         <button
-          onClick={onOpenGuide}
-          className="ml-8 text-amber-200 hover:text-white text-sm font-medium transition-colors"
+          type="button"
+          onClick={guideEnabled ? onOpenGuide : undefined}
+          disabled={!guideEnabled}
+          aria-disabled={!guideEnabled}
+          className={`ml-8 text-sm font-medium transition-colors ${guideEnabled ? 'text-amber-200 hover:text-white' : 'cursor-not-allowed text-indigo-300/50'}`}
           title="开始入门引导"
         >
           引导

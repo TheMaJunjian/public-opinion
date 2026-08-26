@@ -196,7 +196,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         )}
         <span style={{ fontSize: 11, color: "#666" }}>点 / {p.availablePoints}</span>
         {p.totalConsumption && (
-          <span style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? "#f87171" : "#f59e0b" }}>
+          <span data-guide-contribution-consumption="true" style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? "#f87171" : "#f59e0b" }}>
             总计 {p.totalConsumption.total} 点
             <span style={{ color: "#888" }}>
               （{[p.totalConsumption.hasText ? `文本 ${p.totalConsumption.textStake}` : null,

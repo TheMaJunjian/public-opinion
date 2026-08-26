@@ -16,7 +16,7 @@ type BubblePosition = {
   tailVisible: boolean;
   diagonalTail?: { path: string; outlinePath: string };
 };
-type GuideStage = 'message' | 'staging' | 'stance' | 'contribution';
+type GuideStage = 'message' | 'staging' | 'stance' | 'contribution' | 'consumption';
 type TailSegment = [{ x: number; y: number }, { x: number; y: number }];
 const BUBBLE_MAX_WIDTH = 460;
 function getBubblePosition(rect: DOMRect, height = 340): BubblePosition {
@@ -150,12 +150,14 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   }, [open]);
 
   useEffect(() => {
-    if (!open || completed || (guideStage !== 'staging' && guideStage !== 'stance' && guideStage !== 'contribution')) return;
+    if (!open || completed || (guideStage !== 'staging' && guideStage !== 'stance' && guideStage !== 'contribution' && guideStage !== 'consumption')) return;
     const elements = guideStage === 'staging'
       ? [document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')]
       : guideStage === 'stance'
         ? Array.from(document.querySelectorAll<HTMLElement>('[data-guide-stance-type="true"]'))
-        : [document.querySelector<HTMLElement>('[data-guide-contribution-stake="true"]')];
+        : guideStage === 'contribution'
+          ? [document.querySelector<HTMLElement>('[data-guide-contribution-stake="true"]')]
+          : [document.querySelector<HTMLElement>('[data-guide-contribution-consumption="true"]')];
     const highlightedElements = elements.filter((element): element is HTMLElement => Boolean(element));
     if (highlightedElements.length === 0) return;
     highlightedElements.forEach(element => { element.style.boxShadow = '0 0 0 3px #facc15, 0 0 22px rgba(250,204,21,0.65)'; });
@@ -182,6 +184,8 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           })()
         : guideStage === 'contribution'
           ? document.querySelector<HTMLElement>('[data-guide-contribution-stake="true"]')
+        : guideStage === 'consumption'
+          ? document.querySelector<HTMLElement>('[data-guide-contribution-consumption="true"]')
         : target?.messageId
           ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
           : null;
@@ -195,6 +199,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       if (guideStage === 'staging') setVisibilityHint('消息已经加入选择暂存区，当目标集合为空时，选择暂存区中存在的消息被视为已加入目标集合。');
       else if (guideStage === 'stance') setVisibilityHint('赞同你赞同的，反对你反对的。');
       else if (guideStage === 'contribution') setVisibilityHint('发送前可以修改这次操作使用的贡献点。');
+      else if (guideStage === 'consumption') setVisibilityHint('查看本次发送将消耗的贡献点，以及发送后预计剩余的贡献点。');
       else if (!targetVisible) setVisibilityHint('目标消息当前不在可视区域，请滚动左侧结构图。');
       else if (!rightVisible) setVisibilityHint('目标消息已定位。请滚动右侧面板查看选择暂存区；界面过窄时请先缩小界面。');
     };
@@ -222,6 +227,8 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         })()
         : guideStage === 'contribution'
           ? document.querySelector<HTMLElement>('[data-guide-contribution-stake="true"]')
+        : guideStage === 'consumption'
+          ? document.querySelector<HTMLElement>('[data-guide-contribution-consumption="true"]')
         : target?.messageId
           ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
           : null;
@@ -240,7 +247,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         <div role="dialog" aria-modal="true" style={{ width: 'min(420px, calc(100vw - 32px))', padding: 24, border: '1px solid #86efac', borderRadius: 12, background: '#18181b', color: '#f4f4f5', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', textAlign: 'center' }}>
           <div style={{ fontSize: 30, color: '#86efac' }}>✓</div>
           <h2 style={{ margin: '8px 0', fontSize: 18 }}>已完成引导</h2>
-          <p style={{ margin: 0, color: '#d4d4d8', fontSize: 13, lineHeight: 1.7 }}>消息选择、站队和发送前贡献点设置引导已完成。</p>
+          <p style={{ margin: 0, color: '#d4d4d8', fontSize: 13, lineHeight: 1.7 }}>消息选择、站队、贡献点设置和消耗查看引导已完成。</p>
           <button type="button" onClick={onClose} style={{ marginTop: 18, padding: '7px 20px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer' }}>完成</button>
         </div>
       </div>,
@@ -280,22 +287,23 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <strong style={{ color: '#fde68a' }}>{guideStage === 'staging' ? '消息已加入选择暂存区' : guideStage === 'stance' ? '选择站队关系' : guideStage === 'contribution' ? '发送前修改贡献点' : '选择目标消息'}</strong>
+          <strong style={{ color: '#fde68a' }}>{guideStage === 'staging' ? '消息已加入选择暂存区' : guideStage === 'stance' ? '选择站队关系' : guideStage === 'contribution' ? '发送前修改贡献点' : guideStage === 'consumption' ? '查看贡献点消耗' : '选择目标消息'}</strong>
           <button type="button" onClick={onClose} style={{ border: 0, background: 'transparent', color: '#a1a1aa', cursor: 'pointer', fontSize: 18 }} aria-label="关闭引导">×</button>
         </div>
         <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
           <div style={{ color: '#a1a1aa', fontSize: 11 }}>操作</div>
-          <div>{guideStage === 'staging' ? '请查看右侧选择暂存区' : guideStage === 'stance' ? '请选择赞同或反对' : guideStage === 'contribution' ? '发送前调整贡献点押注数值' : '单击选择消息'}</div>
+          <div>{guideStage === 'staging' ? '请查看右侧选择暂存区' : guideStage === 'stance' ? '请选择赞同或反对' : guideStage === 'contribution' ? '发送前调整贡献点押注数值' : guideStage === 'consumption' ? '查看发送按钮左侧的贡献点消耗信息' : '单击选择消息'}</div>
           <div style={{ marginTop: 8, color: '#fcd34d', fontSize: 12 }}>提示</div>
-          <div>{guideStage === 'staging' ? '消息已加入选择暂存区，点击相关按钮可将选择暂存区中的所有消息加入来源集合或目标集合。' : guideStage === 'stance' ? '对正确的消息内容，选择赞同。' : guideStage === 'contribution' ? '贡献点数值会影响发送时的消耗，发送前可以按需要修改。' : '单击选中，再次单击取消选中；双击空白区域可取消所有选中。'}</div>
+          <div>{guideStage === 'staging' ? '消息已加入选择暂存区，点击相关按钮可将选择暂存区中的所有消息加入来源集合或目标集合。' : guideStage === 'stance' ? '对正确的消息内容，选择赞同。' : guideStage === 'contribution' ? '贡献点数值会影响发送时的消耗，发送前可以按需要修改。' : guideStage === 'consumption' ? '总计显示本次操作的贡献点消耗，剩余显示发送后预计保留的贡献点。' : '单击选中，再次单击取消选中；双击空白区域可取消所有选中。'}</div>
           <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 12 }}>说明</div>
           <div>{visibilityHint}</div>
           {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息ID：{target.messageId}</div>}
           {target?.title && <div style={{ marginTop: 4, color: '#d4d4d8', fontSize: 12, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>目标消息内容：{target.title}</div>}
-          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{guideStage === 'staging' ? '提醒：点击下一步继续。' : guideStage === 'stance' ? '提醒：选择关系类型后继续下一步。' : guideStage === 'contribution' ? '提醒：完成发送前押注贡献点调整后，点击下一步继续。' : '提醒：选中后继续下一步。'}</div>
+          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{guideStage === 'staging' ? '提醒：点击下一步继续。' : guideStage === 'stance' ? '提醒：选择关系类型后继续下一步。' : guideStage === 'contribution' ? '提醒：完成发送前押注贡献点调整后，点击下一步继续。' : guideStage === 'consumption' ? '提醒：查看贡献点消耗后，点击下一步完成引导。' : '提醒：选中后继续下一步。'}</div>
         </div>
         {guideStage === 'staging' && <button type="button" onClick={() => { setGuideStage('stance'); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
-        {guideStage === 'contribution' && <button type="button" onClick={() => { setCompleted(true); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
+        {guideStage === 'contribution' && <button type="button" onClick={() => { setGuideStage('consumption'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
+        {guideStage === 'consumption' && <button type="button" onClick={() => { setCompleted(true); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
       </div>
     </div>,
     document.body,

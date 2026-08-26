@@ -9,6 +9,7 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => {
     getMessages: vi.fn(),
     getAllMessages: vi.fn(),
     getRelations: vi.fn(),
+    createMessage: vi.fn(),
     getAttentionUsers: vi.fn().mockResolvedValue({ data: {} }),
     getPointsBalance: vi.fn().mockResolvedValue({ points: { available: 100, locked: 0 }, balance: { amount: 100, debtFrozen: false } }),
     getPointsTransactions: vi.fn().mockResolvedValue({ data: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 } }),
@@ -51,6 +52,7 @@ vi.mock('../api', () => ({ api: mockApi }));
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
     user: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
+    logout: vi.fn(),
   }),
 }));
 vi.mock('react-router-dom', async () => {
@@ -116,6 +118,32 @@ describe('TopicDetailPage composer refresh', () => {
     mockApi.getTopic.mockResolvedValue(topic);
     mockApi.getMessages.mockResolvedValue({ data: [makeMessage('msg-1', '第一条'), makeMessage('msg-2', '第二条')] });
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
+  });
+
+  it('disables the send button while a message request is pending', async () => {
+    localStorage.setItem('token', 'test-token');
+    let resolveMessage!: (message: Message) => void;
+    mockApi.createMessage
+      .mockImplementationOnce(() => new Promise<Message>(resolve => { resolveMessage = resolve; }))
+      .mockResolvedValue({
+        id: 'round-pending', topicId: 'topic-1', kind: 'ROUND', contentType: 'TEXT',
+        content: '', createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+      });
+    render(<TopicDetailPage />);
+
+    const textarea = await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    fireEvent.change(textarea, { target: { value: '待发送消息' } });
+    const sendButton = screen.getByRole('button', { name: '发送' });
+    fireEvent.click(sendButton);
+
+    await waitFor(() => expect(sendButton).toBeDisabled());
+    expect(mockApi.createMessage).toHaveBeenCalledTimes(1);
+
+    resolveMessage({
+      id: 'msg-pending', topicId: 'topic-1', kind: 'TEXT', contentType: 'TEXT',
+      content: '待发送消息', createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+    });
+    await waitFor(() => expect(mockApi.createMessage).toHaveBeenCalledTimes(2));
   });
 
   it('re-enables the textarea after clearing draft targets and switching relation types', async () => {

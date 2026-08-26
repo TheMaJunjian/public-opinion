@@ -795,6 +795,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   relStakeRef.current = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
+  const [sendInFlight, setSendInFlight] = useState(false);
+  const sendInFlightRef = useRef(false);
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
   const [settlementOpenType, setSettlementOpenType] = useState<'TRUTH' | 'VALUE' | null>(null);
   const [comparisonMode, setComparisonMode] = useState(false);
@@ -2448,19 +2450,6 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       }).catch(() => {});
       // Reset to rule default
       setStakeAmount(minSelfStake);
-      if (isInsideClassify) {
-        if (currentClassifyRelMsgId) {
-          try {
-            // Create a join message on the main canvas that adds the new message
-            // to the current classify. This is the primary ownership action.
-            await attachMessageToCurrentClassify(msg.id);
-          } catch (e: any) {
-            setSendError(`加入容器记录创建失败: ${e?.message ?? e}`);
-            setTimeout(() => setSendError(null), 4000);
-          }
-        }
-        setClassifyKey(k => k + 1); // force StructureView remount AFTER classify updated
-      }
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
       window.dispatchEvent(new Event('points-refresh'));
@@ -2488,6 +2477,22 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           scrollMsgToCenter(msg.id);
         } catch { /* round creation optional */ }
       }
+      if (isInsideClassify) {
+        if (currentClassifyRelMsgId) {
+          try {
+            // Create a join message on the main canvas that adds the new message
+            // to the current classify. This is the primary ownership action.
+            await attachMessageToCurrentClassify(msg.id);
+          } catch (e: any) {
+            setSendError(`加入容器记录创建失败: ${e?.message ?? e}`);
+            setTimeout(() => setSendError(null), 4000);
+          }
+        }
+        setClassifyKey(k => k + 1); // force StructureView remount AFTER classify updated
+      }
+      if (!overrideContent) setNewMessageContent("");
+      scrollMsgToCenter(msg.id);
+      window.dispatchEvent(new Event('points-refresh'));
       return msg;
     } catch (e: any) {
       if (await handleAuthError(e)) return null;
@@ -3111,8 +3116,9 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
                 payload: refPayload,
               });
               const relId = backendRel.id;
+              const newEdge = buildEdges({ ...srcUnit }, { ...t }, "reference", refEdgeLabel, relId);
               await registerCreatedRelationInCurrentClassify(backendRel);
-              newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reference", refEdgeLabel, relId));
+              setEdges(prev => [...prev, newEdge]);
             } catch (e: any) { showAlert(`建立引用关系失败: ${e?.message ?? e}`); }
           }
         }
@@ -4424,6 +4430,18 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
     setNewMessageContent("");
     setRelationType(null); setSecondaryRelationType("none");
+  }
+
+  async function handleSendClick() {
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
+    setSendInFlight(true);
+    try {
+      await handleQuickSendAndRelateFromDraftTargets();
+    } finally {
+      sendInFlightRef.current = false;
+      setSendInFlight(false);
+    }
   }
 
   type DraftGroup = { messageId: string; wholeSelected: boolean; fragments: UnitSelection[] };
@@ -6995,14 +7013,14 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           setRelStakeAmount={setRelStakeAmount}
           availablePoints={availablePoints}
           effectiveMinStake={effectiveMinStake}
-          singleButtonEnabled={singleButtonEnabled}
+          singleButtonEnabled={singleButtonEnabled && !sendInFlight}
           singleButtonLabel={singleButtonLabel}
           sendValidationLabel={sendValidationLabel}
           totalConsumption={totalConsumption}
           stakeFeeAmountRef={stakeFeeAmountRef}
           subTypeStakeMap={subTypeStakeMap}
           relationStakeMap={relationStakeMap}
-          handleQuickSendAndRelateFromDraftTargets={handleQuickSendAndRelateFromDraftTargets}
+          handleQuickSendAndRelateFromDraftTargets={handleSendClick}
           sendError={sendError}
           sendWarning={sendWarning}
           recentNormals={recentNormals}

@@ -240,24 +240,44 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         ]);
         if (cancelled) return;
         setTopic(topicData);
-        const { messages: demoMsgs, edges: demoEdges } = convertMessagesToDemoModel(
-          messagesData.data, relationsData.data
+        const currentRelations = relationsRef.current;
+        const serverRelationIds = new Set(relationsData.data.map(relation => relation.id));
+        const mergedRelations = [
+          ...relationsData.data,
+          ...currentRelations.filter(relation => !serverRelationIds.has(relation.id)),
+        ];
+        const { messages: serverDemoMsgs, edges: serverDemoEdges } = convertMessagesToDemoModel(
+          messagesData.data, mergedRelations
         );
-        setRelations(relationsData.data);
+        const serverMessageIds = new Set(serverDemoMsgs.map(message => message.id));
+        const mergedDemoMsgs = [
+          ...serverDemoMsgs,
+          ...messagesRef.current.filter(message => !serverMessageIds.has(message.id)),
+        ];
+        const mergedEdgeKeys = new Set(serverDemoEdges.map(edge =>
+          `${edge.relationMessageId}::${edge.from.messageId}::${edge.to.messageId}::${edge.relationType}`
+        ));
+        const mergedDemoEdges = [
+          ...serverDemoEdges,
+          ...edgesRef.current.filter(edge => !mergedEdgeKeys.has(
+            `${edge.relationMessageId}::${edge.from.messageId}::${edge.to.messageId}::${edge.relationType}`
+          )),
+        ];
+        setRelations(mergedRelations);
         setAttentionUsersByTarget(attentionData.data);
         setRegisteredUsers(usersData.data);
-        operationLog('加载主题关系', `count=${relationsData.data.length}`);
-        setMessages(demoMsgs);
-        setEdges(demoEdges);
+        operationLog('加载主题关系', `count=${mergedRelations.length}`);
+        setMessages(mergedDemoMsgs);
+        setEdges(mergedDemoEdges);
 
         // Phase 2: batch-load stake counts for ALL messages (text + relation)
-        const allMsgIds = demoMsgs.map((m: { id: string }) => m.id);
+        const allMsgIds = mergedDemoMsgs.map((m: { id: string }) => m.id);
         if (allMsgIds.length > 0) {
           try {
             const stakes = await Promise.all(
               allMsgIds.map((id: string) =>
                 api.getMessageStakes(id).then(r => {
-                  const msg = demoMsgs.find((m: { id: string; author: string }) => m.id === id);
+                  const msg = mergedDemoMsgs.find((m: { id: string; author: string }) => m.id === id);
                   const authorStake = msg
                     ? r.stakes
                         .filter(s => s.user.username === msg.author && s.side === 'PRO')
@@ -284,7 +304,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
             }
             // For RECOMMEND/ARCHIVE relations: mirror text target's VALUE stake counts onto
             // the annotation relation message so badges show correct VALUE stats.
-            for (const rel of relationsData.data) {
+            for (const rel of mergedRelations) {
               const rt = rel.relationType?.toUpperCase();
               if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
                 const trefs = rel.targetRefs as Array<{ messageId?: string }> | undefined;

@@ -121,6 +121,38 @@ describe('TopicDetailPage composer refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: '引用' }));
     expect(screen.getByText('请在画布中选择目标消息')).toBeInTheDocument();
   });
+
+  it('keeps a locally visible reference message when polling returns a stale snapshot', async () => {
+    vi.useFakeTimers();
+    const source = makeMessage('source-1', '来源消息');
+    const reference = {
+      id: 'ref-1', topicId: 'topic-1', kind: 'REFERENCE' as const, contentType: 'TEXT' as const,
+      content: '引用消息', createdAt: '2024-01-01T00:02:00.000Z',
+      createdBy: makeUser(),
+    };
+    const referenceRelation: Relation = {
+      id: 'ref-1', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'source-1',
+      targetRefs: [{ kind: 'message', messageId: 'source-1' }],
+      createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+    };
+    mockApi.getMessages
+      .mockResolvedValueOnce({ data: [source, reference] })
+      .mockResolvedValue({ data: [source] });
+    mockApi.getRelations
+      .mockResolvedValueOnce({ data: [referenceRelation] })
+      .mockResolvedValue({ data: [] });
+
+    render(<TopicDetailPage />);
+    await act(async () => {});
+    const initialGraphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1]?.[0];
+    expect(initialGraphProps.messages.some((m: { id: string }) => m.id === 'ref-1')).toBe(true);
+
+    await act(async () => { vi.advanceTimersByTime(5000); });
+    await act(async () => {});
+    const refreshedGraphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1]?.[0];
+    expect(refreshedGraphProps.messages.some((m: { id: string }) => m.id === 'ref-1')).toBe(true);
+    vi.useRealTimers();
+  });
 });
 
 describe('TopicDetailPage nested-classify merge expansion', () => {

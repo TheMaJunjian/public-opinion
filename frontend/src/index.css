@@ -51,13 +51,6 @@ html {
   .guide-bubble {
     padding-bottom: 64px !important;
   }
-
-  .top-controls-frozen {
-    width: 100vw !important;
-    max-width: 100vw;
-    box-sizing: border-box;
-  }
-
   .topic-left-panel {
     overflow-x: auto !important;
     scrollbar-width: auto;

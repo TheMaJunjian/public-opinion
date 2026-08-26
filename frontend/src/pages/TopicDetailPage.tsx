@@ -6232,7 +6232,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     <>
     <ErrorBoundary>
     <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
-      <div ref={relationBarRef} className={topControlsFrozen ? "top-controls-frozen" : undefined} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, left: 0, zIndex: 40 } : {}) }}>
+      <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, zIndex: 40 } : {}) }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>

@@ -53,7 +53,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, topC
   }
 
   return (
-    <nav ref={navRef} className={`relative bg-indigo-700 text-white px-6 py-3 flex items-center shadow-md${topControlsFrozen ? ' top-controls-frozen sticky top-0 left-0 z-50' : ''}`}>
+    <nav ref={navRef} className={`relative bg-indigo-700 text-white px-6 py-3 flex items-center shadow-md${topControlsFrozen ? ' sticky top-0 z-50' : ''}`}>
       <div ref={leftControlsRef} className="relative flex shrink-0 items-center gap-4">
         <Link to="/" className="flex flex-col leading-tight hover:opacity-90 transition-opacity">
           <span className="text-xl font-bold tracking-widest">公论</span>

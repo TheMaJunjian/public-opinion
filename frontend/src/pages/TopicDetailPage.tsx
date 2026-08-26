@@ -614,6 +614,11 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     const startGuide = () => {
       const target = messages.find(message => isContentKind(message.kind));
       if (!target) return;
+      setDraftUnits([]);
+      setSourceUnits([]);
+      setTargetUnits([]);
+      setActiveTextSelectId(null);
+      clearBrowserSelection();
       guideTargetIdRef.current = target.id;
       setGuideActive(true);
       setViewMode('graph');

@@ -18,7 +18,7 @@ type BubblePosition = {
 type TailSegment = [{ x: number; y: number }, { x: number; y: number }];
 function getBubblePosition(rect: DOMRect): BubblePosition {
   const width = Math.min(390, window.innerWidth - 32);
-  const height = 300;
+  const height = 340;
   const gap = 24;
   const margin = 16;
   const tailLength = 31;
@@ -113,7 +113,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         highlightedElementRef.current = element;
         element.style.boxShadow = '0 0 0 3px #facc15, 0 0 22px rgba(250,204,21,0.65)';
         setBubblePosition(getBubblePosition(element.getBoundingClientRect()));
-        setVisibilityHint('目标消息已定位在左侧结构图。选择暂存区位于右侧，如看不到请滚动右侧面板；界面过窄时请先缩小界面。');
+        setVisibilityHint('目标消息已定位在左侧显示视图-结构图。选择暂存区位于右侧操作面板，如看不到请滚动右侧面板；界面过窄时请先缩小界面。');
       };
       locate();
     };
@@ -177,13 +177,13 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     <div data-guide-overlay="true" style={{ position: 'fixed', inset: 0, zIndex: 900, pointerEvents: 'none' }}>
       {bubblePosition?.diagonalTail && (
         <svg aria-hidden="true" width="100%" height="100%" viewBox={`0 0 ${window.innerWidth} ${window.innerHeight}`} style={{ position: 'fixed', inset: 0, zIndex: 2, overflow: 'visible', pointerEvents: 'none' }}>
-          <rect x={bubblePosition.left} y={bubblePosition.top} width={Math.min(390, window.innerWidth - 32)} height="300" rx="16" fill="rgba(24,24,27,0.96)" stroke="#facc15" strokeWidth="1" />
+          <rect x={bubblePosition.left} y={bubblePosition.top} width={Math.min(390, window.innerWidth - 32)} height="340" rx="16" fill="rgba(24,24,27,0.96)" stroke="#facc15" strokeWidth="1" />
           <path d={bubblePosition.diagonalTail.path} fill="rgba(24,24,27,0.96)" stroke="none" />
           <path d={bubblePosition.diagonalTail.outlinePath} fill="none" stroke="#facc15" strokeWidth="1" strokeLinecap="butt" />
         </svg>
       )}
       <div data-guide-bubble="true" style={{
-        position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: 'min(390px, calc(100vw - 32px))', height: 300, boxSizing: 'border-box',
+        position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: 'min(390px, calc(100vw - 32px))', height: 340, boxSizing: 'border-box',
         padding: '15px 18px', border: 0, borderRadius: 16,
         background: 'transparent', color: '#f4f4f5',
         boxShadow: 'none', pointerEvents: 'auto',
@@ -215,7 +215,8 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           <div>单击选中，再次单击取消选中；双击空白区域可取消所有选中。</div>
           <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 12 }}>说明</div>
           <div>{visibilityHint}</div>
-          {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息：{target.messageId}</div>}
+          {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息ID：{target.messageId}</div>}
+          {target?.title && <div style={{ marginTop: 4, color: '#d4d4d8', fontSize: 12, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>目标消息内容：{target.title}</div>}
           <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>提醒：选中后，本步入门引导完成。</div>
         </div>
       </div>

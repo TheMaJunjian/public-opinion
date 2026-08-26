@@ -80,7 +80,8 @@ function AppContent() {
             width: 'max-content',
             minWidth: `${100 / interfaceZoom}%`,
             minHeight: `${100 / interfaceZoom}vh`,
-          }}
+            '--interface-zoom': interfaceZoom,
+          } as React.CSSProperties}
         >
           <GestureShortcutManager onConfirm={handleGestureConfirm} />
           <Navbar

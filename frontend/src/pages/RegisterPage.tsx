@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { storePrivateKeyForUser } from '../api/client';
@@ -11,15 +11,6 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const appRoot = document.querySelector<HTMLElement>('#root > div');
-    const previousBackground = appRoot?.style.backgroundColor ?? '';
-    if (appRoot) appRoot.style.backgroundColor = '#fff';
-    return () => {
-      if (appRoot) appRoot.style.backgroundColor = previousBackground;
-    };
-  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,7 +41,7 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="w-screen h-[calc(100dvh-4.25rem)] min-h-[calc(100dvh-4.25rem)] bg-white flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="bg-white rounded-xl shadow-md p-8 w-full max-w-sm">
         <h1 className="text-2xl font-bold text-center text-indigo-700 mb-2">公论</h1>
         <p className="text-center text-gray-500 text-sm mb-6">创建与会者账户，加入公论</p>

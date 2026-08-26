@@ -15,7 +15,7 @@ describe('RegistrationGuideHint', () => {
     );
 
     expect(document.querySelector('[data-guide-button="true"]')).toBeInTheDocument();
-    expect(screen.getByText(/顶部的“教程”按钮可以随时查看完整教程/)).toBeInTheDocument();
+    expect(screen.getByText(/点击“引导”按钮右侧的“教程”按钮可以查看教程/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '已阅' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });

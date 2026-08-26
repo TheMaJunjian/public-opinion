@@ -7008,7 +7008,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     <PromptModal
       open={showUnauthenticatedNotice}
       title="当前未登录"
-      message="当前未登录，只能查看消息，无法发送消息。登录、注册按钮在右上角，登录后可参与讨论。"
+      message={'当前未登录，只能查看消息，无法发送消息。\n登录、注册按钮在右上角。\n登录后可参与讨论。'}
       confirmText="已阅"
       onConfirm={() => setShowUnauthenticatedNotice(false)}
     />

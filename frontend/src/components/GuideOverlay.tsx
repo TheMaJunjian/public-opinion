@@ -16,7 +16,7 @@ type BubblePosition = {
   tailVisible: boolean;
   diagonalTail?: { path: string; outlinePath: string };
 };
-type GuideStage = 'message' | 'staging' | 'stance' | 'contribution' | 'consumption' | 'send' | 'settlement-view' | 'settle' | 'settlement-confirm' | 'settlement-confirm-action' | 'settlement-history';
+type GuideStage = 'message-compose' | 'message-contribution' | 'message-consumption' | 'message-send' | 'message' | 'staging' | 'stance' | 'contribution' | 'consumption' | 'send' | 'settlement-view' | 'settle' | 'settlement-confirm' | 'settlement-confirm-action' | 'settlement-history';
 type TailSegment = [{ x: number; y: number }, { x: number; y: number }];
 const BUBBLE_MAX_WIDTH = 460;
 function getBubblePosition(rect: DOMRect, height = 340): BubblePosition {
@@ -104,7 +104,14 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   useEffect(() => {
     if (!open) return;
     setCompleted(false);
-    setGuideStage('message');
+    setGuideStage('message-compose');
+    const onGuideTextMessageSent = (event: Event) => {
+      if (guideStageRef.current !== 'message-send') return;
+      const detail = (event as CustomEvent<GuideTargetDetail>).detail;
+      if (!detail?.messageId) return;
+      setGuideStage('message');
+      window.dispatchEvent(new CustomEvent('guide-target-ready', { detail }));
+    };
     const onSelectionComplete = () => {
       setGuideStage('staging');
       window.dispatchEvent(new Event('guide-clear-visuals'));
@@ -114,6 +121,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       window.dispatchEvent(new Event('guide-clear-visuals'));
     };
     const onGuideSendSelected = () => {
+      if (guideStageRef.current !== 'send') return;
       setGuideStage('settlement-view');
       window.dispatchEvent(new Event('guide-clear-visuals'));
     };
@@ -135,6 +143,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       window.dispatchEvent(new Event('guide-clear-visuals'));
     };
     window.addEventListener('guide-selection-complete', onSelectionComplete);
+    window.addEventListener('guide-text-message-sent', onGuideTextMessageSent);
     window.addEventListener('guide-stance-selected', onStanceSelected);
     window.addEventListener('guide-send-selected', onGuideSendSelected);
     window.addEventListener('guide-settlement-opened', onGuideSettlementOpened);
@@ -162,6 +171,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     return () => {
       if (highlightedElementRef.current) highlightedElementRef.current.style.boxShadow = '';
       window.removeEventListener('guide-selection-complete', onSelectionComplete);
+      window.removeEventListener('guide-text-message-sent', onGuideTextMessageSent);
       window.removeEventListener('guide-stance-selected', onStanceSelected);
       window.removeEventListener('guide-send-selected', onGuideSendSelected);
       window.removeEventListener('guide-settlement-opened', onGuideSettlementOpened);
@@ -182,8 +192,16 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   }, [open]);
 
   useEffect(() => {
-    if (!open || completed || (guideStage !== 'staging' && guideStage !== 'stance' && guideStage !== 'contribution' && guideStage !== 'consumption' && guideStage !== 'send' && guideStage !== 'settlement-view' && guideStage !== 'settle' && guideStage !== 'settlement-confirm' && guideStage !== 'settlement-confirm-action' && guideStage !== 'settlement-history')) return;
-    const elements = guideStage === 'staging'
+    if (!open || completed || (guideStage !== 'message-compose' && guideStage !== 'message-contribution' && guideStage !== 'message-consumption' && guideStage !== 'message-send' && guideStage !== 'staging' && guideStage !== 'stance' && guideStage !== 'contribution' && guideStage !== 'consumption' && guideStage !== 'send' && guideStage !== 'settlement-view' && guideStage !== 'settle' && guideStage !== 'settlement-confirm' && guideStage !== 'settlement-confirm-action' && guideStage !== 'settlement-history')) return;
+    const elements = guideStage === 'message-compose'
+      ? [document.querySelector<HTMLElement>('[data-guide-message-input="true"]')]
+      : guideStage === 'message-contribution'
+        ? [document.querySelector<HTMLElement>('[data-guide-contribution-stake="true"]')]
+        : guideStage === 'message-consumption'
+          ? [document.querySelector<HTMLElement>('[data-guide-contribution-consumption="true"]')]
+      : guideStage === 'message-send'
+        ? [document.querySelector<HTMLElement>('[data-guide-text-message-send="true"]')]
+      : guideStage === 'staging'
       ? [document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')]
       : guideStage === 'stance'
         ? Array.from(document.querySelectorAll<HTMLElement>('[data-guide-stance-type="true"]'))
@@ -194,7 +212,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
             : guideStage === 'send'
               ? [document.querySelector<HTMLElement>('[data-guide-send="true"]')]
               : guideStage === 'settlement-view'
-                ? [document.querySelector<HTMLElement>('[data-guide-settlement-entry="true"]')]
+                ? [document.querySelector<HTMLElement>(`[data-guide-settlement-entry="true"][data-guide-target-message="${CSS.escape(target?.messageId ?? '')}"]`)]
                 : guideStage === 'settle'
                   ? [document.querySelector<HTMLElement>('[data-guide-settle="true"]')]
                   : guideStage === 'settlement-confirm'
@@ -204,9 +222,17 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
                       : [document.querySelector<HTMLElement>(`[data-guide-settlement-history="${CSS.escape(settlementRoundIdRef.current ?? '')}"]`)];
     const highlightedElements = elements.filter((element): element is HTMLElement => Boolean(element));
     const applyHighlight = () => {
-      const currentElements = (guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history')
+      const currentElements = (guideStage === 'message-compose' || guideStage === 'message-contribution' || guideStage === 'message-consumption' || guideStage === 'message-send' || guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history')
         ? [document.querySelector<HTMLElement>(guideStage === 'settle'
           ? '[data-guide-settle="true"]'
+          : guideStage === 'message-compose'
+            ? '[data-guide-message-input="true"]'
+          : guideStage === 'message-contribution'
+            ? '[data-guide-contribution-stake="true"]'
+          : guideStage === 'message-consumption'
+            ? '[data-guide-contribution-consumption="true"]'
+          : guideStage === 'message-send'
+            ? '[data-guide-text-message-send="true"]'
           : guideStage === 'settlement-confirm'
             ? '[data-guide-settlement-message="true"]'
             : guideStage === 'settlement-confirm-action'
@@ -221,7 +247,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       return currentElements;
     };
     let appliedElements = applyHighlight();
-    const timer = (guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history') && appliedElements.length === 0
+    const timer = (guideStage === 'message-compose' || guideStage === 'message-contribution' || guideStage === 'message-consumption' || guideStage === 'message-send' || guideStage === 'settle' || guideStage === 'settlement-confirm' || guideStage === 'settlement-confirm-action' || guideStage === 'settlement-history') && appliedElements.length === 0
       ? window.setInterval(() => { appliedElements = applyHighlight(); }, 100)
       : null;
     return () => {
@@ -235,7 +261,11 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   useEffect(() => {
     if (!open || completed) return;
     const updateHint = () => {
-      const targetElement = guideStage === 'staging'
+      const targetElement = guideStage === 'message-compose'
+        ? document.querySelector<HTMLElement>('[data-guide-message-input="true"]')
+        : guideStage === 'message-send'
+          ? document.querySelector<HTMLElement>('[data-guide-text-message-send="true"]')
+        : guideStage === 'staging'
         ? document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')
         : guideStage === 'stance'
           ? (() => {
@@ -255,7 +285,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         : guideStage === 'send'
           ? document.querySelector<HTMLElement>('[data-guide-send="true"]')
         : guideStage === 'settlement-view'
-          ? document.querySelector<HTMLElement>('[data-guide-settlement-entry="true"]')
+          ? document.querySelector<HTMLElement>(`[data-guide-settlement-entry="true"][data-guide-target-message="${CSS.escape(target?.messageId ?? '')}"]`)
         : guideStage === 'settle'
           ? document.querySelector<HTMLElement>('[data-guide-settle="true"]')
         : guideStage === 'settlement-confirm'
@@ -277,7 +307,11 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       const targetVisible = targetRect.bottom > 0 && targetRect.top < window.innerHeight;
       const rightVisible = rightRect.bottom > 0 && rightRect.top < window.innerHeight && rightRect.left < window.innerWidth;
       setBubblePosition(current => getBubblePosition(targetRect, current?.height ?? 340));
-      if (guideStage === 'staging') setVisibilityHint('消息已经加入选择暂存区，当目标集合为空时，选择暂存区中存在的消息被视为已加入目标集合。');
+      if (guideStage === 'message-compose') setVisibilityHint('先查看文本消息输入框，准备输入一条新的观点消息。查看完成后点击引导窗口中的下一步。');
+      else if (guideStage === 'message-contribution') setVisibilityHint('调整这条文本消息使用的贡献点，确认发送时的押注数值。查看完成后点击下一步。');
+      else if (guideStage === 'message-consumption') setVisibilityHint('查看这条文本消息发送将消耗的贡献点，以及发送后的预计剩余点数。查看完成后点击下一步。');
+      else if (guideStage === 'message-send') setVisibilityHint('文本消息已经准备好，请点击发送按钮；发送成功后，这条新消息会成为下一步的赞同目标。');
+      else if (guideStage === 'staging') setVisibilityHint('消息已经加入选择暂存区，当目标集合为空时，选择暂存区中存在的消息被视为已加入目标集合。');
       else if (guideStage === 'stance') setVisibilityHint('赞同你赞同的，反对你反对的。');
       else if (guideStage === 'contribution') setVisibilityHint('发送前可以修改这次操作使用的贡献点。');
       else if (guideStage === 'consumption') setVisibilityHint('查看本次发送将消耗的贡献点，以及发送后预计剩余的贡献点。');
@@ -299,7 +333,15 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     if (!open || completed || !bubbleRef.current) return;
     const measuredHeight = bubbleRef.current.offsetHeight;
     if (!measuredHeight) return;
-    const targetElement = guideStage === 'staging'
+    const targetElement = guideStage === 'message-compose'
+      ? document.querySelector<HTMLElement>('[data-guide-message-input="true"]')
+      : guideStage === 'message-contribution'
+        ? document.querySelector<HTMLElement>('[data-guide-contribution-stake="true"]')
+        : guideStage === 'message-consumption'
+          ? document.querySelector<HTMLElement>('[data-guide-contribution-consumption="true"]')
+      : guideStage === 'message-send'
+        ? document.querySelector<HTMLElement>('[data-guide-text-message-send="true"]')
+        : guideStage === 'staging'
       ? document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')
       : guideStage === 'stance'
         ? (() => {
@@ -319,7 +361,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
         : guideStage === 'send'
           ? document.querySelector<HTMLElement>('[data-guide-send="true"]')
         : guideStage === 'settlement-view'
-          ? document.querySelector<HTMLElement>('[data-guide-settlement-entry="true"]')
+          ? document.querySelector<HTMLElement>(`[data-guide-settlement-entry="true"][data-guide-target-message="${CSS.escape(target?.messageId ?? '')}"]`)
         : guideStage === 'settle'
           ? document.querySelector<HTMLElement>('[data-guide-settle="true"]')
         : guideStage === 'settlement-confirm'
@@ -333,9 +375,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           : null;
     if (!targetElement) return;
     const targetRect = targetElement instanceof DOMRect ? targetElement : targetElement.getBoundingClientRect();
-    setBubblePosition(current => current && current.height !== measuredHeight
-      ? getBubblePosition(targetRect, measuredHeight)
-      : current);
+    setBubblePosition(getBubblePosition(targetRect, measuredHeight));
   }, [open, completed, guideStage, target?.messageId, visibilityHint]);
 
   if (!open) return null;
@@ -363,7 +403,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           <path d={bubblePosition.diagonalTail.outlinePath} fill="none" stroke="#facc15" strokeWidth="1" strokeLinecap="butt" />
         </svg>
       )}
-      <div ref={bubbleRef} data-guide-bubble="true" style={{
+      <div key={guideStage} ref={bubbleRef} data-guide-bubble="true" style={{
         position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: `min(${BUBBLE_MAX_WIDTH}px, calc(100vw - 32px))`, height: 'auto', minHeight: 0, boxSizing: 'border-box',
         padding: '15px 18px 32px', border: 0, borderRadius: 16,
         background: 'transparent', color: '#f4f4f5',
@@ -386,20 +426,23 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <strong style={{ color: '#fde68a' }}>{guideStage === 'staging' ? '消息已加入选择暂存区' : guideStage === 'stance' ? '选择站队关系' : guideStage === 'contribution' ? '发送前修改贡献点' : guideStage === 'consumption' ? '查看贡献点消耗' : guideStage === 'send' ? '发送站队关系消息' : guideStage === 'settlement-view' ? '查看结算' : guideStage === 'settle' ? '点击结算' : guideStage === 'settlement-confirm' ? '查看结算确认提示' : guideStage === 'settlement-confirm-action' ? '确认结算' : guideStage === 'settlement-history' ? '查看结算历史' : '选择目标消息'}</strong>
+          <strong style={{ color: '#fde68a' }}>{guideStage === 'message-compose' ? '输入文本消息内容' : guideStage === 'message-contribution' ? '调整文本消息贡献点' : guideStage === 'message-consumption' ? '查看文本消息消耗' : guideStage === 'message-send' ? '发送文本消息' : guideStage === 'staging' ? '消息已加入选择暂存区' : guideStage === 'stance' ? '选择站队关系' : guideStage === 'contribution' ? '发送前修改贡献点' : guideStage === 'consumption' ? '查看贡献点消耗' : guideStage === 'send' ? '发送站队关系消息' : guideStage === 'settlement-view' ? '查看结算' : guideStage === 'settle' ? '点击结算' : guideStage === 'settlement-confirm' ? '查看结算确认提示' : guideStage === 'settlement-confirm-action' ? '确认结算' : guideStage === 'settlement-history' ? '查看结算历史' : '选择目标消息'}</strong>
           <button type="button" onClick={onClose} style={{ border: 0, background: 'transparent', color: '#a1a1aa', cursor: 'pointer', fontSize: 18 }} aria-label="关闭引导">×</button>
         </div>
         <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
           <div style={{ color: '#a1a1aa', fontSize: 11 }}>操作</div>
-          <div>{guideStage === 'staging' ? '请查看右侧选择暂存区' : guideStage === 'stance' ? '请选择赞同或反对' : guideStage === 'contribution' ? '发送前调整贡献点押注数值' : guideStage === 'consumption' ? '查看发送按钮左侧的贡献点消耗信息' : guideStage === 'send' ? '点击发送按钮' : guideStage === 'settlement-view' ? '点击消息卡片上的结算入口' : guideStage === 'settle' ? '点击结算按钮' : guideStage === 'settlement-confirm' ? '查看确认弹窗中的提示信息，然后点击引导窗口中的下一步' : guideStage === 'settlement-confirm-action' ? '点击确认结算按钮' : guideStage === 'settlement-history' ? '双击对应历史结算记录展开详细信息' : '单击选择消息'}</div>
+          <div>{guideStage === 'message-compose' ? '查看输入框并点击下一步' : guideStage === 'message-contribution' ? '调整文本消息贡献点并点击下一步' : guideStage === 'message-consumption' ? '查看文本消息消耗并点击下一步' : guideStage === 'message-send' ? '点击发送按钮' : guideStage === 'staging' ? '请查看右侧选择暂存区' : guideStage === 'stance' ? '请选择赞同或反对' : guideStage === 'contribution' ? '发送前调整贡献点押注数值' : guideStage === 'consumption' ? '查看发送按钮左侧的贡献点消耗信息' : guideStage === 'send' ? '点击发送按钮' : guideStage === 'settlement-view' ? '点击消息卡片上的结算入口' : guideStage === 'settle' ? '点击结算按钮' : guideStage === 'settlement-confirm' ? '查看确认弹窗中的提示信息，然后点击引导窗口中的下一步' : guideStage === 'settlement-confirm-action' ? '点击确认结算按钮' : guideStage === 'settlement-history' ? '双击对应历史结算记录展开详细信息' : '单击选择消息'}</div>
           <div style={{ marginTop: 8, color: '#fcd34d', fontSize: 12 }}>提示</div>
-          <div>{guideStage === 'staging' ? '消息已加入选择暂存区，点击相关按钮可将选择暂存区中的所有消息加入来源集合或目标集合。' : guideStage === 'stance' ? '对正确的消息内容，选择赞同。' : guideStage === 'contribution' ? '贡献点数值会影响发送时的消耗，发送前可以按需要修改。' : guideStage === 'consumption' ? '总计显示本次操作的贡献点消耗，剩余显示发送后预计保留的贡献点。' : guideStage === 'send' ? '点击发送按钮后，系统会提交这条站队关系消息。' : guideStage === 'settlement-view' ? '结算入口用于打开当前消息的结算面板。' : guideStage === 'settle' ? '结算按钮会打开确认弹窗，请继续查看弹窗内容。' : guideStage === 'settlement-confirm' ? '确认弹窗会展示本轮结算结果、收益池和当前用户贡献点变化；查看完成后点击下一步。' : guideStage === 'settlement-confirm-action' ? '确认弹窗中的信息已查看，点击确认结算后等待结算完成。' : guideStage === 'settlement-history' ? '双击对应的历史结算记录，可以展开查看本轮详细结算信息。' : '单击选中，再次单击取消选中；双击空白区域可取消所有选中。'}</div>
+          <div>{guideStage === 'message-compose' ? '这一步先熟悉文本消息输入位置；点击下一步后调整贡献点。' : guideStage === 'message-contribution' ? '文本消息的押注数值会影响本次发送消耗。' : guideStage === 'message-consumption' ? '确认发送后的总消耗和预计剩余贡献点。' : guideStage === 'message-send' ? '点击发送后，系统会创建一条新的文本消息，它将成为下一步的赞同目标。' : guideStage === 'staging' ? '消息已加入选择暂存区，点击相关按钮可将选择暂存区中的所有消息加入来源集合或目标集合。' : guideStage === 'stance' ? '对正确的消息内容，选择赞同。' : guideStage === 'contribution' ? '贡献点数值会影响发送时的消耗，发送前可以按需要修改。' : guideStage === 'consumption' ? '总计显示本次操作的贡献点消耗，剩余显示发送后预计保留的贡献点。' : guideStage === 'send' ? '点击发送按钮后，系统会提交这条站队关系消息。' : guideStage === 'settlement-view' ? '结算入口用于打开当前消息的结算面板。' : guideStage === 'settle' ? '结算按钮会打开确认弹窗，请继续查看弹窗内容。' : guideStage === 'settlement-confirm' ? '确认弹窗会展示本轮结算结果、收益池和当前用户贡献点变化；查看完成后点击下一步。' : guideStage === 'settlement-confirm-action' ? '确认弹窗中的信息已查看，点击确认结算后等待结算完成。' : guideStage === 'settlement-history' ? '双击对应的历史结算记录，可以展开查看本轮详细结算信息。' : '单击选中，再次单击取消选中；双击空白区域可取消所有选中。'}</div>
           <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 12 }}>说明</div>
           <div>{visibilityHint}</div>
           {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息ID：{target.messageId}</div>}
           {target?.title && <div style={{ marginTop: 4, color: '#d4d4d8', fontSize: 12, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>目标消息内容：{target.title}</div>}
-          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{guideStage === 'staging' ? '提醒：点击下一步继续。' : guideStage === 'stance' ? '提醒：选择关系类型后继续下一步。' : guideStage === 'contribution' ? '提醒：完成发送前押注贡献点调整后，点击下一步继续。' : guideStage === 'consumption' ? '提醒：查看贡献点消耗后，点击下一步继续。' : guideStage === 'send' ? '提醒：点击发送按钮进入下一步。' : guideStage === 'settlement-view' ? '提醒：点击结算入口进入下一步。' : guideStage === 'settle' ? '提醒：点击结算按钮查看确认提示。' : guideStage === 'settlement-confirm' ? '提醒：查看提示信息后点击下一步。' : guideStage === 'settlement-confirm-action' ? '提醒：点击确认结算后，等待结算完成。' : guideStage === 'settlement-history' ? '提醒：双击记录查看详情，然后点击完成。' : '提醒：选中后继续下一步。'}</div>
+          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{guideStage === 'message-compose' ? '提醒：点击下一步进入文本消息贡献点调整。' : guideStage === 'message-contribution' ? '提醒：点击下一步查看文本消息消耗。' : guideStage === 'message-consumption' ? '提醒：点击下一步进入文本消息发送。' : guideStage === 'message-send' ? '提醒：发送成功后自动进入目标消息选择。' : guideStage === 'staging' ? '提醒：点击下一步继续。' : guideStage === 'stance' ? '提醒：选择关系类型后继续下一步。' : guideStage === 'contribution' ? '提醒：完成发送前押注贡献点调整后，点击下一步继续。' : guideStage === 'consumption' ? '提醒：查看贡献点消耗后，点击下一步继续。' : guideStage === 'send' ? '提醒：点击发送按钮进入下一步。' : guideStage === 'settlement-view' ? '提醒：点击结算入口进入下一步。' : guideStage === 'settle' ? '提醒：点击结算按钮查看确认提示。' : guideStage === 'settlement-confirm' ? '提醒：查看提示信息后点击下一步。' : guideStage === 'settlement-confirm-action' ? '提醒：点击确认结算后，等待结算完成。' : guideStage === 'settlement-history' ? '提醒：双击记录查看详情，然后点击完成。' : '提醒：选中后继续下一步。'}</div>
         </div>
+        {guideStage === 'message-compose' && <button type="button" onClick={() => { setGuideStage('message-contribution'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
+        {guideStage === 'message-contribution' && <button type="button" onClick={() => { setGuideStage('message-consumption'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
+        {guideStage === 'message-consumption' && <button type="button" onClick={() => { setGuideStage('message-send'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
         {guideStage === 'staging' && <button type="button" onClick={() => { setGuideStage('stance'); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
         {guideStage === 'contribution' && <button type="button" onClick={() => { setGuideStage('consumption'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
         {guideStage === 'consumption' && <button type="button" onClick={() => { setGuideStage('send'); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}

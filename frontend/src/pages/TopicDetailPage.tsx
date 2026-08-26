@@ -612,20 +612,17 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
 
   useEffect(() => {
     const startGuide = () => {
-      const target = messages.find(message => isContentKind(message.kind));
-      if (!target) return;
       setDraftUnits([]);
       setSourceUnits([]);
       setTargetUnits([]);
+      setRelationType(null);
+      setSecondaryRelationType('none');
+      setNewMessageContent('');
       setActiveTextSelectId(null);
       clearBrowserSelection();
-      guideTargetIdRef.current = target.id;
+      guideTargetIdRef.current = null;
       setGuideActive(true);
       setViewMode('graph');
-      window.dispatchEvent(new CustomEvent('guide-target-ready', {
-        detail: { messageId: target.id, title: target.content.slice(0, 40) },
-      }));
-      setTimeout(() => scrollMsgToCenter(target.id), 100);
     };
     const stopGuide = () => {
       guideTargetIdRef.current = null;
@@ -3260,7 +3257,13 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     // CORRECT uses its own branch below and never creates a replacement text message.
     if (relationType === null) {
       if (text.length === 0) return;
-      await handleSendMessageOnly(text);
+      const sentMessage = await handleSendMessageOnly(text);
+      if (sentMessage) {
+        guideTargetIdRef.current = sentMessage.id;
+        window.dispatchEvent(new CustomEvent('guide-text-message-sent', {
+          detail: { messageId: sentMessage.id, title: sentMessage.content.slice(0, 40) },
+        }));
+      }
       setNewMessageContent("");
       return;
     }

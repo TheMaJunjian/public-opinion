@@ -213,7 +213,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           </span>
         )}
         </>}
-        <button data-guide-send="true" onClick={() => { window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={p.isPreviewMode || !p.singleButtonEnabled}
+        <button data-guide-send="true" data-guide-text-message-send="true" onClick={() => { window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={p.isPreviewMode || !p.singleButtonEnabled}
           style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: (p.singleButtonEnabled && !p.isPreviewMode) ? "#0b84ff" : "#333", color: (p.singleButtonEnabled && !p.isPreviewMode) ? "#fff" : "#777", cursor: (p.singleButtonEnabled && !p.isPreviewMode) ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
           发送
         </button>
@@ -490,6 +490,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
               : "输入一条新普通消息（支持自由换行）";
             return (
               <textarea
+                data-guide-message-input="true"
                 style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
                 placeholder={placeholderText}
                 value={p.newMessageContent}

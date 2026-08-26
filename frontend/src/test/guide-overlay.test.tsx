@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import GuideOverlay from '../components/GuideOverlay';
 
 function renderGuide() {
@@ -19,11 +19,18 @@ function renderGuide() {
 }
 
 describe('GuideOverlay', () => {
+  afterEach(() => cleanup());
+
   it('keeps the first next button disabled until text is entered', async () => {
     renderGuide();
 
     const nextButton = await screen.findByRole('button', { name: '下一步' });
     expect(nextButton).toBeDisabled();
+    const actions = document.querySelector<HTMLElement>('[data-guide-actions="true"]');
+    expect(actions).not.toBeNull();
+    expect(actions).toHaveStyle({ marginTop: '12px', justifyContent: 'flex-end' });
+    expect(nextButton).not.toHaveStyle({ position: 'absolute' });
+    expect(document.querySelector<HTMLElement>('[data-guide-bubble="true"]')).toHaveStyle({ padding: '15px 18px 18px' });
 
     const input = document.querySelector<HTMLTextAreaElement>('[data-guide-message-input="true"]');
     expect(input).not.toBeNull();
@@ -57,4 +64,21 @@ describe('GuideOverlay', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('当前步骤不可操作');
     expect(unrelatedButton).toBeInTheDocument();
   });
+
+  it('keeps selection staging controls read-only during the staging step', async () => {
+    renderGuide();
+    const stagingButton = document.createElement('button');
+    stagingButton.textContent = '加入目标集合';
+    const staging = document.createElement('div');
+    staging.dataset.guideSelectionStaging = 'true';
+    staging.appendChild(stagingButton);
+    document.body.appendChild(staging);
+
+    act(() => window.dispatchEvent(new Event('guide-selection-complete')));
+    await screen.findByText('消息已加入选择暂存区');
+    fireEvent.click(stagingButton);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('当前步骤不可操作');
+  });
+
 });

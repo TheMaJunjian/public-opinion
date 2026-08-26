@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { Z_INDEX } from '../constants/zIndex';
 import { useEffect, useRef, useState } from 'react';
 import { GestureDirection, GesturePoint, GestureSide, ShortcutSymbol, recognizeGesture } from '../utils/gestureShortcut';
 
@@ -518,14 +519,14 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         aria-modal="true"
         aria-label="快捷符输入蒙版"
         style={{
-          position: 'fixed', inset: 0, zIndex: 2147483000,
+          position: 'fixed', inset: 0, zIndex: Z_INDEX.shortcut,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           pointerEvents: 'none', userSelect: 'none',
         }}
       >
         <div
           aria-hidden="true"
-          style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 2147483002 }}
+          style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: Z_INDEX.shortcutVisual }}
         >
           <svg
             aria-hidden="true"
@@ -562,7 +563,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             left: shortcutInputPosition?.x ?? window.innerWidth / 2,
             top: shortcutInputPosition?.y ?? window.innerHeight / 2,
             transform: 'translate(-50%, -50%)',
-            zIndex: 2147483001,
+            zIndex: Z_INDEX.shortcutContent,
           }}
         >
           <div style={{ fontSize: 16, fontWeight: 600 }}>快捷符输入</div>
@@ -594,7 +595,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             aria-live="polite"
             style={{
               position: 'fixed', left: pendingPosition.x, top: pendingPosition.y,
-              transform: 'translate(-50%, -50%)', zIndex: 2147483003, pointerEvents: 'none',
+              transform: 'translate(-50%, -50%)', zIndex: Z_INDEX.shortcutStatus, pointerEvents: 'none',
               padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
               border: '1px solid #666', color: '#fff', fontSize: 13,
               boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
@@ -613,7 +614,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             aria-live="polite"
             style={{
               position: 'fixed', left: cancelledPosition.x, top: cancelledPosition.y,
-              transform: 'translate(-50%, -50%)', zIndex: 2147483004, pointerEvents: 'none',
+              transform: 'translate(-50%, -50%)', zIndex: Z_INDEX.shortcutCancelled, pointerEvents: 'none',
               padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
               border: '1px solid #f87171', color: '#fecaca', fontSize: 13,
               boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
@@ -628,7 +629,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
             aria-live="polite"
             style={{
               position: 'fixed', left: shortcutFailurePosition.x, top: shortcutFailurePosition.y,
-              transform: 'translate(-50%, -50%)', zIndex: 2147483005, pointerEvents: 'none',
+              transform: 'translate(-50%, -50%)', zIndex: Z_INDEX.shortcutFailure, pointerEvents: 'none',
               padding: '8px 14px', borderRadius: 6, background: 'rgba(20, 20, 20, 0.96)',
               border: '1px solid #f87171', color: '#fecaca', fontSize: 13,
               boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
@@ -651,7 +652,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         style={{
           position: 'fixed', left: statusPosition.x, top: statusPosition.y,
           transform: 'translate(-50%, -50%)',
-          zIndex: 3000, pointerEvents: 'none', padding: '8px 14px', borderRadius: 6,
+          zIndex: Z_INDEX.shortcutTransient, pointerEvents: 'none', padding: '8px 14px', borderRadius: 6,
           background: 'rgba(20, 20, 20, 0.94)', border: '1px solid #f87171', color: '#fecaca',
           fontSize: 13, boxShadow: '0 4px 18px rgba(0,0,0,0.35)',
         }}
@@ -667,7 +668,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       style={{
         position: 'fixed', left: pendingPosition.x, top: pendingPosition.y,
         transform: 'translate(-50%, -50%)',
-        zIndex: 3000, pointerEvents: 'none', padding: '8px 14px', borderRadius: 6,
+        zIndex: Z_INDEX.shortcutTransient, pointerEvents: 'none', padding: '8px 14px', borderRadius: 6,
         background: 'rgba(20, 20, 20, 0.94)', border: '1px solid #666', color: '#fff',
         fontSize: 13, boxShadow: '0 4px 18px rgba(0,0,0,0.35)',
       }}

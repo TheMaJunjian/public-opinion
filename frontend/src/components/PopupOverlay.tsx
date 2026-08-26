@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { Z_INDEX } from '../constants/zIndex';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 
@@ -101,7 +102,7 @@ export function MessageJumpOverlay({
       style={{
         position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
         width: '100dvw', height: '100dvh', minWidth: '100vw', minHeight: '100vh',
-        boxSizing: 'border-box', zIndex: 190,
+        boxSizing: 'border-box', zIndex: Z_INDEX.popup,
         background: cloneReady ? 'rgba(0,0,0,0.42)' : 'transparent',
         pointerEvents: 'none',
       }}

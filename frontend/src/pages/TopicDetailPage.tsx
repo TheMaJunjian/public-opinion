@@ -13,6 +13,7 @@ import type { Topic, TargetRef, Relation, MessageStakes, User } from '../types';
 import { getPresentationSpec, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { Z_INDEX } from '../constants/zIndex';
 import MessageCard, { type MessageCardContext } from '../components/MessageCard';
 import SettlementPanel from '../components/SettlementPanel';
 import RoundHistory from '../components/RoundHistory';
@@ -6232,7 +6233,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     <>
     <ErrorBoundary>
     <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
-      <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, zIndex: 40 } : {}) }}>
+      <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, zIndex: Z_INDEX.header } : {}) }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
@@ -6242,7 +6243,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         </div>
         <div aria-hidden="true" style={{ flex: 1, minWidth: 0 }} />
         {!isPreloaded && (
-        <div style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", ...(relationControlsPinned ? { position: "sticky", right: 0, zIndex: 41 } : {}) }}>
+        <div style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", ...(relationControlsPinned ? { position: "sticky", right: 0, zIndex: Z_INDEX.header } : {}) }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
             <button key={rt} onClick={() => {

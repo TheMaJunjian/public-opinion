@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { Z_INDEX } from '../constants/zIndex';
 import PointsBadge from './PointsBadge';
 
 interface NavbarProps {
@@ -53,7 +54,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, topC
   }
 
   return (
-    <nav ref={navRef} className={`relative bg-indigo-700 text-white px-6 py-3 flex items-center shadow-md${topControlsFrozen ? ' sticky top-0 z-50' : ''}`}>
+    <nav ref={navRef} className="relative bg-indigo-700 text-white px-6 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
       <div ref={leftControlsRef} className="relative flex shrink-0 items-center gap-4">
         <Link to="/" className="flex flex-col leading-tight hover:opacity-90 transition-opacity">
           <span className="text-xl font-bold tracking-widest">公论</span>
@@ -79,17 +80,22 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, topC
           aria-label={topControlsFrozen ? '解冻顶部控件' : '冻结顶部控件'}
           aria-pressed={topControlsFrozen}
           title={topControlsFrozen ? '解冻教程、退出和关系类型控件' : '冻结教程、退出和关系类型控件'}
-          className="absolute left-[calc(100%+8px)] top-full z-[60] flex h-6 w-6 items-center justify-center rounded-full text-xs shadow-md"
+          className="absolute left-[calc(100%+8px)] top-full flex h-6 w-6 items-center justify-center rounded-full text-xs shadow-md"
           style={{
             background: 'transparent',
             color: 'rgba(255,255,255,0.7)',
+            zIndex: Z_INDEX.freezeButton,
           }}
         >
-          {topControlsFrozen ? '📍' : '📌'}
+          {topControlsFrozen ? (
+            <span aria-hidden="true" className="relative inline-block h-4 w-4 translate-y-0.5 rounded-full border-2 border-red-500">
+              <span className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500" />
+            </span>
+          ) : '📌'}
         </button>
       </div>
       <div aria-hidden="true" className="flex-1 min-w-4" />
-      <div ref={rightControlsRef} className={`${rightControlsPinned ? 'sticky right-0' : ''} z-10 flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4`}>
+      <div ref={rightControlsRef} className={`${rightControlsPinned ? 'sticky right-0' : ''} flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4`} style={{ zIndex: Z_INDEX.popover }}>
         {user ? (
           <>
             <button

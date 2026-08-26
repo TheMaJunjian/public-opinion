@@ -89,6 +89,7 @@ export default function PointsBadge() {
       return;
     }
     setOpen(true);
+    window.dispatchEvent(new Event('guide-points-opened'));
     setTxLoading(true);
     try {
       const res = await api.getPointsTransactions({ limit: 20 });
@@ -115,12 +116,13 @@ export default function PointsBadge() {
   return (
     <div className="relative" ref={popRef}>
       <button
+        data-guide-points="true"
         onClick={handleClick}
         className={`flex items-center gap-2 text-sm hover:opacity-80 transition-opacity cursor-pointer ${flash ? `animate-pulse ring-2 rounded px-1 ${flash === 'gain' ? 'ring-red-400' : 'ring-green-400'}` : ''}`}
         title={`可用${points.available} · 锁定${points.locked} · 损失${breakdown.totalLost} · 协议费${breakdown.totalProtocolFees} · 收益${breakdown.totalEarned}`}
       >
         <span className="text-indigo-200">
-          💎 {points.available.toLocaleString()}
+          🪙 {points.available.toLocaleString()}
         </span>
         <span className="text-indigo-400 text-xs" title={`锁定: ${points.locked}`}>
           🔒{points.locked}
@@ -149,6 +151,7 @@ export default function PointsBadge() {
       {/* Popover: transaction list */}
       {open && (
         <div
+          data-guide-points-panel="true"
           className="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-80 overflow-auto"
           onClick={(e) => e.stopPropagation()}
         >
@@ -171,6 +174,7 @@ export default function PointsBadge() {
                 return (
                 <li
                   key={tx.id}
+                  data-guide-points-record={txData?.roundId ? String(txData.roundId) : undefined}
                   className={`px-3 py-2 text-xs flex justify-between items-center select-none ${hasMessage ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
                   onDoubleClick={canNavigate ? (e) => {
                     e.preventDefault();

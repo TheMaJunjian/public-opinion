@@ -192,7 +192,7 @@ export function convertMessagesToDemoModel(
   // Build a set of relation IDs to detect when sourceMessageId references a relation message.
   const relationIds = new Set(relations.map(r => r.id));
 
-  const demoMessages: DemoMessage[] = messages.map(m => {
+  const demoMessages: DemoMessage[] = messages.filter(m => (m as any).kind !== 'RELATION').map(m => {
     const bk = (m as any).kind ?? 'TEXT';
     // Extract settlement target from ROUND/ROUND_RESULT targetRefs
     let settlementTargetId: string | undefined;

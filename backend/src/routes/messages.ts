@@ -39,10 +39,11 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
       return;
     }
 
+    const messageWhere = { topicId, supersededBy: null };
     const [total, messages] = await Promise.all([
-      prisma.message.count({ where: { topicId, kind: { in: ['TEXT', 'GOVERNANCE', 'CODE', 'OPERATIONS', 'ROUND', 'ROUND_RESULT'] } } }),
+      prisma.message.count({ where: messageWhere }),
       prisma.message.findMany({
-        where: { topicId, kind: { in: ['TEXT', 'GOVERNANCE', 'CODE', 'OPERATIONS', 'ROUND', 'ROUND_RESULT'] } },
+        where: messageWhere,
         orderBy: { createdAt: 'asc' },
         skip,
         take: limit,

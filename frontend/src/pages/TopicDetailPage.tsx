@@ -231,19 +231,30 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           setLoading(true);
           setLoadError(null);
         }
-        const [topicData, messagesData, relationsData, attentionData, usersData] = await Promise.all([
+        const [topicData, messagesData, attentionData, usersData] = await Promise.all([
           api.getTopic(topicId!),
           api.getAllMessages(topicId!),
-          api.getRelations(topicId!, { limit: 200 }),
           api.getAttentionUsers(topicId!),
           api.getUsers ? api.getUsers() : Promise.resolve({ data: [] as User[] }),
         ]);
         if (cancelled) return;
         setTopic(topicData);
+        const serverRelations: Relation[] = messagesData.data
+          .filter(message => message.kind === 'RELATION' && message.relationType)
+          .map(message => ({
+            id: message.id,
+            topicId: message.topicId,
+            relationType: message.relationType!,
+            sourceMessageId: message.relSourceId ?? null,
+            targetRefs: message.targetRefs ?? [],
+            payload: message.relationPayload ?? undefined,
+            createdAt: message.createdAt,
+            createdBy: message.createdBy,
+          }));
         const currentRelations = relationsRef.current;
-        const serverRelationIds = new Set(relationsData.data.map(relation => relation.id));
+        const serverRelationIds = new Set(serverRelations.map(relation => relation.id));
         const mergedRelations = [
-          ...relationsData.data,
+          ...serverRelations,
           ...currentRelations.filter(relation => !serverRelationIds.has(relation.id)),
         ];
         const { messages: serverDemoMsgs, edges: serverDemoEdges } = convertMessagesToDemoModel(

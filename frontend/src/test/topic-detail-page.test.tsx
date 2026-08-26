@@ -21,7 +21,29 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => {
     closeAndSettle: vi.fn(),
     getTopicTagCounts: vi.fn().mockResolvedValue({ topicId: '', counts: {} }),
   };
-  mockApi.getAllMessages.mockImplementation((...args: Parameters<typeof mockApi.getMessages>) => mockApi.getMessages(...args));
+  mockApi.getAllMessages.mockImplementation(async (...args: Parameters<typeof mockApi.getMessages>) => {
+    const messages = await mockApi.getMessages(...args);
+    const relations = await mockApi.getRelations();
+    return {
+      ...messages,
+      data: [
+        ...messages.data,
+        ...relations.data.map((relation: Relation) => ({
+          id: relation.id,
+          topicId: relation.topicId,
+          kind: 'RELATION',
+          contentType: 'TEXT',
+          content: '',
+          relationType: relation.relationType,
+          relSourceId: relation.sourceMessageId,
+          targetRefs: relation.targetRefs,
+          relationPayload: relation.payload ?? null,
+          createdAt: relation.createdAt,
+          createdBy: relation.createdBy,
+        })),
+      ],
+    };
+  });
   return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn() };
 });
 

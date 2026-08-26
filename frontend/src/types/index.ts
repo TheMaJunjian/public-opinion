@@ -31,6 +31,10 @@ export interface Message {
   content: string;
   createdAt: string;
   createdBy: User;
+  relationType?: RelationType | null;
+  relSourceId?: string | null;
+  targetRefs?: TargetRef[];
+  relationPayload?: RelationPayload | null;
 }
 
 // ============================================================

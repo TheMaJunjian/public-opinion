@@ -222,9 +222,15 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   useEffect(() => {
     if (!topicId || preloadedData) return;
     let cancelled = false;
-    async function load() {
+    let refreshInFlight = false;
+    async function load(showLoading: boolean) {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       try {
-        setLoading(true); setLoadError(null);
+        if (showLoading) {
+          setLoading(true);
+          setLoadError(null);
+        }
         const [topicData, messagesData, relationsData, attentionData, usersData] = await Promise.all([
           api.getTopic(topicId!),
           api.getAllMessages(topicId!),
@@ -299,13 +305,18 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         }
       } catch (e: any) {
         if (cancelled) return;
-        setLoadError(String(e?.message ?? e));
+        if (showLoading) setLoadError(String(e?.message ?? e));
       } finally {
-        if (!cancelled) setLoading(false);
+        refreshInFlight = false;
+        if (!cancelled && showLoading) setLoading(false);
       }
     }
-    load();
-    return () => { cancelled = true; };
+    load(true);
+    const refreshTimer = window.setInterval(() => { void load(false); }, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+    };
   }, [topicId, leaderboardRefreshVersion]);
 
   useEffect(() => {

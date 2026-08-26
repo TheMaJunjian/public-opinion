@@ -296,6 +296,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
             {settledRounds.slice(0, 5).map(round => (
               <div key={round.id}>
                 <div
+                  data-guide-settlement-history={round.id}
                   className={`bg-gray-50 border rounded px-3 py-2 text-xs cursor-pointer hover:bg-gray-100 transition-colors select-none ${expandedSettledRound === round.id ? 'border-indigo-300' : 'border-gray-200'}`}
                   onDoubleClick={() => setExpandedSettledRound(expandedSettledRound === round.id ? null : round.id)}
                 >
@@ -506,6 +507,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
           roundPayload: { roundId: localRound.id, result: result.result, settlementType: localRound.settlementType },
         });
       }
+      window.dispatchEvent(new CustomEvent('guide-settlement-confirmed', { detail: { roundId: localRound.id } }));
       onSettled(localRound.id);
       window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
@@ -544,7 +546,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
           )}
         </div>
         <button
-          onClick={handleSettle}
+          onClick={() => { window.dispatchEvent(new Event('guide-settle-selected')); void handleSettle(); }}
+          data-guide-settle="true"
           disabled={totalWeight === 0 || voting || settling}
           className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 || voting || settling ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
           title={totalWeight === 0 ? '暂无押注，无法结算' : voting ? '投票请求处理中' : settling ? '结算请求处理中' : '结算'}
@@ -648,6 +651,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       <PromptModal
         open={confirmOpen}
         title="确认结算"
+        guideSettlementConfirm
         message={`${settlementPrompt}\n\n结算后将根据投票权重分配押注池贡献点，可继续发起结算，但本次结算不可撤销。\n确定要结算此轮次吗？`}
         confirmText={settling ? '结算中...' : '确认结算'}
         confirmDisabled={settling}

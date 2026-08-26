@@ -1016,7 +1016,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         target.closest('[data-settlement-panel]') ||
         target.closest('[data-settlement-toggle-truth]') ||
         target.closest('[data-settlement-toggle-value]') ||
-        target.closest('[data-prompt-modal="true"]')
+        target.closest('[data-prompt-modal="true"]') ||
+        target.closest('[data-guide-overlay="true"]')
       ) return;
       closeSettlement();
     };

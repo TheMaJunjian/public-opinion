@@ -11,6 +11,7 @@ interface PromptModalProps {
   cancelText?: string;
   danger?: boolean;
   hideActions?: boolean;
+  guideSettlementConfirm?: boolean;
   onConfirm: () => void;
   onCancel?: () => void;
 }
@@ -29,6 +30,7 @@ export default function PromptModal({
   cancelText = '取消',
   danger = false,
   hideActions = false,
+  guideSettlementConfirm = false,
   onConfirm,
   onCancel,
 }: PromptModalProps) {
@@ -91,7 +93,15 @@ export default function PromptModal({
           {title}
         </div>
 
-        <div style={{ padding: '16px', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+        <div
+          {...(guideSettlementConfirm ? { 'data-guide-settlement-message': 'true' } : {})}
+          style={{
+            padding: '16px',
+            fontSize: 14,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+          }}
+        >
           {message}
         </div>
 
@@ -115,6 +125,7 @@ export default function PromptModal({
           )}
           <button
             data-shortcut-confirm="true"
+            {...(guideSettlementConfirm ? { 'data-guide-settlement-confirm': 'true' } : {})}
             onClick={onConfirm}
             disabled={confirmDisabled}
             style={{

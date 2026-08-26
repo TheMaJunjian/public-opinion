@@ -3591,14 +3591,16 @@ function GraphViewCanvas(props: GraphViewProps) {
                     })()}
                     {onSettlementToggleTruth && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(msg.id); }}
+                        onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(msg.id); }}
+                        data-guide-settlement-entry="true"
                         style={{fontSize:13,cursor:"pointer",background:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"rgba(99,102,241,0.2)":"none",border:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"1px solid #6366f1":"1px solid transparent",borderRadius:4,padding:"0 3px",color:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"#a5b4fc":"#6b7280",lineHeight:1}}
                         title="真假仲裁"
                       >⚖️</button>
                     )}
                     {onSettlementToggleValue && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(msg.id); }}
+                        onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(msg.id); }}
+                        data-guide-settlement-entry="true"
                         style={{fontSize:13,cursor:"pointer",background:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"rgba(245,158,11,0.2)":"none",border:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"1px solid #f59e0b":"1px solid transparent",borderRadius:4,padding:"0 3px",color:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"#fcd34d":"#6b7280",lineHeight:1}}
                         title="价值仲裁"
                       >💎</button>
@@ -3823,7 +3825,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                           {onSettlementToggleTruth && (
                             <button
                               data-settlement-toggle-truth
-                              onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(msg.id); }}
+                              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(msg.id); }}
+                              data-guide-settlement-entry="true"
                               style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"rgba(99,102,241,0.2)":"none", border: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"1px solid #6366f1":"1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"#a5b4fc":"#6b7280", lineHeight: 1 }}
                               title="真假仲裁"
                             >⚖️</button>
@@ -3831,7 +3834,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                           {onSettlementToggleValue && (
                             <button
                               data-settlement-toggle-value
-                              onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(msg.id); }}
+                              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(msg.id); }}
+                              data-guide-settlement-entry="true"
                               style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"rgba(245,158,11,0.2)":"none", border: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"1px solid #f59e0b":"1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"#fcd34d":"#6b7280", lineHeight: 1 }}
                               title="价值仲裁"
                             >💎</button>
@@ -4529,14 +4533,16 @@ function GraphViewCanvas(props: GraphViewProps) {
                         )}
                         {onSettlementToggleTruth && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(gf.relMsgId); }}
+                            onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(gf.relMsgId); }}
+                            data-guide-settlement-entry="true"
                             style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}
                             title="真假仲裁"
                           >⚖️</button>
                         )}
                         {onSettlementToggleValue && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(gf.relMsgId); }}
+                            onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(gf.relMsgId); }}
+                            data-guide-settlement-entry="true"
                             style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "rgba(245,158,11,0.2)" : "none", border: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "#fcd34d" : "#6b7280", lineHeight: 1 }}
                             title="价值仲裁"
                           >💎</button>
@@ -4597,13 +4603,15 @@ function GraphViewCanvas(props: GraphViewProps) {
               {(truthPro > 0 || truthCon > 0) && <span style={{fontSize:10}}><span style={{color:"#a5b4fc"}}>⚖️</span>{truthPro > 0 && <span style={{color:"#4ade80"}}>👍{truthPro}</span>}{truthCon > 0 && <span style={{color:"#f87171"}}>👎{truthCon}</span>}</span>}
               {(valuePro > 0 || valueCon > 0) && <span style={{fontSize:10}}><span style={{color:"#fcd34d"}}>💎</span>{valuePro > 0 && <span style={{color:"#4ade80"}}>👍{valuePro}</span>}{valueCon > 0 && <span style={{color:"#f87171"}}>👎{valueCon}</span>}</span>}
               <button
-                onClick={(e) => { e.stopPropagation(); onSettlementToggleTruth(sf.relMsgId); }}
+                onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(sf.relMsgId); }}
+                data-guide-settlement-entry="true"
                 style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}
                 title="真假仲裁"
               >⚖️</button>
               {onSettlementToggleValue && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); onSettlementToggleValue(sf.relMsgId); }}
+                  onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(sf.relMsgId); }}
+                  data-guide-settlement-entry="true"
                   style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "rgba(245,158,11,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "#fcd34d" : "#6b7280", lineHeight: 1 }}
                   title="价值仲裁"
                 >💎</button>

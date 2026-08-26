@@ -92,6 +92,38 @@ function makeToken(user = mockUser): string {
   return jwt.sign(user, JWT_SECRET, { expiresIn: '1h' });
 }
 
+describe('GET /api/topics/:topicId/messages - unified Message model', () => {
+  it('returns both TEXT and RELATION message records', async () => {
+    const relationMessage = {
+      id: 'rel-1',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'REFERENCE',
+      relSourceId: 'msg-1',
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      relationPayload: null,
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    };
+    (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
+    (prisma.message.count as jest.Mock).mockResolvedValue(2);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage, relationMessage]);
+
+    const res = await request(app).get('/api/topics/topic-1/messages?limit=200');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((message: { kind: string }) => message.kind)).toEqual(['TEXT', 'RELATION']);
+    expect(res.body.data[1]).toMatchObject({
+      id: 'rel-1',
+      relationType: 'REFERENCE',
+      relSourceId: 'msg-1',
+    });
+    expect(prisma.message.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { topicId: 'topic-1', supersededBy: null },
+    }));
+  });
+});
+
 // ─── GET /api/topics/:topicId/relations ───────────────────────────────────
 
 describe('GET /api/topics/:topicId/relations', () => {

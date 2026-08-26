@@ -61,22 +61,29 @@ describe('Replay/Verify', () => {
 
   beforeAll(async () => {
     const ids = [`${PREFIX}a`, `${PREFIX}b`];
-    const ourMsgs = await prisma.message.findMany({ where: { createdById: { in: ids } }, select: { id: true } });
-    const ourMsgIds = ourMsgs.map(m => m.id);
+    const ourTopics = await prisma.topic.findMany({ where: { createdById: { in: ids } }, select: { id: true } });
+    const ourTopicIds = ourTopics.map(topic => topic.id);
+    const ourMsgs = await prisma.message.findMany({ where: { topicId: { in: ourTopicIds } }, select: { id: true } });
+    const ourMsgIds = ourMsgs.map(message => message.id);
     const ourRounds = await prisma.settlementRound.findMany({ where: { messageId: { in: ourMsgIds } }, select: { id: true } });
     const ourRoundIds = ourRounds.map(r => r.id);
 
     if (ourRoundIds.length > 0) await prisma.voteStake.deleteMany({ where: { roundId: { in: ourRoundIds } } });
     if (ourRoundIds.length > 0) await prisma.settlementRound.deleteMany({ where: { id: { in: ourRoundIds } } });
-    await prisma.stake.deleteMany({ where: { userId: { in: ids } } });
+    if (ourTopicIds.length > 0) {
+      await prisma.stake.deleteMany({ where: { topicId: { in: ourTopicIds } } });
+    }
     await prisma.betPool.deleteMany({ where: { messageId: { in: ourMsgIds } } });
     await prisma.pointTransaction.deleteMany({ where: { userId: { in: ids } } });
     await prisma.ledgerEntry.deleteMany({ where: { userId: { in: ids } } });
     await prisma.balance.deleteMany({ where: { userId: { in: ids } } });
     await prisma.pointAccount.deleteMany({ where: { userId: { in: ids } } });
     await prisma.auditLog.deleteMany({ where: { actorId: { in: ids } } });
-    await prisma.message.deleteMany({ where: { createdById: { in: ids } } });
-    await prisma.topic.deleteMany({ where: { createdById: { in: ids } } });
+    if (ourTopicIds.length > 0) {
+      await prisma.auditLog.deleteMany({ where: { topicId: { in: ourTopicIds } } });
+      await prisma.message.deleteMany({ where: { topicId: { in: ourTopicIds } } });
+      await prisma.topic.deleteMany({ where: { id: { in: ourTopicIds } } });
+    }
     await prisma.user.deleteMany({ where: { id: { in: ids } } });
   });
 

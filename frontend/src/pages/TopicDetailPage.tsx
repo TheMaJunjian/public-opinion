@@ -6272,7 +6272,11 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
               setRelationType(prev => prev === rt ? null : rt);
               if (rt === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); }
               else { setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); }
+              if (guideTargetIdRef.current && (rt === 'agree' || rt === 'disagree')) {
+                window.dispatchEvent(new Event('guide-stance-selected'));
+              }
             }}
+              data-guide-stance-type={rt === 'agree' || rt === 'disagree' ? 'true' : undefined}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
             </button>

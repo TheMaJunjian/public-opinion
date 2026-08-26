@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 interface GuideTargetDetail {
@@ -10,16 +10,16 @@ type BubblePlacement = 'right' | 'left' | 'top' | 'bottom';
 type BubblePosition = {
   top: number;
   left: number;
+  height: number;
   placement: BubblePlacement;
   tailOffset: number;
   tailVisible: boolean;
   diagonalTail?: { path: string; outlinePath: string };
 };
-type GuideStage = 'message' | 'staging';
+type GuideStage = 'message' | 'staging' | 'stance';
 type TailSegment = [{ x: number; y: number }, { x: number; y: number }];
-function getBubblePosition(rect: DOMRect): BubblePosition {
+function getBubblePosition(rect: DOMRect, height = 340): BubblePosition {
   const width = Math.min(390, window.innerWidth - 32);
-  const height = 340;
   const gap = 24;
   const margin = 16;
   const tailLength = 31;
@@ -74,6 +74,7 @@ function getBubblePosition(rect: DOMRect): BubblePosition {
   return {
     left,
     top,
+    height,
     placement: selected.placement,
     tailVisible: false,
     tailOffset: selected.placement === 'right' || selected.placement === 'left'
@@ -94,6 +95,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   const [guideStage, setGuideStage] = useState<GuideStage>('message');
   const [visibilityHint, setVisibilityHint] = useState('正在定位目标消息…');
   const [bubblePosition, setBubblePosition] = useState<BubblePosition | null>(null);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -103,7 +105,12 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       setGuideStage('staging');
       window.dispatchEvent(new Event('guide-clear-visuals'));
     };
+    const onStanceSelected = () => {
+      setCompleted(true);
+      window.dispatchEvent(new Event('guide-clear-visuals'));
+    };
     window.addEventListener('guide-selection-complete', onSelectionComplete);
+    window.addEventListener('guide-stance-selected', onStanceSelected);
     const onTarget = (event: Event) => {
       const detail = (event as CustomEvent<GuideTargetDetail>).detail;
       targetRef.current = detail;
@@ -126,6 +133,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     return () => {
       if (highlightedElementRef.current) highlightedElementRef.current.style.boxShadow = '';
       window.removeEventListener('guide-selection-complete', onSelectionComplete);
+      window.removeEventListener('guide-stance-selected', onStanceSelected);
       window.removeEventListener('guide-target-ready', onTarget);
       window.dispatchEvent(new Event('guide-stop'));
     };
@@ -141,12 +149,15 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   }, [open]);
 
   useEffect(() => {
-    if (!open || completed || guideStage !== 'staging') return;
-    const stagingElement = document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]');
-    if (!stagingElement) return;
-    stagingElement.style.boxShadow = '0 0 0 3px #facc15, 0 0 22px rgba(250,204,21,0.65)';
+    if (!open || completed || (guideStage !== 'staging' && guideStage !== 'stance')) return;
+    const elements = guideStage === 'staging'
+      ? [document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')]
+      : Array.from(document.querySelectorAll<HTMLElement>('[data-guide-stance-type="true"]'));
+    const highlightedElements = elements.filter((element): element is HTMLElement => Boolean(element));
+    if (highlightedElements.length === 0) return;
+    highlightedElements.forEach(element => { element.style.boxShadow = '0 0 0 3px #facc15, 0 0 22px rgba(250,204,21,0.65)'; });
     return () => {
-      stagingElement.style.boxShadow = '';
+      highlightedElements.forEach(element => { element.style.boxShadow = ''; });
     };
   }, [open, completed, guideStage]);
 
@@ -155,17 +166,29 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     const updateHint = () => {
       const targetElement = guideStage === 'staging'
         ? document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')
+        : guideStage === 'stance'
+          ? (() => {
+            const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-guide-stance-type="true"]'));
+            const rects = elements.map(element => element.getBoundingClientRect());
+            if (rects.length === 0) return null;
+            const left = Math.min(...rects.map(rect => rect.left));
+            const top = Math.min(...rects.map(rect => rect.top));
+            const right = Math.max(...rects.map(rect => rect.right));
+            const bottom = Math.max(...rects.map(rect => rect.bottom));
+            return new DOMRect(left, top, right - left, bottom - top);
+          })()
         : target?.messageId
           ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
           : null;
       const rightPanel = document.querySelector<HTMLElement>('[data-guide-right-panel="true"]');
       if (!targetElement || !rightPanel) return;
-      const targetRect = targetElement.getBoundingClientRect();
+      const targetRect = targetElement instanceof DOMRect ? targetElement : targetElement.getBoundingClientRect();
       const rightRect = rightPanel.getBoundingClientRect();
       const targetVisible = targetRect.bottom > 0 && targetRect.top < window.innerHeight;
       const rightVisible = rightRect.bottom > 0 && rightRect.top < window.innerHeight && rightRect.left < window.innerWidth;
-      setBubblePosition(getBubblePosition(targetRect));
+      setBubblePosition(current => getBubblePosition(targetRect, current?.height ?? 340));
       if (guideStage === 'staging') setVisibilityHint('消息已经加入选择暂存区，当目标集合为空时，选择暂存区中存在的消息被视为已加入目标集合。');
+      else if (guideStage === 'stance') setVisibilityHint('赞同你赞同的，反对你反对的。');
       else if (!targetVisible) setVisibilityHint('目标消息当前不在可视区域，请滚动左侧结构图。');
       else if (!rightVisible) setVisibilityHint('目标消息已定位。请滚动右侧面板查看选择暂存区；界面过窄时请先缩小界面。');
     };
@@ -173,6 +196,33 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     const timer = window.setInterval(updateHint, 500);
     return () => window.clearInterval(timer);
   }, [open, completed, guideStage, target?.messageId]);
+
+  useLayoutEffect(() => {
+    if (!open || completed || !bubbleRef.current) return;
+    const measuredHeight = bubbleRef.current.offsetHeight;
+    if (!measuredHeight) return;
+    const targetElement = guideStage === 'staging'
+      ? document.querySelector<HTMLElement>('[data-guide-selection-staging="true"]')
+      : guideStage === 'stance'
+        ? (() => {
+          const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-guide-stance-type="true"]'));
+          const rects = elements.map(element => element.getBoundingClientRect());
+          if (rects.length === 0) return null;
+          const left = Math.min(...rects.map(rect => rect.left));
+          const top = Math.min(...rects.map(rect => rect.top));
+          const right = Math.max(...rects.map(rect => rect.right));
+          const bottom = Math.max(...rects.map(rect => rect.bottom));
+          return new DOMRect(left, top, right - left, bottom - top);
+        })()
+        : target?.messageId
+          ? document.querySelector<HTMLElement>(`[data-msgid="${CSS.escape(target.messageId)}"]`)
+          : null;
+    if (!targetElement) return;
+    const targetRect = targetElement instanceof DOMRect ? targetElement : targetElement.getBoundingClientRect();
+    setBubblePosition(current => current && current.height !== measuredHeight
+      ? getBubblePosition(targetRect, measuredHeight)
+      : current);
+  }, [open, completed, guideStage, target?.messageId, visibilityHint]);
 
   if (!open) return null;
 
@@ -194,14 +244,14 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
     <div data-guide-overlay="true" style={{ position: 'fixed', inset: 0, zIndex: 900, pointerEvents: 'none' }}>
       {bubblePosition?.diagonalTail && (
         <svg aria-hidden="true" width="100%" height="100%" viewBox={`0 0 ${window.innerWidth} ${window.innerHeight}`} style={{ position: 'fixed', inset: 0, zIndex: 2, overflow: 'visible', pointerEvents: 'none' }}>
-          <rect x={bubblePosition.left} y={bubblePosition.top} width={Math.min(390, window.innerWidth - 32)} height="340" rx="16" fill="rgba(24,24,27,0.96)" stroke="#facc15" strokeWidth="1" />
+          <rect x={bubblePosition.left} y={bubblePosition.top} width={Math.min(390, window.innerWidth - 32)} height={bubblePosition.height} rx="16" fill="rgba(24,24,27,0.96)" stroke="#facc15" strokeWidth="1" />
           <path d={bubblePosition.diagonalTail.path} fill="rgba(24,24,27,0.96)" stroke="none" />
           <path d={bubblePosition.diagonalTail.outlinePath} fill="none" stroke="#facc15" strokeWidth="1" strokeLinecap="butt" />
         </svg>
       )}
-      <div data-guide-bubble="true" style={{
-        position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: 'min(390px, calc(100vw - 32px))', height: 340, boxSizing: 'border-box',
-        padding: '15px 18px', border: 0, borderRadius: 16,
+      <div ref={bubbleRef} data-guide-bubble="true" style={{
+        position: 'fixed', top: bubblePosition?.top ?? 24, left: bubblePosition?.left ?? 24, zIndex: 3, width: 'min(390px, calc(100vw - 32px))', height: 'auto', minHeight: 0, boxSizing: 'border-box',
+        padding: '15px 18px 32px', border: 0, borderRadius: 16,
         background: 'transparent', color: '#f4f4f5',
         boxShadow: 'none', pointerEvents: 'auto',
       }}>
@@ -222,21 +272,21 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
           }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <strong style={{ color: '#fde68a' }}>{guideStage === 'staging' ? '消息已加入选择暂存区' : '选择消息'}</strong>
+          <strong style={{ color: '#fde68a' }}>{guideStage === 'staging' ? '消息已加入选择暂存区' : guideStage === 'stance' ? '选择站队关系' : '选择目标消息'}</strong>
           <button type="button" onClick={onClose} style={{ border: 0, background: 'transparent', color: '#a1a1aa', cursor: 'pointer', fontSize: 18 }} aria-label="关闭引导">×</button>
         </div>
         <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65 }}>
           <div style={{ color: '#a1a1aa', fontSize: 11 }}>操作</div>
-          <div>{guideStage === 'staging' ? '请查看右侧选择暂存区' : '单击选择消息'}</div>
+          <div>{guideStage === 'staging' ? '请查看右侧选择暂存区' : guideStage === 'stance' ? '请选择赞同或反对' : '单击选择消息'}</div>
           <div style={{ marginTop: 8, color: '#fcd34d', fontSize: 12 }}>提示</div>
-          <div>{guideStage === 'staging' ? '消息已加入选择暂存区，点击相关按钮可将选择暂存区中的所有消息加入来源集合或目标集合。' : '单击选中，再次单击取消选中；双击空白区域可取消所有选中。'}</div>
+          <div>{guideStage === 'staging' ? '消息已加入选择暂存区，点击相关按钮可将选择暂存区中的所有消息加入来源集合或目标集合。' : guideStage === 'stance' ? '对正确的消息内容，选择赞同。' : '单击选中，再次单击取消选中；双击空白区域可取消所有选中。'}</div>
           <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 12 }}>说明</div>
           <div>{visibilityHint}</div>
           {target && <div style={{ marginTop: 8, color: '#a1a1aa', fontSize: 11 }}>目标消息ID：{target.messageId}</div>}
           {target?.title && <div style={{ marginTop: 4, color: '#d4d4d8', fontSize: 12, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>目标消息内容：{target.title}</div>}
-          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{guideStage === 'staging' ? '提醒：点击下一步继续。' : '提醒：选中后继续下一步。'}</div>
+          <div style={{ marginTop: 8, color: '#86efac', fontSize: 12 }}>{guideStage === 'staging' ? '提醒：点击下一步继续。' : guideStage === 'stance' ? '提醒：选择关系类型后继续下一步。' : '提醒：选中后继续下一步。'}</div>
         </div>
-        {guideStage === 'staging' && <button type="button" onClick={() => { setCompleted(true); window.dispatchEvent(new Event('guide-clear-visuals')); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
+        {guideStage === 'staging' && <button type="button" onClick={() => { setGuideStage('stance'); }} style={{ position: 'absolute', right: 18, bottom: 14, padding: '6px 16px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer', fontSize: 12 }}>下一步</button>}
       </div>
     </div>,
     document.body,

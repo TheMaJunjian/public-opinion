@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { storePrivateKeyForUser } from '../api/client';
@@ -11,6 +11,15 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const appRoot = document.querySelector<HTMLElement>('#root > div');
+    const previousBackground = appRoot?.style.backgroundColor ?? '';
+    if (appRoot) appRoot.style.backgroundColor = '#fff';
+    return () => {
+      if (appRoot) appRoot.style.backgroundColor = previousBackground;
+    };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

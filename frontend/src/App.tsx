@@ -52,6 +52,10 @@ function AppContent() {
       else document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       return;
     }
+    if (symbol === 'switch-view') {
+      document.querySelector<HTMLElement>('[data-shortcut-view-toggle="true"]')?.click();
+      return;
+    }
     if (!target) return;
     const amount = direction === 'up' || direction === 'down'
       ? target.clientHeight * 0.7

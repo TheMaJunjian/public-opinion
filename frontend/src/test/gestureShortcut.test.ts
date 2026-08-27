@@ -48,6 +48,13 @@ describe('recognizeGesture', () => {
     expect(recognizeGesture(points)).toMatchObject({ symbol });
   });
 
+  it.each([
+    [{ x: 20, y: 40 }, { x: 60, y: 40 }, { x: 100, y: 40 }, { x: 60, y: 40 }, { x: 24, y: 40 }],
+    [{ x: 100, y: 40 }, { x: 60, y: 40 }, { x: 20, y: 40 }, { x: 60, y: 40 }, { x: 96, y: 40 }],
+  ])('recognizes a horizontal out-and-back stroke as a view switch', (...points) => {
+    expect(recognizeGesture(points)).toMatchObject({ symbol: 'switch-view' });
+  });
+
   it('rejects short and heavily wavering strokes', () => {
     expect(recognizeGesture(line(0, 0, 20, 0))).toBeNull();
     expect(recognizeGesture(line(0, 0, 60, 15))).not.toMatchObject({ symbol: 'cancel' });

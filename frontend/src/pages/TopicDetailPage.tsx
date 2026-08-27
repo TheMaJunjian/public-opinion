@@ -6465,7 +6465,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
                     : resolveNavigationTargetId(scrollTargetId, messages, relations);
                   setTimeout(() => scrollMsgToCenter(navigationTargetId), 100);
                 }
-              }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
+              }} data-shortcut-view-toggle="true" style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
               </button>}
               </div>

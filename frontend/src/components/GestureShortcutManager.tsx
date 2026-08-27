@@ -40,13 +40,13 @@ const shortcutActions: Record<ShortcutSymbol, string> = {
   'scroll-up': directionActions.up, 'scroll-down': directionActions.down,
   'scroll-left': directionActions.left, 'scroll-right': directionActions.right,
   'zoom-in': '放大界面', 'zoom-out': '缩小界面',
-  confirm: '确认当前可确认操作', 'open-input': '打开快捷符输入蒙版', cancel: '取消或关闭',
-  'close-input': '关闭快捷符输入蒙版',
+  confirm: '确认当前可确认操作', 'open-input': '打开快捷符输入蒙版', cancel: ' 取消或关闭',
+  'close-input': '关闭快捷符输入蒙版', 'switch-view': '切换显示视图',
 };
 
 const shortcutGuide: ShortcutSymbol[] = [
   'open-input', 'close-input', 'confirm', 'cancel', 'zoom-in', 'zoom-out',
-  'scroll-up', 'scroll-down', 'scroll-left', 'scroll-right',
+  'scroll-up', 'scroll-down', 'scroll-left', 'scroll-right', 'switch-view',
 ];
 
 interface GesturePosition {
@@ -118,6 +118,9 @@ function getSymbolLines(symbol: ShortcutSymbol, direction: GestureDirection, sid
     { x1: 78, y1: 16, x2: 18, y2: 48 },
     { x1: 18, y1: 48, x2: 18, y2: 16 },
     { x1: 18, y1: 16, x2: 78, y2: 48 },
+  ];
+  if (symbol === 'switch-view') return [
+    { x1: 12, y1: 32, x2: 84, y2: 32 },
   ];
   const negative = side === 'negative';
   if (direction === 'right') return [

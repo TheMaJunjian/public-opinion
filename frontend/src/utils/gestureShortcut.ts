@@ -1,6 +1,6 @@
 export type GestureDirection = 'up' | 'down' | 'left' | 'right';
 export type GestureSide = 'negative' | 'positive';
-export type ShortcutSymbol = 'scroll-up' | 'scroll-down' | 'scroll-left' | 'scroll-right' | 'zoom-in' | 'zoom-out' | 'confirm' | 'open-input' | 'cancel' | 'close-input';
+export type ShortcutSymbol = 'scroll-up' | 'scroll-down' | 'scroll-left' | 'scroll-right' | 'zoom-in' | 'zoom-out' | 'confirm' | 'open-input' | 'cancel' | 'close-input' | 'switch-view';
 
 export interface GesturePoint { x: number; y: number; }
 
@@ -16,6 +16,8 @@ const MIN_AXIS_RATIO = 1.2;
 const MAX_TURNS = 1;
 const MIN_DIAGONAL_ANGLE = 20;
 const MAX_DIAGONAL_ANGLE = 70;
+const VIEW_SWITCH_MIN_WIDTH = 48;
+const VIEW_SWITCH_MAX_HEIGHT = 18;
 
 function distance(a: GesturePoint, b: GesturePoint) { return Math.hypot(b.x - a.x, b.y - a.y); }
 
@@ -59,6 +61,31 @@ function recognizeShapeShortcut(points: GesturePoint[], totalDistance: number): 
   const maxY = Math.max(...ys);
   const width = maxX - minX;
   const height = maxY - minY;
+
+  if (width >= VIEW_SWITCH_MIN_WIDTH && height <= VIEW_SWITCH_MAX_HEIGHT) {
+    const farthestIndex = points.reduce((selectedIndex, point, index) => {
+      const selected = points[selectedIndex];
+      return Math.abs(point.x - start.x) > Math.abs(selected.x - start.x) ? index : selectedIndex;
+    }, 0);
+    const farthest = points[farthestIndex];
+    const returnDistance = distance(start, end);
+    const firstLeg = distance(start, farthest);
+    const secondLeg = distance(farthest, end);
+    const initialDirection = farthest.x >= start.x ? 'right' : 'left';
+    if (farthestIndex > 0 && farthestIndex < points.length - 1
+      && firstLeg >= VIEW_SWITCH_MIN_WIDTH
+      && secondLeg >= VIEW_SWITCH_MIN_WIDTH * 0.55
+      && returnDistance <= Math.max(20, width * 0.3)
+      && firstLeg / secondLeg <= 3
+      && secondLeg / firstLeg <= 3) {
+      return {
+        direction: initialDirection,
+        side: 'negative',
+        symbol: 'switch-view',
+        confidence: 0.9,
+      };
+    }
+  }
 
   const cornerIndex = (selector: (point: GesturePoint) => number) => {
     let selectedIndex = 1;

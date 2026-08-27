@@ -73,8 +73,8 @@ function notifyUserLinks(edge: DemoEdge, messages: DemoMessage[], navigate: (to:
   );
 }
 
-function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; kind: 'in' | 'out'; messages: DemoMessage[]; navigate: (to: string) => void; topicId?: string }) {
-  const { focusIds, edges, kind, messages, navigate, topicId } = props;
+function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; kind: 'in' | 'out'; messages: DemoMessage[]; navigate: (to: string) => void; topicId?: string; onNavigateToMessage?: (messageId: string) => void }) {
+  const { focusIds, edges, kind, messages, navigate, topicId, onNavigateToMessage } = props;
   const rows = focusIds.map(id => {
     const m = messages.find(mm => mm.id === id);
     let arr: DemoEdge[] = [];
@@ -106,7 +106,19 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
                         )}
                         ：{fmtSel(e.from)} → {fmtSel(e.to)}
                       </>
-                    ) : `${relationTypeName(e.relationType)}：${fmtSel(e.from)} → ${fmtSel(e.to)}`}
+                    ) : (
+                      <>
+                        {onNavigateToMessage ? (
+                          <button
+                            type="button"
+                            onClick={event => { event.stopPropagation(); onNavigateToMessage(e.relationMessageId); }}
+                            title={`跳转到${relationTypeName(e.relationType)}消息 ${e.relationMessageId}`}
+                            style={{ padding: 0, border: 0, background: 'transparent', color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2, font: 'inherit' }}
+                          >{relationTypeName(e.relationType)}：{e.relationMessageId}</button>
+                        ) : `${relationTypeName(e.relationType)}：${e.relationMessageId}`}
+                        {`：${fmtSel(e.from)} → ${fmtSel(e.to)}`}
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -118,8 +130,8 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
   );
 }
 
-export default function TopicStructureView(props: { focusIds: string[]; messages: DemoMessage[]; edges: DemoEdge[]; topicId?: string }) {
-  const { focusIds, messages, edges, topicId } = props;
+export default function TopicStructureView(props: { focusIds: string[]; messages: DemoMessage[]; edges: DemoEdge[]; topicId?: string; onNavigateToMessage?: (messageId: string) => void }) {
+  const { focusIds, messages, edges, topicId, onNavigateToMessage } = props;
   const navigate = useNavigate();
   const msgMap = new Map(messages.map(m => [m.id, m]));
   if (!focusIds || focusIds.length === 0) {
@@ -143,11 +155,11 @@ export default function TopicStructureView(props: { focusIds: string[]; messages
       <div style={{ display: 'flex', gap: 8 }}>
         <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>左侧（Incoming：指向焦点集合）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="in" messages={messages} navigate={navigate} topicId={topicId} />
+          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="in" messages={messages} navigate={navigate} topicId={topicId} onNavigateToMessage={onNavigateToMessage} />
         </div>
         <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>右侧（Outgoing：焦点集合指向）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="out" messages={messages} navigate={navigate} topicId={topicId} />
+          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="out" messages={messages} navigate={navigate} topicId={topicId} onNavigateToMessage={onNavigateToMessage} />
         </div>
       </div>
     </div>

@@ -54,6 +54,7 @@ interface TopicRightPanelProps {
   enterFocus: (id: string, opts: { replace: boolean }) => void;
   exitFocus: () => void;
   exitAllFocus: () => void;
+  onNavigateToMessage: (messageId: string) => void;
   isInsideClassify: boolean;
   currentFocusIds: string[] | null;
   classifyKey: number;
@@ -510,7 +511,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{p.currentFocusIds ? p.currentFocusIds.join(", ") : "（无）"}</div>
       </div>
 
-      <TopicStructureView key={`sv-${p.classifyKey}-${p.focusKey}`} topicId={p.topicId} focusIds={p.currentFocusIds ?? []} messages={p.messages} edges={p.edges} />
+      <TopicStructureView key={`sv-${p.classifyKey}-${p.focusKey}`} topicId={p.topicId} focusIds={p.currentFocusIds ?? []} messages={p.messages} edges={p.edges} onNavigateToMessage={p.onNavigateToMessage} />
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>

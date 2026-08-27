@@ -1935,7 +1935,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       }
       if (!pulseElement?.isConnected) return;
       const targetElements = pulseElement.hasAttribute('data-rel-overlay')
-        ? Array.from(leftPanelRef.current?.querySelectorAll(`[data-msgid="${targetId}"][data-rel-overlay]`) ?? [])
+        ? findMessageElements(leftPanelRef.current!, targetId)
+            .filter(candidate => candidate.hasAttribute('data-rel-overlay'))
         : findMessageElements(leftPanelRef.current!, targetId);
       const targetRects = targetElements
         .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
@@ -1963,7 +1964,8 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     const directElements = Array.from(container.querySelectorAll('[data-msgid]'))
       .filter(node => {
         const element = node as HTMLElement;
-        return element.getAttribute('data-msgid') === messageId;
+        if (element.getAttribute('data-msgid') === messageId) return true;
+        return element.getAttribute('data-jump-msgids')?.split(/\s+/).includes(messageId) ?? false;
       }) as HTMLElement[];
     return directElements;
   }
@@ -6969,6 +6971,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           enterFocus={enterFocus}
           exitFocus={exitFocus}
           exitAllFocus={exitAllFocus}
+          onNavigateToMessage={handleNavigateToMessage}
           isInsideClassify={isInsideClassify}
           currentFocusIds={currentFocusIds}
           classifyKey={classifyKey}

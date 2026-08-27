@@ -6207,8 +6207,11 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       : (joinRelationsByTarget.get(joinFilterTargetId) ?? [])
     ).map(join => join.id))
     : null;
+  const comparisonScopeMessageIds = new Set(listMessagesToRender.map(message => message.id));
   const comparisonViewIds = comparisonMode
-    ? new Set(comparisonTargets.map(item => item.message.id))
+    ? new Set(comparisonTargets
+        .filter(item => comparisonScopeMessageIds.has(item.message.id))
+        .map(item => item.message.id))
     : null;
   const correctionTemporaryViewIds = correctionFilterTargetId
     ? new Set(

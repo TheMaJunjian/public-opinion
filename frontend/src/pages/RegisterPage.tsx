@@ -44,7 +44,7 @@ export default function RegisterPage() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="bg-white rounded-xl shadow-md p-8 w-full max-w-sm">
         <h1 className="text-2xl font-bold text-center text-indigo-700 mb-2">公论</h1>
-        <p className="text-center text-gray-500 text-sm mb-6">创建与会者账户，加入公论</p>
+        <p className="text-center text-gray-500 text-sm mb-6">创建您的与会者账户，参与公论</p>
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-600 rounded px-3 py-2 text-sm mb-4">
             {error}

@@ -61,7 +61,7 @@ describe('GuideOverlay', () => {
 
     fireEvent.click(unrelatedButton);
 
-    expect(await screen.findByRole('status')).toHaveTextContent('当前步骤不可操作');
+    expect(await screen.findByRole('status')).toHaveTextContent('当前步骤目标区域外有操作限制');
     expect(unrelatedButton).toBeInTheDocument();
   });
 
@@ -78,7 +78,7 @@ describe('GuideOverlay', () => {
     await screen.findByText('消息已加入选择暂存区');
     fireEvent.click(stagingButton);
 
-    expect(await screen.findByRole('status')).toHaveTextContent('当前步骤不可操作');
+    expect(await screen.findByRole('status')).toHaveTextContent('当前步骤目标区域外有操作限制');
   });
 
 });

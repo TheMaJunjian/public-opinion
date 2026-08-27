@@ -515,7 +515,7 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
       )}
       {invalidAction && (
         <div role="status" style={{ position: 'fixed', left: invalidAction.left, top: invalidAction.top, transform: 'translate(-50%, -120%)', zIndex: 5, padding: '5px 9px', borderRadius: 5, background: '#7f1d1d', color: '#fee2e2', fontSize: 12, whiteSpace: 'nowrap', boxShadow: '0 4px 14px rgba(0,0,0,0.35)' }}>
-          当前步骤不可操作
+          当前步骤目标区域外有操作限制
         </div>
       )}
       {bubblePosition?.diagonalTail && (

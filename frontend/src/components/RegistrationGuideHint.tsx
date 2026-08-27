@@ -68,7 +68,7 @@ export default function RegistrationGuideHint({ open, onClose }: RegistrationGui
           pointerEvents: 'auto',
         }}
       >
-        <div style={{ color: '#fde68a', fontWeight: 700, fontSize: 15 }}>欢迎与会者加入公论</div>
+        <div style={{ color: '#fde68a', fontWeight: 700, fontSize: 15 }}>欢迎与会者参与公论</div>
         <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.7 }}>
           点击上方的“引导”按钮，可以查看分步骤操作引导。<br />
           点击“引导”按钮右侧的“教程”按钮可以查看教程。

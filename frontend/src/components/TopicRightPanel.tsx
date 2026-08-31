@@ -19,6 +19,7 @@ interface TopicRightPanelProps {
   TOTAL_FLEX: number;
   leftFlex: number;
   minWidth: number;
+  stickyTop?: number | string;
 
   // Mode
   isPreviewMode: boolean;
@@ -188,8 +189,8 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     touchAction: "pan-y" as const,
     overscrollBehaviorY: "auto" as const,
     position: "sticky" as const,
-    top: 0,
-    zIndex: 10,
+    top: p.stickyTop ?? 0,
+    zIndex: 0,
   };
 
   const renderSendControls = () => (

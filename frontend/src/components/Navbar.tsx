@@ -11,10 +11,11 @@ interface NavbarProps {
   guideEnabled?: boolean;
   topControlsFrozen?: boolean;
   onToggleTopControls?: () => void;
+  onHeightChange?: (height: number) => void;
 }
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
-export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guideEnabled = false, topControlsFrozen = false, onToggleTopControls }: NavbarProps) {
+export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guideEnabled = false, topControlsFrozen = false, onToggleTopControls, onHeightChange }: NavbarProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const navRef = useRef<HTMLElement>(null);
@@ -32,6 +33,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
       if (!leftControls || !rightControls) return;
 
       const navRect = nav.getBoundingClientRect();
+      onHeightChange?.(navRect.height);
       const leftRect = leftControls.getBoundingClientRect();
       const rightRect = rightControls.getBoundingClientRect();
       const normalRight = navRect.left + rightControls.offsetLeft + rightRect.width;
@@ -47,7 +49,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
       observer.disconnect();
       window.removeEventListener('resize', updatePinnedState);
     };
-  }, []);
+  }, [onHeightChange]);
 
   async function handleLogout() {
     try {

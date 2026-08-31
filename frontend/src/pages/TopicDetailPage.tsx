@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
@@ -91,15 +91,26 @@ type FocusEntry = {
 
 interface TopicDetailPageProps {
   topControlsFrozen?: boolean;
+  topControlsOffset?: number;
 }
 
-export default function TopicDetailPage({ topControlsFrozen = false }: TopicDetailPageProps) {
+export default function TopicDetailPage({ topControlsFrozen = false, topControlsOffset = 68 }: TopicDetailPageProps) {
   const { topicId } = useParams<{ topicId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, logout, loading: authLoading } = useAuth();
   const relationBarRef = useRef<HTMLDivElement>(null);
   const [relationControlsPinned, setRelationControlsPinned] = useState(true);
+  const [relationBarHeight, setRelationBarHeight] = useState(0);
+
+  const measureRelationBar = () => {
+    const relationBar = relationBarRef.current;
+    if (relationBar) setRelationBarHeight(relationBar.getBoundingClientRect().height);
+  };
+
+  useLayoutEffect(() => {
+    measureRelationBar();
+  });
 
   useEffect(() => {
     const relationBar = relationBarRef.current;
@@ -107,6 +118,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
 
     const updatePinnedState = () => {
       setRelationControlsPinned(relationBar.getBoundingClientRect().right <= window.innerWidth + 1);
+      setRelationBarHeight(relationBar.getBoundingClientRect().height);
     };
 
     updatePinnedState();
@@ -6288,7 +6300,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     <>
     <ErrorBoundary>
     <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
-      <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, ...(topControlsFrozen ? { position: "sticky", top: 68, zIndex: Z_INDEX.header } : {}) }}>
+      <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top: topControlsFrozen ? topControlsOffset : 0, zIndex: Z_INDEX.popover }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
@@ -6298,7 +6310,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         </div>
         <div aria-hidden="true" style={{ flex: 1, minWidth: 0 }} />
         {!isPreloaded && (
-        <div style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", ...(relationControlsPinned ? { position: "sticky", right: 0, zIndex: Z_INDEX.header } : {}) }}>
+        <div style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", position: relationControlsPinned ? "sticky" : undefined, right: relationControlsPinned ? 0 : undefined, zIndex: Z_INDEX.header }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
             <button key={rt} onClick={() => {
@@ -6347,7 +6359,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
 
       <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", minWidth: effectiveContainerWidth }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
-          <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414", position: "sticky", top: 0, zIndex: Z_INDEX.header }}>
+          <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414", position: "sticky", top: topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight, zIndex: Z_INDEX.header - 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, flexWrap: "wrap" }}>
                 <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表" : "消息图"}</div>
@@ -6908,6 +6920,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
           TOTAL_FLEX={TOTAL_FLEX}
           leftFlex={leftFlex}
           minWidth={MIN_RIGHT_PX}
+          stickyTop={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
           isPreviewMode={isPreviewMode}
           isViewerMode={isPreloaded}
           viewerUsers={viewerUsers}

@@ -19,6 +19,7 @@ function AppContent() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideEnabled, setGuideEnabled] = useState(false);
   const [topControlsFrozen, setTopControlsFrozen] = useState(false);
+  const [navbarHeight, setNavbarHeight] = useState(68);
   const [interfaceZoom, setInterfaceZoom] = useState(1);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
 
@@ -94,6 +95,7 @@ function AppContent() {
             guideEnabled={guideEnabled}
             topControlsFrozen={topControlsFrozen}
             onToggleTopControls={() => setTopControlsFrozen(!topControlsFrozen)}
+            onHeightChange={setNavbarHeight}
           />
           <main className="flex-1">
             <Suspense fallback={routeFallback}>
@@ -101,7 +103,7 @@ function AppContent() {
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/" element={<HomePage />} />
-                <Route path="/topics/:topicId" element={<TopicDetailPage topControlsFrozen={topControlsFrozen} />} />
+                <Route path="/topics/:topicId" element={<TopicDetailPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
               </Routes>
             </Suspense>
           </main>

@@ -6885,6 +6885,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   }}
                 />
             )}
+            <div aria-hidden="true" style={{ height: 96, flexShrink: 0 }} />
           </div>
         </div>
 

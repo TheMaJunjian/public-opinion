@@ -50,8 +50,11 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
   }, []);
 
   async function handleLogout() {
-    await logout();
-    navigate('/login');
+    try {
+      await logout();
+    } finally {
+      navigate('/login', { replace: true });
+    }
   }
 
   return (

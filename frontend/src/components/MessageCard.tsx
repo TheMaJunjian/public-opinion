@@ -1,5 +1,6 @@
 import type { DemoMessage } from '../utils/modelBridge';
 import { isContentKind } from '../utils/modelBridge';
+import { getPresentationSpec } from '../types';
 
 export interface MessageCardContext {
   isWholeSelected?: boolean;
@@ -74,6 +75,9 @@ export default function MessageCard({
 
   const bk = (msg as any).backendKind as string | undefined;
   const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? '#f59e0b' : bk === 'CODE' ? '#3b82f6' : '#10b981');
+  const topicBackground = isSummaryTopic ? '#14352a' : isMergeTopic ? '#1e293b' : '#1f1f1f';
+  const topicLabel = isSummaryTopic ? '总结容器' : isMergeTopic ? '归并' : '进行中';
+  const selectedTypeLabel = isClassifyTopic ? '分类' : isSummaryTopic ? '总结' : isMergeTopic ? '归并' : msg.kind === 'relation' ? (relType ? getPresentationSpec(relType).label : '关系') : '文本';
 
   return (
     <div
@@ -87,25 +91,25 @@ export default function MessageCard({
         position: 'relative',
         borderRadius: isTopicMsg ? 8 : 6,
         border: isWholeSelected
-          ? '2px solid #0b84ff'
+          ? '2px solid #fbbf24'
           : isTopicMsg
-            ? '1px solid #334155'
+            ? isSummaryTopic ? '1px solid rgba(52,211,153,0.7)' : isMergeTopic ? '1px solid rgba(148,163,184,0.75)' : '1px solid #444'
             : isGovernanceMsg ? `1px solid ${govColor}44` : isActiveText ? '2px dashed #0b84ff' : '1px solid #444',
         borderLeft: isWholeSelected
-          ? '3px solid #0b84ff'
-          : isTopicMsg ? '3px solid #6366f1'
+          ? '4px solid #fbbf24'
+          : isTopicMsg ? `4px solid ${isSummaryTopic ? '#34d399' : isMergeTopic ? '#94a3b8' : '#6366f1'}`
           : isGovernanceMsg ? `3px solid ${govColor}` : undefined,
         background: isWholeSelected
-          ? '#1e3a5f'
-          : isTopicMsg ? '#1e293b'
+          ? 'rgba(91,65,0,0.55)'
+          : isTopicMsg ? topicBackground
           : isGovernanceMsg ? '#1a1f2e' : '#1f1f1f',
         padding: isTopicMsg ? '10px 12px' : '10px 14px',
         cursor: 'pointer',
         fontSize: 13,
         boxShadow: isWholeSelected
-          ? '0 2px 12px rgba(11,132,255,0.2)'
+          ? '0 0 0 3px #111827, 0 0 0 5px #fbbf24, 0 4px 18px rgba(251,191,36,0.45)'
           : isTopicMsg ? '0 2px 8px rgba(0,0,0,0.15)' : undefined,
-        outline: lastClickedMsgId === msg.id ? '1px dashed #0b84ff' : 'none',
+        outline: isWholeSelected ? 'none' : lastClickedMsgId === msg.id ? '1px dashed #0b84ff' : 'none',
         userSelect: isActiveText ? 'text' : 'auto',
         opacity: readStatus === 'READ' ? 0.72 : 1,
       }}
@@ -120,6 +124,11 @@ export default function MessageCard({
         color: isTopicMsg ? '#94a3b8' : undefined,
       }}>
         <span>
+          {isWholeSelected && (
+            <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: '#fbbf24', color: '#111827', fontWeight: 800, opacity: 1 }}>
+              {selectedTypeLabel}
+            </span>
+          )}
           {headerLabel ?? (isClassifyTopic ? `分类 ${msg.id}`
             : isSummaryTopic ? `总结 ${msg.id}`
             : isMergeTopic ? `归并 ${msg.id}`
@@ -134,8 +143,8 @@ export default function MessageCard({
         <span style={{ textAlign: 'right' }}>
           <div>
             {isClassifyTopic ? '双击进入分类'
-              : isSummaryTopic ? '双击进入总结'
-              : isMergeTopic ? '归并'
+              : isSummaryTopic ? '双击进入总结容器'
+              : isMergeTopic ? '双击进入归并'
               : <>{`作者：${msg.author}`}{headerAfterAuthor && ' '}{headerAfterAuthor}</>}
           </div>
           {headerExtra}
@@ -159,25 +168,30 @@ export default function MessageCard({
       )}
       {isTopicMsg && (
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
           gap: 8, marginBottom: 6,
         }}>
           <div style={{
             fontWeight: 600, color: '#f1f5f9',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: isSummaryTopic ? 'pre-wrap' : 'nowrap',
             userSelect: isActiveText ? 'text' : 'auto',
             cursor: isActiveText ? 'text' : 'inherit',
           }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
-            {topicMsgTitle || (isClassifyTopic ? `分类（${topicMsgTargetCount ?? 0}）`
+            {isSummaryTopic && topicMsgTitle ? (
+              <>
+                <div style={{ fontSize: 10, color: '#6ee7b7', marginBottom: 3 }}>总结内容</div>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{topicMsgTitle}</div>
+              </>
+            ) : topicMsgTitle || (isClassifyTopic ? `分类（${topicMsgTargetCount ?? 0}）`
               : isMergeTopic ? `归并（${topicMsgTargetCount ?? 0}）`
               : `总结（${topicMsgTargetCount ?? 0}）`)}
           </div>
           <span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 999,
-            background: isMergeTopic ? 'rgba(148,163,184,0.18)' : 'rgba(34,197,94,0.15)',
-            color: isMergeTopic ? '#94a3b8' : '#4ade80',
+            background: isMergeTopic ? 'rgba(148,163,184,0.18)' : isSummaryTopic ? 'rgba(52,211,153,0.2)' : 'rgba(2,150,80,0.2)',
+            color: isMergeTopic ? '#94a3b8' : isSummaryTopic ? '#6ee7b7' : '#86efac',
           }}>
-            {isMergeTopic ? '归并' : '进行中'}
+            {topicLabel}
           </span>
         </div>
       )}

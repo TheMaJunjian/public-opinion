@@ -24,7 +24,14 @@ export default function HomePage() {
 
     async function loadOrCreate() {
       try {
-        const res = await api.getTopics({ limit: 1 });
+        let res;
+        try {
+          res = await api.getTopics({ limit: 1 });
+        } catch (firstError) {
+          if (!(firstError instanceof TypeError)) throw firstError;
+          await new Promise(resolve => window.setTimeout(resolve, 200));
+          res = await api.getTopics({ limit: 1 });
+        }
         if (cancelled) return;
         if (res.data.length > 0) {
           navigate(`/topics/${res.data[0].id}`, { replace: true });

@@ -158,6 +158,39 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
   const navigate = useNavigate();
   const showContributionControls = !p.isPreviewMode;
+  const handlePanelWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const panel = event.currentTarget;
+    if (event.deltaY === 0) return;
+    const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+    const previousScrollTop = panel.scrollTop;
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, previousScrollTop + event.deltaY));
+    const consumedDelta = nextScrollTop - previousScrollTop;
+    const remainingDelta = event.deltaY - consumedDelta;
+    const documentScroller = document.scrollingElement;
+    event.preventDefault();
+    if (consumedDelta !== 0) panel.scrollTop = nextScrollTop;
+    if (documentScroller && remainingDelta !== 0) {
+      documentScroller.scrollTop += remainingDelta;
+    }
+  };
+  const panelStyle = {
+    flex: p.TOTAL_FLEX - p.leftFlex,
+    padding: 8,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+    overflowY: "auto" as const,
+    overflowX: "hidden" as const,
+    height: "100vh",
+    minWidth: p.minWidth,
+    boxSizing: "border-box" as const,
+    alignSelf: "flex-start",
+    touchAction: "pan-y" as const,
+    overscrollBehaviorY: "auto" as const,
+    position: "sticky" as const,
+    top: 0,
+    zIndex: 10,
+  };
 
   const renderSendControls = () => (
     <>
@@ -252,7 +285,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
 
   if (p.isViewerMode) {
     return (
-      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: p.minWidth, boxSizing: "border-box" }}>
+      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} style={panelStyle}>
         {renderComparisonHeader()}
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontWeight: 600, color: "#e2e8f0" }}>只读阅览</div>
@@ -278,7 +311,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     );
   }
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} data-guide-right-panel="true" style={{ flex: p.TOTAL_FLEX - p.leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: p.minWidth, boxSizing: "border-box" }}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} data-guide-right-panel="true" style={panelStyle}>
       {renderComparisonHeader()}
       {p.isPreviewMode && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>

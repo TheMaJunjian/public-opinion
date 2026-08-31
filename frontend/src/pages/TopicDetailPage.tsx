@@ -4,9 +4,9 @@ import { useParams, useSearchParams, useLocation, useNavigate } from 'react-rout
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
 import type {
-  DemoMessage, DemoEdge, UnitSelection, Selection,
+  DemoMessage, DemoEdge, UnitSelection,
   RelationType, MessageKind,
 } from '../utils/modelBridge';
 import type { Topic, TargetRef, Relation, MessageStakes, User } from '../types';
@@ -220,7 +220,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   }, [isPreloaded, viewerUsers]);
 
   useEffect(() => {
-    if (!topicId || preloadedData) return;
+    if (!topicId || preloadedData || authLoading || !user) return;
     let cancelled = false;
     let refreshInFlight = false;
     async function load(showLoading: boolean) {
@@ -348,7 +348,13 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       cancelled = true;
       window.clearInterval(refreshTimer);
     };
-  }, [topicId, leaderboardRefreshVersion]);
+  }, [topicId, leaderboardRefreshVersion, authLoading]);
+
+  useEffect(() => {
+    if (!authLoading && !isPreloaded && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [authLoading, isPreloaded, navigate, user?.username]);
 
   useEffect(() => {
     if (loading || authLoading || loadError || isPreloaded) return;
@@ -1344,9 +1350,6 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     return () => window.removeEventListener('relation-created', handler);
   }, [appendCreatedRelation]);
 
-  // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
-  // Used to skip corrected fragments when double-clicking to select all fragments.
-  const correctedEdgeMap = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
   const lastInheritedEdgeSignatureRef = useRef<string>('');
 
   useEffect(() => {
@@ -1364,12 +1367,6 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       lastInheritedEdgeSignatureRef.current = signature;
     }
   }, [edges, msgMap, setEdges]);
-
-  /** Returns edge IDs for a relation message, excluding any that have been individually corrected. */
-  function getUncorrectedEdgeIds(relationMessageId: string): string[] {
-    const correctedIds = correctedEdgeMap.get(relationMessageId);
-    return getEdgeIdsForRelation(relationMessageId).filter(id => !correctedIds?.has(id));
-  }
 
   // TAG-only source messages in the linear list view: messages used exclusively as old-style
   // TAG relation sources should not appear as list items (their label is shown on the tag badge).
@@ -1717,7 +1714,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
   const effectiveContainerWidth = Math.max(containerWidth, getAvailableWidth());
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
-  const splitterDragRef = useRef<{ startX: number; startLeftPx: number } | null>(null);
+  const splitterDragRef = useRef<{ startX: number; startLeftPx: number; containerW: number; scale: number } | null>(null);
   // Ref to track the ID of a newly sent message that should be scrolled into view.
   const pendingScrollMsgIdRef = useRef<string | null>(null);
   // Track pending requestAnimationFrame handles so they can be cancelled before
@@ -2827,6 +2824,12 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
 
   function enterClassifyTopic(relMsgId: string) {
     // Save snapshot so we can restore on exit
+    cancelScrollRafs();
+    scrollRequestIdRef.current++;
+    if (leftPanelRef.current) {
+      leftPanelRef.current.scrollTop = 0;
+      leftPanelRef.current.scrollLeft = 0;
+    }
     classifyStackRef.current.push({ relMsgId, snapshot: captureSnapshot() });
     setClassifyRelMsgId(relMsgId);
     setClassifyKey(k => k + 1);
@@ -2886,54 +2889,16 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     }
   }
 
-  function getEdgeIdsForRelation(relationMessageId: string) {
-    return edges.filter(e => e.relationMessageId === relationMessageId).map(e => e.id);
-  }
-
-  function relationAllFragmentsSelected(relationMessageId: string, units: UnitSelection[]) {
-    const edgeIds = getUncorrectedEdgeIds(relationMessageId);
-    if (edgeIds.length === 0) return units.some(u => u.messageId === relationMessageId && u.selection.kind === "whole");
-    const have = new Set(units.filter(u => u.messageId === relationMessageId && u.selection.kind === "edge").map(u => (u.selection as any).edgeId));
-    return edgeIds.every(id => have.has(id));
-  }
-
-  function ensureRelationWholeSynced(relationMessageId: string) {
-    setDraftUnits(prev => {
-      const shouldHaveWhole = relationAllFragmentsSelected(relationMessageId, prev);
-      const wholeUnit: UnitSelection = { messageId: relationMessageId, selection: { kind: "whole" } };
-      const hasWhole = prev.some(u => unitEquals(u, wholeUnit));
-      let next = [...prev];
-      if (shouldHaveWhole && !hasWhole) next.push(wholeUnit);
-      else if (!shouldHaveWhole && hasWhole) next = next.filter(u => !unitEquals(u, wholeUnit));
-      return next;
-    });
-  }
-
-  function handleEdgeLabelSingleClick(e: React.MouseEvent, relationMessageId: string, edgeId: string) {
+  function handleEdgeLabelSingleClick(e: React.MouseEvent, relationMessageId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relationMessageId);
-    const unit: UnitSelection = { messageId: relationMessageId, selection: { kind: "edge", edgeId } };
-    setDraftUnits(prev => {
-      const exists = prev.some(u => unitEquals(u, unit));
-      const next = exists ? prev.filter(u => !unitEquals(u, unit)) : [...prev, unit];
-      setTimeout(() => ensureRelationWholeSynced(relationMessageId), 0);
-      return next;
-    });
+    toggleWholeUnit(relationMessageId);
   }
 
   function handleEdgeLabelDoubleClick(e: React.MouseEvent, relationMessageId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relationMessageId);
-    const wholeUnit: UnitSelection = { messageId: relationMessageId, selection: { kind: "whole" } };
-    const edgeIds = getUncorrectedEdgeIds(relationMessageId);
-    const edgeUnits = edgeIds.map(id => ({ messageId: relationMessageId, selection: { kind: "edge", edgeId: id } as Selection }));
-    setDraftUnits(prev => {
-      const hasWhole = prev.some(u => unitEquals(u, wholeUnit));
-      if (hasWhole) return prev.filter(u => !(u.messageId === relationMessageId && (u.selection.kind === "whole" || u.selection.kind === "edge")));
-      const merged = mergeUnits(prev, edgeUnits as UnitSelection[]);
-      if (!merged.some(u => unitEquals(u, wholeUnit))) merged.push(wholeUnit);
-      return merged;
-    });
+    toggleWholeUnit(relationMessageId);
   }
 
   /**
@@ -5521,12 +5486,6 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
         });
     const graphVisibleIds = new Set(graphMessages.map(m => m.id));
 
-    // In focus mode, container-type relation messages (CLASSIFY, MERGE, SUMMARY)
-    // are rendered as frames (via their edges in GraphView), not as message cards.
-    // We keep them in graphMessagesToRender so that GraphView's msgMap can look up
-    // their author/title for frame headers.  GraphView skips card rendering for
-    // frame-type messages (isAnyFrameRel check).
-    const graphMessagesToRender = graphMessages;
     // Edge is visible in graph view when the relation message is visible AND
     // the edge does not connect to a classified (hidden) text endpoint.
     // Edges of directly-focused relation messages are always included
@@ -5546,23 +5505,42 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
       const toOk = graphVisibleIds.has(e.to.messageId);
       return fromOk && toOk;
     });
+    // A container relation can be filtered from graphMessages because it belongs
+    // to another container while its frame edges are still retained above. Keep
+    // that relation message available so frame headers can read its payload.
+    const frameRelationIds = new Set(
+      graphEdges
+        .filter(edge => getPresentationSpec(edge.relationType).isContainer)
+        .map(edge => edge.relationMessageId),
+    );
+    const frameMessages = baseMessages.filter(message =>
+      message.kind === 'relation' && frameRelationIds.has(message.id),
+    );
+    const graphMessagesToRender = [
+      ...graphMessages,
+      ...frameMessages.filter(message => !graphVisibleIds.has(message.id)),
+    ];
     // In focus mode, container-type relation messages (CLASSIFY, MERGE, SUMMARY)
     // are rendered as group frames — skip their individual message cards.
     // In non-focus mode, they show as topic cards (e.g. "双击进入分类").
-    const hideMessageIds = useFocusWindow
-      ? new Set(
-          graphMessages
+    const hiddenFrameMessageIds = frameMessages
+      .filter(message => !graphVisibleIds.has(message.id))
+      .map(message => message.id);
+    const hideMessageIds = new Set([
+      ...(useFocusWindow
+        ? graphMessages
             .filter(m => m.kind === 'relation' && m.relationType && getPresentationSpec(m.relationType).isContainer)
             .map(m => m.id)
-        )
-      : undefined;
+        : []),
+      ...hiddenFrameMessageIds,
+    ]);
 
     return {
       graphMessagesToRender: graphMessagesToRender,
       graphEdgesToRender: graphEdges,
       listMessagesToRender: listMessages,
       listEdgesToRender: listEdges,
-      hideMessageIds,
+      hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
     };
   }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds, userPreferredJoinByTarget]);
 
@@ -6078,66 +6056,45 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     } catch (e: any) { showAlert(`操作失败: ${e?.message ?? e}`); }
   }
 
-  function handleSplitterMouseDown(e: React.MouseEvent) {
+  function handleSplitterPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     setSplitterActive(true);
-    const leftPanel = panelContainerRef.current?.firstElementChild as HTMLElement | null;
-    splitterDragRef.current = { startX: e.clientX, startLeftPx: leftPanel?.getBoundingClientRect().width ?? 0 };
-    function onMouseMove(ev: MouseEvent) {
+    const panelContainer = panelContainerRef.current;
+    const containerW = panelContainer?.offsetWidth ?? 0;
+    const containerRect = panelContainer?.getBoundingClientRect();
+    const splitterRect = e.currentTarget.getBoundingClientRect();
+    const scale = panelContainer && containerW > 0 && containerRect
+      ? containerRect.width / containerW
+      : 1;
+    const startLeftPx = panelContainer && scale > 0
+      ? (splitterRect.left - containerRect!.left) / scale
+      : 0;
+    splitterDragRef.current = { startX: e.clientX, startLeftPx, containerW, scale };
+    function onPointerMove(ev: PointerEvent) {
       if (!splitterDragRef.current || !panelContainerRef.current) return;
-      const dx = ev.clientX - splitterDragRef.current.startX;
-      const containerW = panelContainerRef.current.clientWidth;
+      const dx = (ev.clientX - splitterDragRef.current.startX) / splitterDragRef.current.scale;
       const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
-      const naturalRightPx = containerW - 12 - desiredLeftPx;
+      const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
       const nextWidth = naturalRightPx < MIN_RIGHT_PX
         ? desiredLeftPx + MIN_RIGHT_PX + 12
         : naturalRightPx > MAX_RIGHT_PX
           ? desiredLeftPx + MAX_RIGHT_PX + 12
-          : containerW;
+          : splitterDragRef.current.containerW;
+      const effectiveNextWidth = Math.max(nextWidth, getAvailableWidth());
       setContainerWidth(nextWidth);
-      setLeftFlex(TOTAL_FLEX * desiredLeftPx / (nextWidth - 12));
+      setLeftFlex(TOTAL_FLEX * desiredLeftPx / (effectiveNextWidth - 12));
     }
-    function onMouseUp() {
+    function onPointerUp() {
       setSplitterActive(false);
       splitterDragRef.current = null;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup', onPointerUp);
+      document.removeEventListener('pointercancel', onPointerUp);
     }
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  }
-
-  function handleSplitterTouchStart(e: React.TouchEvent) {
-    e.preventDefault();
-    setSplitterActive(true);
-    const touch = e.touches[0];
-    if (!touch) return;
-    const leftPanel = panelContainerRef.current?.firstElementChild as HTMLElement | null;
-    splitterDragRef.current = { startX: touch.clientX, startLeftPx: leftPanel?.getBoundingClientRect().width ?? 0 };
-    function onTouchMove(ev: TouchEvent) {
-      if (!splitterDragRef.current || !panelContainerRef.current) return;
-      const t = ev.touches[0];
-      if (!t) return;
-      const dx = t.clientX - splitterDragRef.current.startX;
-      const containerW = panelContainerRef.current.clientWidth;
-      const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
-      const naturalRightPx = containerW - 12 - desiredLeftPx;
-      const nextWidth = naturalRightPx < MIN_RIGHT_PX
-        ? desiredLeftPx + MIN_RIGHT_PX + 12
-        : naturalRightPx > MAX_RIGHT_PX
-          ? desiredLeftPx + MAX_RIGHT_PX + 12
-          : containerW;
-      setContainerWidth(nextWidth);
-      setLeftFlex(TOTAL_FLEX * desiredLeftPx / (nextWidth - 12));
-    }
-    function onTouchEnd() {
-      setSplitterActive(false);
-      splitterDragRef.current = null;
-      document.removeEventListener('touchmove', onTouchMove);
-      document.removeEventListener('touchend', onTouchEnd);
-    }
-    document.addEventListener('touchmove', onTouchMove, { passive: false });
-    document.addEventListener('touchend', onTouchEnd);
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerUp);
   }
 
   function handleLeftPanelTouchStart(e: React.TouchEvent<HTMLDivElement>) {
@@ -6171,6 +6128,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     leftPanelTouchRef.current = null;
   }
 
+  if (!authLoading && !isPreloaded && !user) return null;
   if (loading) {
     return <PromptModal
       open
@@ -6208,6 +6166,11 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
     ).map(join => join.id))
     : null;
   const comparisonScopeMessageIds = new Set(listMessagesToRender.map(message => message.id));
+  for (const edge of edges) {
+    if (comparisonScopeMessageIds.has(edge.from.messageId) || comparisonScopeMessageIds.has(edge.to.messageId)) {
+      comparisonScopeMessageIds.add(edge.relationMessageId);
+    }
+  }
   const comparisonViewIds = comparisonMode
     ? new Set(comparisonTargets
         .filter(item => comparisonScopeMessageIds.has(item.message.id))
@@ -6384,9 +6347,14 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
 
       <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", minWidth: effectiveContainerWidth }}>
         <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
-          <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
+          <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414", position: "sticky", top: 0, zIndex: Z_INDEX.header }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表" : "消息图"}</div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  {viewMode === "list" ? "按线性结构查看消息。" : "按非线性结构查看消息。"}
+                </div>
+              </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <button onClick={async () => {
                 try {
@@ -6474,9 +6442,6 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
                 {viewMode === "list" ? "切换为结构图" : "切换为列表"}
               </button>}
               </div>
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
-              {viewMode === "list" ? "线性视图：按线性结构查看消息。" : "结构图：按非线性结构查看消息。"}
             </div>
           </div>
           {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null || comparisonMode) && (
@@ -6913,8 +6878,7 @@ export default function TopicDetailPage({ topControlsFrozen = false }: TopicDeta
 
         {/* Draggable splitter — 12px wide with visible grip handle */}
         <div
-          onMouseDown={handleSplitterMouseDown}
-          onTouchStart={handleSplitterTouchStart}
+          onPointerDown={handleSplitterPointerDown}
           style={{
             width: 12, flexShrink: 0,
             background: splitterActive ? "#0b84ff" : "#2a2a2a",

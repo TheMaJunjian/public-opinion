@@ -47,6 +47,15 @@ html {
   display: none;
 }
 
+.topic-right-panel {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.topic-right-panel::-webkit-scrollbar {
+  display: none;
+}
+
 @media (max-width: 768px) {
   .guide-bubble {
     padding-bottom: 64px !important;

@@ -252,6 +252,8 @@ export function convertMessagesToDemoModel(
         content = rel.payload?.correctionContent ?? '';
       } else if (relType === 'classify') {
         content = `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
+      } else if (relType === 'summary') {
+        content = getRelationTitle(rel.payload) ?? `总结（无来源）\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'tag' && tagLabel) {
         content = `标签「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (rel.sourceMessageId) {

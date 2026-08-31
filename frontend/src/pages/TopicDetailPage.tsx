@@ -73,6 +73,7 @@ type ViewMode = "list" | "graph";
 type FocusSnapshot = {
   viewMode: ViewMode;
   leftScroll: { top: number; left: number } | null;
+  pageScroll: { top: number; left: number } | null;
   rightScroll: { top: number; left: number } | null;
   draftUnits: UnitSelection[];
   sourceUnits: UnitSelection[];
@@ -2105,9 +2106,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }
 
   function captureSnapshot(): FocusSnapshot {
+    const pageScroll = document.scrollingElement;
     return {
       viewMode,
       leftScroll: leftPanelRef.current ? { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft } : null,
+      pageScroll: pageScroll ? { top: pageScroll.scrollTop, left: pageScroll.scrollLeft } : null,
       rightScroll: rightPanelRef.current ? { top: rightPanelRef.current.scrollTop, left: rightPanelRef.current.scrollLeft } : null,
       draftUnits: draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       sourceUnits: sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
@@ -2147,6 +2150,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         scrollRafRef.current = null;
         scrollRaf2Ref.current = null;
         clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
+        clampAndSetScroll(document.scrollingElement as HTMLDivElement | null, s.pageScroll?.top ?? null, s.pageScroll?.left ?? null);
         clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
       });
     });
@@ -2836,13 +2840,18 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   function enterClassifyTopic(relMsgId: string) {
     // Save snapshot so we can restore on exit
+    const snapshot = captureSnapshot();
     cancelScrollRafs();
     scrollRequestIdRef.current++;
     if (leftPanelRef.current) {
       leftPanelRef.current.scrollTop = 0;
       leftPanelRef.current.scrollLeft = 0;
     }
-    classifyStackRef.current.push({ relMsgId, snapshot: captureSnapshot() });
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollTop = 0;
+      document.scrollingElement.scrollLeft = 0;
+    }
+    classifyStackRef.current.push({ relMsgId, snapshot });
     setClassifyRelMsgId(relMsgId);
     setClassifyKey(k => k + 1);
   }

@@ -2933,7 +2933,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     let match: { id: string; size: number } | null = null;
     for (const relation of relations) {
-      if (relation.relationType !== 'CLASSIFY' || rejectedContainerIds.has(relation.id)) continue;
+      if (!['CLASSIFY', 'SUMMARY'].includes(relation.relationType) || rejectedContainerIds.has(relation.id)) continue;
       const owned = collectOwnedByRelation(
         relation.id,
         relationById,
@@ -6295,7 +6295,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const wasTemporaryCategoryActive = temporaryCategoryStackRef.current.length > 0
       || joinFilterTargetId !== null;
     const targetMessage = messagesRef.current.find(message => message.id === messageId);
-    const containingClassifyId = findContainingClassifyTopic(messageId);
     const navigationFilterState = navigationVisibilityRef.current;
     const targetCleanFiltered = navigationFilterState.cleanMode
       && navigationFilterState.cleanVisibleIds
@@ -6325,19 +6324,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       if (targetMessage?.kind === 'join') {
         setClassifyRelMsgId(null);
         setClassifyKey(k => k + 1);
-      } else if (containingClassifyId && containingClassifyId !== classifyRelMsgId) {
-        setClassifyRelMsgId(containingClassifyId);
-        setClassifyKey(k => k + 1);
-      } else if (!containingClassifyId) {
-        setClassifyRelMsgId(null);
-        setClassifyKey(k => k + 1);
       }
     } else {
       setJoinFilterTargetId(null);
-      if (containingClassifyId && containingClassifyId !== classifyRelMsgId) {
-        setClassifyRelMsgId(containingClassifyId);
-        setClassifyKey(k => k + 1);
-      }
     }
     setMessagePulse(null);
     setTraceEntries([]);
@@ -6352,7 +6341,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     pendingScrollDependencyIdsRef.current = [];
     pendingScrollMsgRef.current = messageId;
     setScrollKey(k => k + 1);
-  }, [classifyRelMsgId, cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert]);
+  }, [cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert]);
 
   const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
     if (correctionFilterTargetId === null) {
@@ -6805,11 +6794,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                 const selectedMessageId = draftUnits.length > 0
                   ? draftUnits[draftUnits.length - 1].messageId
                   : lastClickedMessageId;
-                const selectedContainerId = selectedMessageId
+                const selectedSummaryContainerId = nextViewMode === 'graph' && selectedMessageId
                   ? relations.find(relation => {
                     if (relation.relationType.toUpperCase() !== 'JOIN' || !relation.sourceMessageId) return false;
                     const container = relations.find(candidate => candidate.id === relation.sourceMessageId);
-                    if (!container || !['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(container.relationType.toUpperCase())) return false;
+                    if (!container || container.relationType.toUpperCase() !== 'SUMMARY') return false;
                     return (relation.targetRefs ?? []).some(ref =>
                       ref.kind === 'relation'
                         ? ref.relationId === selectedMessageId
@@ -6819,7 +6808,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   : undefined;
                 const scrollTargetId = comparisonMode
                   ? comparisonId
-                  : selectedContainerId ?? selectedMessageId;
+                  : selectedSummaryContainerId ?? selectedMessageId;
                 if (scrollTargetId) {
                   const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
                   const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
@@ -6831,7 +6820,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   setTimeout(() => scrollMsgToCenter(navigationTargetId), 100);
                 }
               }} data-shortcut-view-toggle="true" style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
-                {viewMode === "list" ? "切换为结构图" : "切换为列表"}
+                {viewMode === "list" ? "切换为消息图" : "切换为消息表"}
               </button>}
               </div>
             </div>

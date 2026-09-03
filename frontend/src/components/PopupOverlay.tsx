@@ -63,6 +63,7 @@ export function MessageJumpOverlay({
       height: `${clipRect.height}px`,
       overflow: 'hidden',
       zIndex: '2',
+      background: '#1f1f1f',
       pointerEvents: 'none',
     });
     Object.assign(clone.style, visualRoot ? {

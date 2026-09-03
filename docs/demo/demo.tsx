@@ -3925,7 +3925,7 @@ export default function App() {
                   cursor: "pointer",
                 }}
               >
-                {viewMode === "list" ? "切换为结构图" : "切换为列表"}
+                {viewMode === "list" ? "切换为消息图" : "切换为消息表"}
               </button>
             </div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>

@@ -151,7 +151,7 @@ describe('TopicDetailPage composer refresh', () => {
 
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     // TAG auto-selects "推荐" as secondary — don't click it again or it toggles off
     fireEvent.click(screen.getByRole('button', { name: '标注' }));
     fireEvent.click(screen.getByText('关系消息 rel-1'));
@@ -260,7 +260,7 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     // Switch to list view
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
 
     // On the main canvas only the outer classify topic card should be visible;
     // msg-a, msg-b, rel-merge, and rel-inner are hidden (classified away).
@@ -351,7 +351,7 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     // Switch to list view
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
 
     // On the main canvas only the outer classify topic card should be visible.
     await waitFor(() => {
@@ -426,7 +426,7 @@ describe('TopicDetailPage summary relation visibility', () => {
     expect(latestGraphProps?.messages?.some((m: { id: string }) => m.id === 'msg-1')).toBe(false);
 
     // In list view, summary target text should remain visible.
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
     });
@@ -585,7 +585,7 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
     });
@@ -703,7 +703,7 @@ describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => 
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
@@ -770,7 +770,7 @@ describe('TopicDetailPage SUMMARY topic with arrange source visibility', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
     });
@@ -898,7 +898,7 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
@@ -915,7 +915,7 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
@@ -986,7 +986,7 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
     });
@@ -1050,7 +1050,7 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
       expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(true);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
       expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
@@ -1150,14 +1150,14 @@ describe('TopicDetailPage trace container frame projection', () => {
 
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
     fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
     await waitFor(() => expect(screen.getByText('总结 rel-summary')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('总结 rel-summary'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
-    fireEvent.click(screen.getByRole('button', { name: '切换为结构图' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '退出追溯' })).toBeInTheDocument();
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
@@ -1241,7 +1241,7 @@ describe('TopicDetailPage trace container frame projection', () => {
 
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => expect(screen.getByText('分类 rel-a')).toBeInTheDocument());
     fireEvent.doubleClick(screen.getByText('分类 rel-a'));
     await waitFor(() => expect(screen.getByText('总结 rel-b')).toBeInTheDocument());
@@ -1250,7 +1250,7 @@ describe('TopicDetailPage trace container frame projection', () => {
 
     fireEvent.click(screen.getByText('分类 rel-c'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
-    fireEvent.click(screen.getByRole('button', { name: '切换为结构图' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
@@ -1305,11 +1305,11 @@ describe('TopicDetailPage trace container frame projection', () => {
 
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => expect(screen.getByText('总结 rel-summary')).toBeInTheDocument());
     fireEvent.click(screen.getByText('总结 rel-summary'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
-    fireEvent.click(screen.getByRole('button', { name: '切换为结构图' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
 
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
@@ -1371,7 +1371,7 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     // Switch to list view for easier assertions
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
 
     // Base view: topic card visible, classified messages hidden, unclassified visible
     await waitFor(() => {
@@ -1408,7 +1408,7 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
     fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
     await waitFor(() => expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0));
@@ -1547,7 +1547,7 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
@@ -1579,7 +1579,7 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
       expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
     });
@@ -1657,13 +1657,13 @@ describe('TopicDetailPage opposed annotation visibility in classify graph', () =
   it('keeps opposed annotation in list with a badge and hides it from the graph', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
     fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
     await waitFor(() => expect(screen.getByText('关系消息 rel-annotation')).toBeInTheDocument());
     expect(screen.getByText('你已反对 · 点赞同恢复')).toBeInTheDocument();
     expect(screen.queryByText('你已反对此注释')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '切换为结构图' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
 
     await waitFor(() => {
       expect(mockGraphView).toHaveBeenCalled();

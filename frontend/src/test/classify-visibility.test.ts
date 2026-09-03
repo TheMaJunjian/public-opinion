@@ -424,6 +424,17 @@ describe('消息加入/移出分类', () => {
     expect(filterContainerEdgesByEffectiveJoins(edges, relations, new Set(['join-arrange']))).toEqual(edges);
   });
 
+  it('没有 JOIN 记录时保留容器原始目标边', () => {
+    const edges = [
+      { id: 'classify-edge', relationMessageId: 'classify-1', relationType: 'classify', from: { messageId: 'anon:classify-1', selection: { kind: 'whole' } }, to: { messageId: 'msg-1', selection: { kind: 'whole' } } },
+    ] as any;
+    const relations = [
+      { id: 'classify-1', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+    ] as any;
+
+    expect(filterContainerEdgesByEffectiveJoins(edges, relations, new Set())).toEqual(edges);
+  });
+
   it('分类被反对时，赞同无效 JOIN 还需要同时赞同其分类消息', () => {
     const relations = [
       { id: 'classify-1', relationType: 'CLASSIFY', sourceMessageId: null },

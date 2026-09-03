@@ -30,7 +30,7 @@ import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
-import { buildTraceProjection } from '../utils/traceProjection';
+import { applyTraceFrameVisibility, buildTraceProjection } from '../utils/traceProjection';
 import { operationLog } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
@@ -607,7 +607,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }, [draftUnits, sourceUnits, targetUnits]);
   const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
   const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
-  const traceExpandedFrameIds = new Set<string>();
+  const [traceExpandedFrameIds, setTraceExpandedFrameIds] = useState<Set<string>>(new Set());
   // Counter incremented on every exitTrace/exitAllTrace to force GraphView
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
@@ -1420,6 +1420,31 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     () => getEffectiveJoinRelationIds(relations, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget),
     [relations, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]
   );
+  const traceProjectionEdges = useMemo(() => {
+    const result = [...edges];
+    const existingMemberships = new Set(edges.map(edge => `${edge.relationMessageId}::${edge.to.messageId}`));
+    for (const relation of relations) {
+      if (relation.relationType?.toUpperCase() !== 'JOIN' || !effectiveJoinRelationIds.has(relation.id)) continue;
+      const containerId = relation.sourceMessageId;
+      const container = containerId ? relationById.get(containerId) : undefined;
+      if (!containerId || !container || !getPresentationSpec(container.relationType).isContainer) continue;
+      for (const [index, target] of relation.targetRefs.entries()) {
+        const targetId = target.kind === 'relation' ? target.relationId : target.messageId;
+        const membershipKey = `${containerId}::${targetId}`;
+        if (existingMemberships.has(membershipKey)) continue;
+        existingMemberships.add(membershipKey);
+        result.push({
+          id: `join-membership:${relation.id}:${index}`,
+          relationMessageId: containerId,
+          relationType: container.relationType.toLowerCase() as DemoEdge['relationType'],
+          from: { messageId: `anon:${containerId}`, selection: { kind: 'whole' } },
+          to: { messageId: targetId, selection: { kind: 'whole' } },
+          relationLabel: container.relationType.toLowerCase(),
+        });
+      }
+    }
+    return result;
+  }, [edges, relations, effectiveJoinRelationIds, relationById]);
 
   const joinRelationsByTarget = useMemo(() => {
     const map = new Map<string, Relation[]>();
@@ -2239,6 +2264,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       ids: [messageId], snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
       classifyRelMsgId, classifyStack: [...classifyStackRef.current],
     };
+    setTraceExpandedFrameIds(new Set());
     setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
     if (options?.mode !== 'topic') {
       classifyStackRef.current = [];
@@ -2265,6 +2291,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       ids: messageIds, snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
       classifyRelMsgId, classifyStack: [...classifyStackRef.current],
     };
+    setTraceExpandedFrameIds(new Set());
     setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
     if (options?.mode !== 'topic') {
       classifyStackRef.current = [];
@@ -2296,6 +2323,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
+    setTraceExpandedFrameIds(new Set());
     setTraceKey(k => k + 1);
     classifyStackRef.current = entry?.classifyStack ?? [];
     setClassifyRelMsgId(entry?.classifyRelMsgId ?? null);
@@ -2310,6 +2338,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       if (prev.length === 0) return prev;
       return [];
     });
+    setTraceExpandedFrameIds(new Set());
     setTraceKey(k => k + 1);
     classifyStackRef.current = traceEntries.length > 0 ? traceEntries[0].classifyStack : [];
     setClassifyRelMsgId(traceEntries.length > 0 ? traceEntries[0].classifyRelMsgId : null);
@@ -2671,6 +2700,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         return;
       }
       if (relType === "classify" || relType === "summary") {
+        if ((relType === "summary" || relType === "classify") && traceEntries.length > 0 && !isInsideClassify) {
+          setTraceExpandedFrameIds(prev => {
+            const next = new Set(prev);
+            if (next.has(messageId)) next.delete(messageId);
+            else next.add(messageId);
+            return next;
+          });
+          setTraceKey(key => key + 1);
+          return;
+        }
         if (relationType === "correct") {
           // In correction mode, the container card is the selectable text target;
           // do not navigate away from the current canvas.
@@ -4979,12 +5018,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (startIds.length === 0) return { messagesToShow: messages, edgesToShow: edges };
     const projection = buildTraceProjection({
       messages,
-      edges,
+      edges: traceProjectionEdges,
       startIds,
       distance: traceDistance,
     });
+    const graphProjection = applyTraceFrameVisibility(projection, traceExpandedFrameIds);
     if (traceEntries.length >= 0) {
-      return { messagesToShow: projection.messages, edgesToShow: projection.edges };
+      return { messagesToShow: graphProjection.messages, edgesToShow: graphProjection.edges };
     }
 
     /* Legacy trace projection retained temporarily below while the page-level
@@ -5253,7 +5293,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       return fromOk || toOk;
     });
     return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
-  }, [messages, edges, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
+  }, [messages, edges, traceProjectionEdges, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
   const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitTrace = traceEntries.length > 0;
@@ -5273,6 +5313,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     return ids;
   }, [traceEntries, msgMap]);
+  const traceFrameIds = useMemo(() => new Set(
+    Array.from(traceRelationMsgIds).filter(id => {
+      const relationType = msgMap.get(id)?.relationType;
+      return relationType ? getPresentationSpec(relationType).isContainer : false;
+    }),
+  ), [traceRelationMsgIds, msgMap]);
   const classifyTargetCount = useMemo(
     () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
     [currentClassifyRelMsgId, relationById]
@@ -5379,7 +5425,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const traceStartIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
       const listProjection = buildTraceProjection({
         messages,
-        edges,
+        edges: traceProjectionEdges,
         startIds: traceStartIds,
         distance: traceDistance,
       });
@@ -5795,7 +5841,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       listEdgesToRender: listEdges,
       hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
     };
-  }, [messages, edges, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
+  }, [messages, edges, traceProjectionEdges, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
 
   const normalGraphProjection = useMemo(() => {
     const scopedCorrectedMessages = graphMessagesToRender.map(message => {
@@ -6164,6 +6210,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType ?? relationTypeByRelMsgId.get(relMsgId) ?? "";
     if (relType === "classify" || relType === "summary") {
+      if (traceEntries.length > 0 && !isInsideClassify) {
+        setTraceExpandedFrameIds(prev => {
+          const next = new Set(prev);
+          if (next.has(relMsgId)) next.delete(relMsgId);
+          else next.add(relMsgId);
+          return next;
+        });
+        setTraceKey(key => key + 1);
+        return;
+      }
       enterClassifyTopic(relMsgId);
       return;
     }
@@ -6468,7 +6524,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       effectiveJoinRelationIds,
     ),
     ...(viewMode !== "list"
-      ? edges.filter(edge =>
+      ? (traceEntries.length > 0 ? graphEdgesToRender : edges).filter(edge =>
           getPresentationSpec(edge.relationType).isContainer &&
           (traceRelationMsgIds.has(edge.relationMessageId) ||
             graphMessagesToRender.some(message => message.id === edge.relationMessageId))
@@ -7116,6 +7172,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
                   hideMessageIds={hideMessageIds}
+                  traceExpandedFrameIds={traceExpandedFrameIds}
+                  traceFrameIds={traceFrameIds}
                   stakeCounts={stakeCounts}
                   onSettlementToggleTruth={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'TRUTH') { closeSettlement(); } else { openSettlement(msgId, 'TRUTH'); } }}
                   onSettlementToggleValue={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'VALUE') { closeSettlement(); } else { openSettlement(msgId, 'VALUE'); } }}

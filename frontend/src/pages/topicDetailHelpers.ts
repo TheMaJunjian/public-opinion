@@ -686,6 +686,17 @@ export function filterContainerEdgesByEffectiveJoins(
   const containerTypes = new Set(['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE']);
   return edges.filter(edge => {
     if (!containerTypes.has(edge.relationType.toUpperCase())) return true;
+    const container = relations.find(relation => relation.id === edge.relationMessageId);
+    const originalTargetRef = (container?.targetRefs as TargetRef[] | undefined)?.find(ref =>
+      (ref.kind === 'relation' && ref.relationId === edge.to.messageId) ||
+      (ref.kind !== 'relation' && ref.messageId === edge.to.messageId)
+    );
+    if (originalTargetRef && targetIsOwnedByContainer(
+      edge.relationMessageId,
+      originalTargetRef,
+      relations,
+      effectiveJoinRelationIds,
+    )) return true;
     return relations.some(relation =>
       relation.relationType?.toUpperCase() === 'JOIN' &&
       relation.sourceMessageId === edge.relationMessageId &&

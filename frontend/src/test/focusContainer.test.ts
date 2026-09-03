@@ -323,6 +323,26 @@ describe('buildTraceProjection', () => {
     expect(projection.messages.map(item => item.id)).toEqual(['summary-a', 'classify-b']);
   });
 
+  it('does not traverse through an excluded relation', () => {
+    const messages = [
+      message('a', 'normal'),
+      message('b', 'normal'),
+      message('reference-c', 'relation', 'reference'),
+    ];
+    const projection = buildTraceProjection({
+      messages,
+      edges: [
+        makeEdge('reference-c-a', 'reference-c', 'reference', 'a', 'b'),
+      ],
+      excludedRelationIds: new Set(['reference-c']),
+      startIds: ['a'],
+      distance: 1,
+    });
+
+    expect(projection.messages.map(item => item.id)).toEqual(['a']);
+    expect(projection.edges).toHaveLength(0);
+  });
+
   it('includes effective JOIN members in a traced container projection', () => {
     const messages = [message('container', 'relation', 'classify'), message('member', 'normal')];
     const projection = buildTraceProjection({

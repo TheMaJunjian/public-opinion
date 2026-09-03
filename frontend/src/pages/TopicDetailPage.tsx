@@ -1724,8 +1724,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const MIN_RIGHT_PX = 280;
   const MOBILE_DEFAULT_WIDTH = 1240;
-  const REVIEW_RIGHT_PX = 380;
-  const VIEWER_RIGHT_PX = 300;
   const MAX_RIGHT_PX = 500;
   const getAvailableWidth = () => document.documentElement.clientWidth || window.innerWidth;
   const getMinimumContainerWidth = () => Math.max(
@@ -1744,7 +1742,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const effectiveContainerWidth = Math.max(containerWidth, getAvailableWidth());
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
-  const splitterDragRef = useRef<{ startX: number; startLeftPx: number; containerW: number; scale: number } | null>(null);
+  const splitterDragRef = useRef<{ startX: number; startLeftPx: number; containerW: number } | null>(null);
   // Ref to track the ID of a newly sent message that should be scrolled into view.
   const pendingScrollMsgIdRef = useRef<string | null>(null);
   // Track pending requestAnimationFrame handles so they can be cancelled before
@@ -1775,22 +1773,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       window.removeEventListener('resize', syncContainerWidth);
     };
   }, []);
-  useEffect(() => {
-    if (!comparisonReviewed) return;
-    const minimumReviewWidth = MIN_LEFT_PX + REVIEW_RIGHT_PX + 12;
-    const nextWidth = Math.max(getAvailableWidth(), minimumReviewWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12);
-    setContainerWidth(nextWidth);
-    setLeftFlex(TOTAL_FLEX * MIN_LEFT_PX / (nextWidth - 12));
-  }, [comparisonReviewed]);
-
-  useEffect(() => {
-    if (!isPreloaded) return;
-    const nextWidth = Math.max(getAvailableWidth(), MIN_LEFT_PX + VIEWER_RIGHT_PX + 12);
-    const nextLeftWidth = nextWidth - VIEWER_RIGHT_PX - 12;
-    setContainerWidth(nextWidth);
-    setLeftFlex(TOTAL_FLEX * nextLeftWidth / (nextWidth - 12));
-  }, [isPreloaded]);
-
   useEffect(() => {
     const updateFixedHorizontalScroll = () => {
       const panel = leftPanelRef.current;
@@ -5021,6 +5003,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       messages,
       edges,
       containerMemberships: traceContainerMemberships,
+      excludedRelationIds: effectiveSuppressedRelIdsForLayout,
       startIds,
       distance: traceDistance,
     });
@@ -5295,7 +5278,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       return fromOk || toOk;
     });
     return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
-  }, [messages, edges, traceContainerMemberships, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
+  }, [messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
   const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitTrace = traceEntries.length > 0;
@@ -5445,6 +5428,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         messages,
         edges,
         containerMemberships: traceContainerMemberships,
+        excludedRelationIds: effectiveSuppressedRelIdsForLayout,
         startIds: traceStartIds,
         distance: traceDistance,
       });
@@ -5929,6 +5913,17 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const comparisonGraphProjections = useMemo(() => {
     if (!comparisonReviewed || !comparisonTargetId) return null;
 
+    const traceVisibleIds = traceEntries.length > 0
+      ? new Set(applyTraceFrameVisibility(buildTraceProjection({
+        messages,
+        edges,
+        containerMemberships: traceContainerMemberships,
+        excludedRelationIds: effectiveSuppressedRelIdsForLayout,
+        startIds: traceEntries[traceEntries.length - 1].ids.filter(Boolean),
+        distance: traceDistance,
+      }), traceExpandedFrameIds).messages.map(message => message.id))
+      : null;
+
     const buildProjection = (side: 'agree' | 'disagree') => {
       const sideRejectedContainerIds = new Set(rejectedContainerIds);
       if (side === 'agree') sideRejectedContainerIds.delete(comparisonTargetId);
@@ -6024,11 +6019,21 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         const toOk = graphVisibleIds.has(edge.to.messageId);
         return fromOk && toOk;
       });
-      return { messages: graphMessages, edges: graphEdges, hideMessageIds: undefined };
+      if (!traceVisibleIds) {
+        return { messages: graphMessages, edges: graphEdges, hideMessageIds: undefined };
+      }
+      const visibleMessages = graphMessages.filter(message => traceVisibleIds.has(message.id));
+      const visibleIds = new Set(visibleMessages.map(message => message.id));
+      const visibleEdges = graphEdges.filter(edge => {
+        if (!visibleIds.has(edge.relationMessageId)) return false;
+        return (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId))
+          && visibleIds.has(edge.to.messageId);
+      });
+      return { messages: visibleMessages, edges: visibleEdges, hideMessageIds: undefined };
     };
 
     return { agree: buildProjection('agree'), disagree: buildProjection('disagree') };
-  }, [comparisonReviewed, comparisonTargetId, relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, edges, msgMap, messages, mergeOwnership, replacedRelationMsgIds, traceRelationMsgIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds]);
+  }, [comparisonReviewed, comparisonTargetId, relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, edges, msgMap, messages, mergeOwnership, replacedRelationMsgIds, traceRelationMsgIds, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, traceContainerMemberships, traceExpandedFrameIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -6399,19 +6404,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     e.currentTarget.setPointerCapture(e.pointerId);
     setSplitterActive(true);
     const panelContainer = panelContainerRef.current;
-    const containerW = panelContainer?.offsetWidth ?? 0;
     const containerRect = panelContainer?.getBoundingClientRect();
     const splitterRect = e.currentTarget.getBoundingClientRect();
-    const scale = panelContainer && containerW > 0 && containerRect
-      ? containerRect.width / containerW
-      : 1;
-    const startLeftPx = panelContainer && scale > 0
-      ? (splitterRect.left - containerRect!.left) / scale
+    const containerW = containerRect?.width ?? 0;
+    const startLeftPx = containerRect
+      ? splitterRect.left - containerRect.left
       : 0;
-    splitterDragRef.current = { startX: e.clientX, startLeftPx, containerW, scale };
+    splitterDragRef.current = { startX: e.clientX, startLeftPx, containerW };
     function onPointerMove(ev: PointerEvent) {
       if (!splitterDragRef.current || !panelContainerRef.current) return;
-      const dx = (ev.clientX - splitterDragRef.current.startX) / splitterDragRef.current.scale;
+      const dx = ev.clientX - splitterDragRef.current.startX;
       const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
       const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
       const nextWidth = naturalRightPx < MIN_RIGHT_PX

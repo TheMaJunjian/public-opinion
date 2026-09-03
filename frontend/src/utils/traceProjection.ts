@@ -11,6 +11,7 @@ export interface TraceProjectionInput {
   messages: DemoMessage[];
   edges: DemoEdge[];
   containerMemberships?: TraceContainerMembership[];
+  excludedRelationIds?: ReadonlySet<string>;
   startIds: string[];
   distance: number;
 }
@@ -34,10 +35,11 @@ function addAdjacency(adjacency: Map<string, Set<string>>, left: string, right: 
  * transparent connections and are projected when their endpoints are visible.
  */
 export function buildTraceProjection(input: TraceProjectionInput): TraceProjection {
-  const { messages, edges, containerMemberships = [], startIds, distance } = input;
+  const { messages, edges, containerMemberships = [], excludedRelationIds = new Set<string>(), startIds, distance } = input;
   const messageMap = new Map(messages.map(message => [message.id, message]));
-  const traceEdges = [...edges];
+  const traceEdges = edges.filter(edge => !excludedRelationIds.has(edge.relationMessageId));
   for (const membership of containerMemberships) {
+    if (excludedRelationIds.has(membership.containerId)) continue;
     if (!messageMap.has(membership.containerId)) continue;
     membership.targetIds.forEach((targetId, index) => {
       if (!messageMap.has(targetId)) return;

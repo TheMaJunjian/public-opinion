@@ -25,7 +25,12 @@ import { verifySignature } from './middleware/auth';
 
 const app = express();
 
-app.use(cors());
+app.set('trust proxy', 1);
+
+const corsOrigin = process.env.NODE_ENV === 'production'
+  ? process.env.CORS_ORIGIN || false
+  : true;
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
 // Rate limiters
@@ -51,6 +56,14 @@ const writeLimiter = rateLimit({
   skip: (req) => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS',
 });
 
+const debugLogLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '调试日志请求过于频繁，请稍后再试' },
+});
+
 // Load OpenAPI spec and mount Swagger UI
 // __dirname is dist/ in production, src/ in dev; openapi.yaml lives in src/
 const swaggerDocument = YAML.load(path.join(__dirname, '..', 'src', 'openapi.yaml')) as Record<string, unknown>;
@@ -66,7 +79,9 @@ app.use('/api/rules', rulesRouter);
 app.use('/api/messages/:id/stakes', stakesRouter);
 app.use('/', writeLimiter, roundsRouter);
 app.use('/', writeLimiter, stancesRouter);
-app.use('/api/debug-log', debugLogRouter);
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/debug-log', debugLogLimiter, debugLogRouter);
+}
 app.use('/', auditLogsRouter);
 app.use('/', revenueRouter);
 app.use('/api/topics/:topicId/export', exportRouter);

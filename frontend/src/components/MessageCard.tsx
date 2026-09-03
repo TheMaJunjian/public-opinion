@@ -173,7 +173,7 @@ export default function MessageCard({
         }}>
           <div style={{
             fontWeight: 600, color: '#f1f5f9',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: isSummaryTopic ? 'pre-wrap' : 'nowrap',
+            flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
             userSelect: isActiveText ? 'text' : 'auto',
             cursor: isActiveText ? 'text' : 'inherit',
           }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>

@@ -3761,7 +3761,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </div>
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
-                    <div style={{fontWeight:600,color:"#f3f4f6",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    <div style={{fontWeight:600,color:"#f3f4f6",flex:1,minWidth:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>
                       {topicTitle}
                     </div>
                   </div>
@@ -4750,7 +4750,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", flex: 1, minWidth: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                           {isRelWholeSel(gf.relMsgId) && <span style={{ display: "inline-block", marginRight: 6, fontSize: 10, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: "#fbbf24", color: "#111827" }}>{isSummaryTopic ? "总结" : "分类"}</span>}
                           {isSummaryTopic ? (
                             <>

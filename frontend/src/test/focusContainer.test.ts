@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolveOneContainer, applyContainerExpansion } from '../utils/focusContainer';
 import { buildTraceProjection } from '../utils/traceProjection';
-import type { DemoEdge, UnitSelection } from '../utils/modelBridge';
+import type { DemoEdge, UnitSelection, DemoMessage } from '../utils/modelBridge';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -305,51 +305,13 @@ function message(id: string, kind: DemoMessage['kind'], relationType?: DemoMessa
 }
 
 describe('buildTraceProjection', () => {
-  const nestedMessages: DemoMessage[] = [
-    message('a', 'relation', 'summary'),
-    message('b', 'relation', 'classify'),
-    message('c', 'normal'),
-  ];
-  const nestedEdges: DemoEdge[] = [
-    makeEdge('a-b', 'a', 'summary', 'anon:a', 'b'),
-    makeEdge('b-c', 'b', 'classify', 'anon:b', 'c'),
-  ];
+  it('filters ordinary messages and their relations by distance only', () => {
+    const messages = [message('a', 'normal'), message('b', 'normal'), message('c', 'normal')];
+    const edges = [makeEdge('e1', 'rel', 'proposal', 'a', 'b')];
+    messages.push(message('rel', 'relation', 'proposal'));
+    const projection = buildTraceProjection({ messages, edges, startIds: ['a'], distance: 1 });
 
-  it('shows only the nearest collapsed container at distance one', () => {
-    const projection = buildTraceProjection({
-      messages: nestedMessages,
-      edges: nestedEdges,
-      startIds: ['c'],
-      distance: 1,
-    });
-
-    expect(projection.messages.map(item => item.id)).toEqual(['b']);
-    expect(projection.edges).toEqual([]);
-  });
-
-  it('expands B without exposing its ancestor A', () => {
-    const projection = buildTraceProjection({
-      messages: nestedMessages,
-      edges: nestedEdges,
-      startIds: ['c'],
-      distance: 1,
-      expandedContainerIds: new Set(['b']),
-    });
-
-    expect(projection.messages.map(item => item.id)).toEqual(['b', 'c']);
-    expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['b']);
-  });
-
-  it('keeps a collapsed child as a card inside an expanded parent', () => {
-    const projection = buildTraceProjection({
-      messages: nestedMessages,
-      edges: nestedEdges,
-      startIds: ['c'],
-      distance: 2,
-      expandedContainerIds: new Set(['a']),
-    });
-
-    expect(projection.messages.map(item => item.id)).toEqual(['a', 'b']);
-    expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['a']);
+    expect(projection.messages.map(item => item.id)).toEqual(['a', 'b', 'rel']);
+    expect(projection.edges.map(edge => edge.id)).toEqual(['e1']);
   });
 });

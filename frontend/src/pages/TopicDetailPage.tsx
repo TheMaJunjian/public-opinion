@@ -607,7 +607,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }, [draftUnits, sourceUnits, targetUnits]);
   const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
   const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
-  const [traceExpandedFrameIds, setTraceExpandedFrameIds] = useState<Set<string>>(new Set());
+  const traceExpandedFrameIds = new Set<string>();
   // Counter incremented on every exitTrace/exitAllTrace to force GraphView
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
@@ -2239,7 +2239,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       ids: [messageId], snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
       classifyRelMsgId, classifyStack: [...classifyStackRef.current],
     };
-    setTraceExpandedFrameIds(new Set());
     setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
     if (options?.mode !== 'topic') {
       classifyStackRef.current = [];
@@ -2266,7 +2265,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       ids: messageIds, snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
       classifyRelMsgId, classifyStack: [...classifyStackRef.current],
     };
-    setTraceExpandedFrameIds(new Set());
     setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
     if (options?.mode !== 'topic') {
       classifyStackRef.current = [];
@@ -2298,7 +2296,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
-    setTraceExpandedFrameIds(new Set());
     setTraceKey(k => k + 1);
     classifyStackRef.current = entry?.classifyStack ?? [];
     setClassifyRelMsgId(entry?.classifyRelMsgId ?? null);
@@ -2313,7 +2310,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       if (prev.length === 0) return prev;
       return [];
     });
-    setTraceExpandedFrameIds(new Set());
     setTraceKey(k => k + 1);
     classifyStackRef.current = traceEntries.length > 0 ? traceEntries[0].classifyStack : [];
     setClassifyRelMsgId(traceEntries.length > 0 ? traceEntries[0].classifyRelMsgId : null);
@@ -2675,16 +2671,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         return;
       }
       if (relType === "classify" || relType === "summary") {
-        if ((relType === "summary" || relType === "classify") && traceEntries.length > 0 && !isInsideClassify) {
-          setTraceExpandedFrameIds(prev => {
-            const next = new Set(prev);
-            if (next.has(messageId)) next.delete(messageId);
-            else next.add(messageId);
-            return next;
-          });
-          setTraceKey(key => key + 1);
-          return;
-        }
         if (relationType === "correct") {
           // In correction mode, the container card is the selectable text target;
           // do not navigate away from the current canvas.
@@ -4996,9 +4982,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       edges,
       startIds,
       distance: traceDistance,
-      expandedContainerIds: traceExpandedFrameIds,
     });
-    return { messagesToShow: projection.messages, edgesToShow: projection.edges };
+    if (traceEntries.length >= 0) {
+      return { messagesToShow: projection.messages, edgesToShow: projection.edges };
+    }
 
     /* Legacy trace projection retained temporarily below while the page-level
        consumers are migrated; the return above is the single active path. */
@@ -5286,12 +5273,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     return ids;
   }, [traceEntries, msgMap]);
-  const traceFrameIds = useMemo(() => new Set(
-    Array.from(traceRelationMsgIds).filter(id => {
-      const relationType = msgMap.get(id)?.relationType;
-      return relationType ? getPresentationSpec(relationType).isContainer : false;
-    }),
-  ), [traceRelationMsgIds, msgMap]);
   const classifyTargetCount = useMemo(
     () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
     [currentClassifyRelMsgId, relationById]
@@ -5401,7 +5382,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         edges,
         startIds: traceStartIds,
         distance: traceDistance,
-        expandedContainerIds: new Set([...traceExpandedFrameIds, ...traceStartIds]),
       });
       return {
         graphMessagesToRender: baseMessages,
@@ -6184,16 +6164,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType ?? relationTypeByRelMsgId.get(relMsgId) ?? "";
     if (relType === "classify" || relType === "summary") {
-      if (traceEntries.length > 0 && !isInsideClassify) {
-        setTraceExpandedFrameIds(prev => {
-          const next = new Set(prev);
-          if (next.has(relMsgId)) next.delete(relMsgId);
-          else next.add(relMsgId);
-          return next;
-        });
-        setTraceKey(key => key + 1);
-        return;
-      }
       enterClassifyTopic(relMsgId);
       return;
     }
@@ -7146,8 +7116,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
                   hideMessageIds={hideMessageIds}
-                  traceExpandedFrameIds={traceExpandedFrameIds}
-                  traceFrameIds={traceFrameIds}
                   stakeCounts={stakeCounts}
                   onSettlementToggleTruth={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'TRUTH') { closeSettlement(); } else { openSettlement(msgId, 'TRUTH'); } }}
                   onSettlementToggleValue={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'VALUE') { closeSettlement(); } else { openSettlement(msgId, 'VALUE'); } }}

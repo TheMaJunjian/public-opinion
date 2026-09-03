@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import React, { useState } from 'react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, type DemoEdge, type DemoMessage } from '../utils/modelBridge';
 import { formatCorrectionRange, generateCorrectionContent } from '../pages/topicDetailHelpers';
-import { computeReplacementDiff, getCorrectionBaseContent, rebuildCorrectionContent } from '../components/CorrectionComparisonPopup';
+import CorrectionComparisonPopup, { computeReplacementDiff, getCorrectionBaseContent, rebuildCorrectionContent } from '../components/CorrectionComparisonPopup';
 
 function message(id: string, createdAt: string, content: string, kind: DemoMessage['kind']): DemoMessage {
   return { id, author: 'tester', createdAt, content, kind };
@@ -212,6 +214,38 @@ describe('correction versions', () => {
   it('detects a stale selection so the user can create a new correction', () => {
     expect(correctionSelectionIsStale('Abcde', { kind: 'text', start: 0, len: 1, text: 'a' })).toBe(true);
     expect(correctionSelectionIsStale('Abcde', { kind: 'text', start: 2, len: 1, text: 'c' })).toBe(false);
+  });
+
+  it('disables the correction confirmation button while sending', async () => {
+    let resolveConfirmation!: () => void;
+    const confirmation = new Promise<void>(resolve => { resolveConfirmation = resolve; });
+    const onConfirm = vi.fn(() => confirmation);
+    function PopupHarness() {
+      const [isSending, setIsSending] = useState(false);
+      const handleConfirm = () => {
+        setIsSending(true);
+        return onConfirm();
+      };
+      return React.createElement(CorrectionComparisonPopup, {
+        popup: { relMsgId: 'new-correction', x: 0, y: 0 },
+        messages: [],
+        edges: [],
+        onClose: vi.fn(),
+        isSending,
+        reversePreview: { before: '原文', after: '更正后', onConfirm: handleConfirm },
+      });
+    }
+    render(React.createElement(PopupHarness));
+
+    const confirmButton = screen.getByRole('button', { name: '确认发送更正' });
+    fireEvent.click(confirmButton);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(confirmButton).toBeDisabled());
+    fireEvent.click(confirmButton);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    resolveConfirmation();
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
   });
 
 

@@ -4,11 +4,16 @@ import { useParams, useSearchParams, useLocation, useNavigate } from 'react-rout
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, kindLabel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, isTraceTextLikeMessage, kindLabel } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection,
   RelationType, MessageKind,
 } from '../utils/modelBridge';
+
+function isTraceExpandableFrameType(relationType: string): boolean {
+  const normalizedType = relationType.toLowerCase();
+  return normalizedType === 'summary' || normalizedType === 'classify';
+}
 import type { Topic, TargetRef, Relation, MessageStakes, User } from '../types';
 import { getPresentationSpec, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
@@ -25,6 +30,7 @@ import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
+import { buildTraceProjection } from '../utils/traceProjection';
 import { operationLog } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
@@ -70,7 +76,7 @@ import {
 
 type ViewMode = "list" | "graph";
 
-type FocusSnapshot = {
+type TraceSnapshot = {
   viewMode: ViewMode;
   leftScroll: { top: number; left: number } | null;
   pageScroll: { top: number; left: number } | null;
@@ -80,14 +86,18 @@ type FocusSnapshot = {
   targetUnits: UnitSelection[];
   activeTextSelectId: string | null;
   lastClickedMessageId: string | null;
-  focusHop: number;
+  traceDistance: number;
 };
 
-type FocusEntry = {
+type ClassifyStackEntry = { relMsgId: string; snapshot: TraceSnapshot | null };
+
+type TraceEntry = {
   ids: string[];
-  snapshot: FocusSnapshot | null;
-  mode: "focus" | "topic";
+  snapshot: TraceSnapshot | null;
+  mode: "trace" | "topic";
   topicRelMsgId?: string;
+  classifyRelMsgId: string | null;
+  classifyStack: ClassifyStackEntry[];
 };
 
 interface TopicDetailPageProps {
@@ -596,23 +606,24 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     operationLog('选择变化', `暂存区=${describe(draftUnits)} 来源集合=${describe(sourceUnits)} 目标集合=${describe(targetUnits)}`);
   }, [draftUnits, sourceUnits, targetUnits]);
   const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
-  const [focusEntries, setFocusEntries] = useState<FocusEntry[]>([]);
-  // Counter incremented on every exitFocus/exitAllFocus to force GraphView
+  const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
+  const [traceExpandedFrameIds, setTraceExpandedFrameIds] = useState<Set<string>>(new Set());
+  // Counter incremented on every exitTrace/exitAllTrace to force GraphView
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
   const [classifyKey, setClassifyKey] = useState(0);
-  const [focusKey, setFocusKey] = useState(0);
+  const [traceKey, setTraceKey] = useState(0);
   const [scrollKey, setScrollKey] = useState(0);
-  // Classify state — independent from the focus system.
+  // Classify state — independent from the trace system.
   // When non-null, the view is scoped to the CLASSIFY/SUMMARY relation's owned messages.
   const [classifyRelMsgId, setClassifyRelMsgId] = useState<string | null>(null);
   const isInsideClassify = classifyRelMsgId !== null;
   const currentClassifyRelMsgId = classifyRelMsgId;
   // Stack-based snapshot store for nested classify enter/exit.
   // Each entry holds the classify id and the snapshot captured before entering it.
-  const classifyStackRef = useRef<Array<{ relMsgId: string; snapshot: FocusSnapshot | null }>>([]);
+  const classifyStackRef = useRef<ClassifyStackEntry[]>([]);
   const temporaryCategoryStackRef = useRef<Array<{
-    snapshot: FocusSnapshot;
+    snapshot: TraceSnapshot;
     joinFilterTargetId: string | null;
     joinFilterDirection: 'incoming' | 'outgoing';
     correctionFilterTargetId: string | null;
@@ -749,7 +760,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   // Phase 6: expose for SettlementPanel direct access
   useEffect(() => { (window as any).__addSettlementMessage = handleSettlementMessageCreated; return () => { delete (window as any).__addSettlementMessage; }; }, [handleSettlementMessageCreated]);
 
-  // Scroll to message after data loads and renders (also triggers on focus changes for in-place nav).
+  // Scroll to message after data loads and renders (also triggers on trace changes for in-place nav).
   // View-switch decisions (graph→list for hidden messages) are made in the auto-classify
   // effect above; this effect only handles the actual scrolling.
   useEffect(() => {
@@ -761,7 +772,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       scrollMsgToCenter(pendingScrollMsgRef.current, { dependencyIds });
       pendingScrollMsgRef.current = null;
     }
-  }, [loading, messages, classifyKey, focusKey, scrollKey, viewMode]);
+  }, [loading, messages, classifyKey, traceKey, scrollKey, viewMode]);
 
   useEffect(() => {
     const pendingNavigation = pendingCorrectionNavigationRef.current;
@@ -777,7 +788,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
     if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
   }, []);
-  const [focusHop, setFocusHop] = useState<number>(1);
+  const [traceDistance, setTraceDistance] = useState<number>(1);
   // Popup state for decoration double-click (shows sender info)
   const [decorationPopup, setDecorationPopup] = useState<{
     messageId: string; kind: "agree" | "disagree";
@@ -900,7 +911,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   // Phase 5: Refs to avoid stale closure in points-navigate handler
   // (initialized empty; values synced via useEffect below after all useMemos run)
-  const focusEntriesRef = useRef<FocusEntry[]>([]);
+  const traceEntriesRef = useRef<TraceEntry[]>([]);
   const classifyRelMsgIdRef = useRef<string | null>(null);
   const relationsRef = useRef<Relation[]>([]);
   const relationByIdRef = useRef<Map<string, Relation>>(new Map());
@@ -1159,8 +1170,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return () => window.removeEventListener('stakes-refresh', handler);
   }, [mergeStakeSnapshot]);
 
-  const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
-  const currentFocusIds = currentFocusEntry?.ids ?? null;
+  const currentTraceEntry = traceEntries.length > 0 ? traceEntries[traceEntries.length - 1] : null;
+  const currentTraceIds = currentTraceEntry?.ids ?? null;
   const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
   const msgMap = useMemo(() => {
     const map = new Map(messages.map(m => [m.id, m]));
@@ -1472,7 +1483,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }, [relations]);
 
   // Phase 5: Keep refs in sync with derived state for points-navigate handler
-  focusEntriesRef.current = focusEntries;
+  traceEntriesRef.current = traceEntries;
   classifyRelMsgIdRef.current = classifyRelMsgId;
   relationsRef.current = relations;
   relationByIdRef.current = relationById;
@@ -1697,7 +1708,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const messagePulseRafRef = useRef<number | null>(null);
   // Saved scroll positions for each view mode, so switching modes does not reset to top.
   const viewModeScrollRef = useRef<{ graph: { top: number; left: number } | null; list: { top: number; left: number } | null }>({ graph: null, list: null });
-  const prevFocusLenRef = useRef(0);
+  const prevTraceLenRef = useRef(0);
   const lastAddedFragmentRef = useRef<{ messageId: string; unit: UnitSelection; time: number } | null>(null);
   const mouseDownRef = useRef<{ x: number; y: number; messageId: string | null } | null>(null);
   const lastDragOrSelectTimeRef = useRef<number>(0);
@@ -2105,7 +2116,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     scrollRafRef.current = requestAnimationFrame(tryScroll);
   }
 
-  function captureSnapshot(): FocusSnapshot {
+  function captureSnapshot(): TraceSnapshot {
     const pageScroll = document.scrollingElement;
     return {
       viewMode,
@@ -2117,7 +2128,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       targetUnits: targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       activeTextSelectId,
       lastClickedMessageId,
-      focusHop,
+      traceDistance,
     };
   }
 
@@ -2129,10 +2140,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (left !== null) container.scrollLeft = Math.min(Math.max(0, left), maxLeft);
   }
 
-  function restoreSnapshot(s: FocusSnapshot | null, opts?: { restoreSelection?: boolean }) {
+  function restoreSnapshot(s: TraceSnapshot | null, opts?: { restoreSelection?: boolean }) {
     if (!s) return;
     scrollRequestIdRef.current++;
-    const restoreSel = opts?.restoreSelection !== false; // 默认 true，焦点模式恢复候选区
+    const restoreSel = opts?.restoreSelection !== false; // 默认 true，追溯模式恢复候选区
     if (restoreSel) {
       setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
       setSourceUnits(s.sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
@@ -2140,7 +2151,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     setActiveTextSelectId(s.activeTextSelectId);
     setLastClickedMessageId(s.lastClickedMessageId);
-    setFocusHop(s.focusHop);
+    setTraceDistance(s.traceDistance);
     setViewMode(s.viewMode);
     // Cancel any in-flight scroll rAF before scheduling new ones so that stale
     // callbacks never touch DOM nodes after React has reconciled them away.
@@ -2207,8 +2218,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   useEffect(() => {
     const prepareViewer = () => {
       exitAllTemporaryCategories();
-      setFocusEntries([]);
-      setFocusKey(key => key + 1);
+      setTraceEntries([]);
+      setTraceKey(key => key + 1);
       if (classifyStackRef.current.length > 0 || classifyRelMsgId !== null) {
         classifyStackRef.current = [];
         setClassifyRelMsgId(null);
@@ -2220,47 +2231,93 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return () => window.removeEventListener('prepare-export-viewer', prepareViewer);
   }, [classifyRelMsgId]);
 
-  function enterFocus(messageId: string, options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
+  function enterTrace(messageId: string, options?: { replace?: boolean; mode?: "trace" | "topic"; topicRelMsgId?: string }) {
     if (!messageId) return;
-    operationLog(`进入${options?.mode === 'topic' ? '分类' : '焦点'}`, `message=${messageId}`);
+    operationLog(`进入${options?.mode === 'topic' ? '分类' : '追溯'}`, `message=${messageId}`);
     const snapshot = captureSnapshot();
-    const entry: FocusEntry = { ids: [messageId], snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
-    setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
+    const entry: TraceEntry = {
+      ids: [messageId], snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
+      classifyRelMsgId, classifyStack: [...classifyStackRef.current],
+    };
+    setTraceExpandedFrameIds(new Set());
+    setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
+    if (options?.mode !== 'topic') {
+      classifyStackRef.current = [];
+      setClassifyRelMsgId(null);
+      setClassifyKey(key => key + 1);
+      cancelScrollRafs();
+      scrollRequestIdRef.current++;
+      if (leftPanelRef.current) {
+        leftPanelRef.current.scrollTop = 0;
+        leftPanelRef.current.scrollLeft = 0;
+      }
+      if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = 0;
+        document.scrollingElement.scrollLeft = 0;
+      }
+    }
   }
 
-  function enterFocusMultiple(messageIds: string[], options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
+  function enterTraceMultiple(messageIds: string[], options?: { replace?: boolean; mode?: "trace" | "topic"; topicRelMsgId?: string }) {
     if (!messageIds || messageIds.length === 0) return;
-    operationLog(`进入${options?.mode === 'topic' ? '分类' : '焦点'}`, `messages=${messageIds.join(',')}`);
+    operationLog(`进入${options?.mode === 'topic' ? '分类' : '追溯'}`, `messages=${messageIds.join(',')}`);
     const snapshot = captureSnapshot();
-    const entry: FocusEntry = { ids: messageIds, snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
-    setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
-    // Bump exit key to force GraphView clean remount when entering focus,
+    const entry: TraceEntry = {
+      ids: messageIds, snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
+      classifyRelMsgId, classifyStack: [...classifyStackRef.current],
+    };
+    setTraceExpandedFrameIds(new Set());
+    setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
+    if (options?.mode !== 'topic') {
+      classifyStackRef.current = [];
+      setClassifyRelMsgId(null);
+      setClassifyKey(key => key + 1);
+      cancelScrollRafs();
+      scrollRequestIdRef.current++;
+      if (leftPanelRef.current) {
+        leftPanelRef.current.scrollTop = 0;
+        leftPanelRef.current.scrollLeft = 0;
+      }
+      if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = 0;
+        document.scrollingElement.scrollLeft = 0;
+      }
+    }
+    // Bump exit key to force GraphView clean remount when entering trace,
     // avoiding React 18 concurrent reconciliation removeChild errors.
-    setFocusKey(k => k + 1);
+    setTraceKey(k => k + 1);
   }
 
-  function exitFocus() {
-    // Pop the focus stack and bump the exit key to force GraphView remount,
+  function exitTrace() {
+    // Pop the trace stack and bump the exit key to force GraphView remount,
     // avoiding React 18 concurrent reconciliation bugs (removeChild errors).
-    const entry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
+    const entry = traceEntries.length > 0 ? traceEntries[traceEntries.length - 1] : null;
     const snapshot = entry?.snapshot ?? null;
-    operationLog('退出焦点', `depth=${focusEntries.length}`);
-    setFocusEntries(prev => {
+    operationLog('退出追溯', `depth=${traceEntries.length}`);
+    setTraceEntries(prev => {
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
-    setFocusKey(k => k + 1);
+    setTraceExpandedFrameIds(new Set());
+    setTraceKey(k => k + 1);
+    classifyStackRef.current = entry?.classifyStack ?? [];
+    setClassifyRelMsgId(entry?.classifyRelMsgId ?? null);
+    setClassifyKey(key => key + 1);
     if (snapshot) restoreSnapshot(snapshot, { restoreSelection: true });
   }
 
-  function exitAllFocus() {
-    const snapshot = focusEntries.length > 0 ? focusEntries[0].snapshot : null;
-    operationLog('退出全部焦点', `depth=${focusEntries.length}`);
-    setFocusEntries(prev => {
+  function exitAllTrace() {
+    const snapshot = traceEntries.length > 0 ? traceEntries[0].snapshot : null;
+    operationLog('退出全部追溯', `depth=${traceEntries.length}`);
+    setTraceEntries(prev => {
       if (prev.length === 0) return prev;
       return [];
     });
-    setFocusKey(k => k + 1);
+    setTraceExpandedFrameIds(new Set());
+    setTraceKey(k => k + 1);
+    classifyStackRef.current = traceEntries.length > 0 ? traceEntries[0].classifyStack : [];
+    setClassifyRelMsgId(traceEntries.length > 0 ? traceEntries[0].classifyRelMsgId : null);
+    setClassifyKey(key => key + 1);
     if (snapshot) restoreSnapshot(snapshot);
   }
 
@@ -2286,7 +2343,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }
 
   /**
-   * When inside a CLASSIFY / SUMMARY topic focus, register a newly created
+  * When inside a CLASSIFY / SUMMARY topic view, register a newly created
    * message or relation as a target of the parent CLASSIFY/SUMMARY so it
    * stays scoped inside the topic after exit.
    *
@@ -2421,7 +2478,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       settlementTargetId: settleTargetId,
       roundPayload: { settlementType, roundId: (roundMsg as any).relationPayload?.roundId },
     }]);
-    if (isInsideClassify && currentClassifyRelMsgId) {
+    // Trace mode always renders from the trace window on the main canvas.
+    // Do not let a stale classify state from the same React transition project
+    // the selected nested message back into an empty parent frame.
+    if (isInsideClassify && currentClassifyRelMsgId && traceEntries.length === 0) {
       await attachMessageToCurrentClassify(roundMsg.id);
       setClassifyKey(k => k + 1);
     }
@@ -2615,6 +2675,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         return;
       }
       if (relType === "classify" || relType === "summary") {
+        if ((relType === "summary" || relType === "classify") && traceEntries.length > 0 && !isInsideClassify) {
+          setTraceExpandedFrameIds(prev => {
+            const next = new Set(prev);
+            if (next.has(messageId)) next.delete(messageId);
+            else next.add(messageId);
+            return next;
+          });
+          setTraceKey(key => key + 1);
+          return;
+        }
         if (relationType === "correct") {
           // In correction mode, the container card is the selectable text target;
           // do not navigate away from the current canvas.
@@ -3929,7 +3999,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       setRelationType(null); setSecondaryRelationType("none");
       // Bump key to force GraphView clean remount after adding classify edges,
       // avoiding React 18 concurrent reconciliation removeChild errors.
-      setFocusKey(k => k + 1);
+      setTraceKey(k => k + 1);
       return;
     }
 
@@ -4450,15 +4520,15 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     prevDraftCountRef.current = cur;
   }, [draftUnits, activeTextSelectId]);
 
-  // Bug 3: scroll to center focused message when entering focus mode
+  // Scroll to center the traced message when entering trace mode.
   useEffect(() => {
-    const newLen = focusEntries.length;
-    if (newLen <= prevFocusLenRef.current) { prevFocusLenRef.current = newLen; return; }
-    prevFocusLenRef.current = newLen;
+    const newLen = traceEntries.length;
+    if (newLen <= prevTraceLenRef.current) { prevTraceLenRef.current = newLen; return; }
+    prevTraceLenRef.current = newLen;
     if (viewMode !== "graph") return;
-    const entry = focusEntries[newLen - 1];
+    const entry = traceEntries[newLen - 1];
     if (!entry || entry.ids.length === 0) return;
-    const focusId = entry.ids[0];
+    const traceId = entry.ids[0];
     cancelScrollRafs();
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRaf2Ref.current = requestAnimationFrame(() => {
@@ -4466,7 +4536,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         scrollRaf2Ref.current = null;
         const container = leftPanelRef.current;
         if (!container) return;
-        const el = container.querySelector(`[data-msgid="${focusId}"]`) as HTMLElement | null;
+        const el = container.querySelector(`[data-msgid="${traceId}"]`) as HTMLElement | null;
         if (!el) return;
         const elRect = el.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
@@ -4476,7 +4546,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
       });
     });
-  }, [focusEntries, viewMode]);
+  }, [traceEntries, viewMode]);
 
   // Restore saved scroll position after view mode switch so switching does not auto-scroll to top.
   useEffect(() => {
@@ -4918,81 +4988,53 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }
 
   const { messagesToShow, edgesToShow } = useMemo(() => {
-    if (focusEntries.length === 0) return { messagesToShow: messages, edgesToShow: edges };
-    const startIds = focusEntries[focusEntries.length - 1].ids.filter(Boolean);
+    if (traceEntries.length === 0) return { messagesToShow: messages, edgesToShow: edges };
+    const startIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
     if (startIds.length === 0) return { messagesToShow: messages, edgesToShow: edges };
+    const projection = buildTraceProjection({
+      messages,
+      edges,
+      startIds,
+      distance: traceDistance,
+      expandedContainerIds: traceExpandedFrameIds,
+    });
+    return { messagesToShow: projection.messages, edgesToShow: projection.edges };
+
+    /* Legacy trace projection retained temporarily below while the page-level
+       consumers are migrated; the return above is the single active path. */
     const adj = new Map<string, Set<string>>();
     function addEdgeAdj(a: string, b: string) {
       if (!adj.has(a)) adj.set(a, new Set()); if (!adj.has(b)) adj.set(b, new Set());
       adj.get(a)!.add(b); adj.get(b)!.add(a);
     }
     for (const e of edges) {
-      // Container-type relations (CLASSIFY, MERGE, SUMMARY) do NOT count as
-      // focus-distance hops.  They use a two-level visibility model:
+      // SUMMARY/CLASSIFY relations use a two-level visibility model:
       //   - Container card is shown when its nearest connected message is within range.
       //   - Container children are expanded when range has 1+ hop of budget remaining.
       // This prevents the entire cluster from appearing at distance 1.
-      if (getPresentationSpec(e.relationType).isContainer) continue;
-      // Only add a direct from↔to hop if at least one endpoint is a normal text message.
-      // Relation-to-relation connections (e.g. a CORRECT relation linking two relation messages)
-      // should not count as focus-distance hops.
-      const fromIsNormal = isContentKind(msgMap.get(e.from.messageId)?.kind ?? "normal");
-      const toIsNormal = isContentKind(msgMap.get(e.to.messageId)?.kind ?? "normal");
-      if (fromIsNormal || toIsNormal) addEdgeAdj(e.from.messageId, e.to.messageId);
-      // Connect the relation message to both endpoints so BFS can traverse through
-      // relation messages (including those with anon: sources).  Skip anon: IDs
-      // since they are not real messages and should not appear as BFS nodes.
+      // MERGE/ARRANGE are ordinary trace relations and must remain in the
+      // adjacency graph; their visual frame handling is independent of trace expansion.
+      if (isTraceExpandableFrameType(e.relationType)) continue;
+      // Only text-like endpoints participate as direct trace nodes. A textual
+      // relation message is also a node; ordinary relation labels are not.
+      const fromIsTextLike = isTraceTextLikeMessage(msgMap.get(e.from.messageId));
+      const toIsTextLike = isTraceTextLikeMessage(msgMap.get(e.to.messageId));
+      if (fromIsTextLike || toIsTextLike) addEdgeAdj(e.from.messageId, e.to.messageId);
+      const relationIsTextLike = isTraceTextLikeMessage(msgMap.get(e.relationMessageId));
+      if (!relationIsTextLike) continue;
       const fromId = e.from.messageId;
       const toId = e.to.messageId;
       if (!fromId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, fromId);
       if (!toId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, toId);
     }
-    // When a relation message is the focus, resolve it to its connected normal (text)
-    // messages and use those as BFS roots.  This preserves the original hop semantics:
-    //   1 hop = one relation message connecting two text messages.
-    // Distance is measured TEXT-MESSAGE to TEXT-MESSAGE through relation messages.
-    // The relation message itself does NOT act as a BFS node — it is the connector.
-    //
-    // The relation edges are always shown when their text-message endpoints are visible
-    // (ensured by the edge filter below with relationFocusIds / focusRelationMsgIds guards).
-    //
-    // This way:
-    //   hop=0 → text messages directly connected to the focused relation
-    //   hop=1 → those text messages + their 1-hop neighbours through other relations
+    // A traced relation is itself distance 0; its nearest related text message
+    // is distance 1, just like a traced text message's nearest related text.
     const effectiveStartIds = new Set<string>();
-    const relationFocusIds = new Set<string>();
-    function collectNormalMessagesForRelation(relId: string, seen: Set<string>): void {
-      if (seen.has(relId)) return;
-      seen.add(relId);
-      for (const e of edges) {
-        if (e.relationMessageId !== relId) continue;
-        const mf = msgMap.get(e.from.messageId);
-        if (mf && isContentKind(mf.kind)) effectiveStartIds.add(e.from.messageId);
-        else if (mf?.kind === "relation") collectNormalMessagesForRelation(e.from.messageId, seen);
-        const mt = msgMap.get(e.to.messageId);
-        if (mt && isContentKind(mt.kind)) effectiveStartIds.add(e.to.messageId);
-        else if (mt?.kind === "relation") collectNormalMessagesForRelation(e.to.messageId, seen);
-      }
-    }
+    const relationTraceIds = new Set<string>();
     for (const id of startIds) {
       const m = msgMap.get(id);
       if (m && m.kind === "relation") {
-        relationFocusIds.add(id);
-        // When a container-type relation is the focus at hop=0, don't resolve
-        // its children — only the container card itself should be shown.
-        // At hop >= 1, resolve normally so children appear as the container expands.
-        const isContainer = m.relationType ? getPresentationSpec(m.relationType).isContainer : false;
-        if (!(focusHop === 0 && isContainer)) {
-          const sizeBefore = effectiveStartIds.size;
-          collectNormalMessagesForRelation(id, new Set<string>());
-          // Fallback: relation has no connected normal messages (e.g. pure-stance
-          // with anon source).  Keep the relation message itself as BFS root so
-          // focus mode still shows something.
-          if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);
-        }
-        // Also include the relation message itself as a BFS root so that
-        // external messages connected directly to the relation (not via its
-        // resolved normal messages) are reachable at hop=1.
+        relationTraceIds.add(id);
         effectiveStartIds.add(id);
       } else {
         effectiveStartIds.add(id);
@@ -5012,10 +5054,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       if (!spec.groupsTargets) continue;
       let members = frameMembers.get(e.relationMessageId);
       if (!members) { members = new Set<string>(); frameMembers.set(e.relationMessageId, members); }
-      const fromKind = msgMap.get(e.from.messageId)?.kind ?? "normal";
-      const toKind = msgMap.get(e.to.messageId)?.kind ?? "normal";
-      if (isContentKind(fromKind as MessageKind)) members.add(e.from.messageId);
-      if (isContentKind(toKind as MessageKind)) members.add(e.to.messageId);
+      if (isTraceTextLikeMessage(msgMap.get(e.from.messageId))) members.add(e.from.messageId);
+      if (isTraceTextLikeMessage(msgMap.get(e.to.messageId))) members.add(e.to.messageId);
     }
     // Reverse index: for each normal message, which frame IDs contain it.
     const msgFrameMap = new Map<string, Set<string>>();
@@ -5026,19 +5066,22 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         frames.add(frameId);
       }
     }
+    // Expansion is explicit: expanding an outer frame only exposes nested
+    // container messages in its embedded canvas. A nested frame is expanded
+    // only after the user double-clicks that nested frame.
+    const expandedTraceFrameIds = new Set(traceExpandedFrameIds);
     while (q.length > 0) {
       const cur = q.shift()!; const d = dist.get(cur)!;
-      if (d >= focusHop) {
+      if (d >= traceDistance) {
         // Frame-type relations (ARRANGE, MERGE, etc.) at the boundary: expand to
         // contained normal messages at the same distance so the entire frame group
         // appears at hop=1 when a contained message or an external reference is
-        // the focus.  Only include messages that are actual members of this frame
+        // the trace.  Only include messages that are actual members of this frame
         // (endpoints of edges with relationMessageId === cur), not external messages
         // that merely reference the frame via other relations.
         const curMsg = msgMap.get(cur);
-        if (d === focusHop && curMsg?.kind === 'relation' && curMsg.relationType) {
-          const spec = getPresentationSpec(curMsg.relationType);
-          if (spec.groupsTargets) {
+        if (d === traceDistance && curMsg?.kind === 'relation' && curMsg.relationType) {
+          if (isTraceExpandableFrameType(curMsg.relationType)) {
             const members = frameMembers.get(cur);
             if (members) {
               for (const m of members) {
@@ -5051,21 +5094,21 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
       const neighbors = adj.get(cur); if (!neighbors) continue;
       const curMsg = msgMap.get(cur);
-      // When the frame itself is the focus (relationFocusIds contains a frame that
+      // When the frame itself is traced (relationTraceIds contains a frame that
       // contains cur), external connections should NOT be deferred — hop=1 should
       // expand one hop beyond the frame group.
-      const frameIsFocus = curMsg && isContentKind(curMsg.kind) &&
-        (msgFrameMap.get(cur) ? Array.from(msgFrameMap.get(cur)!).some(f => relationFocusIds.has(f)) : false);
+      const frameIsTraced = curMsg && isContentKind(curMsg.kind) &&
+        (msgFrameMap.get(cur) ? Array.from(msgFrameMap.get(cur)!).some(f => relationTraceIds.has(f)) : false);
       for (const nb of neighbors) {
         if (dist.has(nb)) continue;
         // When the current node is a normal message inside a frame at d=0,
         // defer direct edges to external normal messages to d+2 so they
         // only appear at hop=2.  The frame relation and same-frame messages
         // get d+1 normally (they appear at hop=1 as part of the frame group).
-        // Exception: when the containing frame itself is the focus, external
+        // Exception: when the containing frame itself is traced, external
         // messages should appear at hop=1 (no deferral).
         let hopDelta = 1;
-        if (d === 0 && curMsg && isContentKind(curMsg.kind) && !frameIsFocus) {
+        if (d === 0 && curMsg && isContentKind(curMsg.kind) && !frameIsTraced) {
           const curFrames = msgFrameMap.get(cur);
           if (curFrames && curFrames.size > 0) {
             const nbMsg = msgMap.get(nb);
@@ -5084,29 +5127,94 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     // ── Container expansion (two-level visibility model) ──
     // Delegated to applyContainerExpansion (focusContainer.ts) which is
     // independently unit-tested.  See that module for the full expansion rules.
-    applyContainerExpansion(dist, edges, focusHop);
+    applyContainerExpansion(dist, edges, traceDistance, expandedTraceFrameIds);
+    // A nested container is represented by its parent card until that parent
+    // is explicitly expanded.  Keep directly traced containers visible, but do
+    // not let the fixed-point container pass leak every nested card into the
+    // outer trace canvas.
+    for (const edge of edges) {
+      if (!expandedTraceFrameIds.has(edge.relationMessageId)) continue;
+      if (!isTraceExpandableFrameType(edge.relationType)) continue;
+      const frameDistance = dist.get(edge.relationMessageId);
+      if (frameDistance === undefined || frameDistance + 1 > traceDistance) continue;
+      if (!edge.from.messageId.startsWith('anon:')) dist.set(edge.from.messageId, traceDistance);
+      if (!edge.to.messageId.startsWith('anon:')) dist.set(edge.to.messageId, traceDistance);
+    }
+    for (const edge of edges) {
+      if (edge.relationType.toLowerCase() !== 'correct') continue;
+      if (!dist.has(edge.from.messageId) && !dist.has(edge.to.messageId)) continue;
+      if (!edge.from.messageId.startsWith('anon:')) dist.set(edge.from.messageId, traceDistance);
+      if (!edge.to.messageId.startsWith('anon:')) dist.set(edge.to.messageId, traceDistance);
+    }
+    // An explicitly expanded container is the frame itself. Its direct members
+    // must therefore be available to the embedded canvas, while nested
+    // containers remain collapsed until explicitly expanded.
+    const addExpandedFrameMembers = (frameId: string, visited: Set<string>) => {
+      if (visited.has(frameId)) return;
+      visited.add(frameId);
+      for (const edge of edges) {
+        if (edge.relationMessageId !== frameId) continue;
+        for (const memberId of [edge.from.messageId, edge.to.messageId]) {
+          if (memberId.startsWith('anon:')) continue;
+          dist.set(memberId, Math.min(dist.get(memberId) ?? traceDistance, traceDistance));
+        }
+      }
+    };
+    const expandedFrameMembersVisited = new Set<string>();
+    for (const frameId of expandedTraceFrameIds) {
+      addExpandedFrameMembers(frameId, expandedFrameMembersVisited);
+    }
+
+    // A nested container remains a collapsed message card until it is
+    // explicitly expanded. Its text descendants belong to that card and must
+    // not leak into the surrounding canvas.
+    const collapsedNestedMemberIds = new Set<string>();
+    for (const frameId of expandedTraceFrameIds) {
+      for (const edge of edges) {
+        if (edge.relationMessageId !== frameId) continue;
+        for (const memberId of [edge.from.messageId, edge.to.messageId]) {
+          if (memberId.startsWith('anon:') || expandedTraceFrameIds.has(memberId)) continue;
+          const member = msgMap.get(memberId);
+          if (!member?.relationType || !getPresentationSpec(member.relationType).isContainer) continue;
+          const nestedMembers = collectOwnedByRelation(
+            memberId,
+            relationById,
+            new Set(),
+            rejectedContainerIds,
+            rejectedJoinRelationIds,
+            userPreferredJoinByTarget,
+          );
+          for (const textId of nestedMembers.textIds) collapsedNestedMemberIds.add(textId);
+          for (const relationId of nestedMembers.relationIds) collapsedNestedMemberIds.add(relationId);
+        }
+      }
+    }
+    for (const id of collapsedNestedMemberIds) {
+      if (!expandedTraceFrameIds.has(id)) dist.delete(id);
+    }
 
     const messagesToShowArr = messages.filter(m => dist.has(m.id));
     const shownIds = new Set(messagesToShowArr.map(m => m.id));
     const relationMessagesToAdd = new Set<string>();
     for (const e of edges) {
       // Auto-add a relation message when:
-      //   - At least one endpoint is strictly within the hop window (dist < focusHop), OR
-      //   - Both endpoints are "visible" (in dist or an anon: placeholder).  This
-      //     ensures relations whose text-message endpoints are all shown (e.g. a
-      //     pure-stance MERGE/ARRANGE frame or AGREE badge whose targets are visible)
-      //     appear even when every endpoint is at the hop boundary.
+      //   - At least one endpoint is strictly within the distance window (dist < traceDistance), OR
+      //   - Both endpoints are "visible" for a non-container relation. This keeps
+      //     boundary relation labels visible without pulling an outer container
+      //     back into the trace window.
       const fromDist = dist.get(e.from.messageId);
       const toDist = dist.get(e.to.messageId);
-      const fromTriggers = fromDist !== undefined && fromDist < focusHop;
-      const toTriggers = toDist !== undefined && toDist < focusHop;
-      // bothVisible only applies when focusHop > 0 (normal expansion) OR when a
-      // relation message is the focus (relationFocusIds > 0) — in that case all
-      // resolved text messages are intentionally shown, so nested frames whose
-      // endpoints are all visible should also appear at hop=0.
+      const fromTriggers = fromDist !== undefined && fromDist < traceDistance;
+      const toTriggers = toDist !== undefined && toDist < traceDistance;
+      // Container relations use their distance/expansion rules below instead of
+      // this endpoint-only fallback, so an ancestor cannot be reintroduced merely
+      // because its child container is visible.
       const fromOk = fromDist !== undefined || e.from.messageId.startsWith('anon:');
       const toOk = toDist !== undefined || e.to.messageId.startsWith('anon:');
-      const bothVisible = (focusHop > 0 || relationFocusIds.size > 0) && fromOk && toOk;
+      const isContainerRelation = getPresentationSpec(e.relationType).isContainer;
+      const bothVisible = !isContainerRelation
+        && (traceDistance > 0 || relationTraceIds.size > 0)
+        && fromOk && toOk;
       if (fromTriggers || toTriggers || bothVisible) relationMessagesToAdd.add(e.relationMessageId);
     }
     const relationMsgsAdded = new Set<string>();
@@ -5115,12 +5223,20 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const m = messages.find(x => x.id === rmId);
       if (m) { messagesToShowArr.push(m); relationMsgsAdded.add(rmId); }
     }
-    // Always ensure the original focus-entry IDs are in messagesToShow.
+    const collapsedTraceMemberIds = new Set<string>();
+    for (const [frameId, members] of frameMembers) {
+      if (!dist.has(frameId) || expandedTraceFrameIds.has(frameId)) continue;
+      for (const memberId of members) {
+        if (!expandedTraceFrameIds.has(memberId)) collapsedTraceMemberIds.add(memberId);
+      }
+    }
+    // Always ensure the original trace-entry IDs are in messagesToShow.
     // When a startId is a classify relation message, collectNormalMessagesForRelation resolves
     // through it to normal message targets; the classify message itself may not appear via
     // BFS dist or the relation-adjacency step above (if its edges point to other relations,
     // not directly to text messages).
     for (const id of startIds) {
+      if (collapsedTraceMemberIds.has(id)) continue;
       if (!shownIds.has(id) && !relationMsgsAdded.has(id)) {
         const m = msgMap.get(id);
         if (m) messagesToShowArr.push(m);
@@ -5129,9 +5245,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const shownSet = new Set(messagesToShowArr.map(m => m.id));
     // An edge is visible when its relationMessageId is in shownSet AND at least one
     // of its endpoints is either in shownSet or is an anon: placeholder.
-    // Additionally, edges belonging to a directly-focused relation message are always
+    // Additionally, edges belonging to a directly-traced relation message are always
     // shown so that the relation structure is fully visible even at hop=0
-    // (Bug fix: focus mode relation message visibility).
+    // (Bug fix: trace mode relation message visibility).
     //
     // Container-type edges (CLASSIFY, MERGE, SUMMARY): always show when the
     // container is in shownSet.  The frame rendering in GraphView will only
@@ -5139,8 +5255,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     // Children not independently reachable are hidden inside the frame.
     const edgesToShowArr = edges.filter(e => {
       if (!shownSet.has(e.relationMessageId)) return false;
-      // Always show all edges of a directly-focused relation message
-      if (relationFocusIds.has(e.relationMessageId)) return true;
+      // Always show all edges of a directly-traced relation message
+      if (relationTraceIds.has(e.relationMessageId)) return true;
       // Container edges: always visible when container is in shownSet.
       // GraphView renders the frame border + header; only children with
       // layout boxes (in messagesToShow) appear inside the frame.
@@ -5150,27 +5266,32 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       return fromOk || toOk;
     });
     return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
-  }, [messages, edges, focusEntries, focusHop, msgMap]);
+  }, [messages, edges, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
-  const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
-  const canExitFocus = focusEntries.length > 0;
+  const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
+  const canExitTrace = traceEntries.length > 0;
 
   // Track latest classify ID across async supersede calls so sequential
   // addTargetToClassifyTopic calls always target the current classify.
   const latestClassifyRelMsgIdRef = useRef<string | null>(null);
   useEffect(() => { latestClassifyRelMsgIdRef.current = currentClassifyRelMsgId; }, [currentClassifyRelMsgId]);
 
-  // Set of relation-message IDs that are directly in the current focus set.
-  // Used to ensure that edges of focused relations are always visible regardless
-  // of endpoint checks (fix: REFERENCE edge not showing when relation is focused).
-  const focusRelationMsgIds = useMemo(() => {
-    if (focusEntries.length === 0) return new Set<string>();
+  // Set of relation-message IDs directly in the current trace set.
+  // Used to keep their edges visible regardless of endpoint checks.
+  const traceRelationMsgIds = useMemo(() => {
+    if (traceEntries.length === 0) return new Set<string>();
     const ids = new Set<string>();
-    for (const id of focusEntries[focusEntries.length - 1].ids) {
+    for (const id of traceEntries[traceEntries.length - 1].ids) {
       if (msgMap.get(id)?.kind === 'relation') ids.add(id);
     }
     return ids;
-  }, [focusEntries, msgMap]);
+  }, [traceEntries, msgMap]);
+  const traceFrameIds = useMemo(() => new Set(
+    Array.from(traceRelationMsgIds).filter(id => {
+      const relationType = msgMap.get(id)?.relationType;
+      return relationType ? getPresentationSpec(relationType).isContainer : false;
+    }),
+  ), [traceRelationMsgIds, msgMap]);
   const classifyTargetCount = useMemo(
     () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
     [currentClassifyRelMsgId, relationById]
@@ -5189,7 +5310,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   );
   const classifyKindLabel = currentClassifyRelType === "summary" ? "总结" : currentClassifyRelType === "classify" ? "分类" : "分类";
   const classifyExitLabel = currentClassifyRelType === "summary" ? "退出总结" : currentClassifyRelType === "classify" ? "退出分类" : "退出分类";
-  const topicFocusTitle = currentClassifyRelMsg
+  const topicViewTitle = currentClassifyRelMsg
     ? (getRelationTitle(currentClassifyRelMsg.relationPayload) || `${classifyKindLabel}（${classifyTargetCount}）`)
     : "";
   const isTemporaryJoinCategory = joinFilterTargetId !== null;
@@ -5199,9 +5320,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       : (joinRelationsByTarget.get(joinFilterTargetId)?.length ?? 0))
     : 0;
 
-  // 当前视图实际可见的内容消息ID集（考虑焦点/分类上下文）
+  // 当前视图实际可见的内容消息ID集（考虑追溯/分类上下文）
   const graphVisibleTextIds = useMemo(() => {
-    if (isInsideClassify && currentClassifyRelMsgId) {
+    // Trace mode always renders from the trace window on the main canvas.
+    // Do not let a stale classify state from the same React transition project
+    // the selected nested message back into an empty parent frame.
+    if (isInsideClassify && currentClassifyRelMsgId && traceEntries.length === 0) {
       const topicRelation = relationById.get(currentClassifyRelMsgId);
       if (!topicRelation) return new Set<string>();
       const ids = new Set<string>(getTextTargetIds(topicRelation.targetRefs));
@@ -5264,14 +5388,44 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }, [edges, msgMap, graphVisibleTextIds]);
 
   const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender, hideMessageIds } = useMemo(() => {
-    const useFocusWindow = focusEntries.length > 0 && !isInsideClassify;
-    const baseMessages = useFocusWindow ? messagesToShow : messages;
-    const baseEdges = useFocusWindow ? edgesToShow : edges;
-    if (isInsideClassify && currentClassifyRelMsgId) {
+    // A trace entry owns the canvas projection immediately. The classify state
+    // is cleared asynchronously when entering trace, so checking it here can
+    // render the old sub-canvas together with the new trace window.
+    const useTraceWindow = traceEntries.length > 0;
+    const baseMessages = useTraceWindow ? messagesToShow : messages;
+    const baseEdges = useTraceWindow ? edgesToShow : edges;
+    if (useTraceWindow) {
+      const traceStartIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
+      const listProjection = buildTraceProjection({
+        messages,
+        edges,
+        startIds: traceStartIds,
+        distance: traceDistance,
+        expandedContainerIds: new Set([...traceExpandedFrameIds, ...traceStartIds]),
+      });
+      return {
+        graphMessagesToRender: baseMessages,
+        graphEdgesToRender: baseEdges,
+        listMessagesToRender: listProjection.messages,
+        listEdgesToRender: listProjection.edges,
+        hideMessageIds: undefined,
+      };
+    }
+    if (isInsideClassify && currentClassifyRelMsgId && !useTraceWindow) {
       const topicRelation = relationById.get(currentClassifyRelMsgId);
       const containerVisible = collectContainerVisibleIds(currentClassifyRelMsgId, relations, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
       const topicTextIds = new Set<string>(containerVisible.textIds);
       const topicRelationIds = new Set<string>(containerVisible.relationIds);
+      // Nested CLASSIFY/SUMMARY relations are opaque cards in the parent
+      // canvas. collectContainerVisibleIds recursively includes their text
+      // targets, so remove those descendants before building the projection.
+      for (const nestedRelationId of topicRelationIds) {
+        const nestedRelation = relationById.get(nestedRelationId);
+        const nestedType = nestedRelation?.relationType?.toUpperCase();
+        if (nestedType !== 'CLASSIFY' && nestedType !== 'SUMMARY') continue;
+        const nestedVisible = collectContainerVisibleIds(nestedRelationId, relations, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget);
+        for (const textId of nestedVisible.textIds) topicTextIds.delete(textId);
+      }
       if (topicRelation) {
         const queue = Array.from(topicRelationIds);
         const visited = new Set<string>();
@@ -5383,17 +5537,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
             topicTextIds.has(mid) || topicRelationIds.has(mid);
           if (textEndpoints.every(mid => endpointInTopic(mid))) {
             topicRelationIds.add(relMsgId);
-          } else if (relEdges[0]?.relationType === 'reference') {
-            // Cross-topic REFERENCE: include the relation message when its source
-            // message (from) is in the current topic, even if the target is in
-            // a different classify topic.
-            const sourceInTopic = relEdges.some(e => {
-              const fromM = msgMap.get(e.from.messageId);
-              return fromM && isContentKind(fromM.kind) && endpointInTopic(e.from.messageId);
-            });
-            if (sourceInTopic) {
-              topicRelationIds.add(relMsgId);
-            }
           }
           continue;
         }
@@ -5418,11 +5561,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         // nested classify relations as topic cards via topicRelationIds.
         if (isInsideClassify && (e.relationType === 'classify' || e.relationType === 'summary')) return false;
         if (e.relationType === 'classify' || e.relationType === 'summary') return true;
-        // Cross-topic REFERENCE: include the edge when the source endpoint is
-        // visible, even if the target is in a different classify topic.
-        if (e.relationType === 'reference') {
-          return e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId);
-        }
         return (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
                visibleIds.has(e.to.messageId);
       });
@@ -5445,10 +5583,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are classified (via listExclusiveRelMsgIds).
     //
-    // In focus mode (useFocusWindow), baseMessages is already correctly filtered by
-    // the BFS + container expansion logic.  The classified-message hiding below is
-    // only for the main (non-focus) view.
-    const skipClassifyHiding = useFocusWindow || isInsideClassify;
+    // In trace mode, baseMessages is filtered by BFS and frame expansion;
+    // ordinary classified-message hiding still applies below.
+    const skipClassifyHiding = isInsideClassify;
     const listHiddenRelationIds = new Set<string>([
       ...activeClassifyOwnership.relationIds,
       ...classifiedTargetSummaryRelMsgIds,
@@ -5461,18 +5598,18 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           if (isContentKind(m.kind) && classifiedTargetTextIds.has(m.id)) return false;
           if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
           // Hide content-kind messages owned by a classify (e.g. governance/ops cards)
-          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id)) return false;
+          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id) && !directlyTracedFrameMemberIds.has(m.id)) return false;
           return true;
         });
     const listVisibleIds = new Set(listMessages.map(m => m.id));
     // Edge is visible in list view when the relation message is visible AND
     // the edge does not connect to a classified (hidden) text endpoint.
-    // Edges of directly-focused relation messages are always included
+    // Edges of directly-traced relation messages are always included
     // so the relation structure is fully visible (fix: REFERENCE edge focus).
     const listEdges = baseEdges.filter(e => {
-      if (!listVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
-      // Edges of focused relations: always visible
-      if (focusRelationMsgIds.has(e.relationMessageId)) return true;
+      if (!listVisibleIds.has(e.relationMessageId) && !traceRelationMsgIds.has(e.relationMessageId)) return false;
+      // Edges of traced relations: always visible
+      if (traceRelationMsgIds.has(e.relationMessageId)) return true;
       const fromOk = e.from.messageId.startsWith('anon:') || listVisibleIds.has(e.from.messageId);
       const toOk = listVisibleIds.has(e.to.messageId);
       return fromOk && toOk;
@@ -5485,8 +5622,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are in the hidden set (via graphExclusiveRelMsgIds).
     //
-    // In focus mode (useFocusWindow), baseMessages is already correctly filtered by
-    // the BFS + container expansion logic — skip the classified-message hiding.
+    // Trace mode uses the same ordinary visibility hiding as the main view.
     const graphHiddenRelationIds = new Set<string>([
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
@@ -5496,20 +5632,130 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       ...graphExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
-    const graphMessages = skipClassifyHiding
+    const traceParentClassifyId = useTraceWindow
+      ? traceEntries[traceEntries.length - 1]?.classifyRelMsgId
+        ?? edges.find(edge =>
+          edge.relationMessageId !== traceEntries[traceEntries.length - 1]?.ids[0]
+          && getPresentationSpec(edge.relationType).isContainer
+          && (edge.from.messageId === traceEntries[traceEntries.length - 1]?.ids[0]
+            || edge.to.messageId === traceEntries[traceEntries.length - 1]?.ids[0])
+        )?.relationMessageId
+        ?? null
+      : null;
+    const traceParentFrameExpanded = traceParentClassifyId !== null
+      && traceExpandedFrameIds.has(traceParentClassifyId);
+    const traceNestedOpaqueRelationIds = new Set<string>();
+    const traceOpaqueMemberOwners = new Map<string, Set<string>>();
+    if (traceParentClassifyId) {
+      const parentVisible = collectContainerVisibleIds(
+        traceParentClassifyId,
+        relations,
+        rejectedContainerIds,
+        rejectedJoinRelationIds,
+        userPreferredJoinByTarget,
+      );
+      for (const relationId of parentVisible.relationIds) {
+        if (relationId === traceParentClassifyId) continue;
+        const relation = relationById.get(relationId);
+        const relationType = relation?.relationType?.toUpperCase();
+        if (relationType === 'CLASSIFY' || relationType === 'SUMMARY') {
+          traceNestedOpaqueRelationIds.add(relationId);
+          const nestedVisible = collectContainerVisibleIds(
+            relationId,
+            relations,
+            rejectedContainerIds,
+            rejectedJoinRelationIds,
+            userPreferredJoinByTarget,
+          );
+          nestedVisible.textIds.forEach(messageId => {
+            const owners = traceOpaqueMemberOwners.get(messageId) ?? new Set<string>();
+            owners.add(relationId);
+            traceOpaqueMemberOwners.set(messageId, owners);
+          });
+        }
+      }
+    }
+    for (const relationId of traceRelationMsgIds) {
+      const relation = relationById.get(relationId);
+      const relationType = relation?.relationType?.toUpperCase();
+      if (relationType !== 'CLASSIFY' && relationType !== 'SUMMARY') continue;
+      const nestedVisible = collectContainerVisibleIds(
+        relationId,
+        relations,
+        rejectedContainerIds,
+        rejectedJoinRelationIds,
+        userPreferredJoinByTarget,
+      );
+      nestedVisible.textIds.forEach(messageId => {
+        const owners = traceOpaqueMemberOwners.get(messageId) ?? new Set<string>();
+        owners.add(relationId);
+        traceOpaqueMemberOwners.set(messageId, owners);
+      });
+    }
+    const directlyTracedFrameMemberIds = new Set<string>();
+    if (useTraceWindow) {
+      for (const edge of edges) {
+        if (!traceExpandedFrameIds.has(edge.relationMessageId)) continue;
+        if (!isTraceExpandableFrameType(edge.relationType)) continue;
+        if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
+        if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
+      }
+      for (const edge of edges) {
+        if (edge.relationType.toLowerCase() !== 'correct') continue;
+        if (!directlyTracedFrameMemberIds.has(edge.from.messageId) && !directlyTracedFrameMemberIds.has(edge.to.messageId)) continue;
+        if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
+        if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
+      }
+      for (const frameId of traceExpandedFrameIds) {
+        const expandedMembers = collectContainerVisibleIds(
+          frameId,
+          relations,
+          rejectedContainerIds,
+          rejectedJoinRelationIds,
+          userPreferredJoinByTarget,
+        );
+        expandedMembers.textIds.forEach(messageId => directlyTracedFrameMemberIds.add(messageId));
+      }
+      // Expansion exposes only the direct members of an explicitly expanded
+      // SUMMARY/CLASSIFY frame. MERGE and ARRANGE remain ordinary relations in
+      // trace mode and must not recursively expand through this path.
+      for (const frameId of traceExpandedFrameIds) {
+        for (const edge of edges) {
+          if (edge.relationMessageId !== frameId) continue;
+          for (const memberId of [edge.from.messageId, edge.to.messageId]) {
+            if (memberId.startsWith('anon:')) continue;
+            directlyTracedFrameMemberIds.add(memberId);
+          }
+        }
+      }
+    }
+    const graphMessages = skipClassifyHiding && !useTraceWindow
       ? baseMessages
       : baseMessages.filter(m => {
-          if (isContentKind(m.kind) && graphHiddenTextIds.has(m.id)) return false;
-          if (m.kind === "relation" && graphHiddenRelationIds.has(m.id)) return false;
+          if (isContentKind(m.kind) && graphHiddenTextIds.has(m.id) && !directlyTracedFrameMemberIds.has(m.id)) return false;
+            if (useTraceWindow && m.id === traceParentClassifyId) return true;
+          if (m.kind === "relation" && graphHiddenRelationIds.has(m.id) && !traceRelationMsgIds.has(m.id)) return false;
+            if (useTraceWindow && traceNestedOpaqueRelationIds.has(m.id)
+              && !traceExpandedFrameIds.has(m.id) && !traceParentFrameExpanded) return false;
+          if (useTraceWindow && isContentKind(m.kind) && traceOpaqueMemberOwners.has(m.id)) {
+            const owners = traceOpaqueMemberOwners.get(m.id)!;
+            if (![...owners].some(relationId => traceExpandedFrameIds.has(relationId))) return false;
+          }
           // Hide content-kind messages owned by a classify (e.g. governance/ops cards)
-          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id)) return false;
+          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id) && !directlyTracedFrameMemberIds.has(m.id)) return false;
           return true;
         });
+    if (useTraceWindow) {
+      for (const memberId of directlyTracedFrameMemberIds) {
+        const member = messages.find(message => message.id === memberId);
+        if (member && !graphMessages.some(message => message.id === memberId)) graphMessages.push(member);
+      }
+    }
     const graphVisibleIds = new Set(graphMessages.map(m => m.id));
 
     // Edge is visible in graph view when the relation message is visible AND
     // the edge does not connect to a classified (hidden) text endpoint.
-    // Edges of directly-focused relation messages are always included
+    // Edges of directly-traced relation messages are always included
     // so the relation structure is fully visible (fix: REFERENCE edge focus).
     // CLASSIFY / SUMMARY edges are always included so their topic cards can
     // display the correct target count, even when targets are hidden.
@@ -5517,9 +5763,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       // CORRECT relations are rendered as decorations on their target cards.
       // Keep them when the target is visible even if the relation message is hidden.
       if (e.relationType === 'correct' && graphVisibleIds.has(e.to.messageId)) return true;
-      if (!graphVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
-      // Edges of focused relations: always visible
-      if (focusRelationMsgIds.has(e.relationMessageId)) return true;
+      if (!graphVisibleIds.has(e.relationMessageId) && !traceRelationMsgIds.has(e.relationMessageId)) return false;
+      // Edges of traced relations: always visible
+      if (traceRelationMsgIds.has(e.relationMessageId)) return true;
       // CLASSIFY / SUMMARY: keep edges so topic card target count is correct
       if (e.relationType === 'classify' || e.relationType === 'summary') return true;
       const fromOk = e.from.messageId.startsWith('anon:') || graphVisibleIds.has(e.from.messageId);
@@ -5535,22 +5781,28 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         .map(edge => edge.relationMessageId),
     );
     const frameMessages = baseMessages.filter(message =>
-      message.kind === 'relation' && frameRelationIds.has(message.id),
+      message.kind === 'relation' && frameRelationIds.has(message.id)
+        && !(traceNestedOpaqueRelationIds.has(message.id)
+          && !traceExpandedFrameIds.has(message.id) && !traceParentFrameExpanded),
     );
     const graphMessagesToRender = [
       ...graphMessages,
       ...frameMessages.filter(message => !graphVisibleIds.has(message.id)),
     ];
-    // In focus mode, container-type relation messages (CLASSIFY, MERGE, SUMMARY)
-    // are rendered as group frames — skip their individual message cards.
-    // In non-focus mode, they show as topic cards (e.g. "双击进入分类").
+    // In trace mode, container-type relation messages are rendered as group
+    // frames so their members are shown on the embedded canvas.
     const hiddenFrameMessageIds = frameMessages
-      .filter(message => !graphVisibleIds.has(message.id))
+      .filter(message => !graphVisibleIds.has(message.id) && (
+        !useTraceWindow
+        || !isTraceExpandableFrameType(message.relationType ?? '')
+        || traceExpandedFrameIds.has(message.id)
+        || (traceNestedOpaqueRelationIds.has(message.id) && traceParentFrameExpanded)
+      ))
       .map(message => message.id);
     const hideMessageIds = new Set([
-      ...(useFocusWindow
+      ...(useTraceWindow
         ? graphMessages
-            .filter(m => m.kind === 'relation' && m.relationType && getPresentationSpec(m.relationType).isContainer)
+            .filter(m => m.kind === 'relation' && m.relationType && getPresentationSpec(m.relationType).isContainer && !isTraceExpandableFrameType(m.relationType))
             .map(m => m.id)
         : []),
       ...hiddenFrameMessageIds,
@@ -5563,7 +5815,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       listEdgesToRender: listEdges,
       hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
     };
-  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds, userPreferredJoinByTarget]);
+  }, [messages, edges, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
 
   const normalGraphProjection = useMemo(() => {
     const scopedCorrectedMessages = graphMessagesToRender.map(message => {
@@ -5716,8 +5968,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const graphVisibleIds = new Set(graphMessages.map(message => message.id));
       const graphEdges = baseEdgesWithTarget.filter(edge => {
         if (sideSuppressedRelIds.has(edge.relationMessageId)) return false;
-        if (!graphVisibleIds.has(edge.relationMessageId) && !focusRelationMsgIds.has(edge.relationMessageId)) return false;
-        if (focusRelationMsgIds.has(edge.relationMessageId)) return true;
+        if (!graphVisibleIds.has(edge.relationMessageId) && !traceRelationMsgIds.has(edge.relationMessageId)) return false;
+        if (traceRelationMsgIds.has(edge.relationMessageId)) return true;
         if (edge.relationType === 'classify' || edge.relationType === 'summary') return true;
         const fromOk = edge.from.messageId.startsWith('anon:') || graphVisibleIds.has(edge.from.messageId);
         const toOk = graphVisibleIds.has(edge.to.messageId);
@@ -5727,7 +5979,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     };
 
     return { agree: buildProjection('agree'), disagree: buildProjection('disagree') };
-  }, [comparisonReviewed, comparisonTargetId, relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, edges, msgMap, messages, mergeOwnership, replacedRelationMsgIds, focusRelationMsgIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds]);
+  }, [comparisonReviewed, comparisonTargetId, relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, edges, msgMap, messages, mergeOwnership, replacedRelationMsgIds, traceRelationMsgIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds]);
 
   function handleCanvasBlankClick() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
@@ -5735,8 +5987,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }
 
   async function confirmReverseCorrection() {
+    if (sendInFlightRef.current) return;
     const preview = comparisonPopup?.reversePreview;
     if (!preview || !topicId) return;
+    sendInFlightRef.current = true;
+    setSendInFlight(true);
     try {
       if (preview.mode === 'source') {
         const sourceMessage = await handleSendMessageOnly(preview.after);
@@ -5768,6 +6023,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       setComparisonPopup(null);
     } catch (e: any) {
       showAlert(`建立反向更正失败: ${e?.message ?? e}`);
+    } finally {
+      sendInFlightRef.current = false;
+      setSendInFlight(false);
     }
   }
 
@@ -5926,6 +6184,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType ?? relationTypeByRelMsgId.get(relMsgId) ?? "";
     if (relType === "classify" || relType === "summary") {
+      if (traceEntries.length > 0 && !isInsideClassify) {
+        setTraceExpandedFrameIds(prev => {
+          const next = new Set(prev);
+          if (next.has(relMsgId)) next.delete(relMsgId);
+          else next.add(relMsgId);
+          return next;
+        });
+        setTraceKey(key => key + 1);
+        return;
+      }
       enterClassifyTopic(relMsgId);
       return;
     }
@@ -5933,7 +6201,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       setMergeInfoPopup({ relMsgId, x: e.clientX, y: e.clientY });
       return;
     }
-    enterFocus(relMsgId);
+    enterTrace(relMsgId);
   }
 
   function handleInlineBadgeClick(e: React.MouseEvent, relMsgId: string) {
@@ -6009,8 +6277,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
     }
     setMessagePulse(null);
-    setFocusEntries([]);
-    setFocusKey(k => k + 1);
+    setTraceEntries([]);
+    setTraceKey(k => k + 1);
     // Clear candidates and select the target message as whole
     setDraftUnits([{ messageId, selection: { kind: 'whole' as const } }]);
     setSourceUnits([]);
@@ -6223,11 +6491,20 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     : typeFilteredMessages;
   renderedMessageIdsRef.current = new Set(messagesToRenderFiltered.map(message => message.id));
 
-  const rawEdgesToRender = filterContainerEdgesByEffectiveJoins(
-    viewMode === "list" ? listEdgesToRender : graphEdgesToRender,
-    relations,
-    effectiveJoinRelationIds,
-  );
+  const rawEdgesToRender = [
+    ...filterContainerEdgesByEffectiveJoins(
+      viewMode === "list" ? listEdgesToRender : graphEdgesToRender,
+      relations,
+      effectiveJoinRelationIds,
+    ),
+    ...(viewMode !== "list"
+      ? edges.filter(edge =>
+          getPresentationSpec(edge.relationType).isContainer &&
+          (traceRelationMsgIds.has(edge.relationMessageId) ||
+            graphMessagesToRender.some(message => message.id === edge.relationMessageId))
+        )
+      : []),
+  ].filter((edge, index, all) => all.findIndex(candidate => candidate.id === edge.id) === index);
   // Phase 6: Also filter edges through clean view
   const rawEdgesToRenderClean = cleanVisibleIds
     ? rawEdgesToRender.filter(e => cleanVisibleIds.visibleRelIds.has(e.relationMessageId))
@@ -6475,7 +6752,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                         ? `对比临时分类（${comparisonTargets.length}）`
                         : correctionFilterTargetId !== null
                         ? `更正记录临时分类（${correctionTemporaryViewIds?.size ?? 0}）`
-                        : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (topicFocusTitle || classifyKindLabel)}
+                        : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (topicViewTitle || classifyKindLabel)}
                     </div>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
                       {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory ? "临时" : "进行中"}
@@ -6532,18 +6809,18 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
             {messagesToRenderFiltered.length === 0 ? (
               <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
-                <div>{isInsideClassify ? `当前${classifyKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
+                <div>{isInsideClassify ? `当前${classifyKindLabel}中暂无消息` : traceEntries.length > 0 ? "追溯范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
                 <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 360, lineHeight: 1.6 }}>
-                  {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : focusEntries.length > 0 ? "当前焦点范围内没有匹配的消息。尝试退出焦点或调整过滤规则。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他与会者可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
+                  {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : traceEntries.length > 0 ? "当前追溯范围内没有匹配的消息。尝试退出追溯或调整追溯距离。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他与会者可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
                 </div>
                 {isInsideClassify && (
                   <button onClick={() => exitClassifyTopic()} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
                     {classifyExitLabel}
                   </button>
                 )}
-                {!isInsideClassify && canExitFocus && (
-                  <button onClick={exitFocus} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
-                    退出焦点
+                {!isInsideClassify && canExitTrace && (
+                  <button onClick={exitTrace} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
+                    退出追溯
                   </button>
                 )}
               </div>
@@ -6842,7 +7119,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
               </div>
             ) : (
               <GraphView
-                  key={`gv-${classifyKey}-${focusKey}-${comparisonReviewed ? `comparison-${comparisonTargetId ?? 'none'}` : 'normal'}`}
+                  key={`gv-${classifyKey}-${traceKey}-${comparisonReviewed ? `comparison-${comparisonTargetId ?? 'none'}` : 'normal'}`}
                   messages={comparisonReviewed ? comparisonGraphMessages : graphMessagesFinal} edges={comparisonReviewed ? (comparisonAgreeGraph?.edges ?? temporaryEdgesToRender) : edgesToRender} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
                   comparisonPair={comparisonReviewed} comparisonTargetId={comparisonTargetId} comparisonRecommendedDisplay={comparisonRecommendedDisplay}
                   comparisonAgreeMessages={comparisonAgreeGraph?.messages} comparisonAgreeEdges={comparisonAgreeGraph?.edges}
@@ -6869,6 +7146,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
                   hideMessageIds={hideMessageIds}
+                  traceExpandedFrameIds={traceExpandedFrameIds}
+                  traceFrameIds={traceFrameIds}
                   stakeCounts={stakeCounts}
                   onSettlementToggleTruth={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'TRUTH') { closeSettlement(); } else { openSettlement(msgId, 'TRUTH'); } }}
                   onSettlementToggleValue={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'VALUE') { closeSettlement(); } else { openSettlement(msgId, 'VALUE'); } }}
@@ -6951,21 +7230,21 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           targetUnits={targetUnits}
           removeUnitFrom={removeUnitFrom}
           describeUnit={describeUnit}
-          focusHop={focusHop}
-          setFocusHop={setFocusHop}
-          canSetFocus={canSetFocus}
-          canExitFocus={canExitFocus}
+          traceDistance={traceDistance}
+          setTraceDistance={setTraceDistance}
+          canSetTrace={canSetTrace}
+          canExitTrace={canExitTrace}
           getSelectedWholeMessageIds={getSelectedWholeMessageIds}
           lastClickedMessageId={lastClickedMessageId}
-          enterFocusMultiple={enterFocusMultiple}
-          enterFocus={enterFocus}
-          exitFocus={exitFocus}
-          exitAllFocus={exitAllFocus}
+          enterTraceMultiple={enterTraceMultiple}
+          enterTrace={enterTrace}
+          exitTrace={exitTrace}
+          exitAllTrace={exitAllTrace}
           onNavigateToMessage={handleNavigateToMessage}
           isInsideClassify={isInsideClassify}
-          currentFocusIds={currentFocusIds}
+          currentTraceIds={currentTraceIds}
           classifyKey={classifyKey}
-          focusKey={focusKey}
+          traceKey={traceKey}
           messages={messages}
           edges={edges}
           user={user}
@@ -7225,6 +7504,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           ),
         )}
         onClose={() => setComparisonPopup(null)}
+        isSending={sendInFlight}
         reversePreview={comparisonPopup.reversePreview ? {
           before: comparisonPopup.reversePreview.before,
           after: comparisonPopup.reversePreview.after,

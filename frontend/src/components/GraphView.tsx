@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
 import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
@@ -75,6 +75,7 @@ const GROUP_HEADER_HEIGHT = 56;
 // MERGE_CARD_H is imported from ../utils/layout
 
 // Shared empty set for fallback
+
 
 // Group frame stroke colors by relColor value
 const GROUP_FRAME_STROKE: Record<string,string> = {
@@ -331,12 +332,16 @@ function getMergeHeaderWidth(text: string): number {
 }
 
 /** Compute the floating header card rect shown above classify/merge/summary group frames. */
-function getGroupHeaderRect(frameRect: Rect): Rect {
+function getGroupHeaderHeight(measuredHeights: Record<string, number>, relMsgId: string): number {
+  return Math.max(GROUP_HEADER_HEIGHT, measuredHeights[relMsgId] ?? GROUP_HEADER_HEIGHT);
+}
+
+function getGroupHeaderRect(frameRect: Rect, height = GROUP_HEADER_HEIGHT): Rect {
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y - GROUP_HEADER_HEIGHT,
+    y: frameRect.y - height,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
-    height: GROUP_HEADER_HEIGHT,
+    height,
   };
 }
 
@@ -1248,18 +1253,22 @@ type FrameBlock = {
   childRelMsgIds: string[];
   /** True for merge frames (need extra header space). */
   isMerge: boolean;
+  /** True when CLASSIFY/SUMMARY renders a header card inside the frame. */
+  hasGroupHeader: boolean;
   /** Layout direction for arrange frames: 'single-row' (horizontal) or 'single-column' (vertical, default). */
   targetLayout?: RelationTargetLayout;
 };
 
 /** Identify frame blocks from edges and build parent-child hierarchy.
  *  Frame types: arrange, frame-group (classify/merge), replace-overlay (summary). */
-function buildFrameBlocks(params: {
+export function buildFrameBlocks(params: {
   edges: DemoEdge[];
   visibleCardIds: Set<string>;
   msgMap: Map<string, DemoMessage>;
+  keepEmptyFrameIds?: Set<string>;
+  traceMode?: boolean;
 }): FrameBlock[] {
-  const { edges, visibleCardIds, msgMap } = params;
+  const { edges, visibleCardIds, msgMap, keepEmptyFrameIds = new Set<string>(), traceMode = false } = params;
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   for (const e of edges) {
     const arr = edgesByRelMsg.get(e.relationMessageId) ?? [];
@@ -1282,12 +1291,10 @@ function buildFrameBlocks(params: {
     const cardIds = new Set<string>();
     const sourceId = relEdges[0].from.messageId;
     if (!sourceId.startsWith('anon:') && visibleCardIds.has(sourceId)) cardIds.add(sourceId);
-    // Collect card IDs, recursively expanding through relation-message targets.
-    // When a frame targets another frame (e.g. arrange→arrange), the target
-    // frame's relMsgId won't be in visibleCardIds (it's not a text card).
-    // We need to recurse into the target frame's edges to find the actual
-    // text-message cards, and also include the target frame's relMsgId so the
-    // subset detection later can nest it as a child frame.
+    // Collect direct card IDs. When a frame targets another frame, keep only
+    // that relation message here; the nested frame owns its own contents.
+    // Recursing into the target frame would put its text cards in both the
+    // parent and nested layouts, which breaks collapsed-frame behavior.
     const collectNestedCardIds = (targetMsgId: string, visited: Set<string>) => {
       if (visited.has(targetMsgId)) return;
       visited.add(targetMsgId);
@@ -1304,23 +1311,21 @@ function buildFrameBlocks(params: {
         const nIsFrame = nk === 'arrange-frame' || nk === 'frame-group' || nk === 'replace-overlay'
           || !nIsKnown;
         if (nIsFrame) {
-          // Include the nested frame's relMsgId so subset detection can nest it
+          // The relation message is the parent's direct embedded node.
           cardIds.add(targetMsgId);
-          // Recurse into its edges to find text-message cards
-          for (const ne of nestedEdges) {
-            collectNestedCardIds(ne.to.messageId, visited);
-          }
         }
       }
     };
     for (const edge of relEdges) {
       collectNestedCardIds(edge.to.messageId, new Set());
     }
-    if (cardIds.size > 0) {
+    const relationType = relEdges[0].relationType.toLowerCase();
+    const keepEmpty = keepEmptyFrameIds.has(relMsgId) && getPresentationSpec(relationType).isContainer === true;
+    if (cardIds.size > 0 || keepEmpty) {
       const relMsg = msgMap.get(relMsgId);
       const isArrange = isKnownType ? (relKind === 'arrange-frame') : true;
       const targetLayout = isArrange ? (relMsg?.relationPayload?.targetLayout) : undefined;
-      blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge', targetLayout });
+      blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge', hasGroupHeader: relationType === 'classify' || relationType === 'summary', targetLayout });
     }
   }
   // Build parent-child: a block B is a child of block A if A has an edge
@@ -1335,6 +1340,29 @@ function buildFrameBlocks(params: {
       }
     }
   }
+  if (traceMode) {
+    for (const block of blocks) {
+      for (const childId of block.childRelMsgIds) block.cardIds.add(childId);
+    }
+    for (const block of blocks) {
+      const childCards = new Set<string>();
+      const collectChildCards = (parent: FrameBlock) => {
+        for (const childId of parent.childRelMsgIds) {
+          const child = blocks.find(candidate => candidate.relMsgId === childId);
+          if (child) {
+            child.cardIds.forEach(id => childCards.add(id));
+            collectChildCards(child);
+          }
+        }
+      };
+      collectChildCards(block);
+      block.directCardIds = new Set([...block.cardIds].filter(id =>
+        !childCards.has(id) && !block.childRelMsgIds.includes(id)
+      ));
+    }
+    return blocks;
+  }
+
   // Transitive expansion: when a frame's text-message cards are fully covered
   // by another frame, add the covered frame's relMsgId to the covering frame's cardIds.
   // This allows subset detection to nest arrange-inside-arrange properly.
@@ -1439,14 +1467,18 @@ function buildFrameLayoutUnits(params: {
   frameBlocks: FrameBlock[];
   layout: Record<string, LayoutBox>;
   frameRects: Record<string, Rect>;
+  measuredHeights: Record<string, number>;
 }): FrameAvoidanceReservation[] {
   const units: FrameAvoidanceReservation[] = [];
   for (const frame of params.frameBlocks) {
     const rect = params.frameRects[frame.relMsgId];
     if (!rect) continue;
+    const headerHeight = frame.hasGroupHeader ? getGroupHeaderHeight(params.measuredHeights, frame.relMsgId) : 0;
     units.push({
       relMsgId: frame.relMsgId,
-      rect,
+      rect: headerHeight > 0
+        ? { ...rect, y: rect.y - headerHeight, height: rect.height + headerHeight }
+        : rect,
       cardIds: new Set([...frame.cardIds].filter(id => id in params.layout)),
       ...(frame.isMerge ? { headerTopPad: MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP } : {}),
     });
@@ -1459,6 +1491,8 @@ function computeNoOverlapLayout(params: {
   correctedTargetIds?: Set<string>;
   frameBlocks?: FrameBlock[];
   allMessages: DemoMessage[];
+  activeTextSelectId?: string | null;
+  traceMode?: boolean;
 }) {
   const { normals, colOf, measuredHeights, measuredWidths } = params;
   const correctedTargetIds = params.correctedTargetIds ?? new Set<string>();
@@ -1542,6 +1576,18 @@ function computeNoOverlapLayout(params: {
       }
     }
     const localColOf = !isHorizontal ? computeMergeLocalColumns(frameCards, childFrameCols) : {};
+    const parentMinCol = Math.min(
+      ...frameCards.map(card => colOf[card.id] ?? 0),
+      ...childFrameCols,
+      0,
+    );
+    const childFrameX = (child: FrameBlock) => {
+      const childCols = [...child.cardIds]
+        .map(id => colOf[id])
+        .filter((column): column is number => column !== undefined);
+      const childMinCol = childCols.length > 0 ? Math.min(...childCols) : parentMinCol;
+      return contentX + colX(Math.max(0, childMinCol - parentMinCol)) - colX(0);
+    };
     for (const childId of fb.childRelMsgIds) {
       const child = frameById.get(childId);
       if (child) items.push({ kind: 'childFrame', child });
@@ -1555,8 +1601,9 @@ function computeNoOverlapLayout(params: {
     });
 
     const mergeHeaderPad = isMerge ? MERGE_CARD_H + MERGE_CONTENT_TOP_GAP : 0;
+    const groupHeaderPad = fb.hasGroupHeader ? getGroupHeaderHeight(measuredHeights, fb.relMsgId) : 0;
     const contentX = frameX + FRAME_PAD_X;
-    const contentY = frameY + FRAME_PAD_Y + mergeHeaderPad;
+    const contentY = frameY + groupHeaderPad + FRAME_PAD_Y + mergeHeaderPad;
 
     let yCursor = contentY;
     const colYCursor = new Map<number, number>();
@@ -1601,6 +1648,12 @@ function computeNoOverlapLayout(params: {
           contentRight  = Math.max(contentRight,  r.x + r.width);
           contentBottom = Math.max(contentBottom, r.y + r.height);
         }
+        function occupiedChildRect(r: Rect): Rect {
+          const headerHeight = child.hasGroupHeader ? getGroupHeaderHeight(measuredHeights, child.relMsgId) : 0;
+          return headerHeight > 0
+            ? { ...r, y: r.y - headerHeight, height: r.height + headerHeight }
+            : r;
+        }
         if (isMerge) {
           // Start child frame below the bottom of all previously placed content
           let childStartY = contentY;
@@ -1608,7 +1661,8 @@ function computeNoOverlapLayout(params: {
             childStartY = Math.max(childStartY, cy);
           }
           const result = layoutFrameBlock(child, contentX, childStartY);
-          const childBottom = result.rect.y + result.rect.height + ROW_GAP;
+          const occupiedRect = occupiedChildRect(result.rect);
+          const childBottom = occupiedRect.y + occupiedRect.height + ROW_GAP;
           // Sync all column cursors below the child frame so items in other
           // columns don't end up visually above it.
           for (const [col] of colYCursor) {
@@ -1618,8 +1672,8 @@ function computeNoOverlapLayout(params: {
           // horizontally overlaps. Cards in non-overlapping columns
           // (to the right of the frame) stay at their original Y level.
           const maxLocalCol = Math.max(0, ...Object.values(localColOf));
-          const childLeft = result.rect.x;
-          const childRight = result.rect.x + result.rect.width;
+          const childLeft = occupiedRect.x;
+          const childRight = occupiedRect.x + occupiedRect.width;
           for (let col = 0; col <= maxLocalCol; col++) {
             const cardLeft = contentX + colX(col) - colX(0);
             const cardRight = cardLeft + CARD_W;
@@ -1629,23 +1683,54 @@ function computeNoOverlapLayout(params: {
           }
           // Ensure col 0 is always synced (child frame always starts at contentX)
           colYCursor.set(0, Math.max(colYCursor.get(0) ?? contentY, childBottom));
-          trackChildRect(result.rect);
+          trackChildRect(occupiedRect);
         } else if (isHorizontal) {
           const result = layoutFrameBlock(child, xCursor, yCursor);
-          xCursor += result.rect.width + COL_GAP;
-          rowMaxHeight = Math.max(rowMaxHeight, result.rect.height);
-          trackChildRect(result.rect);
+          const occupiedRect = occupiedChildRect(result.rect);
+          xCursor += occupiedRect.width + COL_GAP;
+          rowMaxHeight = Math.max(rowMaxHeight, occupiedRect.height);
+          trackChildRect(occupiedRect);
         } else {
-          const result = layoutFrameBlock(child, contentX, yCursor);
-          yCursor = result.rect.y + result.rect.height + ROW_GAP;
-          trackChildRect(result.rect);
+          // Measure the child to know which columns it occupies. A vertical
+          // child must start below only the columns it overlaps; using the
+          // maximum cursor from every column creates unrelated empty space.
+          const measuredChild = layoutFrameBlock(child, childFrameX(child), contentY);
+          const childLeft = measuredChild.rect.x;
+          const childRight = measuredChild.rect.x + measuredChild.rect.width;
+          let childStartY = contentY;
+          for (const [col, columnY] of colYCursor) {
+            const cardLeft = contentX + colX(col) - colX(0);
+            const cardRight = cardLeft + CARD_W;
+            if (cardLeft < childRight && childLeft < cardRight) {
+              childStartY = Math.max(childStartY, columnY);
+            }
+          }
+          const result = layoutFrameBlock(child, childFrameX(child), childStartY);
+          const occupiedRect = occupiedChildRect(result.rect);
+          const childBottom = occupiedRect.y + occupiedRect.height + ROW_GAP;
+          for (const [col, columnY] of colYCursor) {
+            const cardLeft = contentX + colX(col) - colX(0);
+            const cardRight = cardLeft + CARD_W;
+            if (cardLeft < occupiedRect.x + occupiedRect.width && occupiedRect.x < cardRight) {
+              colYCursor.set(col, Math.max(columnY, childBottom));
+            }
+          }
+          trackChildRect(occupiedRect);
         }
       }
     }
 
-    const frameW = Math.max(contentRight - contentLeft, CARD_W) + FRAME_PAD_X * 2;
-    const frameH = Math.max(contentBottom - contentTop, 0) + FRAME_PAD_Y * 2 + mergeHeaderPad;
-    const frameRect: Rect = { x: frameX, y: frameY, width: frameW, height: frameH };
+    const hasContent = isFinite(contentLeft) && isFinite(contentTop) && isFinite(contentRight) && isFinite(contentBottom);
+    const frameW = hasContent
+      ? Math.max(contentRight - contentLeft, CARD_W) + FRAME_PAD_X * 2
+      : CARD_W + FRAME_PAD_X * 2;
+    const frameH = hasContent
+      ? Math.max(contentBottom - contentTop, 0) + FRAME_PAD_Y * 2 + mergeHeaderPad
+      : FRAME_PAD_Y * 2 + mergeHeaderPad;
+    // frameX/frameY are the collision-layout position of this opaque unit.
+    // Content bounds determine its size, not a second position that would
+    // move the frame away from the cards laid out from the same origin.
+    const frameRect: Rect = { x: frameX, y: frameY + groupHeaderPad, width: frameW, height: frameH };
     frameRectMap.set(fb.relMsgId, frameRect);
     return { rect: frameRect };
   }
@@ -1656,7 +1741,7 @@ function computeNoOverlapLayout(params: {
   // for arrange-inside-arrange (horizontal) and merge-containing-arrange layouts.
   // Without this, nested frames are placed as independent root frames, causing
   // vertical stacking when horizontal alignment is expected.
-  for (const fb of frameBlocks) {
+  if (!params.traceMode) for (const fb of frameBlocks) {
     for (const other of frameBlocks) {
       if (fb.relMsgId === other.relMsgId) continue;
       if (fb.childRelMsgIds.includes(other.relMsgId)) continue;
@@ -1719,11 +1804,11 @@ function computeNoOverlapLayout(params: {
 
   const placedRects2: Rect[] = [];
 
-  function findY2(x: number, w: number): number {
-    let y = GRID_TOP;
+  function findY2(x: number, w: number, topPad = 0): number {
+    let y = GRID_TOP + topPad;
     for (const r of placedRects2) {
       if (x + w <= r.x || r.x + r.width <= x) continue;
-      y = Math.max(y, r.y + r.height + ROW_GAP);
+      y = Math.max(y, r.y + r.height + ROW_GAP + topPad);
     }
     return y;
   }
@@ -1738,7 +1823,6 @@ function computeNoOverlapLayout(params: {
       .filter((column): column is number => column !== undefined);
     return memberCols.length > 0 ? Math.min(...memberCols) : 0;
   }
-
   for (const item of items2) {
     if (item.kind === 'card') {
       const m = item.msg;
@@ -1758,7 +1842,12 @@ function computeNoOverlapLayout(params: {
       const measuredFrame = layoutFrameBlock(fb, frameX, GRID_TOP);
       const frameY = findY2(frameX, measuredFrame.rect.width);
       const result2 = layoutFrameBlock(fb, frameX, frameY);
-      placedRects2.push(result2.rect);
+      placedRects2.push({
+        x: result2.rect.x,
+        y: result2.rect.y - (fb.hasGroupHeader ? getGroupHeaderHeight(measuredHeights, fb.relMsgId) : 0),
+        width: result2.rect.width,
+        height: result2.rect.height + (fb.hasGroupHeader ? getGroupHeaderHeight(measuredHeights, fb.relMsgId) : 0),
+      });
       frameRectMap.set(fb.relMsgId, result2.rect);
       maxBottom = Math.max(maxBottom, result2.rect.y + result2.rect.height);
     }
@@ -1908,6 +1997,10 @@ export interface GraphViewProps {
   onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) => void;
   /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
   hideMessageIds?: Set<string>;
+  /** In trace mode, these CLASSIFY/SUMMARY IDs render as frames instead of cards. */
+  traceExpandedFrameIds?: Set<string>;
+  /** Directly traced CLASSIFY/SUMMARY IDs use exclusive card/frame rendering. */
+  traceFrameIds?: Set<string>;
   /** Render two aligned comparison projections using the same graph layout. */
   comparisonPair?: boolean;
   comparisonTargetId?: string | null;
@@ -2201,6 +2294,14 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   const messages = inputMessages;
   const edges = inputEdges;
+  const traceFrameIds = props.traceFrameIds ?? new Set<string>();
+  const isTraceWindow = traceFrameIds.size > 0 || (props.traceExpandedFrameIds?.size ?? 0) > 0;
+  // An entering trace can briefly render with the previous expansion state.
+  // Only frames belonging to the current trace may be rendered as expanded.
+  const traceExpandedFrameIds = useMemo(
+    () => new Set(props.traceExpandedFrameIds ?? []),
+    [props.traceExpandedFrameIds],
+  );
   const comparisonSuppressedRelIds = props.comparisonSuppressedRelIds ?? EMPTY_COMPARISON_SUPPRESSED_REL_IDS;
   const effectiveHideMessageIds = props.hideMessageIds
     ? new Set([...props.hideMessageIds, ...comparisonSuppressedRelIds])
@@ -2263,9 +2364,11 @@ function GraphViewCanvas(props: GraphViewProps) {
     return ids;
   }, [classifyRelMsgIds, summaryRelMsgIds]);
   const normals = useMemo(() => messages.filter(m =>
-    (isContentKind(m.kind) && !tagSourceIds.has(m.id)) ||
-    (m.kind === "relation" && relationCardMsgIds.has(m.id))
-  ), [messages, tagSourceIds, relationCardMsgIds]);
+    !traceExpandedFrameIds.has(m.id) && (
+      (isContentKind(m.kind) && !tagSourceIds.has(m.id)) ||
+      (m.kind === "relation" && relationCardMsgIds.has(m.id))
+    )
+  ), [messages, tagSourceIds, relationCardMsgIds, traceExpandedFrameIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
   // Exclude CLASSIFY/SUMMARY/ARRANGE messages from relIds — they are now in normals and should not be
   // treated as relation-message endpoints for edge-routing constraint algorithms.
@@ -2287,6 +2390,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const [measuredWidths] = useState<Record<string,number>>({});
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
   const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
+  const [selectedActualRects, setSelectedActualRects] = useState<Record<string, Rect>>({});
   const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}>|null>(null);
   const [decorationsByMsgState, setDecorationsByMsgState] = useState<Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>|null>(null);
   // TAG decorations: aggregated by label text — map from messageId → list of {label, relMsgIds, rect, relAgreeCount, relDisagreeCount, relAgreeMsgIds, relDisagreeMsgIds}
@@ -2425,9 +2529,17 @@ function GraphViewCanvas(props: GraphViewProps) {
   // Combined set of all hidden target message IDs (CORRECT + SUMMARY).
   const hiddenTargetIds = useMemo(() => {
     const ids = new Set(hiddenCorrectedTargetIds);
-    for (const id of hiddenSummaryTargetIds) ids.add(id);
+    const directlyTracedSummaryMemberIds = new Set<string>();
+    for (const edge of edges) {
+      if (edge.relationType !== 'summary' || !traceExpandedFrameIds.has(edge.relationMessageId)) continue;
+      if (!edge.from.messageId.startsWith('anon:')) directlyTracedSummaryMemberIds.add(edge.from.messageId);
+      if (!edge.to.messageId.startsWith('anon:')) directlyTracedSummaryMemberIds.add(edge.to.messageId);
+    }
+    for (const id of hiddenSummaryTargetIds) {
+      if (!directlyTracedSummaryMemberIds.has(id)) ids.add(id);
+    }
     return ids;
-  }, [hiddenCorrectedTargetIds, hiddenSummaryTargetIds]);
+  }, [edges, hiddenCorrectedTargetIds, hiddenSummaryTargetIds, traceExpandedFrameIds, traceFrameIds]);
 
   // Build frame blocks: identify which cards belong to which frames (arrange/merge/classify/summary).
   // This is computed before the layout so frames are placed as atomic units.
@@ -2435,14 +2547,28 @@ function GraphViewCanvas(props: GraphViewProps) {
   const visibleCardIds = useMemo(() => {
     const ids = new Set(normalIds);
     for (const m of messages) {
-      if (isContentKind(m.kind) || relationCardMsgIds.has(m.id)) ids.add(m.id);
+      if (!traceExpandedFrameIds.has(m.id) && (isContentKind(m.kind) || relationCardMsgIds.has(m.id))) ids.add(m.id);
     }
     return ids;
-  }, [messages, normalIds, relationCardMsgIds]);
-  const frameBlocks = useMemo(
-    () => buildFrameBlocks({ edges, visibleCardIds, msgMap }),
-    [edges, visibleCardIds, msgMap]
-  );
+  }, [messages, normalIds, relationCardMsgIds, traceExpandedFrameIds]);
+  const traceEmbeddedFrameIds = useMemo(() => {
+    const ids = new Set(traceExpandedFrameIds);
+    for (const edge of edges) {
+      if (!traceExpandedFrameIds.has(edge.relationMessageId)) continue;
+      for (const endpointId of [edge.from.messageId, edge.to.messageId]) {
+        if (traceFrameIds.has(endpointId)) ids.add(endpointId);
+      }
+    }
+    return ids;
+  }, [edges, traceExpandedFrameIds, traceFrameIds]);
+  const frameBlocks = useMemo(() => {
+    const blocks = buildFrameBlocks({ edges, visibleCardIds, msgMap, keepEmptyFrameIds: traceEmbeddedFrameIds, traceMode: isTraceWindow });
+    if (!isTraceWindow) return blocks;
+    return blocks.filter(block =>
+      !['classify', 'summary'].includes(msgMap.get(block.relMsgId)?.relationType ?? '')
+      || traceEmbeddedFrameIds.has(block.relMsgId),
+    );
+  }, [edges, visibleCardIds, msgMap, traceExpandedFrameIds, traceEmbeddedFrameIds, isTraceWindow]);
   // Compute nesting depth for each frame: root=0, child=parentDepth+1
   const frameDepthMap = useMemo(() => {
     const depth = new Map<string, number>();
@@ -2463,8 +2589,8 @@ function GraphViewCanvas(props: GraphViewProps) {
   // ── Two-pass layout: pass 1 gets frame rects, correct columns, pass 2 is final ──
   // Pass 1: compute initial layout solely to obtain actual frame rects
   const { frameRects: pass1FrameRects } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf: pipelineCol, measuredHeights, measuredWidths, maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages }),
-    [normals, pipelineCol, measuredHeights, measuredWidths, pipelineMaxCol, hiddenTargetIds, frameBlocks, messages]
+    () => computeNoOverlapLayout({ normals, colOf: pipelineCol, measuredHeights, measuredWidths, maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages, activeTextSelectId, traceMode: isTraceWindow }),
+    [normals, pipelineCol, measuredHeights, measuredWidths, pipelineMaxCol, hiddenTargetIds, frameBlocks, messages, activeTextSelectId, isTraceWindow]
   );
 
   // Column correction: push anno/ref/reply sources targeting frames to the right of the frame's actual visual boundary
@@ -2477,8 +2603,8 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   // Pass 2: final layout with corrected columns
   const { layout: pass2Layout, canvasHeight: pass2CanvasHeight, frameRects: baseFrameRects } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, measuredWidths, maxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages }),
-    [normals, colOf, measuredHeights, measuredWidths, maxCol, hiddenTargetIds, frameBlocks, messages]
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, measuredWidths, maxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages, activeTextSelectId, traceMode: isTraceWindow }),
+    [normals, colOf, measuredHeights, measuredWidths, maxCol, hiddenTargetIds, frameBlocks, messages, activeTextSelectId, isTraceWindow]
   );
 
   // Compact: shift anno/ref source clusters toward their targets
@@ -2498,45 +2624,72 @@ function GraphViewCanvas(props: GraphViewProps) {
   const expandFrameRectsToMembers = (sourceRects: Record<string, Rect>, currentLayout: Record<string, LayoutBox>) => {
     const next = { ...sourceRects };
     const normalIds = new Set(normals.map(message => message.id));
-    for (const frame of frameBlocks) {
+    const frameById = new Map(frameBlocks.map(frame => [frame.relMsgId, frame]));
+    const expanded = new Set<string>();
+    const expandFrame = (frame: FrameBlock) => {
+      if (expanded.has(frame.relMsgId)) return next[frame.relMsgId];
+      for (const childId of frame.childRelMsgIds) {
+        const child = frameById.get(childId);
+        if (child) expandFrame(child);
+      }
       const rect = next[frame.relMsgId];
-      if (!rect) continue;
+      if (!rect) return undefined;
       let left = rect.x;
       let top = rect.y;
       let right = rect.x + rect.width;
       let bottom = rect.y + rect.height;
       let contentTop = Infinity;
-      for (const memberId of frame.cardIds) {
+      // cardIds is transitive and includes cards inside child frames. Those
+      // cards are already represented by the child frame rect; using them
+      // here expands the parent twice and creates artificial empty space.
+      for (const memberId of frame.directCardIds) {
         if (!normalIds.has(memberId)) continue;
         const member = currentLayout[memberId];
         if (!member) continue;
         contentTop = Math.min(contentTop, member.y);
         left = Math.min(left, member.x - FRAME_PAD_X);
         right = Math.max(right, member.x + member.width + FRAME_PAD_X);
+        top = Math.min(top, member.y - FRAME_PAD_Y);
         bottom = Math.max(bottom, member.y + member.height + FRAME_PAD_Y);
       }
       for (const childId of frame.childRelMsgIds) {
+        const child = frameById.get(childId);
         const childRect = next[childId];
-        if (childRect) contentTop = Math.min(contentTop, childRect.y);
+        if (childRect) {
+          const childHeaderHeight = child?.hasGroupHeader
+            ? getGroupHeaderHeight(measuredHeights, childId)
+            : 0;
+          const occupiedChildRect = childHeaderHeight > 0
+            ? { ...childRect, y: childRect.y - childHeaderHeight, height: childRect.height + childHeaderHeight }
+            : childRect;
+          left = Math.min(left, occupiedChildRect.x - FRAME_PAD_X);
+          right = Math.max(right, occupiedChildRect.x + occupiedChildRect.width + FRAME_PAD_X);
+          top = Math.min(top, occupiedChildRect.y - FRAME_PAD_Y);
+          bottom = Math.max(bottom, occupiedChildRect.y + occupiedChildRect.height + FRAME_PAD_Y);
+          contentTop = Math.min(contentTop, occupiedChildRect.y);
+        }
       }
       if (contentTop !== Infinity) {
         const headerPad = frame.isMerge ? MERGE_CARD_H + MERGE_CONTENT_TOP_GAP : 0;
-        top = Math.max(top, contentTop - FRAME_PAD_Y - headerPad);
+        top = Math.min(top, contentTop - FRAME_PAD_Y - headerPad);
       }
       next[frame.relMsgId] = { x: left, y: top, width: right - left, height: bottom - top };
-    }
+      expanded.add(frame.relMsgId);
+      return next[frame.relMsgId];
+    };
+    for (const frame of frameBlocks) expandFrame(frame);
     return next;
   };
 
   const expandedFrameRects = useMemo(
     () => expandFrameRectsToMembers(baseFrameRects, compactedLayout),
-    [baseFrameRects, compactedLayout, frameBlocks, normals]
+    [baseFrameRects, compactedLayout, frameBlocks, normals, msgMap]
   );
 
   // Frame avoidance — safety net ensuring frames don't overlap with cards below
   const frameAvoidanceReservations = useMemo(
-    () => buildFrameLayoutUnits({ frameBlocks, layout: compactedLayout, frameRects: expandedFrameRects }),
-    [frameBlocks, compactedLayout, expandedFrameRects]
+    () => buildFrameLayoutUnits({ frameBlocks, layout: compactedLayout, frameRects: expandedFrameRects, measuredHeights }),
+    [frameBlocks, compactedLayout, expandedFrameRects, measuredHeights]
   );
   const { layout, canvasHeight } = useMemo(
     () => {
@@ -2565,11 +2718,12 @@ function GraphViewCanvas(props: GraphViewProps) {
           frameBlocks,
           layout: currentLayout,
           frameRects: settledFrameRects,
+          measuredHeights,
         });
       }
       return { layout: currentLayout, canvasHeight: currentCanvasHeight };
     },
-    [compactedLayout, normals, colOf, frameAvoidanceReservations, compactedCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds, baseFrameRects, edges, frameBlocks]
+    [compactedLayout, normals, colOf, frameAvoidanceReservations, compactedCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds, baseFrameRects, frameBlocks, measuredHeights]
   );
   
   const finalFrameRects = useMemo(() => {
@@ -2589,7 +2743,69 @@ function GraphViewCanvas(props: GraphViewProps) {
     return h;
   }, [canvasHeight, layout, finalFrameRects]);
   const visibleArrangeFrames = arrangeFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId));
-  const visibleGroupFrames = groupFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId));
+  const renderedGroupFrames = groupFrames.map(frame => {
+    const rect = finalFrameRects[frame.relMsgId];
+    return rect ? { ...frame, rect } : frame;
+  });
+  const visibleGroupFrames = renderedGroupFrames.filter(frame =>
+    !effectiveHideMessageIds.has(frame.relMsgId) &&
+    (!isTraceWindow || !['classify', 'summary'].includes(frame.relType)
+      || traceFrameIds.has(frame.relMsgId) || traceExpandedFrameIds.has(frame.relMsgId)) &&
+    (!traceFrameIds.has(frame.relMsgId) || traceExpandedFrameIds.has(frame.relMsgId)),
+  );
+
+  const selectedMessageIds = useMemo(() => new Set([
+    ...draftUnits
+      .filter(unit => unit.selection.kind === 'whole')
+      .map(unit => unit.messageId),
+    ...(lastClickedMessageId ? [lastClickedMessageId] : []),
+  ]), [draftUnits, lastClickedMessageId]);
+
+  useLayoutEffect(() => {
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
+    const canvasRect = canvasEl.getBoundingClientRect();
+    const scaleX = canvasEl.offsetWidth > 0 ? canvasRect.width / canvasEl.offsetWidth : 1;
+    const scaleY = canvasEl.offsetHeight > 0 ? canvasRect.height / canvasEl.offsetHeight : 1;
+    const next: Record<string, Rect> = {};
+    const unionRects = (first: Rect, second: Rect): Rect => {
+      const right = Math.max(first.x + first.width, second.x + second.width);
+      const bottom = Math.max(first.y + first.height, second.y + second.height);
+      const x = Math.min(first.x, second.x);
+      const y = Math.min(first.y, second.y);
+      return { x, y, width: right - x, height: bottom - y };
+    };
+    const toCanvasRect = (rect: DOMRect): Rect => ({
+      x: (rect.left - canvasRect.left) / scaleX,
+      y: (rect.top - canvasRect.top) / scaleY,
+      width: rect.width / scaleX,
+      height: rect.height / scaleY,
+    });
+    for (const messageId of selectedMessageIds) {
+      const element = cardRefs.current[messageId];
+      const actualRect = element?.getBoundingClientRect();
+      let selectedRect = actualRect && actualRect.width > 1 && actualRect.height > 1
+        ? toCanvasRect(actualRect)
+        : undefined;
+      const selectedFrame = visibleGroupFrames.find(frame =>
+        frame.relMsgId === messageId && (frame.relType === 'classify' || frame.relType === 'summary')
+      );
+      const frameRect = selectedFrame?.rect ?? (selectedFrame ? finalFrameRects[messageId] : undefined);
+      if (frameRect) selectedRect = selectedRect ? unionRects(selectedRect, frameRect) : frameRect;
+      if (selectedRect) next[messageId] = selectedRect;
+    }
+    setSelectedActualRects(prev => {
+      const prevIds = Object.keys(prev);
+      const nextIds = Object.keys(next);
+      if (prevIds.length === nextIds.length && nextIds.every(id => {
+        const before = prev[id];
+        const after = next[id];
+        return before && Math.abs(before.x - after.x) < 0.5 && Math.abs(before.y - after.y) < 0.5
+          && Math.abs(before.width - after.width) < 0.5 && Math.abs(before.height - after.height) < 0.5;
+      })) return prev;
+      return next;
+    });
+  }, [selectedMessageIds, visibleGroupFrames, finalFrameRects, layout, actualCanvasWidth, actualCanvasHeight, measuredHeights]);
 
   useEffect(() => {
     if (!props.autoCenterMessageId) return;
@@ -2659,7 +2875,8 @@ function GraphViewCanvas(props: GraphViewProps) {
         const scaleY = canvasEl && canvasEl.offsetHeight > 0 && canvasRect
           ? canvasRect.height / canvasEl.offsetHeight
           : 1;
-        next[id] = Math.ceil(el.getBoundingClientRect().height / scaleY);
+        const measuredHeight = Math.ceil(el.getBoundingClientRect().height / scaleY);
+        next[id] = Math.max(MIN_CARD_H, measuredHeight);
       }
       if (!Object.keys(next).length) return;
       setMeasuredHeights(prev => {
@@ -2669,8 +2886,12 @@ function GraphViewCanvas(props: GraphViewProps) {
       });
     });
     for (const m of normals) { const el=cardRefs.current[m.id]; if (el) ro.observe(el); }
+    for (const frame of visibleGroupFrames) {
+      const el = cardRefs.current[frame.relMsgId];
+      if (el) ro.observe(el);
+    }
     return () => ro.disconnect();
-  }, [normals, layout]);
+  }, [normals, layout, activeTextSelectId, visibleGroupFrames]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
@@ -2850,10 +3071,26 @@ function GraphViewCanvas(props: GraphViewProps) {
           minX = Math.min(minX, targetBox.x); minY = Math.min(minY, targetBox.y);
           maxX = Math.max(maxX, targetBox.x + targetBox.width); maxY = Math.max(maxY, targetBox.y + targetBox.height);
         }
-        if (!anyTarget && !sourceBox) continue;
-        if (minX === Infinity) continue;
-        // Prefer the frame rect computed by layoutFrameBlock (union of child rects + cards + FRAME_PAD).
-        // Fall back to per-edge union for frames not yet covered by the layout pipeline.
+        if (!anyTarget && !sourceBox) {
+          const emptyFrameRect = finalFrameRects[relMsgId];
+          const isEmptyExpandedFrame = traceExpandedFrameIds.has(relMsgId) &&
+            (relType === 'classify' || relType === 'summary') && !!emptyFrameRect;
+          if (!isEmptyExpandedFrame) continue;
+        }
+        if (minX === Infinity) {
+          const emptyFrameRect = finalFrameRects[relMsgId];
+          const isEmptyExpandedFrame = traceExpandedFrameIds.has(relMsgId) &&
+            (relType === 'classify' || relType === 'summary') && !!emptyFrameRect;
+          if (!isEmptyExpandedFrame) continue;
+          minX = emptyFrameRect.x;
+          minY = emptyFrameRect.y;
+          maxX = emptyFrameRect.x + emptyFrameRect.width;
+          maxY = emptyFrameRect.y + emptyFrameRect.height;
+        }
+        // The layout pass already computes the complete frame, including
+        // nested frames and padding. Do not rebuild it from DOM members here:
+        // that would apply padding a second time and make rendering disagree
+        // with the layout used for collision avoidance.
         const rect = finalFrameRects[relMsgId] ?? {
           x: minX - FRAME_PAD, y: minY - FRAME_PAD,
           width: maxX - minX + FRAME_PAD * 2, height: maxY - minY + FRAME_PAD * 2,
@@ -2865,6 +3102,10 @@ function GraphViewCanvas(props: GraphViewProps) {
 
     computeFramesForRelType(isArrangeFrameRel, f => newArrangeFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
     computeFramesForRelType(t => !isArrangeFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
+    for (const frame of newGroupFrames) {
+      const layoutRect = finalFrameRects[frame.relMsgId];
+      if (layoutRect) frame.rect = layoutRect;
+    }
 
     // For MERGE group frames: extend upward to include the card-style header inside the frame.
     // Skip when the rect already comes from baseFrameRects (header already applied).
@@ -2872,6 +3113,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
         const fromBaseRects = !!finalFrameRects[gf.relMsgId];
+        if (fromBaseRects) continue;
         let rightEdge = gf.rect.x + gf.rect.width;
         let bottomEdge = gf.rect.y + gf.rect.height;
         // Extend past nested arrange frames geometrically contained in this merge
@@ -3066,8 +3308,8 @@ function GraphViewCanvas(props: GraphViewProps) {
       const relTypeKind = getPresentationSpec(relType).kind;
       if (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay' || relTypeKind === 'correction-badge') {
         const fr = groupFrameByRelMsgId.get(relId);
-        if (!fr && relTypeKind === 'frame-group') {
-          // CLASSIFY / SUMMARY relation messages are rendered as topic cards rather than SVG frames.
+        if (!fr && (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay')) {
+          // A relation whose targets are hidden from this projection is rendered as a card.
           const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
           if (relCard) return relCard;
         }
@@ -3524,7 +3766,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
-          if (effectiveHideMessageIds.has(msg.id)) return null;
+          if (effectiveHideMessageIds.has(msg.id) || traceExpandedFrameIds.has(msg.id)) return null;
           // Hidden targets: corrected targets (replaced by correction source) and
           // summarized targets (covered by summary card). Chained sources remain visible.
           if (hiddenTargetIds.has(msg.id)) return null;
@@ -3557,7 +3799,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
                 onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-                style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:isTopicStanceTarget?"#2a2410":isWhole?"#4a3510":"#1f1f1f",borderRadius:6,
+                style={{position:"absolute",left:box.x,top:box.y,width:box.width,boxSizing:"border-box",background:isTopicStanceTarget?"#2a2410":isWhole?"#4a3510":"#1f1f1f",borderRadius:6,
                   borderTop:isWhole?"2px solid #fbbf24":isTopicStanceTarget?"2px solid #f59e0b":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
                   borderRight:isWhole?"2px solid #fbbf24":isTopicStanceTarget?"2px solid #f59e0b":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
                   borderBottom:isWhole?"2px solid #fbbf24":isTopicStanceTarget?"2px solid #f59e0b":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
@@ -3719,7 +3961,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:isWhole?"#5b4100":stanceBg||kindBg||"#1f1f1f",borderRadius:6,borderTop:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderRight:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderBottom:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderLeft:kindBorder||(stanceBorder?undefined:(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444")),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":isWhole?"0 0 0 3px #111827, 0 0 0 5px #fbbf24, 0 4px 18px rgba(251,191,36,0.45)":"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:isWhole?"none":lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,boxSizing:"border-box",background:isWhole?"#5b4100":stanceBg||kindBg||"#1f1f1f",borderRadius:6,borderTop:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderRight:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderBottom:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderLeft:kindBorder||(stanceBorder?undefined:(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444")),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":isWhole?"0 0 0 3px #111827, 0 0 0 5px #fbbf24, 0 4px 18px rgba(251,191,36,0.45)":"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:isWhole?"none":lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
               {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
@@ -4032,6 +4274,25 @@ function GraphViewCanvas(props: GraphViewProps) {
           );
         })}
       </div>
+      {Object.entries(selectedActualRects).map(([messageId, rect]) => (
+        <div
+          key={`actual-rect-${messageId}`}
+          data-actual-message-rect={messageId}
+          title={`实际矩形：${messageId}（${Math.round(rect.width)} × ${Math.round(rect.height)}）`}
+          style={{
+            position: 'absolute',
+            left: rect.x,
+            top: rect.y,
+            width: rect.width,
+            height: rect.height,
+            boxSizing: 'border-box',
+            border: '2px solid #ff3b30',
+            background: 'rgba(255,59,48,0.08)',
+            pointerEvents: 'none',
+            zIndex: 30,
+          }}
+        />
+      ))}
       {/* Phase 3: Floating settlement panel in graph view */}
       {settlementOpenMsgId && (() => {
         const cardBox = layout[settlementOpenMsgId];
@@ -4422,7 +4683,10 @@ function GraphViewCanvas(props: GraphViewProps) {
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameDoubleClick??onMessageDoubleClick)(e,gf.relMsgId);};
         const {x,y,width,height}=gf.rect;
         const HH=FRAME_PAD;
+        const groupHeaderRect = getGroupHeaderRect(gf.rect, getGroupHeaderHeight(measuredHeights, gf.relMsgId));
         const gfZ = 4 + (frameDepthMap.get(gf.relMsgId) ?? 0);
+        const isSummaryHeader = gf.relType === "summary";
+        const headerKindColor = isSummaryHeader ? "#34d399" : "#a78bfa";
         const stripBase: React.CSSProperties={position:"absolute",zIndex:gfZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=(gf.relType === "classify" || gf.relType === "summary")
           ? `${gf.relType === "summary" ? "总结" : "分类"}：${gf.relMsgId}；单击选中，双击进入${gf.relType === "summary" ? "总结" : "分类"}`
@@ -4464,6 +4728,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             })()}
             {(gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
               <div data-msgid={gf.relMsgId} data-rel-overlay="true"
+                ref={el => { cardRefs.current[gf.relMsgId] = el; }}
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
                 title={title}
@@ -4486,23 +4751,30 @@ function GraphViewCanvas(props: GraphViewProps) {
                         } as React.CSSProperties;
                       })()
                     : {
-                        left: getGroupHeaderRect(gf.rect).x,
-                        top: getGroupHeaderRect(gf.rect).y,
-                        width: getGroupHeaderRect(gf.rect).width,
-                        minHeight: getGroupHeaderRect(gf.rect).height,
-                        background: isRelWholeSel(gf.relMsgId) ? "#5b4100" : gf.relType === "summary" ? "#14352a" : "#142a22",
+                        left: groupHeaderRect.x,
+                        top: groupHeaderRect.y,
+                        width: groupHeaderRect.width,
+                        minHeight: groupHeaderRect.height,
+                        background: isRelWholeSel(gf.relMsgId) ? "#5b4100" : isSummaryHeader ? "rgba(52,211,153,0.08)" : "#1f1f1f",
                         color: "#f5f5f5",
                         borderRadius: 6,
-                        border: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : gf.relType === "summary" ? "1px solid rgba(52,211,153,0.7)" : "1px solid rgba(34,197,94,0.7)"),
-                        boxShadow: isRelWholeSel(gf.relMsgId) ? "0 0 0 2px #111827, 0 0 0 4px rgba(251,191,36,0.9), 0 8px 20px rgba(251,191,36,0.28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
+                        borderTop: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
+                        borderRight: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
+                        borderBottom: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
+                        borderLeft: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : `3px solid ${headerKindColor}`,
+                        boxShadow: isRelWholeSel(gf.relMsgId) ? "0 0 0 2px #111827, 0 0 0 4px rgba(251,191,36,0.9), 0 8px 20px rgba(251,191,36,0.28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 4px 10px rgba(0,0,0,0.5)"),
                         outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
-                        padding: "8px 10px",
+                        padding: "12px 16px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
                       }),
                   position: "absolute",
                   zIndex: 5,
                   cursor: "pointer",
                   pointerEvents: "auto",
                   userSelect: "none",
+                  boxSizing: "border-box",
                 }}>
                 {(() => {
                   const relMsg = msgMap.get(gf.relMsgId);

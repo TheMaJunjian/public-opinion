@@ -130,36 +130,36 @@ function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; ki
   );
 }
 
-export default function TopicStructureView(props: { focusIds: string[]; messages: DemoMessage[]; edges: DemoEdge[]; topicId?: string; onNavigateToMessage?: (messageId: string) => void }) {
-  const { focusIds, messages, edges, topicId, onNavigateToMessage } = props;
+export default function TopicStructureView(props: { traceIds: string[]; messages: DemoMessage[]; edges: DemoEdge[]; topicId?: string; onNavigateToMessage?: (messageId: string) => void }) {
+  const { traceIds, messages, edges, topicId, onNavigateToMessage } = props;
   const navigate = useNavigate();
   const msgMap = new Map(messages.map(m => [m.id, m]));
-  if (!focusIds || focusIds.length === 0) {
+  if (!traceIds || traceIds.length === 0) {
     return (
       <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
         <div style={{ fontWeight: 600, marginBottom: 4 }}>结构视图（全局模式·简化）</div>
-        <div style={{ fontSize: 12, opacity: 0.7 }}>（进入焦点后显示：左侧指向我 / 右侧我指向）</div>
+        <div style={{ fontSize: 12, opacity: 0.7 }}>（进入追溯后显示：左侧指向我 / 右侧我指向）</div>
       </div>
     );
   }
   return (
     <div style={{ border: '1px solid #444', borderRadius: 6, padding: 8 }}>
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>结构视图（焦点模式 · 多焦点）</div>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>结构视图（追溯模式 · 多消息）</div>
       <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
-        当前焦点消息：
-        {focusIds.map((id, idx) => {
+        当前追溯消息：
+        {traceIds.map((id, idx) => {
           const m = msgMap.get(id);
           return <span key={id} style={{ marginLeft: idx === 0 ? 4 : 8 }}>{m ? `${m.id} · ${m.author}` : id}</span>;
         })}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>左侧（Incoming：指向焦点集合）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="in" messages={messages} navigate={navigate} topicId={topicId} onNavigateToMessage={onNavigateToMessage} />
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>左侧（Incoming：指向追溯集合）</div>
+          <IncomingOutgoingList focusIds={traceIds} edges={edges} kind="in" messages={messages} navigate={navigate} topicId={topicId} onNavigateToMessage={onNavigateToMessage} />
         </div>
         <div style={{ flex: 1, border: '1px solid #333', borderRadius: 6, padding: 6, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>右侧（Outgoing：焦点集合指向）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="out" messages={messages} navigate={navigate} topicId={topicId} onNavigateToMessage={onNavigateToMessage} />
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>右侧（Outgoing：追溯集合指向）</div>
+          <IncomingOutgoingList focusIds={traceIds} edges={edges} kind="out" messages={messages} navigate={navigate} topicId={topicId} onNavigateToMessage={onNavigateToMessage} />
         </div>
       </div>
     </div>

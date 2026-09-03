@@ -17,6 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { resolveOneContainer, applyContainerExpansion } from '../utils/focusContainer';
+import { buildTraceProjection } from '../utils/traceProjection';
 import type { DemoEdge, UnitSelection } from '../utils/modelBridge';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
@@ -57,27 +58,25 @@ describe('resolveOneContainer', () => {
     expect(result).toBeNull();
   });
 
-  // ── focusHop=1, minDist=0 (focus is inside container) ──
+  // ── focusHop=1, container is the next text-like node ──
 
-  it('shows card but does NOT expand at focusHop=1, minDist=0 (partial expansion)', () => {
+  it('shows the container at distance 1 when the trace is inside it', () => {
     // A is focus (dist=0), A is child of classify1
     const dist = new Map<string, number>([['a', 0]]);
     const result = resolveOneContainer('classify1', new Set(['a', 'b', 'c']), dist, 1);
     expect(result).not.toBeNull();
     expect(result!.cardVisible).toBe(true);
-    expect(result!.expanded).toBe(false);
-    expect(result!.minDist).toBe(0);
+    expect(result!.expanded).toBe(true);
+    expect(result!.minDist).toBe(1);
     expect(result!.newChildren).toEqual([]);
   });
 
-  it('shows card only when focus is inside container, even with multiple visible children at dist=0', () => {
+  it('expands the frame when multiple traced children are at distance 0', () => {
     const dist = new Map<string, number>([['a', 0], ['b', 0]]);
     const result = resolveOneContainer('classify1', new Set(['a', 'b', 'c']), dist, 1);
     expect(result).not.toBeNull();
     expect(result!.cardVisible).toBe(true);
-    // minDist=0, focusHop=1: fullExpand = (0+1<=1 && 1>=2) = false
-    // crossRefExpand = (0>0) = false
-    expect(result!.expanded).toBe(false);
+    expect(result!.expanded).toBe(true);
   });
 
   // ── focusHop=1, minDist>0 (child reached via cross-reference) ──
@@ -86,23 +85,14 @@ describe('resolveOneContainer', () => {
     // A is focus (dist=0), C is child of classify1 at dist=1 (reached via reference)
     const dist = new Map<string, number>([['a', 0], ['c', 1]]);
     const result = resolveOneContainer('classify1', new Set(['c', 'd']), dist, 1);
-    expect(result).not.toBeNull();
-    expect(result!.cardVisible).toBe(true);
-    expect(result!.expanded).toBe(true);
-    expect(result!.minDist).toBe(1);
-    // 'c' already in dist, 'd' is new
-    expect(result!.newChildren).toEqual(['d']);
+    expect(result).toBeNull();
   });
 
   it('shows card only when child is at boundary with no other visible children', () => {
     // A is focus (dist=0), D is child at dist=1, no other children visible
     const dist = new Map<string, number>([['a', 0], ['d', 1]]);
     const result = resolveOneContainer('classify1', new Set(['d', 'e']), dist, 1);
-    expect(result).not.toBeNull();
-    expect(result!.cardVisible).toBe(true);
-    // minDist=1, hasVisibleChild=true (d is in dist), crossRefExpand=(1>0 && true)=true
-    expect(result!.expanded).toBe(true);
-    expect(result!.newChildren).toEqual(['e']);
+    expect(result).toBeNull();
   });
 
   // ── focusHop=2, full expansion ──
@@ -113,7 +103,7 @@ describe('resolveOneContainer', () => {
     expect(result).not.toBeNull();
     expect(result!.cardVisible).toBe(true);
     expect(result!.expanded).toBe(true);
-    expect(result!.minDist).toBe(0);
+    expect(result!.minDist).toBe(1);
     expect(result!.newChildren).toEqual(['b', 'c']);
   });
 
@@ -123,8 +113,8 @@ describe('resolveOneContainer', () => {
     const result = resolveOneContainer('classify1', new Set(['b', 'c']), dist, 2);
     expect(result).not.toBeNull();
     expect(result!.expanded).toBe(true);
-    expect(result!.minDist).toBe(1);
-    expect(result!.newChildren).toEqual(['c']);
+    expect(result!.minDist).toBe(2);
+    expect(result!.newChildren).toEqual([]);
   });
 
   // ── focusHop=0 ──
@@ -146,9 +136,7 @@ describe('resolveOneContainer', () => {
     expect(result).not.toBeNull();
     expect(result!.cardVisible).toBe(true);
     // minDist=1 (from classify1 itself), hasVisibleChild=false (b,c not in dist)
-    // fullExpand = (1+1<=1 && 1>=2) = false
-    // crossRefExpand = (1>0 && false) = false
-    expect(result!.expanded).toBe(false);
+    expect(result!.expanded).toBe(true);
     expect(result!.newChildren).toEqual([]);
   });
 });
@@ -161,7 +149,7 @@ describe('applyContainerExpansion', () => {
     const edges: DemoEdge[] = [
       makeEdge('e1', 'ref1', 'reference', 'a', 'b'),
     ];
-    applyContainerExpansion(dist, edges, 1);
+    applyContainerExpansion(dist, edges, 1, new Set());
     expect(dist.size).toBe(1);
     expect(dist.get('a')).toBe(0);
   });
@@ -175,9 +163,21 @@ describe('applyContainerExpansion', () => {
     applyContainerExpansion(dist, edges, 1);
     // Container card added
     expect(dist.has('classify1')).toBe(true);
-    expect(dist.get('classify1')).toBe(0);
-    // Children NOT added (partial expansion)
+    expect(dist.get('classify1')).toBe(1);
+    // Members are one more hop away and are outside a distance-1 trace.
     expect(dist.has('b')).toBe(false);
+  });
+
+  it('does not leave a traced child visible beside its collapsed container card', () => {
+    const dist = new Map<string, number>([['child', 0]]);
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'container', 'classify', 'anon:container', 'child'),
+    ];
+
+    applyContainerExpansion(dist, edges, 1, new Set());
+
+    expect(dist.has('container')).toBe(true);
+    expect(dist.has('child')).toBe(false);
   });
 
   it('expands container children at focusHop=2', () => {
@@ -191,9 +191,9 @@ describe('applyContainerExpansion', () => {
     expect(dist.has('classify1')).toBe(true);
     expect(dist.has('b')).toBe(true);
     expect(dist.has('c')).toBe(true);
-    // New children get distance minDist+1=1
-    expect(dist.get('b')).toBe(1);
-    expect(dist.get('c')).toBe(1);
+    // New children get distance minDist+1=2
+    expect(dist.get('b')).toBe(2);
+    expect(dist.get('c')).toBe(2);
   });
 
   it('cross-ref expands at focusHop=1 when child is visible through other path', () => {
@@ -205,9 +205,9 @@ describe('applyContainerExpansion', () => {
       makeEdge('e3', 'classify1', 'classify', 'anon:classify1', 'd'),
     ];
     applyContainerExpansion(dist, edges, 1);
-    expect(dist.has('classify1')).toBe(true);
-    // Cross-ref expansion: 'd' added
-    expect(dist.has('d')).toBe(true);
+    expect(dist.has('classify1')).toBe(false);
+    // The container is beyond the active trace distance.
+    expect(dist.has('d')).toBe(false);
   });
 
   it('skips containers not connected to any reachable message', () => {
@@ -232,23 +232,23 @@ describe('applyContainerExpansion', () => {
       makeEdge('e4', 'classify2', 'classify', 'anon:classify2', 'e'),
     ];
     applyContainerExpansion(dist, edges, 1);
-    // classify1: minDist=0, card visible, no expansion
+    // classify1: minDist=1, card visible, but its members are beyond range
     expect(dist.has('classify1')).toBe(true);
     expect(dist.has('b')).toBe(false);
-    // classify2: minDist=1, cross-ref expansion
-    expect(dist.has('classify2')).toBe(true);
-    expect(dist.has('e')).toBe(true);
+    // classify2: minDist=2, outside the active range
+    expect(dist.has('classify2')).toBe(false);
+    expect(dist.has('e')).toBe(false);
   });
 
-  it('handles MERGE containers the same as CLASSIFY', () => {
+  it('does not special-case MERGE in trace expansion', () => {
     const dist = new Map<string, number>([['a', 0]]);
     const edges: DemoEdge[] = [
       makeEdge('e1', 'merge1', 'merge', 'anon:merge1', 'a'),
       makeEdge('e2', 'merge1', 'merge', 'anon:merge1', 'b'),
     ];
     applyContainerExpansion(dist, edges, 2);
-    expect(dist.has('merge1')).toBe(true);
-    expect(dist.has('b')).toBe(true);
+    expect(dist.has('merge1')).toBe(false);
+    expect(dist.has('b')).toBe(false);
   });
 
   it('handles SUMMARY containers the same as CLASSIFY', () => {
@@ -262,12 +262,94 @@ describe('applyContainerExpansion', () => {
     expect(dist.has('b')).toBe(true);
   });
 
-  it('handles ARRANGE containers the same as other container types', () => {
+  it('propagates distance through nested containers regardless of edge order', () => {
+    const dist = new Map<string, number>([['message', 0]]);
+    const edges: DemoEdge[] = [
+      // The outer container appears first, before the inner container is discovered.
+      makeEdge('outer-join', 'outer-classify', 'classify', 'anon:outer-classify', 'inner-summary'),
+      makeEdge('inner-join', 'inner-summary', 'summary', 'anon:inner-summary', 'message'),
+    ];
+
+    applyContainerExpansion(dist, edges, 2);
+
+    expect(dist.get('inner-summary')).toBe(1);
+    expect(dist.get('outer-classify')).toBe(2);
+  });
+
+  it('keeps a collapsed nested container card inside an expanded parent', () => {
+    const dist = new Map<string, number>([['message', 0]]);
+    const edges: DemoEdge[] = [
+      makeEdge('outer-edge', 'outer-summary', 'summary', 'anon:outer-summary', 'inner-classify'),
+      makeEdge('inner-edge', 'inner-classify', 'classify', 'anon:inner-classify', 'message'),
+    ];
+
+    applyContainerExpansion(dist, edges, 2, new Set(['outer-summary']));
+
+    expect(dist.has('outer-summary')).toBe(true);
+    expect(dist.has('inner-classify')).toBe(true);
+    expect(dist.has('message')).toBe(false);
+  });
+
+  it('does not special-case ARRANGE in trace expansion', () => {
     const dist = new Map<string, number>([['a', 0]]);
     const edges: DemoEdge[] = [
       makeEdge('e1', 'arrange1', 'arrange', 'anon:arrange1', 'a'),
     ];
     applyContainerExpansion(dist, edges, 1);
-    expect(dist.has('arrange1')).toBe(true);
+    expect(dist.has('arrange1')).toBe(false);
+  });
+});
+
+function message(id: string, kind: DemoMessage['kind'], relationType?: DemoMessage['relationType']): DemoMessage {
+  return { id, kind, relationType, author: 'test', createdAt: id, content: id };
+}
+
+describe('buildTraceProjection', () => {
+  const nestedMessages: DemoMessage[] = [
+    message('a', 'relation', 'summary'),
+    message('b', 'relation', 'classify'),
+    message('c', 'normal'),
+  ];
+  const nestedEdges: DemoEdge[] = [
+    makeEdge('a-b', 'a', 'summary', 'anon:a', 'b'),
+    makeEdge('b-c', 'b', 'classify', 'anon:b', 'c'),
+  ];
+
+  it('shows only the nearest collapsed container at distance one', () => {
+    const projection = buildTraceProjection({
+      messages: nestedMessages,
+      edges: nestedEdges,
+      startIds: ['c'],
+      distance: 1,
+    });
+
+    expect(projection.messages.map(item => item.id)).toEqual(['b']);
+    expect(projection.edges).toEqual([]);
+  });
+
+  it('expands B without exposing its ancestor A', () => {
+    const projection = buildTraceProjection({
+      messages: nestedMessages,
+      edges: nestedEdges,
+      startIds: ['c'],
+      distance: 1,
+      expandedContainerIds: new Set(['b']),
+    });
+
+    expect(projection.messages.map(item => item.id)).toEqual(['b', 'c']);
+    expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['b']);
+  });
+
+  it('keeps a collapsed child as a card inside an expanded parent', () => {
+    const projection = buildTraceProjection({
+      messages: nestedMessages,
+      edges: nestedEdges,
+      startIds: ['c'],
+      distance: 2,
+      expandedContainerIds: new Set(['a']),
+    });
+
+    expect(projection.messages.map(item => item.id)).toEqual(['a', 'b']);
+    expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['a']);
   });
 });

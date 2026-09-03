@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import type { User } from '../types';
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
 import TopicStructureView from './TopicStructureView';
@@ -44,22 +45,22 @@ interface TopicRightPanelProps {
   removeUnitFrom: (side: 'source' | 'target', unit: any) => void;
   describeUnit: (u: any) => string;
 
-  // Focus
-  focusHop: number;
-  setFocusHop: (fn: (h: number) => number) => void;
-  canSetFocus: boolean;
-  canExitFocus: boolean;
+  // Trace
+  traceDistance: number;
+  setTraceDistance: (fn: (distance: number) => number) => void;
+  canSetTrace: boolean;
+  canExitTrace: boolean;
   getSelectedWholeMessageIds: () => string[];
   lastClickedMessageId: string | null;
-  enterFocusMultiple: (ids: string[], opts: { replace: boolean }) => void;
-  enterFocus: (id: string, opts: { replace: boolean }) => void;
-  exitFocus: () => void;
-  exitAllFocus: () => void;
+  enterTraceMultiple: (ids: string[], opts: { replace: boolean }) => void;
+  enterTrace: (id: string, opts: { replace: boolean }) => void;
+  exitTrace: () => void;
+  exitAllTrace: () => void;
   onNavigateToMessage: (messageId: string) => void;
   isInsideClassify: boolean;
-  currentFocusIds: string[] | null;
+  currentTraceIds: string[] | null;
   classifyKey: number;
-  focusKey: number;
+  traceKey: number;
 
   // Messages & edges
   messages: DemoMessage[];
@@ -158,7 +159,36 @@ interface TopicRightPanelProps {
 export default function TopicRightPanel(props: TopicRightPanelProps) {
   const p = props;
   const navigate = useNavigate();
+  const touchStartXRef = useRef<number | null>(null);
   const showContributionControls = !p.isPreviewMode;
+  const handlePanelTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    touchStartXRef.current = event.touches.length === 1 ? event.touches[0].clientX : null;
+  };
+  const handlePanelTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 1 || touchStartXRef.current === null) {
+      touchStartXRef.current = null;
+      return;
+    }
+    const panel = event.currentTarget;
+    const documentScroller = document.scrollingElement;
+    if (!documentScroller) return;
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - touchStartXRef.current;
+    const panelMax = Math.max(0, panel.scrollWidth - panel.clientWidth);
+    const documentMax = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
+    const panelAtEdge = (panel.scrollLeft <= 0 && deltaX > 0) || (panel.scrollLeft >= panelMax - 1 && deltaX < 0);
+    if (panelAtEdge && documentMax > 0) {
+      const next = Math.max(0, Math.min(documentMax, documentScroller.scrollLeft - deltaX));
+      if (next !== documentScroller.scrollLeft) {
+        event.preventDefault();
+        documentScroller.scrollLeft = next;
+      }
+    }
+    touchStartXRef.current = touch.clientX;
+  };
+  const handlePanelTouchEnd = () => {
+    touchStartXRef.current = null;
+  };
   const handlePanelWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const panel = event.currentTarget;
     if (event.deltaY === 0) return;
@@ -181,12 +211,11 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     flexDirection: "column" as const,
     gap: 8,
     overflowY: "auto" as const,
-    overflowX: "hidden" as const,
-    height: "100vh",
+    overflowX: "auto" as const,
     minWidth: p.minWidth,
     boxSizing: "border-box" as const,
     alignSelf: "flex-start",
-    touchAction: "pan-y" as const,
+    touchAction: "pan-x pan-y pinch-zoom" as const,
     overscrollBehaviorY: "auto" as const,
     position: "sticky" as const,
     top: p.stickyTop ?? 0,
@@ -286,7 +315,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
 
   if (p.isViewerMode) {
     return (
-      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} style={panelStyle}>
+      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-topic-scroll-panel="true" style={panelStyle}>
         {renderComparisonHeader()}
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontWeight: 600, color: "#e2e8f0" }}>只读阅览</div>
@@ -312,7 +341,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     );
   }
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} data-guide-right-panel="true" style={panelStyle}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-topic-scroll-panel="true" style={panelStyle}>
       {renderComparisonHeader()}
       {p.isPreviewMode && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
@@ -328,24 +357,24 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
               清空
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button onClick={() => { const selWhole = p.getSelectedWholeMessageIds(); if (selWhole.length > 0) p.enterFocusMultiple(selWhole, { replace: false }); else if (p.lastClickedMessageId) p.enterFocus(p.lastClickedMessageId, { replace: false }); }} disabled={!p.canSetFocus}
-                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.canSetFocus ? "#444" : "#333", color: p.canSetFocus ? "#fff" : "#777", cursor: p.canSetFocus ? "pointer" : "default" }}>
-                设为焦点消息
+              <button onClick={() => { const selWhole = p.getSelectedWholeMessageIds(); if (selWhole.length > 0) p.enterTraceMultiple(selWhole, { replace: false }); else if (p.lastClickedMessageId) p.enterTrace(p.lastClickedMessageId, { replace: false }); }} disabled={!p.canSetTrace}
+                style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.canSetTrace ? "#444" : "#333", color: p.canSetTrace ? "#fff" : "#777", cursor: p.canSetTrace ? "pointer" : "default" }}>
+                设为追溯消息
               </button>
-              {p.canExitFocus && <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={p.exitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#444", color: "#fff", cursor: "pointer" }} title="退出最近一次进入的焦点并恢复进入该焦点前的现场">退出焦点</button>
-                <button onClick={p.exitAllFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", cursor: "pointer" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
+              {p.canExitTrace && <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={p.exitTrace} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#444", color: "#fff", cursor: "pointer" }} title="退出最近一次追溯并恢复进入该追溯前的现场">退出追溯</button>
+                <button onClick={p.exitAllTrace} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", cursor: "pointer" }} title="退出全部追溯并恢复进入第一次追溯前的现场">退出全部</button>
               </div>}
             </div>
           </div>
         </div>
 
-        {p.canExitFocus && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>焦点范围：{p.focusHop}</div>
+        {p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>追溯距离：{p.traceDistance}</div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => p.setFocusHop(h => Math.max(0, h - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
-            <button onClick={() => p.setFocusHop(h => Math.min(8, h + 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>+</button>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>（数值越大，显示的关联消息越多；默认 1，最大 8）</div>
+            <button onClick={() => p.setTraceDistance(distance => Math.max(1, distance - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
+            <button onClick={() => p.setTraceDistance(distance => Math.min(8, distance + 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>+</button>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>（数值越大，显示的关联消息越多；最小 1，最大 8）</div>
           </div>
         </div>}
 
@@ -540,12 +569,12 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
       </>
 
       <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-        <div style={{ fontWeight: 600 }}>焦点</div>
-        <div style={{ fontSize: 12, opacity: 0.75 }}>{p.isInsideClassify ? "当前模式：分类" : "当前模式：焦点"}</div>
-        <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{p.currentFocusIds ? p.currentFocusIds.join(", ") : "（无）"}</div>
+        <div style={{ fontWeight: 600 }}>追溯</div>
+        <div style={{ fontSize: 12, opacity: 0.75 }}>{p.isInsideClassify ? "当前模式：分类" : "当前模式：追溯"}</div>
+        <div style={{ fontSize: 12, opacity: 0.8 }}>当前追溯消息：{p.currentTraceIds ? p.currentTraceIds.join(", ") : "（无）"}</div>
       </div>
 
-      <TopicStructureView key={`sv-${p.classifyKey}-${p.focusKey}`} topicId={p.topicId} focusIds={p.currentFocusIds ?? []} messages={p.messages} edges={p.edges} onNavigateToMessage={p.onNavigateToMessage} />
+      <TopicStructureView key={`sv-${p.classifyKey}-${p.traceKey}`} topicId={p.topicId} traceIds={p.currentTraceIds ?? []} messages={p.messages} edges={p.edges} onNavigateToMessage={p.onNavigateToMessage} />
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>

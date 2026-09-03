@@ -6,7 +6,7 @@
  * This module provides:
  *   buildMessageTree()     - Convert messages + relations into a renderable tree
  *   computeStanceStats()   - Count support/oppose votes per message
- *   buildFocusSubgraph()   - Filter to messages within N hops of a focus set (focus mode)
+ *   buildFocusSubgraph()   - Filter to messages within N hops of a trace set (trace mode)
  *   computeTextHops()      - BFS hop distance between text messages through relations
  */
 
@@ -124,7 +124,7 @@ export function computeStanceStats(messages: Message[], relations: Relation[]): 
 }
 
 // ============================================================
-// Focus Mode — Hop-Based Subgraph Filtering
+// Trace Mode — Distance-Based Subgraph Filtering
 // ============================================================
 
 /**
@@ -192,7 +192,7 @@ export function computeTextHops(
 }
 
 /**
- * buildFocusSubgraph — Returns the filtered sets of messages and relations for focus mode.
+ * buildFocusSubgraph — Returns the filtered sets of messages and relations for trace mode.
  *
  * Rules:
  *   1. Only text messages within maxHops of focusMessageIds are shown.

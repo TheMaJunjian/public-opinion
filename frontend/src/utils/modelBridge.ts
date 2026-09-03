@@ -9,6 +9,15 @@ export const CONTENT_KINDS: MessageKind[] = ["normal", "join", "round", "round_r
 export function isContentKind(k: MessageKind): boolean {
   return CONTENT_KINDS.includes(k as MessageKind);
 }
+
+/** Messages with readable content that should consume one trace-distance hop. */
+export function isTraceTextLikeMessage(message: { kind: MessageKind; relationType?: string } | undefined): boolean {
+  if (!message) return false;
+  if (isContentKind(message.kind)) return true;
+  if (message.kind !== 'relation') return false;
+  return ['summary', 'classify', 'proposal', 'delegation', 'code_change', 'operations']
+    .includes((message.relationType ?? '').toLowerCase());
+}
 export type RelationType =
   | "annotation"
   | "reference"

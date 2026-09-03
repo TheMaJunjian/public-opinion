@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyGroupingColumnOverride, applyMergeCanvasReservations, buildMergeCanvasReservations } from '../components/GraphView';
+import { applyGroupingColumnOverride, applyMergeCanvasReservations, buildFrameBlocks, buildMergeCanvasReservations } from '../components/GraphView';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 
 function makeNormal(id: string): DemoMessage {
@@ -17,6 +17,31 @@ function buildEdgesByRelMsg(edges: DemoEdge[]): Map<string, DemoEdge[]> {
 }
 
 describe('merge canvas helpers', () => {
+  it('uses direct container relations for trace frame hierarchy', () => {
+    const messages: DemoMessage[] = [
+      makeNormal('message-c'),
+      { id: 'frame-a', author: 'tester', createdAt: '2024-01-01T00:01:00.000Z', content: 'A', kind: 'relation', relationType: 'summary' },
+      { id: 'frame-b', author: 'tester', createdAt: '2024-01-01T00:02:00.000Z', content: 'B', kind: 'relation', relationType: 'classify' },
+    ];
+    const edges: DemoEdge[] = [
+      { id: 'frame-a::0', relationMessageId: 'frame-a', relationType: 'summary', from: { messageId: 'anon:frame-a', selection: { kind: 'whole' } }, to: { messageId: 'frame-b', selection: { kind: 'whole' } }, relationLabel: 'summary' },
+      { id: 'frame-b::0', relationMessageId: 'frame-b', relationType: 'classify', from: { messageId: 'anon:frame-b', selection: { kind: 'whole' } }, to: { messageId: 'message-c', selection: { kind: 'whole' } }, relationLabel: 'classify' },
+    ];
+
+    const blocks = buildFrameBlocks({
+      edges,
+      visibleCardIds: new Set(['frame-a', 'frame-b', 'message-c']),
+      msgMap: new Map(messages.map(message => [message.id, message])),
+      traceMode: true,
+    });
+    const frameA = blocks.find(block => block.relMsgId === 'frame-a');
+    const frameB = blocks.find(block => block.relMsgId === 'frame-b');
+
+    expect(frameA?.childRelMsgIds).toEqual(['frame-b']);
+    expect(frameA?.directCardIds.has('message-c')).toBe(false);
+    expect(frameB?.directCardIds.has('message-c')).toBe(true);
+  });
+
   it('builds a merge overlay from both text and relation targets', () => {
     const messages: DemoMessage[] = [
       makeNormal('msg-1'),

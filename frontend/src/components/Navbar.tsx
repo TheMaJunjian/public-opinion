@@ -105,7 +105,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
         </button>
       </div>
       <div aria-hidden="true" className="flex-1 min-w-4" />
-      <div ref={rightControlsRef} className={`${rightControlsPinned ? 'sticky right-0' : ''} flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4`} style={{ zIndex: Z_INDEX.popover }}>
+      <div ref={rightControlsRef} className={`${rightControlsPinned ? 'sticky right-0' : ''} flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4`} style={{ zIndex: Z_INDEX.popup }}>
         {user ? (
           <>
             <button

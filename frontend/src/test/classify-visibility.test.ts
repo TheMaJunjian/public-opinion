@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TargetRef } from '../types';
-import { isContentKind } from '../utils/modelBridge';
+import { isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
 import { collectContainerVisibleIds, collectOwnedByRelation, expandTextIdsWithSettlementResults, filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getAutoClassifyTargetForSettlementMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getSettlementClassifyJoinTarget, getStaleJoinRelationIds, getUserPreferredJoinByTarget, isAppendToExistingClassifyAction, resolveNavigationTargetId } from '../pages/topicDetailHelpers';
 
 /**
@@ -91,6 +91,22 @@ describe('targetRef 解析', () => {
   });
 });
 
+describe('isTraceTextLikeMessage', () => {
+  it('counts content messages and textual relation types as trace nodes', () => {
+    expect(isTraceTextLikeMessage({ kind: 'code' })).toBe(true);
+    expect(isTraceTextLikeMessage({ kind: 'operations' })).toBe(true);
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'summary' })).toBe(true);
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'classify' })).toBe(true);
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'proposal' })).toBe(true);
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'delegation' })).toBe(true);
+  });
+
+  it('does not count ordinary relation labels as trace nodes', () => {
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'reference' })).toBe(false);
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'annotation' })).toBe(false);
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'agree' })).toBe(false);
+  });
+});
 // ========================= CONTENT_KINDS =========================
 
 describe('CONTENT_KINDS', () => {

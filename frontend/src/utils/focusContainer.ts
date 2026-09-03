@@ -1,17 +1,16 @@
 /**
- * focusContainer.ts — Container expansion logic for focus mode.
+ * traceContainer.ts — Container expansion logic for trace mode.
  *
  * Extracted from TopicDetailPage.tsx's inline BFS so it can be unit-tested.
  *
- * Container-type relations (CLASSIFY, MERGE, SUMMARY) use a two-level
- * visibility model in focus mode:
+ * Trace-expandable relations (CLASSIFY, SUMMARY) use a two-level
+ * visibility model in trace mode:
  *   1. Container card: shown when the container or its children are within range.
  *   2. Container expansion: children are added to the visible set based on
  *      hop budget and cross-reference detection.
  */
 
 import type { DemoEdge } from './modelBridge';
-import { getPresentationSpec } from '../types';
 
 /**
  * Result of resolving container expansion for a single container relation.
@@ -32,7 +31,7 @@ export interface ContainerExpansionResult {
 
 /**
  * Compute container expansion for a single container, given the current BFS
- * distance map and focusHop.  Pure function — does not mutate dist.
+ * distance map and traceDistance.  Pure function — does not mutate dist.
  *
  * @returns The expansion decision for this container, or null if it should not
  *          be visible at all.
@@ -41,33 +40,34 @@ export function resolveOneContainer(
   containerId: string,
   children: Set<string>,
   dist: ReadonlyMap<string, number>,
-  focusHop: number,
+  traceDistance: number,
 ): ContainerExpansionResult | null {
-  // Find minimum distance: container itself + all its children
+  // A reachable container is the next text-like node after a reachable child.
+  // Keep an explicitly reached container at its existing distance.
   let minDist = dist.get(containerId);
   for (const childId of children) {
     const d = dist.get(childId);
-    if (d !== undefined && (minDist === undefined || d < minDist)) minDist = d;
+    if (d !== undefined) {
+      const containerDist = d + 1;
+      if (minDist === undefined || containerDist < minDist) minDist = containerDist;
+    }
   }
   if (minDist === undefined) return null;
 
-  // At focusHop=0, only the focus message itself should be visible.
-  if (focusHop === 0) return null;
+  // Trace distance starts at 1; a container is expanded in trace mode.
+  if (traceDistance < 1 || minDist > traceDistance) return null;
 
   // Card is visible when minDist is within range
   const cardVisible = true;
 
-  // Expand children when:
-  //   - Full expansion: minDist + 1 <= focusHop AND focusHop >= 2
-  //   - Cross-reference: minDist > 0 AND children already visible
+  // A trace view embeds the complete container frame whenever the container
+  // itself or one of its members is in the visible trace window.
   const hasVisibleChild = Array.from(children).some(cid => dist.has(cid));
-  const fullExpand = minDist + 1 <= focusHop && focusHop >= 2;
-  const crossRefExpand = minDist > 0 && hasVisibleChild;
-  const expanded = fullExpand || crossRefExpand;
+  const expanded = hasVisibleChild || dist.has(containerId);
 
-  // Children that would be newly added
+  // Members are the next text-like nodes after the container.
   const newChildren: string[] = [];
-  if (expanded) {
+  if (expanded && minDist + 1 <= traceDistance) {
     for (const childId of children) {
       if (!dist.has(childId)) {
         newChildren.push(childId);
@@ -82,18 +82,23 @@ export function resolveOneContainer(
  * Apply container expansion logic to the distance map.
  *
  * Processes all container-type edges, groups them by container relation ID,
- * and mutates `dist` in place to add container cards and expanded children.
+ * and mutates `dist` in place to add cards and expanded children. MERGE and
+ * ARRANGE remain ordinary relations in trace mode.
  *
  * @param dist       BFS distance map (mutated in place)
  * @param edges      All edges (container edges are filtered internally)
- * @param focusHop   Current focus hop distance
+ * @param traceDistance   Current trace distance
  */
 export function applyContainerExpansion(
   dist: Map<string, number>,
   edges: DemoEdge[],
-  focusHop: number,
+  traceDistance: number,
+  expandedContainerIds?: ReadonlySet<string>,
 ): void {
-  const containerEdges = edges.filter(e => getPresentationSpec(e.relationType).isContainer);
+  const containerEdges = edges.filter(e => {
+    const relationType = e.relationType.toLowerCase();
+    return relationType === 'classify' || relationType === 'summary';
+  });
   if (containerEdges.length === 0) return;
 
   // Group container edges by relation message ID
@@ -108,19 +113,42 @@ export function applyContainerExpansion(
     children.add(e.to.messageId);
   }
 
-  for (const [relMsgId, children] of containerChildMap) {
-    const result = resolveOneContainer(relMsgId, children, dist, focusHop);
-    if (!result) continue;
+  // Resolve to a fixed point so an outer container can see an inner container
+  // that was discovered later in the same pass.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [relMsgId, children] of containerChildMap) {
+      const result = resolveOneContainer(relMsgId, children, dist, traceDistance);
+      if (!result) continue;
 
-    // Add container card to dist
-    if (!dist.has(relMsgId)) {
-      dist.set(relMsgId, result.minDist);
-    }
+      // Add container card to dist
+      if (!dist.has(relMsgId)) {
+        dist.set(relMsgId, result.minDist);
+        changed = true;
+      }
 
-    // Add newly expanded children
-    if (result.expanded) {
-      for (const childId of result.newChildren) {
-        dist.set(childId, Math.min(result.minDist + 1, focusHop));
+      const isExplicitlyExpanded = expandedContainerIds === undefined || expandedContainerIds.has(relMsgId);
+      // A collapsed trace container is the visible boundary for its direct
+      // members. Remove members already reached by BFS so they cannot render
+      // beside the collapsed card. Explicitly expanded containers keep them.
+      if (result.expanded && !isExplicitlyExpanded) {
+        for (const childId of children) {
+          // A nested SUMMARY/CLASSIFY is itself the parent's direct card.
+          // Only its own projection decides whether its descendants are shown.
+          if (!containerChildMap.has(childId) && dist.delete(childId)) changed = true;
+        }
+      }
+
+      // Add newly expanded children
+      if (result.expanded && isExplicitlyExpanded) {
+        for (const childId of result.newChildren) {
+          const childDistance = Math.min(result.minDist + 1, traceDistance);
+          if (dist.get(childId) === undefined || dist.get(childId)! > childDistance) {
+            dist.set(childId, childDistance);
+            changed = true;
+          }
+        }
       }
     }
   }

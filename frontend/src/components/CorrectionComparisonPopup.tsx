@@ -16,6 +16,7 @@ type Props = {
   edges: DemoEdge[];
   invalidCorrectionIds?: Set<string>;
   onClose: () => void;
+  isSending?: boolean;
   reversePreview?: {
     before: string;
     after: string;
@@ -23,7 +24,7 @@ type Props = {
   };
 };
 
-export default function CorrectionComparisonPopup({ popup, messages, edges, invalidCorrectionIds = new Set(), onClose, reversePreview }: Props) {
+export default function CorrectionComparisonPopup({ popup, messages, edges, invalidCorrectionIds = new Set(), onClose, isSending = false, reversePreview }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const msgMap = new Map(messages.map(m => [m.id, m]));
   const relEdges = edges.filter(e => e.relationMessageId === popup.relMsgId);
@@ -56,7 +57,11 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <button onClick={onClose} style={buttonStyle}>取消</button>
-            <button onClick={() => void reversePreview.onConfirm()} style={{ ...buttonStyle, background: '#245b4a', color: '#fff' }}>确认发送更正</button>
+            <button
+              onClick={() => void reversePreview.onConfirm()}
+              disabled={isSending}
+              style={{ ...buttonStyle, background: '#245b4a', color: '#fff', opacity: isSending ? 0.6 : 1, cursor: isSending ? 'wait' : 'pointer' }}
+            >{isSending ? '发送中...' : '确认发送更正'}</button>
           </div>
         </div>
       </PopupOverlay>

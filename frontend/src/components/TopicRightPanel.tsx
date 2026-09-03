@@ -17,6 +17,7 @@ interface DraftGroup {
 interface TopicRightPanelProps {
   // Layout
   rightPanelRef: React.RefObject<HTMLDivElement | null> | React.Ref<HTMLDivElement>;
+  leftPanelRef: React.RefObject<HTMLDivElement | null> | React.Ref<HTMLDivElement>;
   TOTAL_FLEX: number;
   leftFlex: number;
   minWidth: number;
@@ -197,11 +198,12 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     const nextScrollTop = Math.max(0, Math.min(maxScrollTop, previousScrollTop + event.deltaY));
     const consumedDelta = nextScrollTop - previousScrollTop;
     const remainingDelta = event.deltaY - consumedDelta;
-    const documentScroller = document.scrollingElement;
+    const leftPanel = p.leftPanelRef.current;
     event.preventDefault();
     if (consumedDelta !== 0) panel.scrollTop = nextScrollTop;
-    if (documentScroller && remainingDelta !== 0) {
-      documentScroller.scrollTop += remainingDelta;
+    if (leftPanel && remainingDelta !== 0) {
+      const leftMaxScrollTop = Math.max(0, leftPanel.scrollHeight - leftPanel.clientHeight);
+      leftPanel.scrollTop = Math.max(0, Math.min(leftMaxScrollTop, leftPanel.scrollTop + remainingDelta));
     }
   };
   const panelStyle = {
@@ -212,6 +214,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     gap: 8,
     overflowY: "auto" as const,
     overflowX: "auto" as const,
+    maxHeight: typeof p.stickyTop === "number" ? `calc(100vh - ${p.stickyTop}px)` : "100vh",
     minWidth: p.minWidth,
     boxSizing: "border-box" as const,
     alignSelf: "flex-start",

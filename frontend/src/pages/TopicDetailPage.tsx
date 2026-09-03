@@ -6477,6 +6477,23 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     leftPanelTouchRef.current = null;
   }
 
+  function handleLeftPanelWheel(event: React.WheelEvent<HTMLDivElement>) {
+    const panel = event.currentTarget;
+    if (event.deltaY === 0) return;
+    const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+    const previousScrollTop = panel.scrollTop;
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, previousScrollTop + event.deltaY));
+    const consumedDelta = nextScrollTop - previousScrollTop;
+    const remainingDelta = event.deltaY - consumedDelta;
+    const rightPanel = rightPanelRef.current;
+    event.preventDefault();
+    if (consumedDelta !== 0) panel.scrollTop = nextScrollTop;
+    if (rightPanel && remainingDelta !== 0) {
+      const rightMaxScrollTop = Math.max(0, rightPanel.scrollHeight - rightPanel.clientHeight);
+      rightPanel.scrollTop = Math.max(0, Math.min(rightMaxScrollTop, rightPanel.scrollTop + remainingDelta));
+    }
+  }
+
   if (!authLoading && !isPreloaded && !user) return null;
   if (loading) {
     return <PromptModal
@@ -6854,11 +6871,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           <div ref={leftPanelRef}
             data-topic-left-panel="true"
             className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
-            style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "visible", overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, maxHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
             onTouchStart={handleLeftPanelTouchStart}
             onTouchMove={handleLeftPanelTouchMove}
             onTouchEnd={handleLeftPanelTouchEnd}
             onTouchCancel={handleLeftPanelTouchEnd}
+            onWheel={handleLeftPanelWheel}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay
@@ -7266,6 +7284,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
         <TopicRightPanel
           rightPanelRef={rightPanelRef}
+          leftPanelRef={leftPanelRef}
           TOTAL_FLEX={TOTAL_FLEX}
           leftFlex={leftFlex}
           minWidth={MIN_RIGHT_PX}

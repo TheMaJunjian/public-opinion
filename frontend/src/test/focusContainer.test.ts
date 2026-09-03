@@ -508,6 +508,25 @@ describe('buildTraceProjection', () => {
     expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['reference-rel']);
   });
 
+  it('removes an ordinary relation when its source is hidden by a collapsed container', () => {
+    const messages: DemoMessage[] = [
+      message('container', 'relation', 'classify'),
+      message('source', 'normal'),
+      message('target', 'normal'),
+      message('reference-rel', 'relation', 'reference'),
+    ];
+    const edges = [
+      makeEdge('container-source', 'container', 'classify', 'anon:container', 'source'),
+      makeEdge('reference-edge', 'reference-rel', 'reference', 'source', 'target'),
+    ];
+
+    const traceProjection = buildTraceProjection({ messages, edges, startIds: ['source'], distance: 1 });
+    const projection = applyTraceFrameVisibility(traceProjection, new Set());
+
+    expect(projection.messages.map(item => item.id)).not.toContain('reference-rel');
+    expect(projection.edges.map(edge => edge.relationMessageId)).not.toContain('reference-rel');
+  });
+
   it('restores summary targets and their corrections only when the frame is expanded', () => {
     const messages: DemoMessage[] = [
       message('msg-orig', 'normal'),

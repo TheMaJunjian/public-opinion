@@ -226,7 +226,7 @@ export function applyTraceFrameVisibility(
       const relationType = messageMap.get(edge.relationMessageId)?.relationType?.toLowerCase();
       const sourceVisible = edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId);
       const targetVisible = edge.to.messageId.startsWith('anon:') || visibleIds.has(edge.to.messageId);
-      if (relationType === 'correct' ? sourceVisible && targetVisible : targetVisible) continue;
+      if (sourceVisible && targetVisible) continue;
       visibleIds.delete(edge.relationMessageId);
       const dependencyIds = relationType === 'correct'
         ? [edge.from.messageId, edge.to.messageId]

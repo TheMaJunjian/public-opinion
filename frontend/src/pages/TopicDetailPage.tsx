@@ -5912,17 +5912,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   const comparisonGraphProjections = useMemo(() => {
     if (!comparisonReviewed || !comparisonTargetId) return null;
-
-    const traceVisibleIds = traceEntries.length > 0
-      ? new Set(applyTraceFrameVisibility(buildTraceProjection({
-        messages,
-        edges,
-        containerMemberships: traceContainerMemberships,
-        excludedRelationIds: effectiveSuppressedRelIdsForLayout,
-        startIds: traceEntries[traceEntries.length - 1].ids.filter(Boolean),
-        distance: traceDistance,
-      }), traceExpandedFrameIds).messages.map(message => message.id))
-      : null;
+    const traceStartIds = traceEntries.length > 0
+      ? traceEntries[traceEntries.length - 1].ids.filter(Boolean)
+      : [];
+    const traceStartIdSet = new Set(traceStartIds);
 
     const buildProjection = (side: 'agree' | 'disagree') => {
       const sideRejectedContainerIds = new Set(rejectedContainerIds);
@@ -5991,7 +5984,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
       const baseEdgesWithTarget = [
         ...projectionBaseEdges,
-        ...(side === 'agree'
+        ...(side === 'agree' || traceStartIdSet.has(comparisonTargetId)
           ? comparisonTargetEdges.filter(edge => !projectionBaseEdges.some(existing => existing.id === edge.id))
           : []),
       ];
@@ -6000,7 +5993,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         : comparisonDisagreeSuppressedRelIds;
       const forcedVisibleIds = side === 'agree' ? targetMessageIds : new Set<string>();
       const scopedBaseMessageIds = new Set(projectionBaseMessages.map(message => message.id));
-      const graphMessages = (side === 'agree' ? baseMessagesWithTarget : projectionBaseMessages).filter(message => {
+      const graphMessages = (side === 'agree' || traceStartIdSet.has(comparisonTargetId) ? baseMessagesWithTarget : projectionBaseMessages).filter(message => {
         if (forcedVisibleIds.has(message.id)) return true;
         if (sideSuppressedRelIds.has(message.id)) return false;
         if (isInsideClassify && scopedBaseMessageIds.has(message.id)) return true;
@@ -6011,20 +6004,36 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       });
       const graphVisibleIds = new Set(graphMessages.map(message => message.id));
       const graphEdges = baseEdgesWithTarget.filter(edge => {
-        if (sideSuppressedRelIds.has(edge.relationMessageId)) return false;
-        if (!graphVisibleIds.has(edge.relationMessageId) && !traceRelationMsgIds.has(edge.relationMessageId)) return false;
+        if (sideSuppressedRelIds.has(edge.relationMessageId) && !traceStartIdSet.has(edge.relationMessageId)) return false;
+        if (!graphVisibleIds.has(edge.relationMessageId)
+          && !traceRelationMsgIds.has(edge.relationMessageId)
+          && !traceStartIdSet.has(edge.relationMessageId)) return false;
         if (traceRelationMsgIds.has(edge.relationMessageId)) return true;
         if (edge.relationType === 'classify' || edge.relationType === 'summary') return true;
         const fromOk = edge.from.messageId.startsWith('anon:') || graphVisibleIds.has(edge.from.messageId);
         const toOk = graphVisibleIds.has(edge.to.messageId);
         return fromOk && toOk;
       });
-      if (!traceVisibleIds) {
+      if (traceEntries.length === 0) {
         return { messages: graphMessages, edges: graphEdges, hideMessageIds: undefined };
       }
-      const visibleMessages = graphMessages.filter(message => traceVisibleIds.has(message.id));
+      const traceProjection = applyTraceFrameVisibility(buildTraceProjection({
+        messages: [
+          ...graphMessages,
+          ...traceStartIds
+            .filter(id => !graphVisibleIds.has(id))
+            .map(id => msgMap.get(id))
+            .filter((message): message is DemoMessage => Boolean(message)),
+        ],
+        edges: graphEdges,
+        containerMemberships: traceContainerMemberships,
+        excludedRelationIds: sideSuppressedRelIds,
+        startIds: traceStartIds,
+        distance: traceDistance,
+      }), traceExpandedFrameIds);
+      const visibleMessages = traceProjection.messages.filter(message => graphVisibleIds.has(message.id));
       const visibleIds = new Set(visibleMessages.map(message => message.id));
-      const visibleEdges = graphEdges.filter(edge => {
+      const visibleEdges = traceProjection.edges.filter(edge => {
         if (!visibleIds.has(edge.relationMessageId)) return false;
         return (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId))
           && visibleIds.has(edge.to.messageId);

@@ -37,9 +37,12 @@ function addAdjacency(adjacency: Map<string, Set<string>>, left: string, right: 
 export function buildTraceProjection(input: TraceProjectionInput): TraceProjection {
   const { messages, edges, containerMemberships = [], excludedRelationIds = new Set<string>(), startIds, distance } = input;
   const messageMap = new Map(messages.map(message => [message.id, message]));
-  const traceEdges = edges.filter(edge => !excludedRelationIds.has(edge.relationMessageId));
+  const traceStartIds = new Set(startIds);
+  const traceEdges = edges.filter(edge =>
+    !excludedRelationIds.has(edge.relationMessageId) || traceStartIds.has(edge.relationMessageId),
+  );
   for (const membership of containerMemberships) {
-    if (excludedRelationIds.has(membership.containerId)) continue;
+    if (excludedRelationIds.has(membership.containerId) && !traceStartIds.has(membership.containerId)) continue;
     if (!messageMap.has(membership.containerId)) continue;
     membership.targetIds.forEach((targetId, index) => {
       if (!messageMap.has(targetId)) return;
@@ -112,7 +115,8 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
         : isCorrect
           ? [...sourceIds, ...targetIds].some(id => visibleIds.has(id))
           : targetWithinTrace;
-      const allEndpointsVisible = [...sourceIds, ...targetIds].every(id => visibleIds.has(id));
+      const endpointIds = [...sourceIds, ...targetIds];
+      const allEndpointsVisible = endpointIds.length > 0 && endpointIds.every(id => visibleIds.has(id));
       if (!shouldComplete && !allEndpointsVisible) continue;
 
       const dependencyIds = isInlineFrame

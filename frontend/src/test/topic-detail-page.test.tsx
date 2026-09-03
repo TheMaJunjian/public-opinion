@@ -1773,4 +1773,48 @@ describe('TopicDetailPage comparison classify projection', () => {
       expect(disagreeIds.has('inside-b')).toBe(true);
     });
   });
+
+  it('uses a suppressed reference relation as a trace anchor on the disagree side', async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    mockApi.getMessages.mockResolvedValue({ data: [
+      makeMessage('reference-source', '引用来源'),
+      makeMessage('reference-target', '引用目标'),
+      makeMessage('reference-neighbor', '关联消息'),
+    ] });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      {
+        id: 'rel-reference', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'reference-source',
+        targetRefs: [{ kind: 'message', messageId: 'reference-target' }],
+        createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-reference-neighbor', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'reference-target',
+        targetRefs: [{ kind: 'message', messageId: 'reference-neighbor' }],
+        createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-disagree-reference', topicId: 'topic-1', relationType: 'DISAGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'rel-reference' }],
+        createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
+      },
+    ] });
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '对比' }));
+    await waitFor(() => expect(screen.getByText('关系消息 rel-reference')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('关系消息 rel-reference'));
+    fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '设为追溯消息' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
+      expect(screen.getByText('追溯距离：1')).toBeInTheDocument();
+      expect(disagreeIds.has('rel-reference')).toBe(false);
+      expect(disagreeIds.has('reference-source')).toBe(true);
+      expect(disagreeIds.has('reference-target')).toBe(true);
+    });
+  });
 });

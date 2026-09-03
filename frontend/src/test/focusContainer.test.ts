@@ -343,6 +343,26 @@ describe('buildTraceProjection', () => {
     expect(projection.edges).toHaveLength(0);
   });
 
+  it('uses an excluded relation start as a trace anchor without restoring it', () => {
+    const messages = [
+      message('a', 'relation', 'reference'),
+      message('b', 'normal'),
+      message('c', 'normal'),
+    ];
+    const projection = buildTraceProjection({
+      messages,
+      edges: [
+        makeEdge('reference-a-b', 'a', 'reference', 'a', 'b'),
+        makeEdge('reference-a-c', 'a', 'reference', 'a', 'c'),
+      ],
+      excludedRelationIds: new Set(['a']),
+      startIds: ['a'],
+      distance: 1,
+    });
+
+    expect(projection.messages.map(item => item.id)).toEqual(['a', 'b', 'c']);
+  });
+
   it('includes effective JOIN members in a traced container projection', () => {
     const messages = [message('container', 'relation', 'classify'), message('member', 'normal')];
     const projection = buildTraceProjection({

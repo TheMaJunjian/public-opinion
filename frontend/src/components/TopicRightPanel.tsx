@@ -361,7 +361,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           </div>
         </div>
 
-        {!p.comparisonReviewed && p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div style={{ fontSize: 12, opacity: 0.8 }}>追溯距离：{p.traceDistance}</div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={() => p.setTraceDistance(distance => Math.max(1, distance - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>

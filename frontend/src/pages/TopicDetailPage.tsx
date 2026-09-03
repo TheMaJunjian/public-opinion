@@ -30,7 +30,7 @@ import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
-import { applyTraceFrameVisibility, buildTraceProjection } from '../utils/traceProjection';
+import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from '../utils/traceProjection';
 import { operationLog } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
@@ -4993,6 +4993,26 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
   }
 
+  const traceContainerMemberships = useMemo<TraceContainerMembership[]>(() => {
+    const containerTypeById = new Map(
+      relations
+        .filter(relation => ['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE'].includes(relation.relationType.toUpperCase()))
+        .map(relation => [relation.id, relation.relationType.toLowerCase() as TraceContainerMembership['relationType']]),
+    );
+    return relations
+      .filter(relation => relation.relationType.toUpperCase() === 'JOIN'
+        && effectiveJoinRelationIds.has(relation.id)
+        && relation.sourceMessageId
+        && containerTypeById.has(relation.sourceMessageId))
+      .map(relation => ({
+        containerId: relation.sourceMessageId!,
+        relationType: containerTypeById.get(relation.sourceMessageId!)!,
+        targetIds: (relation.targetRefs ?? [])
+          .filter(ref => ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation')
+          .map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId),
+      }));
+  }, [relations, effectiveJoinRelationIds]);
+
   const { messagesToShow, edgesToShow } = useMemo(() => {
     if (traceEntries.length === 0) return { messagesToShow: messages, edgesToShow: edges };
     const startIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
@@ -5000,6 +5020,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const traceProjection = buildTraceProjection({
       messages,
       edges,
+      containerMemberships: traceContainerMemberships,
       startIds,
       distance: traceDistance,
     });
@@ -5274,7 +5295,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       return fromOk || toOk;
     });
     return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
-  }, [messages, edges, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
+  }, [messages, edges, traceContainerMemberships, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
   const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitTrace = traceEntries.length > 0;
@@ -5407,6 +5428,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const traceProjection = buildTraceProjection({
         messages,
         edges,
+        containerMemberships: traceContainerMemberships,
         startIds: traceStartIds,
         distance: traceDistance,
       });
@@ -5826,7 +5848,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       listEdgesToRender: listEdges,
       hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
     };
-  }, [messages, edges, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
+  }, [messages, edges, traceContainerMemberships, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
 
   const normalGraphProjection = useMemo(() => {
     const scopedCorrectedMessages = graphMessagesToRender.map(message => {

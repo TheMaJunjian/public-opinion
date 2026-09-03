@@ -305,6 +305,38 @@ function message(id: string, kind: DemoMessage['kind'], relationType?: DemoMessa
 }
 
 describe('buildTraceProjection', () => {
+  it('does not pull a reference source beyond the trace distance boundary', () => {
+    const messages = [
+      message('summary-a', 'relation', 'summary'),
+      message('classify-b', 'relation', 'classify'),
+      message('text-f', 'normal'),
+      message('reference-r', 'relation', 'reference'),
+    ];
+    const projection = buildTraceProjection({
+      messages,
+      edges: [makeEdge('reference-r-a', 'reference-r', 'reference', 'text-f', 'summary-a')],
+      containerMemberships: [{ containerId: 'summary-a', relationType: 'summary', targetIds: ['classify-b'] }],
+      startIds: ['classify-b'],
+      distance: 1,
+    });
+
+    expect(projection.messages.map(item => item.id)).toEqual(['summary-a', 'classify-b']);
+  });
+
+  it('includes effective JOIN members in a traced container projection', () => {
+    const messages = [message('container', 'relation', 'classify'), message('member', 'normal')];
+    const projection = buildTraceProjection({
+      messages,
+      edges: [],
+      containerMemberships: [{ containerId: 'container', relationType: 'classify', targetIds: ['member'] }],
+      startIds: ['container'],
+      distance: 1,
+    });
+
+    expect(projection.messages.map(item => item.id)).toEqual(['container', 'member']);
+    expect(projection.edges).toHaveLength(1);
+  });
+
   const nestedMessages: DemoMessage[] = [
     message('a', 'relation', 'summary'),
     message('b', 'relation', 'classify'),

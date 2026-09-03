@@ -1,9 +1,16 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import { isTraceTextLikeMessage } from './modelBridge';
 
+export interface TraceContainerMembership {
+  containerId: string;
+  relationType: DemoEdge['relationType'];
+  targetIds: string[];
+}
+
 export interface TraceProjectionInput {
   messages: DemoMessage[];
   edges: DemoEdge[];
+  containerMemberships?: TraceContainerMembership[];
   startIds: string[];
   distance: number;
 }
@@ -27,11 +34,30 @@ function addAdjacency(adjacency: Map<string, Set<string>>, left: string, right: 
  * transparent connections and are projected when their endpoints are visible.
  */
 export function buildTraceProjection(input: TraceProjectionInput): TraceProjection {
-  const { messages, edges, startIds, distance } = input;
+  const { messages, edges, containerMemberships = [], startIds, distance } = input;
   const messageMap = new Map(messages.map(message => [message.id, message]));
+  const traceEdges = [...edges];
+  for (const membership of containerMemberships) {
+    if (!messageMap.has(membership.containerId)) continue;
+    membership.targetIds.forEach((targetId, index) => {
+      if (!messageMap.has(targetId)) return;
+      const alreadyRepresented = traceEdges.some(edge =>
+        edge.relationMessageId === membership.containerId && edge.to.messageId === targetId,
+      );
+      if (alreadyRepresented) return;
+      traceEdges.push({
+        id: `trace-membership:${membership.containerId}:${targetId}:${index}`,
+        relationMessageId: membership.containerId,
+        relationType: membership.relationType,
+        from: { messageId: `anon:trace:${membership.containerId}`, selection: { kind: 'whole' } },
+        to: { messageId: targetId, selection: { kind: 'whole' } },
+        relationLabel: membership.relationType,
+      });
+    });
+  }
   const adjacency = new Map<string, Set<string>>();
 
-  for (const edge of edges) {
+  for (const edge of traceEdges) {
     const endpoints = [edge.from.messageId, edge.to.messageId]
       .filter(id => !id.startsWith('anon:') && id !== edge.relationMessageId && messageMap.has(id));
     for (const endpointId of endpoints) addAdjacency(adjacency, edge.relationMessageId, endpointId);
@@ -68,7 +94,7 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
   while (addedRelation) {
     addedRelation = false;
     for (const relationId of nonCardRelationIds) {
-      const ownedEdges = edges.filter(edge => edge.relationMessageId === relationId);
+      const ownedEdges = traceEdges.filter(edge => edge.relationMessageId === relationId);
       const relationType = messageMap.get(relationId)?.relationType?.toLowerCase();
       const sourceIds = new Set(ownedEdges.map(edge => edge.from.messageId)
         .filter(id => !id.startsWith('anon:') && id !== relationId && messageMap.has(id)));
@@ -76,11 +102,14 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
         .filter(id => !id.startsWith('anon:') && id !== relationId && messageMap.has(id)));
       const isInlineFrame = relationType === 'merge' || relationType === 'arrange';
       const isCorrect = relationType === 'correct';
+      const targetWithinTrace = [...targetIds].some(id =>
+        visibleIds.has(id) && (distances.get(id) ?? Number.POSITIVE_INFINITY) < distance,
+      );
       const shouldComplete = isInlineFrame
         ? visibleIds.has(relationId) || [...targetIds].some(id => visibleIds.has(id))
         : isCorrect
           ? [...sourceIds, ...targetIds].some(id => visibleIds.has(id))
-          : [...targetIds].some(id => visibleIds.has(id));
+          : targetWithinTrace;
       const allEndpointsVisible = [...sourceIds, ...targetIds].every(id => visibleIds.has(id));
       if (!shouldComplete && !allEndpointsVisible) continue;
 
@@ -99,7 +128,7 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
 
   const projectedMessages = messages.filter(message => visibleIds.has(message.id));
   const projectedMessageIds = new Set(projectedMessages.map(message => message.id));
-  const projectedEdges = edges.filter(edge => {
+  const projectedEdges = traceEdges.filter(edge => {
     const owner = edge.relationMessageId;
     if (isTraceTextLikeMessage(messageMap.get(owner))) {
       return projectedMessageIds.has(owner);

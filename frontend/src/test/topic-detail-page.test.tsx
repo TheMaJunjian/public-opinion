@@ -1,8 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, beforeEach, expect, it, vi } from 'vitest';
 import TopicDetailPage from '../pages/TopicDetailPage';
-import { buildFrameBlocks } from '../components/GraphView';
-import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 import type { Message, Relation, Topic, User } from '../types';
 
 const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => {
@@ -1022,7 +1020,7 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-summary')).toBe(true);
   });
 
-  it('renders the in-range summary target as its current corrected version', async () => {
+  it('keeps summary targets in the linear trace view without expanding the frame', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
 
@@ -1034,7 +1032,7 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
 
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-      const ids = new Set<string>(props.messages.map((message: { id: string }) => message.id));
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
       expect(ids.has('rel-summary')).toBe(true);
       expect(ids.has('msg-orig')).toBe(false);
       expect(ids.has('msg-corr')).toBe(false);
@@ -1047,14 +1045,14 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
-      expect(ids.has('msg-orig')).toBe(false);
+      expect(ids.has('msg-orig')).toBe(true);
       expect(ids.has('msg-corr')).toBe(true);
       expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(true);
     });
 
     fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
     await waitFor(() => {
-      expect(screen.queryByText('消息 msg-orig')).not.toBeInTheDocument();
+      expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
       expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
     });
   });
@@ -1084,19 +1082,12 @@ describe('TopicDetailPage trace container frame projection', () => {
       data: [
         {
           id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
-          targetRefs: [],
+          targetRefs: [
+            { kind: 'message', messageId: 'frame-member-a' },
+            { kind: 'message', messageId: 'frame-member-b' },
+          ],
           payload: { title: '分类框架' },
           createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
-        },
-        {
-          id: 'join-member-a', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-classify',
-          targetRefs: [{ kind: 'message', messageId: 'frame-member-a' }],
-          createdAt: '2024-01-01T00:01:10.000Z', createdBy: makeUser(),
-        },
-        {
-          id: 'join-member-b', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-classify',
-          targetRefs: [{ kind: 'message', messageId: 'frame-member-b' }],
-          createdAt: '2024-01-01T00:01:20.000Z', createdBy: makeUser(),
         },
         {
           id: 'rel-reference', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'external-text',
@@ -1107,7 +1098,7 @@ describe('TopicDetailPage trace container frame projection', () => {
     });
   });
 
-  it('traces the classify relation as a collapsible card with direct reference text', async () => {
+  it('traces the classify relation as a topic card with direct reference text', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
 
@@ -1127,84 +1118,6 @@ describe('TopicDetailPage trace container frame projection', () => {
       expect(props.traceFrameIds.has('rel-classify')).toBe(true);
       expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(false);
       expect(props.edges.map((edge: { relationMessageId: string }) => edge.relationMessageId)).toContain('rel-classify');
-    });
-
-    let traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-    traceProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-classify');
-    await waitFor(() => {
-      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-      const ids = new Set<string>(props.messages.map((message: { id: string }) => message.id));
-      expect(ids.has('frame-member-a')).toBe(true);
-      expect(ids.has('frame-member-b')).toBe(true);
-      expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(true);
-      const membershipTargets = props.edges
-        .filter((edge: DemoEdge) => edge.relationMessageId === 'rel-classify')
-        .map((edge: DemoEdge) => edge.to.messageId);
-      expect(new Set(membershipTargets)).toEqual(new Set(['frame-member-a', 'frame-member-b']));
-      const frame = buildFrameBlocks({
-        edges: props.edges,
-        visibleCardIds: ids,
-        msgMap: new Map(props.messages.map((message: DemoMessage) => [message.id, message])),
-        traceMode: true,
-      }).find(block => block.relMsgId === 'rel-classify');
-      expect(frame?.directCardIds).toEqual(new Set(['frame-member-a', 'frame-member-b']));
-    });
-
-    traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-    traceProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-classify');
-    await waitFor(() => {
-      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
-      expect(ids.has('frame-member-a')).toBe(false);
-      expect(ids.has('frame-member-b')).toBe(false);
-      expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(false);
-    });
-  });
-
-  it('keeps legacy direct targets inside the classify frame after trace expansion', async () => {
-    mockApi.getRelations.mockResolvedValue({
-      data: [
-        {
-          id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
-          targetRefs: [
-            { kind: 'message', messageId: 'frame-member-a' },
-            { kind: 'message', messageId: 'frame-member-b' },
-          ],
-          payload: { title: '分类框架' },
-          createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
-        },
-      ] as Relation[],
-    });
-    render(<TopicDetailPage />);
-    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
-
-    let props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-    props.onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'rel-classify');
-    const traceButton = screen.getByRole('button', { name: '设为追溯消息' });
-    await waitFor(() => expect(traceButton).not.toBeDisabled());
-    fireEvent.click(traceButton);
-    await waitFor(() => {
-      props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-      expect(props.messages.some((message: DemoMessage) => message.id === 'frame-member-a')).toBe(false);
-    });
-
-    props.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-classify');
-    await waitFor(() => {
-      props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-      const visibleIds = new Set<string>(props.messages.map((message: DemoMessage) => message.id));
-      expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(true);
-      expect(visibleIds).toEqual(new Set(['frame-member-a', 'frame-member-b', 'rel-classify']));
-      expect(props.edges
-        .filter((edge: DemoEdge) => edge.relationMessageId === 'rel-classify')
-        .map((edge: DemoEdge) => edge.to.messageId)
-      ).toEqual(['frame-member-a', 'frame-member-b']);
-      const frame = buildFrameBlocks({
-        edges: props.edges,
-        visibleCardIds: visibleIds,
-        msgMap: new Map(props.messages.map((message: DemoMessage) => [message.id, message])),
-        traceMode: true,
-      }).find(block => block.relMsgId === 'rel-classify');
-      expect(frame?.directCardIds).toEqual(new Set(['frame-member-a', 'frame-member-b']));
     });
   });
 
@@ -1251,7 +1164,7 @@ describe('TopicDetailPage trace container frame projection', () => {
       expect(props.traceFrameIds.has('rel-summary')).toBe(true);
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
       expect(ids.has('rel-classify')).toBe(true);
-      expect(ids.has('rel-summary')).toBe(true);
+      expect(ids.has('rel-summary')).toBe(false);
       expect(ids.has('summary-member-a')).toBe(false);
       expect(ids.has('summary-member-b')).toBe(false);
       expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-classify')).toBe(true);
@@ -1343,19 +1256,7 @@ describe('TopicDetailPage trace container frame projection', () => {
       const ids = new Set(props.messages.map((message: { id: string }) => message.id));
       expect(ids.has('rel-b')).toBe(true);
       expect(ids.has('rel-a')).toBe(false);
-      expect(ids.has('rel-c')).toBe(true);
-      expect(ids.has('msg-d')).toBe(false);
-      expect(ids.has('rel-e')).toBe(false);
-      expect(ids.has('msg-f')).toBe(false);
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: '+' }));
-    await waitFor(() => {
-      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
-      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
-      expect(ids.has('rel-a')).toBe(true);
-      expect(ids.has('rel-b')).toBe(true);
-      expect(ids.has('rel-c')).toBe(true);
+      expect(ids.has('rel-c')).toBe(false);
     });
 
     const traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
@@ -1413,7 +1314,7 @@ describe('TopicDetailPage trace container frame projection', () => {
     await waitFor(() => {
       const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
       expect(props.traceFrameIds.has('rel-summary')).toBe(true);
-      expect(props.messages.some((message: { id: string }) => message.id === 'rel-classify')).toBe(true);
+      expect(props.messages.some((message: { id: string }) => message.id === 'rel-classify')).toBe(false);
     });
     const traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
     traceProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary');

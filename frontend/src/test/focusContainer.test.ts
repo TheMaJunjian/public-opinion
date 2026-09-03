@@ -17,7 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { resolveOneContainer, applyContainerExpansion } from '../utils/focusContainer';
-import { applyTraceFrameVisibility, buildTraceProjection } from '../utils/traceProjection';
+import { buildTraceProjection } from '../utils/traceProjection';
 import type { DemoEdge, DemoMessage, UnitSelection } from '../utils/modelBridge';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
@@ -315,46 +315,45 @@ describe('buildTraceProjection', () => {
     makeEdge('b-c', 'b', 'classify', 'anon:b', 'c'),
   ];
 
-  it('keeps nested container cards visible while their members stay collapsed', () => {
-    const traceProjection = buildTraceProjection({
+  it('shows only the nearest collapsed container at distance one', () => {
+    const projection = buildTraceProjection({
       messages: nestedMessages,
       edges: nestedEdges,
       startIds: ['c'],
       distance: 1,
     });
-    const projection = applyTraceFrameVisibility(traceProjection, new Set());
 
     expect(projection.messages.map(item => item.id)).toEqual(['b']);
     expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['b']);
   });
 
-  it('shows a container member only when that container is expanded', () => {
-    const traceProjection = buildTraceProjection({
+  it('expands B without exposing its ancestor A', () => {
+    const projection = buildTraceProjection({
       messages: nestedMessages,
       edges: nestedEdges,
       startIds: ['c'],
       distance: 1,
+      expandedContainerIds: new Set(['b']),
     });
-    const projection = applyTraceFrameVisibility(traceProjection, new Set(['b']));
 
     expect(projection.messages.map(item => item.id)).toEqual(['b', 'c']);
     expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['b']);
   });
 
-  it('shows every in-range container card when distance increases', () => {
-    const traceProjection = buildTraceProjection({
+  it('keeps a collapsed child as a card inside an expanded parent', () => {
+    const projection = buildTraceProjection({
       messages: nestedMessages,
       edges: nestedEdges,
       startIds: ['c'],
       distance: 2,
+      expandedContainerIds: new Set(['a']),
     });
-    const projection = applyTraceFrameVisibility(traceProjection, new Set(['a']));
 
     expect(projection.messages.map(item => item.id)).toEqual(['a', 'b']);
     expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['a', 'b']);
   });
 
-  it('applies expansion only after computing the card-distance window', () => {
+  it('preserves exclusive container ownership through nested trace expansion', () => {
     const messages: DemoMessage[] = [
       message('A', 'relation', 'classify'),
       message('B', 'normal'),
@@ -375,57 +374,31 @@ describe('buildTraceProjection', () => {
       makeEdge('G-H', 'G', 'merge', 'anon:G', 'H'),
     ];
 
-    const traceDistanceOne = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 1 });
-    expect(traceDistanceOne.messages.map(item => item.id)).toEqual(['C', 'E', 'F', 'G', 'H']);
-    const distanceOne = applyTraceFrameVisibility(traceDistanceOne, new Set());
-    expect(distanceOne.messages.map(item => item.id)).toEqual(['C', 'E']);
-    expect(new Set(distanceOne.edges.map(edge => edge.relationMessageId))).toEqual(new Set(['C', 'E']));
+    const collapsedAtOne = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 1 });
+    expect(collapsedAtOne.messages.map(item => item.id)).toEqual(['C']);
 
-    const traceDistanceTwo = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 2 });
-    const distanceTwo = applyTraceFrameVisibility(traceDistanceTwo, new Set());
-    expect(distanceTwo.messages.map(item => item.id)).toEqual(['A', 'C', 'E']);
-    expect(new Set(distanceTwo.edges.map(edge => edge.relationMessageId))).toEqual(new Set(['A', 'C', 'E']));
+    const collapsedAtTwo = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 2 });
+    expect(collapsedAtTwo.messages.map(item => item.id)).toEqual(['A']);
 
-    const expandedC = applyTraceFrameVisibility(traceDistanceOne, new Set(['C']));
-    expect(expandedC.messages.map(item => item.id)).toEqual(['C', 'E']);
+    const expandedC = buildTraceProjection({
+      messages,
+      edges,
+      startIds: ['E'],
+      distance: 1,
+      expandedContainerIds: new Set(['C']),
+    });
+    expect(expandedC.messages.map(item => item.id)).toEqual(['C', 'D', 'E']);
     expect(new Set(expandedC.edges.map(edge => edge.relationMessageId))).toEqual(new Set(['C', 'E']));
 
-    const expandedE = applyTraceFrameVisibility(traceDistanceOne, new Set(['C', 'E']));
-    expect(expandedE.messages.map(item => item.id)).toEqual(['C', 'E', 'F', 'G', 'H']);
+    const expandedE = buildTraceProjection({
+      messages,
+      edges,
+      startIds: ['E'],
+      distance: 1,
+      expandedContainerIds: new Set(['C', 'E']),
+    });
+    expect(expandedE.messages.map(item => item.id)).toEqual(['C', 'D', 'E', 'F', 'G', 'H']);
     expect(new Set(expandedE.edges.map(edge => edge.relationMessageId))).toEqual(new Set(['C', 'E', 'G']));
-  });
-
-  it('projects one semantic hop around nested containers and transparent merge frames', () => {
-    const messages: DemoMessage[] = [
-      message('A', 'relation', 'classify'),
-      message('B', 'normal'),
-      message('C', 'relation', 'summary'),
-      message('D', 'normal'),
-      message('E', 'relation', 'classify'),
-      message('F', 'normal'),
-      message('G', 'relation', 'merge'),
-      message('H', 'normal'),
-    ];
-    const edges: DemoEdge[] = [
-      makeEdge('A-B', 'A', 'classify', 'anon:A', 'B'),
-      makeEdge('A-C', 'A', 'classify', 'anon:A', 'C'),
-      makeEdge('C-D', 'C', 'summary', 'anon:C', 'D'),
-      makeEdge('C-E', 'C', 'summary', 'anon:C', 'E'),
-      makeEdge('E-F', 'E', 'classify', 'anon:E', 'F'),
-      makeEdge('E-G', 'E', 'classify', 'anon:E', 'G'),
-      makeEdge('G-H', 'G', 'merge', 'anon:G', 'H'),
-    ];
-
-    const project = (startId: string) => buildTraceProjection({ messages, edges, startIds: [startId], distance: 1 });
-
-    expect(project('E').messages.map(item => item.id)).toEqual(['C', 'E', 'F', 'G', 'H']);
-    expect(project('H').messages.map(item => item.id)).toEqual(['E', 'G', 'H']);
-    expect(project('F').messages.map(item => item.id)).toEqual(['E', 'F']);
-
-    const projectTwo = (startId: string) => buildTraceProjection({ messages, edges, startIds: [startId], distance: 2 });
-    expect(projectTwo('E').messages.map(item => item.id)).toEqual(['A', 'C', 'D', 'E', 'F', 'G', 'H']);
-    expect(projectTwo('H').messages.map(item => item.id)).toEqual(['C', 'E', 'F', 'G', 'H']);
-    expect(projectTwo('F').messages.map(item => item.id)).toEqual(['C', 'E', 'F', 'G', 'H']);
   });
 
   it('keeps ordinary relation messages whose endpoints are inside the trace window', () => {
@@ -440,67 +413,5 @@ describe('buildTraceProjection', () => {
 
     expect(projection.messages.map(item => item.id)).toEqual(['source', 'target', 'reference-rel']);
     expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['reference-rel']);
-  });
-
-  it('does not charge distance for nested reference, merge, or arrange structures', () => {
-    const messages: DemoMessage[] = [
-      message('source', 'normal'),
-      message('reference-rel', 'relation', 'reference'),
-      message('merge-rel', 'relation', 'merge'),
-      message('arrange-rel', 'relation', 'arrange'),
-      message('proposal-rel', 'relation', 'proposal'),
-      message('proposal-target', 'normal'),
-    ];
-    const edges = [
-      makeEdge('reference-edge', 'reference-rel', 'reference', 'source', 'merge-rel'),
-      makeEdge('merge-edge', 'merge-rel', 'merge', 'anon:merge-rel', 'arrange-rel'),
-      makeEdge('arrange-edge', 'arrange-rel', 'arrange', 'anon:arrange-rel', 'proposal-rel'),
-      makeEdge('proposal-edge', 'proposal-rel', 'proposal', 'anon:proposal-rel', 'proposal-target'),
-    ];
-
-    const distanceOne = buildTraceProjection({ messages, edges, startIds: ['source'], distance: 1 });
-    expect(distanceOne.messages.map(item => item.id)).toEqual([
-      'source', 'reference-rel', 'merge-rel', 'arrange-rel', 'proposal-rel',
-    ]);
-
-    const distanceTwo = buildTraceProjection({ messages, edges, startIds: ['source'], distance: 2 });
-    expect(distanceTwo.messages.map(item => item.id)).toEqual(messages.map(item => item.id));
-  });
-
-  it('completes a merge or arrange frame when one of its cards is in range', () => {
-    const messages: DemoMessage[] = [
-      message('merge-rel', 'relation', 'merge'),
-      message('member-a', 'normal'),
-      message('member-b', 'normal'),
-    ];
-    const edges = [
-      makeEdge('merge-a', 'merge-rel', 'merge', 'anon:merge-rel', 'member-a'),
-      makeEdge('merge-b', 'merge-rel', 'merge', 'anon:merge-rel', 'member-b'),
-    ];
-
-    const projection = buildTraceProjection({ messages, edges, startIds: ['member-a'], distance: 0 });
-
-    expect(projection.messages.map(item => item.id)).toEqual(['merge-rel', 'member-a', 'member-b']);
-    expect(projection.edges.map(edge => edge.relationMessageId)).toEqual(['merge-rel', 'merge-rel']);
-  });
-
-  it('includes messages that depend on an in-range card through transparent relations', () => {
-    const messages: DemoMessage[] = [
-      message('reference-source', 'normal'),
-      message('reference-rel', 'relation', 'reference'),
-      message('corrected', 'normal'),
-      message('correct-rel', 'relation', 'correct'),
-      message('target', 'normal'),
-    ];
-    const edges = [
-      makeEdge('reference-edge', 'reference-rel', 'reference', 'reference-source', 'target'),
-      makeEdge('correct-edge', 'correct-rel', 'correct', 'corrected', 'target'),
-    ];
-
-    const projection = buildTraceProjection({ messages, edges, startIds: ['target'], distance: 0 });
-
-    expect(projection.messages.map(item => item.id)).toEqual(messages.map(item => item.id));
-    expect(new Set(projection.edges.map(edge => edge.relationMessageId)))
-      .toEqual(new Set(['reference-rel', 'correct-rel']));
   });
 });

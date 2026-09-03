@@ -74,7 +74,7 @@ describe('merge canvas helpers', () => {
     const messageMap = new Map(messages.map(message => [message.id, message]));
 
     const collapsedProjection = buildTraceProjection({
-      messages, edges, startIds: ['E'], distance: 1,
+      messages, edges, startIds: ['E'], distance: 1, expandedContainerIds: new Set(['C']),
     });
     const collapsedBlocks = buildFrameBlocks({
       edges: collapsedProjection.edges,
@@ -82,14 +82,11 @@ describe('merge canvas helpers', () => {
       msgMap: messageMap,
       traceMode: true,
     });
-    expect(collapsedBlocks.map(block => block.relMsgId)).toEqual(['C', 'E', 'G']);
-    expect(collapsedBlocks.find(block => block.relMsgId === 'C')?.childRelMsgIds).toEqual(['E']);
-    expect(collapsedBlocks.find(block => block.relMsgId === 'E')?.childRelMsgIds).toEqual(['G']);
-    expect(collapsedBlocks.find(block => block.relMsgId === 'E')?.directCardIds).toEqual(new Set(['F']));
-    expect(collapsedBlocks.find(block => block.relMsgId === 'G')?.directCardIds).toEqual(new Set(['H']));
+    expect(collapsedBlocks.map(block => block.relMsgId)).toEqual(['C']);
+    expect(collapsedBlocks[0].directCardIds).toEqual(new Set(['D', 'E']));
 
     const expandedProjection = buildTraceProjection({
-      messages, edges, startIds: ['E'], distance: 1,
+      messages, edges, startIds: ['E'], distance: 1, expandedContainerIds: new Set(['C', 'E']),
     });
     const expandedBlocks = buildFrameBlocks({
       edges: expandedProjection.edges,
@@ -101,7 +98,7 @@ describe('merge canvas helpers', () => {
     const frameE = expandedBlocks.find(block => block.relMsgId === 'E');
     const frameG = expandedBlocks.find(block => block.relMsgId === 'G');
     expect(frameC?.childRelMsgIds).toEqual(['E']);
-    expect(frameC?.directCardIds).toEqual(new Set());
+    expect(frameC?.directCardIds).toEqual(new Set(['D']));
     expect(frameE?.childRelMsgIds).toEqual(['G']);
     expect(frameE?.directCardIds).toEqual(new Set(['F']));
     expect(frameG?.directCardIds).toEqual(new Set(['H']));

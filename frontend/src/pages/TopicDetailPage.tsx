@@ -30,7 +30,7 @@ import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
-import { applyTraceFrameVisibility, buildTraceProjection } from '../utils/traceProjection';
+import { buildTraceProjection } from '../utils/traceProjection';
 import { operationLog } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
@@ -1420,31 +1420,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     () => getEffectiveJoinRelationIds(relations, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget),
     [relations, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]
   );
-  const traceProjectionEdges = useMemo(() => {
-    const result = [...edges];
-    const existingMemberships = new Set(edges.map(edge => `${edge.relationMessageId}::${edge.to.messageId}`));
-    for (const relation of relations) {
-      if (relation.relationType?.toUpperCase() !== 'JOIN' || !effectiveJoinRelationIds.has(relation.id)) continue;
-      const containerId = relation.sourceMessageId;
-      const container = containerId ? relationById.get(containerId) : undefined;
-      if (!containerId || !container || !getPresentationSpec(container.relationType).isContainer) continue;
-      for (const [index, target] of relation.targetRefs.entries()) {
-        const targetId = target.kind === 'relation' ? target.relationId : target.messageId;
-        const membershipKey = `${containerId}::${targetId}`;
-        if (existingMemberships.has(membershipKey)) continue;
-        existingMemberships.add(membershipKey);
-        result.push({
-          id: `join-membership:${relation.id}:${index}`,
-          relationMessageId: containerId,
-          relationType: container.relationType.toLowerCase() as DemoEdge['relationType'],
-          from: { messageId: `anon:${containerId}`, selection: { kind: 'whole' } },
-          to: { messageId: targetId, selection: { kind: 'whole' } },
-          relationLabel: container.relationType.toLowerCase(),
-        });
-      }
-    }
-    return result;
-  }, [edges, relations, effectiveJoinRelationIds, relationById]);
 
   const joinRelationsByTarget = useMemo(() => {
     const map = new Map<string, Relation[]>();
@@ -5018,13 +4993,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (startIds.length === 0) return { messagesToShow: messages, edgesToShow: edges };
     const projection = buildTraceProjection({
       messages,
-      edges: traceProjectionEdges,
+      edges,
       startIds,
       distance: traceDistance,
+      expandedContainerIds: traceExpandedFrameIds,
     });
-    const graphProjection = applyTraceFrameVisibility(projection, traceExpandedFrameIds);
     if (traceEntries.length >= 0) {
-      return { messagesToShow: graphProjection.messages, edgesToShow: graphProjection.edges };
+      return { messagesToShow: projection.messages, edgesToShow: projection.edges };
     }
 
     /* Legacy trace projection retained temporarily below while the page-level
@@ -5293,7 +5268,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       return fromOk || toOk;
     });
     return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
-  }, [messages, edges, traceProjectionEdges, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
+  }, [messages, edges, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
   const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitTrace = traceEntries.length > 0;
@@ -5425,9 +5400,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const traceStartIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
       const listProjection = buildTraceProjection({
         messages,
-        edges: traceProjectionEdges,
+        edges,
         startIds: traceStartIds,
         distance: traceDistance,
+        expandedContainerIds: new Set([...traceExpandedFrameIds, ...traceStartIds]),
       });
       return {
         graphMessagesToRender: baseMessages,
@@ -5841,7 +5817,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       listEdgesToRender: listEdges,
       hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
     };
-  }, [messages, edges, traceProjectionEdges, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
+  }, [messages, edges, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
 
   const normalGraphProjection = useMemo(() => {
     const scopedCorrectedMessages = graphMessagesToRender.map(message => {

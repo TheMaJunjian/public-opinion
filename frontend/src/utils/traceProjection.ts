@@ -1,16 +1,28 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import { isTraceTextLikeMessage } from './modelBridge';
 
+const TRACE_CONTAINERS = new Set(['classify', 'summary']);
+const INLINE_FRAMES = new Set(['arrange', 'merge']);
+
 export interface TraceProjectionInput {
   messages: DemoMessage[];
   edges: DemoEdge[];
   startIds: string[];
   distance: number;
+  expandedContainerIds?: ReadonlySet<string>;
 }
 
 export interface TraceProjection {
   messages: DemoMessage[];
   edges: DemoEdge[];
+}
+
+function isTraceContainerType(type: string | undefined): boolean {
+  return !!type && TRACE_CONTAINERS.has(type.toLowerCase());
+}
+
+function isContainerEdge(edge: DemoEdge): boolean {
+  return isTraceContainerType(edge.relationType);
 }
 
 function addAdjacency(adjacency: Map<string, Set<string>>, left: string, right: string): void {
@@ -22,18 +34,45 @@ function addAdjacency(adjacency: Map<string, Set<string>>, left: string, right: 
 
 /**
  * Builds the ordinary GraphView input for a trace window.
- * Only card-like messages consume distance. Other relation messages are
- * transparent connections and are projected when their endpoints are visible.
+ * Distance selects candidates; expansion changes only which container edges
+ * survive, so GraphView can use its existing frame/card rendering unchanged.
  */
 export function buildTraceProjection(input: TraceProjectionInput): TraceProjection {
   const { messages, edges, startIds, distance } = input;
   const messageMap = new Map(messages.map(message => [message.id, message]));
+  const expanded = new Set(input.expandedContainerIds ?? []);
+  const containerChildren = new Map<string, Set<string>>();
+  const inlineFrameChildren = new Map<string, Set<string>>();
   const adjacency = new Map<string, Set<string>>();
 
   for (const edge of edges) {
-    const endpoints = [edge.from.messageId, edge.to.messageId]
-      .filter(id => !id.startsWith('anon:') && id !== edge.relationMessageId && messageMap.has(id));
-    for (const endpointId of endpoints) addAdjacency(adjacency, edge.relationMessageId, endpointId);
+    if (isContainerEdge(edge)) {
+      const children = containerChildren.get(edge.relationMessageId) ?? new Set<string>();
+      for (const id of [edge.from.messageId, edge.to.messageId]) {
+        if (!id.startsWith('anon:') && id !== edge.relationMessageId) children.add(id);
+      }
+      containerChildren.set(edge.relationMessageId, children);
+      continue;
+    }
+
+    if (INLINE_FRAMES.has(edge.relationType.toLowerCase())) {
+      const children = inlineFrameChildren.get(edge.relationMessageId) ?? new Set<string>();
+      for (const id of [edge.from.messageId, edge.to.messageId]) {
+        if (!id.startsWith('anon:') && id !== edge.relationMessageId) children.add(id);
+      }
+      inlineFrameChildren.set(edge.relationMessageId, children);
+    }
+
+    const from = messageMap.get(edge.from.messageId);
+    const to = messageMap.get(edge.to.messageId);
+    const relation = messageMap.get(edge.relationMessageId);
+    if (isTraceTextLikeMessage(from) || isTraceTextLikeMessage(to)) {
+      addAdjacency(adjacency, edge.from.messageId, edge.to.messageId);
+    }
+    if (isTraceTextLikeMessage(relation)) {
+      addAdjacency(adjacency, edge.relationMessageId, edge.from.messageId);
+      addAdjacency(adjacency, edge.relationMessageId, edge.to.messageId);
+    }
   }
 
   const distances = new Map<string, number>();
@@ -42,54 +81,138 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
   for (let index = 0; index < queue.length; index += 1) {
     const current = queue[index];
     const currentDistance = distances.get(current)!;
+    if (currentDistance >= distance) continue;
     for (const next of adjacency.get(current) ?? []) {
-      const nextDistance = currentDistance + (isTraceTextLikeMessage(messageMap.get(next)) ? 1 : 0);
-      if (nextDistance > distance || nextDistance >= (distances.get(next) ?? Number.POSITIVE_INFINITY)) continue;
-      distances.set(next, nextDistance);
+      if (distances.has(next)) continue;
+      distances.set(next, currentDistance + 1);
       queue.push(next);
     }
   }
 
-  const visibleIds = new Set<string>(
-    [...distances]
-      .filter(([id, value]) => value <= distance && isTraceTextLikeMessage(messageMap.get(id)))
-      .map(([id]) => id),
-  );
-  for (const startId of startIds) if (messageMap.has(startId)) visibleIds.add(startId);
-
-  // Complete the display dependencies without feeding them back into distance
-  // traversal. Inline frames need every member; other relations need their
-  // source card when an in-range target depends on it.
-  const nonCardRelationIds = new Set(
-    messages
-      .filter(message => message.kind === 'relation' && !isTraceTextLikeMessage(message))
-      .map(message => message.id),
-  );
-  let addedRelation = true;
-  while (addedRelation) {
-    addedRelation = false;
-    for (const relationId of nonCardRelationIds) {
-      const ownedEdges = edges.filter(edge => edge.relationMessageId === relationId);
-      const relationType = messageMap.get(relationId)?.relationType?.toLowerCase();
-      const sourceIds = new Set(ownedEdges.map(edge => edge.from.messageId)
-        .filter(id => !id.startsWith('anon:') && id !== relationId && messageMap.has(id)));
-      const targetIds = new Set(ownedEdges.map(edge => edge.to.messageId)
-        .filter(id => !id.startsWith('anon:') && id !== relationId && messageMap.has(id)));
-      const isInlineFrame = relationType === 'merge' || relationType === 'arrange';
-      const shouldComplete = isInlineFrame
-        ? visibleIds.has(relationId) || [...targetIds].some(id => visibleIds.has(id))
-        : [...targetIds].some(id => visibleIds.has(id));
-      const allEndpointsVisible = [...sourceIds, ...targetIds].every(id => visibleIds.has(id));
-      if (!shouldComplete && !allEndpointsVisible) continue;
-
-      const dependencyIds = isInlineFrame
-        ? [relationId, ...sourceIds, ...targetIds]
-        : [relationId, ...sourceIds];
-      for (const id of dependencyIds) {
-        if (visibleIds.has(id)) continue;
-        visibleIds.add(id);
-        addedRelation = true;
+  const containerDistance = new Map<string, number>();
+  let distanceChanged = true;
+  while (distanceChanged) {
+    distanceChanged = false;
+    for (const [containerId, children] of containerChildren) {
+      const directDistance = distances.get(containerId);
+      const childDistance = Math.min(
+        ...[...children]
+          .map(childId => distances.get(childId) ?? containerDistance.get(childId))
+          .filter((value): value is number => value !== undefined)
+          .map(value => value + 1),
+      );
+      const minDistance = Math.min(directDistance ?? Infinity, childDistance);
+      if (minDistance <= distance && minDistance < (containerDistance.get(containerId) ?? Infinity)) {
+        containerDistance.set(containerId, minDistance);
+        distanceChanged = true;
       }
+    }
+  }
+
+  const visibleIds = new Set<string>(
+    [...distances].filter(([, value]) => value <= distance).map(([id]) => id),
+  );
+  for (const containerId of containerDistance.keys()) visibleIds.add(containerId);
+
+  const parentByContainer = new Map<string, string>();
+  for (const [parentId, children] of containerChildren) {
+    for (const childId of children) {
+      if (containerChildren.has(childId) && !parentByContainer.has(childId)) {
+        parentByContainer.set(childId, parentId);
+      }
+    }
+  }
+  // A traced nested container is represented by its nearest parent card until
+  // the nested container itself is opened.
+  for (const startId of startIds) {
+    if (!containerChildren.has(startId) || expanded.has(startId)) continue;
+    const parentId = parentByContainer.get(startId);
+    if (parentId) {
+      visibleIds.delete(startId);
+      visibleIds.add(parentId);
+    }
+  }
+
+  const childrenOf = (relationId: string): Set<string> =>
+    containerChildren.get(relationId) ?? inlineFrameChildren.get(relationId) ?? new Set<string>();
+  const pruneDescendants = (relationId: string, ancestors: Set<string>): void => {
+    if (ancestors.has(relationId)) return;
+    const nextAncestors = new Set(ancestors).add(relationId);
+    for (const childId of childrenOf(relationId)) {
+      visibleIds.delete(childId);
+      if (containerChildren.has(childId) || inlineFrameChildren.has(childId)) {
+        pruneDescendants(childId, nextAncestors);
+      }
+    }
+  };
+
+  const exposeInlineFrame = (relationId: string, ancestors: Set<string>): void => {
+    if (ancestors.has(relationId)) return;
+    const nextAncestors = new Set(ancestors).add(relationId);
+    for (const childId of inlineFrameChildren.get(relationId) ?? []) {
+      visibleIds.add(childId);
+      if (containerChildren.has(childId)) {
+        resolveContainer(childId, nextAncestors);
+      } else if (inlineFrameChildren.has(childId)) {
+        exposeInlineFrame(childId, nextAncestors);
+      }
+    }
+  };
+
+  // Apply the reachable container tree from the outside in. A collapsed
+  // container owns and hides its complete subtree; an expanded one exposes
+  // direct members, including complete inline MERGE/ARRANGE structures.
+  const resolveContainer = (containerId: string, ancestors: Set<string>): void => {
+    if (ancestors.has(containerId)) return;
+    const nextAncestors = new Set(ancestors).add(containerId);
+    const children = containerChildren.get(containerId) ?? new Set<string>();
+    if (!expanded.has(containerId)) {
+      for (const childId of children) {
+        visibleIds.delete(childId);
+        if (containerChildren.has(childId) || inlineFrameChildren.has(childId)) {
+          pruneDescendants(childId, nextAncestors);
+        }
+      }
+      return;
+    }
+    for (const childId of children) {
+      visibleIds.add(childId);
+      if (containerChildren.has(childId)) {
+        resolveContainer(childId, nextAncestors);
+      } else if (inlineFrameChildren.has(childId)) {
+        exposeInlineFrame(childId, nextAncestors);
+      }
+    }
+  };
+
+  const reachableContainerIds = new Set(containerDistance.keys());
+  for (const containerId of reachableContainerIds) {
+    const parentId = parentByContainer.get(containerId);
+    if (!parentId || !reachableContainerIds.has(parentId)) {
+      resolveContainer(containerId, new Set());
+    }
+  }
+
+  // CORRECT is a version relation, not a container boundary. Keep its paired
+  // message only when the visible side already belongs to this projection.
+  for (const edge of edges) {
+    if (edge.relationType.toLowerCase() !== 'correct') continue;
+    if (!visibleIds.has(edge.from.messageId) && !visibleIds.has(edge.to.messageId)) continue;
+    visibleIds.add(edge.from.messageId);
+    visibleIds.add(edge.to.messageId);
+    visibleIds.add(edge.relationMessageId);
+  }
+
+  // Ordinary relations are visible objects of the projected subgraph. Their
+  // labels/messages do not consume an extra hop, but survive when both real
+  // endpoints are already inside the trace window.
+  for (const edge of edges) {
+    const relationType = edge.relationType.toLowerCase();
+    if (isContainerEdge(edge) || INLINE_FRAMES.has(relationType) || relationType === 'correct') continue;
+    const fromVisible = edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId);
+    const toVisible = edge.to.messageId.startsWith('anon:') || visibleIds.has(edge.to.messageId);
+    if (fromVisible && toVisible && messageMap.has(edge.relationMessageId)) {
+      visibleIds.add(edge.relationMessageId);
     }
   }
 
@@ -97,9 +220,9 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
   const projectedMessageIds = new Set(projectedMessages.map(message => message.id));
   const projectedEdges = edges.filter(edge => {
     const owner = edge.relationMessageId;
-    if (isTraceTextLikeMessage(messageMap.get(owner))) {
-      // Visible container cards keep all owned edges for target counts. The
-      // renderer decides card versus frame from the trace expansion state.
+    if (isContainerEdge(edge)) {
+      // Collapsed cards still need their edges for target counts. GraphView
+      // decides card versus frame from expansion state and visible members.
       return projectedMessageIds.has(owner);
     }
     if (!projectedMessageIds.has(owner)) return false;
@@ -118,44 +241,4 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
   }
 
   return { messages: projectedMessages, edges: projectedEdges };
-}
-
-export function applyTraceFrameVisibility(
-  projection: TraceProjection,
-  expandedContainerIds: ReadonlySet<string>,
-): TraceProjection {
-  const messageMap = new Map(projection.messages.map(message => [message.id, message]));
-  const visibleIds = new Set(messageMap.keys());
-  const childrenByRelation = new Map<string, Set<string>>();
-  for (const edge of projection.edges) {
-    const children = childrenByRelation.get(edge.relationMessageId) ?? new Set<string>();
-    for (const id of [edge.from.messageId, edge.to.messageId]) {
-      if (!id.startsWith('anon:') && id !== edge.relationMessageId && messageMap.has(id)) children.add(id);
-    }
-    childrenByRelation.set(edge.relationMessageId, children);
-  }
-  const hideNonCardSubtree = (relationId: string, visited = new Set<string>()): void => {
-    if (visited.has(relationId)) return;
-    visited.add(relationId);
-    for (const childId of childrenByRelation.get(relationId) ?? []) {
-      const child = messageMap.get(childId);
-      if (child?.kind === 'relation' && isTraceTextLikeMessage(child)) continue;
-      visibleIds.delete(childId);
-      if (child?.kind === 'relation') hideNonCardSubtree(childId, visited);
-    }
-  };
-  for (const message of projection.messages) {
-    if (expandedContainerIds.has(message.id)) continue;
-    const relationType = message.relationType?.toLowerCase();
-    if (relationType === 'classify' || relationType === 'summary') hideNonCardSubtree(message.id);
-  }
-
-  const messages = projection.messages.filter(message => visibleIds.has(message.id));
-  const edges = projection.edges.filter(edge => {
-    if (isTraceTextLikeMessage(messageMap.get(edge.relationMessageId))) return visibleIds.has(edge.relationMessageId);
-    return visibleIds.has(edge.relationMessageId)
-      && (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId))
-      && (edge.to.messageId.startsWith('anon:') || visibleIds.has(edge.to.messageId));
-  });
-  return { messages, edges };
 }

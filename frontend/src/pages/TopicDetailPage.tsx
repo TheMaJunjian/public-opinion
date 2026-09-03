@@ -2968,6 +2968,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
   }
 
+  function handleExitClassifyTopic() {
+    const targetId = draftUnits[draftUnits.length - 1]?.messageId ?? lastClickedMessageId;
+    exitClassifyTopic();
+    if (targetId) setTimeout(() => scrollMsgToCenter(targetId), 150);
+  }
+
   function handleEdgeLabelSingleClick(e: React.MouseEvent, relationMessageId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relationMessageId);
@@ -6794,21 +6800,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                 const selectedMessageId = draftUnits.length > 0
                   ? draftUnits[draftUnits.length - 1].messageId
                   : lastClickedMessageId;
-                const selectedSummaryContainerId = nextViewMode === 'graph' && selectedMessageId
-                  ? relations.find(relation => {
-                    if (relation.relationType.toUpperCase() !== 'JOIN' || !relation.sourceMessageId) return false;
-                    const container = relations.find(candidate => candidate.id === relation.sourceMessageId);
-                    if (!container || container.relationType.toUpperCase() !== 'SUMMARY') return false;
-                    return (relation.targetRefs ?? []).some(ref =>
-                      ref.kind === 'relation'
-                        ? ref.relationId === selectedMessageId
-                        : (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === selectedMessageId,
-                    );
-                  })?.sourceMessageId
-                  : undefined;
+                if (nextViewMode === 'graph' && selectedMessageId && traceEntries.length === 0) {
+                  const containingClassifyId = findContainingClassifyTopic(selectedMessageId);
+                  if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
+                    if (currentClassifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+                    enterClassifyTopic(containingClassifyId);
+                  }
+                }
                 const scrollTargetId = comparisonMode
                   ? comparisonId
-                  : selectedSummaryContainerId ?? selectedMessageId;
+                  : selectedMessageId;
                 if (scrollTargetId) {
                   const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
                   const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
@@ -6898,7 +6899,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : traceEntries.length > 0 ? "当前追溯范围内没有匹配的消息。尝试退出追溯或调整追溯距离。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他与会者可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
                 </div>
                 {isInsideClassify && (
-                  <button onClick={() => exitClassifyTopic()} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
+                  <button onClick={handleExitClassifyTopic} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
                     {classifyExitLabel}
                   </button>
                 )}

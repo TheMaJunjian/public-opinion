@@ -5316,11 +5316,27 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return ids;
   }, [traceEntries, msgMap]);
   const traceFrameIds = useMemo(() => new Set(
-    Array.from(traceRelationMsgIds).filter(id => {
+    [
+      ...Array.from(traceRelationMsgIds),
+      ...((traceEntries.length > 0
+        ? edges
+          .filter(edge => {
+            if (!['classify', 'summary'].includes(edge.relationType.toLowerCase())) return false;
+            const traceStartIds = traceEntries[traceEntries.length - 1].ids;
+            return traceStartIds.includes(edge.from.messageId) || traceStartIds.includes(edge.to.messageId);
+          })
+          .map(edge => edge.relationMessageId)
+        : [])),
+      ...((traceEntries.length > 0
+        ? traceContainerMemberships
+          .filter(membership => traceEntries[traceEntries.length - 1].ids.some(id => membership.targetIds.includes(id)))
+          .map(membership => membership.containerId)
+        : [])),
+    ].filter(id => {
       const relationType = msgMap.get(id)?.relationType;
       return relationType ? getPresentationSpec(relationType).isContainer : false;
     }),
-  ), [traceRelationMsgIds, msgMap]);
+  ), [traceRelationMsgIds, traceEntries, edges, msgMap]);
   const classifyTargetCount = useMemo(
     () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
     [currentClassifyRelMsgId, relationById]

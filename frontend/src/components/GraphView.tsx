@@ -2660,8 +2660,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const visibleGroupFrames = renderedGroupFrames.filter(frame =>
     !effectiveHideMessageIds.has(frame.relMsgId) &&
     (!isTraceWindow || !['classify', 'summary'].includes(frame.relType)
-      || traceFrameIds.has(frame.relMsgId) || traceExpandedFrameIds.has(frame.relMsgId)) &&
-    (!traceFrameIds.has(frame.relMsgId) || traceExpandedFrameIds.has(frame.relMsgId)),
+      || traceExpandedFrameIds.has(frame.relMsgId)),
   );
 
   const selectedMessageIds = useMemo(() => new Set([

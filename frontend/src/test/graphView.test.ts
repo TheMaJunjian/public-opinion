@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyFrameAvoidanceReservations, applyGroupingColumnOverride, applyMergeCanvasReservations, buildFrameBlocks, buildMergeCanvasReservations, computeNoOverlapLayout, unionLayoutRects } from '../components/GraphView';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
-import { buildTraceProjection } from '../utils/traceProjection';
+import { applyTraceFrameVisibility, buildTraceProjection } from '../utils/traceProjection';
 
 function makeNormal(id: string): DemoMessage {
   return { id, author: 'tester', createdAt: '2024-01-01T00:00:00.000Z', content: id, kind: 'normal' };
@@ -73,9 +73,8 @@ describe('merge canvas helpers', () => {
     ];
     const messageMap = new Map(messages.map(message => [message.id, message]));
 
-    const collapsedProjection = buildTraceProjection({
-      messages, edges, startIds: ['E'], distance: 1, expandedContainerIds: new Set(['C']),
-    });
+    const traceProjection = buildTraceProjection({ messages, edges, startIds: ['E'], distance: 1 });
+    const collapsedProjection = applyTraceFrameVisibility(traceProjection, new Set(['C']));
     const collapsedBlocks = buildFrameBlocks({
       edges: collapsedProjection.edges,
       visibleCardIds: new Set(collapsedProjection.messages.map(message => message.id)),
@@ -83,11 +82,9 @@ describe('merge canvas helpers', () => {
       traceMode: true,
     });
     expect(collapsedBlocks.map(block => block.relMsgId)).toEqual(['C']);
-    expect(collapsedBlocks[0].directCardIds).toEqual(new Set(['D', 'E']));
+    expect(collapsedBlocks[0].directCardIds).toEqual(new Set(['E']));
 
-    const expandedProjection = buildTraceProjection({
-      messages, edges, startIds: ['E'], distance: 1, expandedContainerIds: new Set(['C', 'E']),
-    });
+    const expandedProjection = applyTraceFrameVisibility(traceProjection, new Set(['C', 'E']));
     const expandedBlocks = buildFrameBlocks({
       edges: expandedProjection.edges,
       visibleCardIds: new Set(expandedProjection.messages.map(message => message.id)),
@@ -98,7 +95,7 @@ describe('merge canvas helpers', () => {
     const frameE = expandedBlocks.find(block => block.relMsgId === 'E');
     const frameG = expandedBlocks.find(block => block.relMsgId === 'G');
     expect(frameC?.childRelMsgIds).toEqual(['E']);
-    expect(frameC?.directCardIds).toEqual(new Set(['D']));
+    expect(frameC?.directCardIds).toEqual(new Set());
     expect(frameE?.childRelMsgIds).toEqual(['G']);
     expect(frameE?.directCardIds).toEqual(new Set(['F']));
     expect(frameG?.directCardIds).toEqual(new Set(['H']));

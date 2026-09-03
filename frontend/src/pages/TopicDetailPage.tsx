@@ -30,7 +30,7 @@ import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
-import { buildTraceProjection } from '../utils/traceProjection';
+import { applyTraceFrameVisibility, buildTraceProjection } from '../utils/traceProjection';
 import { operationLog } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
@@ -789,6 +789,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
   }, []);
   const [traceDistance, setTraceDistance] = useState<number>(1);
+  const changeTraceDistance = useCallback((update: (distance: number) => number) => {
+    setTraceDistance(currentDistance => update(currentDistance));
+    setTraceExpandedFrameIds(new Set());
+    setLastClickedMessageId(null);
+    setTraceKey(key => key + 1);
+  }, []);
   // Popup state for decoration double-click (shows sender info)
   const [decorationPopup, setDecorationPopup] = useState<{
     messageId: string; kind: "agree" | "disagree";
@@ -4991,13 +4997,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (traceEntries.length === 0) return { messagesToShow: messages, edgesToShow: edges };
     const startIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
     if (startIds.length === 0) return { messagesToShow: messages, edgesToShow: edges };
-    const projection = buildTraceProjection({
+    const traceProjection = buildTraceProjection({
       messages,
       edges,
       startIds,
       distance: traceDistance,
-      expandedContainerIds: traceExpandedFrameIds,
     });
+    const projection = applyTraceFrameVisibility(traceProjection, traceExpandedFrameIds);
     if (traceEntries.length >= 0) {
       return { messagesToShow: projection.messages, edgesToShow: projection.edges };
     }
@@ -5398,13 +5404,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const baseEdges = useTraceWindow ? edgesToShow : edges;
     if (useTraceWindow) {
       const traceStartIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
-      const listProjection = buildTraceProjection({
+      const traceProjection = buildTraceProjection({
         messages,
         edges,
         startIds: traceStartIds,
         distance: traceDistance,
-        expandedContainerIds: new Set([...traceExpandedFrameIds, ...traceStartIds]),
       });
+      const listProjection = applyTraceFrameVisibility(
+        traceProjection,
+        new Set([...traceExpandedFrameIds, ...traceStartIds]),
+      );
       return {
         graphMessagesToRender: baseMessages,
         graphEdgesToRender: baseEdges,
@@ -7233,7 +7242,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           removeUnitFrom={removeUnitFrom}
           describeUnit={describeUnit}
           traceDistance={traceDistance}
-          setTraceDistance={setTraceDistance}
+          setTraceDistance={changeTraceDistance}
           canSetTrace={canSetTrace}
           canExitTrace={canExitTrace}
           getSelectedWholeMessageIds={getSelectedWholeMessageIds}

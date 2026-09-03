@@ -17,7 +17,7 @@ interface DraftGroup {
 interface TopicRightPanelProps {
   // Layout
   rightPanelRef: React.RefObject<HTMLDivElement | null> | React.Ref<HTMLDivElement>;
-  leftPanelRef: React.RefObject<HTMLDivElement | null> | React.Ref<HTMLDivElement>;
+  leftPanelRef: React.RefObject<HTMLDivElement | null>;
   TOTAL_FLEX: number;
   leftFlex: number;
   minWidth: number;

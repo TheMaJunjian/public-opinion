@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
-import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind } from '../utils/modelBridge';
+import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters, convergeGroupingAndRightConstraints } from '../utils/layout';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
@@ -2347,8 +2347,11 @@ function GraphViewCanvas(props: GraphViewProps) {
   const relationCardMsgIds = useMemo(() => {
     const ids = new Set(classifyRelMsgIds);
     for (const id of summaryRelMsgIds) ids.add(id);
+    for (const message of messages) {
+      if (message.kind === 'relation' && isTraceTextLikeMessage(message)) ids.add(message.id);
+    }
     return ids;
-  }, [classifyRelMsgIds, summaryRelMsgIds]);
+  }, [classifyRelMsgIds, summaryRelMsgIds, messages]);
   const normals = useMemo(() => messages.filter(m =>
     !traceExpandedFrameIds.has(m.id) && (
       (isContentKind(m.kind) && !tagSourceIds.has(m.id)) ||
@@ -3638,7 +3641,7 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   function renderContent(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
-    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{message.content}</pre>;
+    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{message.content}</pre>;
     const text = message.content;
     const validItems = targets
       .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
@@ -3655,7 +3658,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       onFragmentAnchorClick,
       (id, start, len, relationType) => annotationTargetFragmentHints.has(`${id}::${start}:${len}:${relationType}`)
     );
-    return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
+    return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
   }
 
 
@@ -4047,7 +4050,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       )}
                     </div>
                     {restLines && (
-                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{restLines}</pre>
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{restLines}</pre>
                     )}
                   </div>
                 );

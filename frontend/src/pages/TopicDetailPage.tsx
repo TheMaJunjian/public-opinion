@@ -4965,14 +4965,14 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
-    if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
+    if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
     const text = message.content;
     const validItems = targets
       .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
       .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
     const tree = buildAnnoTree(validItems);
     const nodes = renderAnnoNodes(text, tree, 0, text.length, 0, message.id, isFragmentSelected, handleFragmentAnchorClick);
-    return <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
+    return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
   }
 
   const traceContainerMemberships = useMemo<TraceContainerMembership[]>(() => {
@@ -6802,7 +6802,24 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   setComparisonTargetId(null);
                 }
                 setViewMode(nextViewMode);
-                const scrollTargetId = comparisonMode ? comparisonId : lastClickedMessageId;
+                const selectedMessageId = draftUnits.length > 0
+                  ? draftUnits[draftUnits.length - 1].messageId
+                  : lastClickedMessageId;
+                const selectedContainerId = selectedMessageId
+                  ? relations.find(relation => {
+                    if (relation.relationType.toUpperCase() !== 'JOIN' || !relation.sourceMessageId) return false;
+                    const container = relations.find(candidate => candidate.id === relation.sourceMessageId);
+                    if (!container || !['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(container.relationType.toUpperCase())) return false;
+                    return (relation.targetRefs ?? []).some(ref =>
+                      ref.kind === 'relation'
+                        ? ref.relationId === selectedMessageId
+                        : (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === selectedMessageId,
+                    );
+                  })?.sourceMessageId
+                  : undefined;
+                const scrollTargetId = comparisonMode
+                  ? comparisonId
+                  : selectedContainerId ?? selectedMessageId;
                 if (scrollTargetId) {
                   const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
                   const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
@@ -7132,7 +7149,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                           {activeStanceTargetIds.has(msg.id) && (() => { const info = activeStanceMap.get(msg.id); if (!info) return null; return <div style={{ marginBottom: 4, display: "flex", gap: 6 }}><span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: info.type === 'disagree' ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)", color: info.type === 'disagree' ? "#fca5a5" : "#86efac", border: info.type === 'disagree' ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(34,197,94,0.3)" }}>{info.type === 'disagree' ? '被反对 · 你的反对生效中' : '被赞同 · 你的赞同生效中'}</span></div>; })()}
                           {summaryCoverages.length > 0 && (
                             <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                              {summaryCoverages.map(item => <span key={item.summaryId} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)" }}>非线性视图由总结「{item.title}」覆盖</span>)}
+                              {summaryCoverages.map(item => <span key={item.summaryId} style={{ minWidth: 0, maxWidth: "100%", fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)", overflowWrap: 'anywhere' }}>非线性视图由总结「{item.title}」覆盖</span>)}
                             </div>
                           )}
                         </>

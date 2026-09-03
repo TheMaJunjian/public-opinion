@@ -313,35 +313,27 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     </div>
   );
 
-  if (p.isViewerMode) {
-    return (
-      <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-topic-scroll-panel="true" style={panelStyle}>
-        {renderComparisonHeader()}
-        <div style={{ border: "1px solid #444", borderRadius: 6, padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontWeight: 600, color: "#e2e8f0" }}>只读阅览</div>
-          <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.6 }}>当前为导出数据阅览模式，不支持发送消息、建立关系或结算操作。</div>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
-            当前与会者
+  return (
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-topic-scroll-panel="true" style={panelStyle}>
+      {p.isViewerMode && <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontWeight: 600 }}>阅览操作</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "#cbd5e1", fontSize: 12 }}>
+            当前用户
             <input
               list="viewer-user-options"
-              placeholder="输入与会者名"
+              placeholder="输入用户名"
               value={p.viewerUsername ?? ""}
               onChange={event => p.onViewerUsernameChange?.(event.target.value)}
-              style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#eee", fontSize: 12 }}
+              style={{ flex: 1, minWidth: 120, padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#eee", fontSize: 12 }}
             />
             <datalist id="viewer-user-options">
               {(p.viewerUsers ?? []).map(viewer => <option key={viewer.id} value={viewer.username} />)}
             </datalist>
           </label>
-          <button onClick={p.onExitViewer} style={{ padding: "5px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>
-            退出阅览
-          </button>
         </div>
-      </div>
-    );
-  }
-  return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="topic-right-panel" onWheel={handlePanelWheel} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-topic-scroll-panel="true" style={panelStyle}>
+        <button onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
+      </div>}
       {renderComparisonHeader()}
       {p.isPreviewMode && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
@@ -369,7 +361,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           </div>
         </div>
 
-        {p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {!p.comparisonReviewed && p.canExitTrace && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div style={{ fontSize: 12, opacity: 0.8 }}>追溯距离：{p.traceDistance}</div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={() => p.setTraceDistance(distance => Math.max(1, distance - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
@@ -407,13 +399,13 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           </ul>
         )}
 
-        <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        {!p.isViewerMode && <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button onClick={() => p.commitDraftTo("source")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.draftUnits.length === 0 ? "#333" : "#444", color: p.draftUnits.length === 0 ? "#777" : "#fff", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
           <button onClick={() => p.commitDraftTo("target")} disabled={p.draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.draftUnits.length === 0 ? "#333" : "#444", color: p.draftUnits.length === 0 ? "#777" : "#fff", cursor: p.draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
-        </div>
+        </div>}
       </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {!p.isViewerMode && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, marginBottom: 4 }}>
             <span>来源集合</span>
@@ -446,14 +438,14 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
             </ul>
           )}
         </div>
-      </div>
-      {p.draftUnits.length > 0 && p.targetUnits.length > 0 && (
+      </div>}
+      {!p.isViewerMode && p.draftUnits.length > 0 && p.targetUnits.length > 0 && (
         <div style={{ border: "1px solid #b45309", borderRadius: 4, padding: "6px 8px", background: "#3b2708", color: "#fbbf24", fontSize: 12 }}>
           候选区和目标集合同时有内容。发送前请将候选区移入目标集合，或清空其中一方。
         </div>
       )}
 
-      <>
+      {!p.isViewerMode && <>
         <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontWeight: 600 }}>输入框（消息与关系设置）</div>
           {p.hasSecondaryRelationSelector && (() => {
@@ -566,17 +558,17 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
           {renderSendControls()}
           </div>
         </div>
-      </>
+      </>}
 
-      <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
+      {!p.comparisonReviewed && <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
         <div style={{ fontWeight: 600 }}>追溯</div>
         <div style={{ fontSize: 12, opacity: 0.75 }}>{p.isInsideClassify ? "当前模式：分类" : "当前模式：追溯"}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前追溯消息：{p.currentTraceIds ? p.currentTraceIds.join(", ") : "（无）"}</div>
-      </div>
+      </div>}
 
       <TopicStructureView key={`sv-${p.classifyKey}-${p.traceKey}`} topicId={p.topicId} traceIds={p.currentTraceIds ?? []} messages={p.messages} edges={p.edges} onNavigateToMessage={p.onNavigateToMessage} />
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {!p.isViewerMode && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>最近普通消息</div>
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
@@ -610,8 +602,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
             })}
           </ul>
         </div>
-      </div>
+      </div>}
 
+      {!p.isViewerMode && <>
       {/* Stance History */}
       <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -655,6 +648,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
       </div>
 
       <OperationLogView />
+      </>}
 
     </div>
   );

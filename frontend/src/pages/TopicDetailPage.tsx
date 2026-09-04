@@ -286,23 +286,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         const { messages: serverDemoMsgs, edges: serverDemoEdges } = convertMessagesToDemoModel(
           messagesData.data, mergedRelations
         );
-        const localMessagesById = new Map(messagesRef.current.map(message => [message.id, message]));
-        const normalizedServerDemoMsgs = serverDemoMsgs.map(serverMessage => {
-          const localMessage = localMessagesById.get(serverMessage.id);
-          const isGovernanceKind = localMessage?.kind === 'governance'
-            || localMessage?.kind === 'code'
-            || localMessage?.kind === 'operations';
-          if (!isGovernanceKind || serverMessage.kind === localMessage?.kind) return serverMessage;
-          return {
-            ...serverMessage,
-            kind: localMessage.kind,
-            backendKind: localMessage.backendKind ?? serverMessage.backendKind,
-            relationPayload: localMessage.relationPayload ?? serverMessage.relationPayload,
-          };
-        });
-        const serverMessageIds = new Set(normalizedServerDemoMsgs.map(message => message.id));
+        const serverMessageIds = new Set(serverDemoMsgs.map(message => message.id));
         const mergedDemoMsgs = [
-          ...normalizedServerDemoMsgs,
+          ...serverDemoMsgs,
           ...messagesRef.current.filter(message => !serverMessageIds.has(message.id)),
         ];
         const mergedEdgeKeys = new Set(serverDemoEdges.map(edge =>

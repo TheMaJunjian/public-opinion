@@ -5015,10 +5015,22 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }));
   }, [relations, effectiveJoinRelationIds]);
 
-  const { messagesToShow, edgesToShow } = useMemo(() => {
-    if (traceEntries.length === 0) return { messagesToShow: messages, edgesToShow: edges };
+  const { messagesToShow, edgesToShow, traceExpandableContainerIds } = useMemo(() => {
+    if (traceEntries.length === 0) {
+      return {
+        messagesToShow: messages,
+        edgesToShow: edges,
+        traceExpandableContainerIds: new Set<string>(),
+      };
+    }
     const startIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
-    if (startIds.length === 0) return { messagesToShow: messages, edgesToShow: edges };
+    if (startIds.length === 0) {
+      return {
+        messagesToShow: messages,
+        edgesToShow: edges,
+        traceExpandableContainerIds: new Set<string>(),
+      };
+    }
     const traceProjection = buildTraceProjection({
       messages,
       edges,
@@ -5029,7 +5041,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     });
     const projection = applyTraceFrameVisibility(traceProjection, traceExpandedFrameIds);
     if (traceEntries.length >= 0) {
-      return { messagesToShow: projection.messages, edgesToShow: projection.edges };
+      return {
+        messagesToShow: projection.messages,
+        edgesToShow: projection.edges,
+        traceExpandableContainerIds: projection.expandableContainerIds,
+      };
     }
 
     /* Legacy trace projection retained temporarily below while the page-level
@@ -5297,7 +5313,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const toOk = shownSet.has(e.to.messageId);
       return fromOk || toOk;
     });
-    return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
+    return {
+      messagesToShow: messagesToShowArr,
+      edgesToShow: edgesToShowArr,
+      traceExpandableContainerIds: new Set(
+        messagesToShowArr
+          .filter(message => message.kind === 'relation' && message.relationType
+            && getPresentationSpec(message.relationType).isContainer)
+          .map(message => message.id),
+      ),
+    };
   }, [messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
   const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
@@ -5335,17 +5360,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           .filter(membership => traceEntries[traceEntries.length - 1].ids.some(id => membership.targetIds.includes(id)))
           .map(membership => membership.containerId)
         : [])),
-      ...((traceEntries.length > 0
-        ? messagesToShow
-          .filter(message => message.kind === 'relation' && message.relationType
-            && getPresentationSpec(message.relationType).isContainer)
-          .map(message => message.id)
-        : [])),
+      ...traceExpandableContainerIds,
     ].filter(id => {
       const relationType = msgMap.get(id)?.relationType;
       return relationType ? getPresentationSpec(relationType).isContainer : false;
     }),
-  ), [traceRelationMsgIds, traceEntries, edges, msgMap, messagesToShow]);
+  ), [traceRelationMsgIds, traceEntries, edges, msgMap, traceExpandableContainerIds]);
   const classifyTargetCount = useMemo(
     () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
     [currentClassifyRelMsgId, relationById]

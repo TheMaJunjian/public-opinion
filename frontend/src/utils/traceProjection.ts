@@ -1,5 +1,6 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import { isTraceTextLikeMessage } from './modelBridge';
+import { getPresentationSpec } from '../types';
 
 export interface TraceContainerMembership {
   containerId: string;
@@ -20,6 +21,17 @@ export interface TraceProjection {
   messages: DemoMessage[];
   edges: DemoEdge[];
   distanceMessageIds?: ReadonlySet<string>;
+  expandableContainerIds: ReadonlySet<string>;
+}
+
+function getExpandableContainerIds(messages: DemoMessage[]): ReadonlySet<string> {
+  return new Set(
+    messages
+      .filter(message => message.kind === 'relation'
+        && message.relationType
+        && getPresentationSpec(message.relationType).isContainer)
+      .map(message => message.id),
+  );
 }
 
 function addAdjacency(adjacency: Map<string, Set<string>>, left: string, right: string): void {
@@ -154,7 +166,12 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
     }
   }
 
-  return { messages: projectedMessages, edges: projectedEdges, distanceMessageIds };
+  return {
+    messages: projectedMessages,
+    edges: projectedEdges,
+    distanceMessageIds,
+    expandableContainerIds: getExpandableContainerIds(projectedMessages),
+  };
 }
 
 export function applyTraceFrameVisibility(
@@ -246,5 +263,10 @@ export function applyTraceFrameVisibility(
       && (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId))
       && (edge.to.messageId.startsWith('anon:') || visibleIds.has(edge.to.messageId));
   });
-  return { messages, edges, distanceMessageIds: projection.distanceMessageIds };
+  return {
+    messages,
+    edges,
+    distanceMessageIds: projection.distanceMessageIds,
+    expandableContainerIds: getExpandableContainerIds(messages),
+  };
 }

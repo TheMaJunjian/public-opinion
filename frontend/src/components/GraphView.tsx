@@ -3204,6 +3204,13 @@ function GraphViewCanvas(props: GraphViewProps) {
         const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
         return relCard ?? null;
       }
+      // Readable relation messages (for example DELEGATION) are rendered as
+      // cards. An edge targeting such a relation must end at that card rather
+      // than at one of the relation's own target labels.
+      if (relationCardMsgIds.has(relId)) {
+        const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
+        if (relCard) return relCard;
+      }
       const te0 = relEdges[0];
       const relType = te0.relationType;
       if (relType === "arrange") {

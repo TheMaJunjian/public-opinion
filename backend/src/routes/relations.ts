@@ -487,12 +487,12 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
     }
 
     // Validate target relation messages exist in this topic (kind=RELATION/GOVERNANCE/CODE/OPERATIONS)
-    let foundTargetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }> = [];
+    let foundTargetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown; relationPayload: unknown }> = [];
     if (targetRelationIds.length > 0) {
       const uniqueRelationIds = [...new Set(targetRelationIds)];
       const directTargetRelations = await prisma.message.findMany({
         where: { id: { in: uniqueRelationIds }, topicId, kind: { in: ['RELATION', 'GOVERNANCE', 'CODE', 'OPERATIONS'] } },
-        select: { id: true, relationType: true, targetRefs: true },
+        select: { id: true, relationType: true, targetRefs: true, relationPayload: true },
       });
       if (directTargetRelations.length !== uniqueRelationIds.length) {
         res.status(404).json({ error: '部分目标关系消息不存在或不属于该分类' });
@@ -501,7 +501,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
 
       // Expand nested relation-message targets for grouping relations so CLASSIFY/MERGE can
       // treat ARRANGE/MERGE/CLASSIFY target relations as their owned text targets.
-      const relationById = new Map<string, { id: string; relationType: string | null; targetRefs: unknown }>();
+      const relationById = new Map<string, { id: string; relationType: string | null; targetRefs: unknown; relationPayload: unknown }>();
       directTargetRelations.forEach(rel => relationById.set(rel.id, rel));
       const expandableRelationTypes = new Set(['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY']);
       const queued = new Set<string>();
@@ -523,7 +523,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         if (nestedRelationIds.length === 0) continue;
         const nestedRelations = await prisma.message.findMany({
           where: { id: { in: nestedRelationIds }, topicId, kind: 'RELATION' },
-          select: { id: true, relationType: true, targetRefs: true },
+          select: { id: true, relationType: true, targetRefs: true, relationPayload: true },
         });
         nestedRelations.forEach(nestedRel => {
           relationById.set(nestedRel.id, nestedRel);
@@ -570,8 +570,9 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
 
       if (data.relationType === 'DELEGATION' && data.payload?.delegationKind === 'FULFILL') {
         const target = foundTargetRelations.find(rel => rel.id === targetRelationIds[0]);
-        if (!target || target.relationType !== 'DELEGATION') {
-          res.status(400).json({ error: '完成委托的目标必须是委托关系消息' });
+        const targetPayload = target?.relationPayload as { delegationKind?: string } | null | undefined;
+        if (!target || target.relationType !== 'DELEGATION' || targetPayload?.delegationKind !== 'CREATE') {
+          res.status(400).json({ error: '完成委托的目标必须是创建委托消息' });
           return;
         }
       }

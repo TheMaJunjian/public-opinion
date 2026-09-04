@@ -3868,7 +3868,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const orphanLabels: string[] = [];
       for (const u of effectiveTargets) {
         const targetMsg = msgMap.get(u.messageId);
-        if (targetMsg && isContentKind(targetMsg.kind)) continue;
+        const isContentRelation = targetMsg?.kind === 'relation'
+          && ['delegation', 'proposal', 'code_change', 'operations'].includes(targetMsg.relationType ?? '');
+        if (targetMsg && (isContentKind(targetMsg.kind) || isContentRelation)) continue;
         const rt = relationTypeByRelMsgId.get(u.messageId);
         if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
         const rel = relationById.get(u.messageId);
@@ -4680,10 +4682,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const hasCrossLinkValidationError = (isClassifyType || isSummaryType || isMergeType)
     && hasTargetsAvailable
     && hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIdsForValidation);
-  const hasOrphanContainerLabel = (isClassifyType || isSummaryType || isMergeType)
+  const hasOrphanContainerLabel = (isSummaryType || isMergeType)
     && effectiveTargetUnits.some(unit => {
       const targetMessage = msgMap.get(unit.messageId);
-      if (targetMessage && isContentKind(targetMessage.kind)) return false;
+      const isContentRelation = targetMessage?.kind === 'relation'
+        && ['delegation', 'proposal', 'code_change', 'operations'].includes(targetMessage.relationType ?? '');
+      if (targetMessage && (isContentKind(targetMessage.kind) || isContentRelation)) return false;
       const targetType = relationTypeByRelMsgId.get(unit.messageId);
       if (!targetType || ['classify', 'merge', 'arrange', 'summary'].includes(targetType)) return false;
       const targetRelation = relationById.get(unit.messageId);
@@ -6106,8 +6110,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }, [comparisonReviewed, comparisonTargetId, relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget, edges, msgMap, messages, mergeOwnership, replacedRelationMsgIds, traceRelationMsgIds, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, traceContainerMemberships, traceExpandedFrameIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds]);
 
   function handleCanvasBlankClick() {
-    setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
-    setRelationType(null); setSecondaryRelationType("none");
+    setDraftUnits([]); setSourceUnits([]); setTargetUnits([]);
+    setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
   }
 
   async function confirmReverseCorrection() {

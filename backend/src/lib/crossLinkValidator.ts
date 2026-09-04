@@ -3,10 +3,8 @@
  *
  * Extracted from routes/relations.ts to keep route handlers lean.
  *
- * Validates that CLASSIFY / MERGE / SUMMARY relations do not create
- * cross-links with text messages already owned by existing CLASSIFY or
- * SUMMARY relations — preventing a text message from belonging to
- * multiple non-overlapping classification scopes.
+ * Validates that grouping and JOIN relations do not split a non-reference
+ * relation across the selected grouping boundary.
  */
 
 import { prisma } from './prisma';
@@ -97,7 +95,7 @@ export function collectSelectedGroupTargetTextIds(params: {
 
 export interface GroupingValidationParams {
   topicId: string;
-  relationType: 'CLASSIFY' | 'MERGE' | 'ARRANGE' | 'SUMMARY';
+  relationType: 'CLASSIFY' | 'MERGE' | 'ARRANGE' | 'SUMMARY' | 'JOIN';
   targetRefs: Array<{ kind: string; messageId?: string; relationId?: string }>;
   targetRelationIds: string[];
   foundTargetRelations: Array<{ id: string; relationType: string | null; targetRefs: unknown }>;
@@ -109,14 +107,13 @@ export interface GroupingValidationResult {
 }
 
 /**
- * Validate that a CLASSIFY / MERGE / ARRANGE / SUMMARY relation does not create
- * forbidden cross-links with already-classified messages.
+ * Validate that a grouping or JOIN relation does not create forbidden
+ * cross-links with messages outside the selected grouping.
  *
  * Performs:
  *   1. SUMMARY target-type check (target relations must be ARRANGE/MERGE/CLASSIFY).
- *   2. Cross-link BFS: ensure no non-REFERENCE/non-CORRECT relation bridges
- *      between the new grouping's text messages and text messages already
- *      owned by an existing CLASSIFY or SUMMARY.
+ *   2. Cross-link scan: ensure no non-REFERENCE relation bridges
+ *      between the selected messages and messages outside them.
  */
 export async function validateGroupingTargets(
   params: GroupingValidationParams
@@ -146,44 +143,12 @@ export async function validateGroupingTargets(
 
   if (groupedTargetTextIds.length === 0) return { ok: true };
 
-  const selectedTargetTextIdSet = new Set(groupedTargetTextIds);
   const relationMessages = await prisma.message.findMany({
     where: { topicId, kind: 'RELATION' },
     select: { id: true, relationType: true, relSourceId: true, targetRefs: true },
   });
 
-  // Build the set of text message IDs already owned by existing CLASSIFY/SUMMARY relations.
-  // A single BFS processes all CLASSIFY/SUMMARY relations together to avoid redundant traversals.
-  // Skip relations that are themselves targets of this operation — they are being absorbed,
-  // so their text messages should not count as "already classified".
-  const allRelById = new Map(relationMessages.map(r => [r.id, r]));
-  const expandableTypes = new Set(['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY']);
-  const absorbedRelationIds = new Set(foundTargetRelations.map(r => r.id));
-  const alreadyClassifiedTextIds = new Set<string>();
-  const bfsQueue: string[] = [];
-  const bfsVisited = new Set<string>();
-
-  for (const rel of relationMessages) {
-    if ((rel.relationType === 'CLASSIFY' || rel.relationType === 'SUMMARY') && !bfsVisited.has(rel.id)) {
-      bfsQueue.push(rel.id);
-    }
-  }
-
-  while (bfsQueue.length > 0) {
-    const bfsId = bfsQueue.shift()!;
-    if (bfsVisited.has(bfsId)) continue;
-    bfsVisited.add(bfsId);
-    if (absorbedRelationIds.has(bfsId)) continue;
-    const bfsRel = allRelById.get(bfsId);
-    if (!bfsRel) continue;
-    extractTextTargetIds(bfsRel.targetRefs).forEach(id => alreadyClassifiedTextIds.add(id));
-    if (!expandableTypes.has(bfsRel.relationType ?? '')) continue;
-    for (const nestedId of extractNestedRelationIds(bfsRel.targetRefs)) {
-      if (!bfsVisited.has(nestedId)) bfsQueue.push(nestedId);
-    }
-  }
-
-  // Build the set of text message IDs that are valid relation sources.
+  // Build the set of message IDs that are valid relation sources.
   const sourceIds = [...new Set(
     relationMessages
       .map(m => m.relSourceId)
@@ -197,57 +162,52 @@ export async function validateGroupingTargets(
     : [];
   const sourceTextIdSet = new Set(sourceTextRows.map(row => row.id));
 
+  const selectedIds = new Set<string>([
+    ...groupedTargetTextIds,
+    ...targetRelationIds,
+  ]);
+  const relationIds = new Set(relationMessages.map(message => message.id));
   const crossLinkError =
     relationType === 'CLASSIFY' ? CLASSIFY_CROSS_LINK_ERROR
     : relationType === 'MERGE' ? MERGE_CROSS_LINK_ERROR
     : relationType === 'ARRANGE' ? ARRANGE_CROSS_LINK_ERROR
-    : SUMMARY_CROSS_LINK_ERROR;
+    : CLASSIFY_CROSS_LINK_ERROR;
 
   for (const relMsg of relationMessages) {
-    // REFERENCE (citation) does not imply semantic grouping.
-    // CORRECT edges are already handled by expandTextIdsWithCorrections
-    // and should not trigger cross-link blocks.
-    // CLASSIFY / SUMMARY / MERGE are grouping relations — a cross-link through
-    // them means reclassification (moving messages between groups), not a violation.
-    if (relMsg.relationType === 'REFERENCE' || relMsg.relationType === 'CORRECT'
-        || relMsg.relationType === 'CLASSIFY' || relMsg.relationType === 'SUMMARY'
-        || relMsg.relationType === 'MERGE') continue;
-    // Relations that are themselves direct targets of this classification
-    // (e.g., when classifying a ARRANGE or MERGE, its own edges should not
-    // trigger cross-link errors).
+    // REFERENCE is the only explicitly non-grouping relation.
+    if (relMsg.relationType === 'REFERENCE') continue;
+    // A JOIN is a membership record, not an independent semantic link. It is
+    // validated when created, but existing JOIN records must not block every
+    // later classification of their member.
+    if (relMsg.relationType === 'JOIN') continue;
+    // When a grouping relation is itself selected, its own target edges are
+    // internal to the selected grouping.
     if (targetRelationIds.includes(relMsg.id)) continue;
 
-    const sourceTextId =
-      relMsg.relSourceId && sourceTextIdSet.has(relMsg.relSourceId)
-        ? relMsg.relSourceId
-        : null;
-
+    const sourceId = relMsg.relSourceId && (
+      sourceTextIdSet.has(relMsg.relSourceId) || relationIds.has(relMsg.relSourceId)
+    ) ? relMsg.relSourceId : null;
     const refs = Array.isArray(relMsg.targetRefs)
-      ? relMsg.targetRefs as Array<{ kind?: unknown; messageId?: unknown }>
+      ? relMsg.targetRefs as Array<{ kind?: unknown; messageId?: unknown; relationId?: unknown }>
       : [];
-
-    const targetTextIds = [...new Set(
-      refs
-        .filter(ref =>
-          (ref.kind === 'message' || ref.kind === 'text-fragment') &&
-          typeof ref.messageId === 'string'
-        )
-        .map(ref => ref.messageId as string)
-    )];
-
-    const hasSelectedEndpoint =
-      (sourceTextId !== null && selectedTargetTextIdSet.has(sourceTextId)) ||
-      targetTextIds.some(id => selectedTargetTextIdSet.has(id));
-
+    const targetIds = refs.flatMap(ref => {
+      if (ref.kind === 'relation' && typeof ref.relationId === 'string') return [ref.relationId];
+      if ((ref.kind === 'message' || ref.kind === 'text-fragment') && typeof ref.messageId === 'string') return [ref.messageId];
+      return [];
+    });
+    const endpointIds = [...new Set([...(sourceId ? [sourceId] : []), ...targetIds])];
+    const hasSelectedEndpoint = endpointIds.some(id => selectedIds.has(id));
     if (!hasSelectedEndpoint) continue;
-
-    // Block if the non-selected endpoint is already owned by a CLASSIFY/SUMMARY
-    // AND is NOT part of the same expanded selection.
-    if (sourceTextId !== null && !selectedTargetTextIdSet.has(sourceTextId) && alreadyClassifiedTextIds.has(sourceTextId)) {
-      return { ok: false, error: crossLinkError };
-    }
-    if (targetTextIds.some(id => !selectedTargetTextIdSet.has(id) && alreadyClassifiedTextIds.has(id))) {
-      return { ok: false, error: crossLinkError };
+    if (endpointIds.some(id => !selectedIds.has(id))) {
+      const selectedId = endpointIds.find(id => selectedIds.has(id));
+      const outsideId = endpointIds.find(id => !selectedIds.has(id));
+      const detail = selectedId && outsideId
+        ? `消息 ${selectedId} 与消息 ${outsideId} 存在 ${relMsg.relationType ?? '未知'} 关系`
+        : '选中消息与分类外消息存在非引用关系';
+      return {
+        ok: false,
+        error: `${crossLinkError}：${detail}。`,
+      };
     }
   }
 

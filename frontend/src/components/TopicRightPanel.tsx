@@ -524,7 +524,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
             onChange={e => p.setRelationLabel(e.target.value)}
           />
           )}
-          <div key={`${p.composerRefreshKey}::${p.singleButtonLabel}::${p.sendValidationLabel ?? ''}`}>
+          <div key={p.composerRefreshKey}>
           {(() => {
             const isCustomSubType = p.subType === 'CUSTOM' && ((p.relationType === "tag" && (p.secondaryRelationType === "recommend" || p.secondaryRelationType === "archive")) || p.relationType === "recommend" || p.relationType === "archive");
             const isTagWithoutSecondary = p.relationType === "tag" && p.secondaryRelationType === "none";

@@ -377,6 +377,7 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
   });
+
 });
 
 describe('TopicDetailPage summary relation visibility', () => {

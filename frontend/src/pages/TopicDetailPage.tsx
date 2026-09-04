@@ -462,48 +462,39 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const relById = new Map(relations.map(r => [r.id, r]));
     const msgMapLocal = new Map(messages.map(m => [m.id, m]));
 
-    const tryEnter = (relId: string) => {
-      if (classifyRelMsgId === relId) {
-        // Already in this classify — just ensure correct view mode
-        if (hiddenInGraphView.has(msgId)) setViewMode("list");
-        setAutoClassifyMsgId(null);
-        return;
+    const containingTopics = relations
+      .filter(rel => {
+        const rt = rel.relationType?.toUpperCase();
+        return (rt === 'CLASSIFY' || rt === 'SUMMARY') && !rejectedContainerIds.has(rel.id);
+      })
+      .map(rel => {
+        const owned = collectOwnedByRelation(rel.id, relById, new Set(), undefined, rejectedJoinRelationIds);
+        const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
+        const ownsAnchor = expanded.has(anchorId) || owned.relationIds.has(anchorId);
+        return { rel, size: owned.textIds.size + owned.relationIds.size, ownsAnchor };
+      })
+      .filter(item => item.ownsAnchor)
+      // Larger ownership means an outer container. Enter outer-to-inner so
+      // the classify stack represents the actual parent chain.
+      .sort((a, b) => b.size - a.size)
+      .map(item => item.rel.id);
+
+    const tryEnter = (relIds: string[]) => {
+      if (relIds.length === 0) return;
+      classifyStackRef.current = [];
+      setClassifyRelMsgId(null);
+      relIds.forEach(relId => enterClassifyTopic(relId));
+      const deepestRelId = relIds[relIds.length - 1];
+      // If the deepest container is rejected, enter preview (read-only) mode.
+      if (rejectedContainerIds.has(deepestRelId)) {
+        setPreviewClassifyId(deepestRelId);
       }
-      if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
-      enterClassifyTopic(relId);
-      // If the classify is rejected, enter preview (read-only) mode
-      if (rejectedContainerIds.has(relId)) {
-        setPreviewClassifyId(relId);
-      }
-      if (hiddenInGraphView.has(msgId)) setViewMode("list");
       setAutoClassifyMsgId(null);
     };
 
-    // ── Find the classify that owns the anchor ──
-    // First pass: direct targetRefs match.
-    for (const rel of relations) {
-      const rt = rel.relationType?.toUpperCase();
-      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
-      // Don't auto-enter rejected classifies from navigation jumps —
-      // their messages are back on the main canvas.  User can still
-      // enter preview mode by double-clicking the card directly.
-      if (rejectedContainerIds.has(rel.id)) continue;
-      const targets = (rel.targetRefs ?? []) as TargetRef[];
-      if (targets.some(t =>
-        (t.kind === 'relation' && t.relationId === anchorId) ||
-        (t.kind !== 'relation' && t.messageId === anchorId)
-      )) { tryEnter(rel.id); return; }
-    }
-    // Second pass: transitive ownership + CORRECT expansion.
-    for (const rel of relations) {
-      const rt = rel.relationType?.toUpperCase();
-      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
-      if (rejectedContainerIds.has(rel.id)) continue;
-      const owned = collectOwnedByRelation(rel.id, relById, new Set(), undefined, rejectedJoinRelationIds);
-      const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
-      if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
-        tryEnter(rel.id); return;
-      }
+    if (containingTopics.length > 0) {
+      tryEnter(containingTopics);
+      return;
     }
     // Anchor not in any classify → main view.
     if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false }); else setClassifyRelMsgId(null);
@@ -573,6 +564,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const previousComposerModeRef = useRef<string>(`${relationType ?? 'plain'}::${secondaryRelationType}`);
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
+  const [messageIdInput, setMessageIdInput] = useState("");
   useEffect(() => {
     if (relationType !== 'proposal') return;
     if (secondaryRelationType === '终止结算' || secondaryRelationType === '分配收入') {
@@ -915,6 +907,48 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const showAlert = useCallback((message: string) => {
     setAlertMessage(message);
   }, []);
+
+  function renderAlertMessage(message: string): React.ReactNode {
+    const parts: React.ReactNode[] = [];
+    const messageIdPattern = /消息(?:「[^」]*」)?\(([^)]+)\)|消息\s+([A-Za-z0-9_-]+)/g;
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+    while ((match = messageIdPattern.exec(message)) !== null) {
+      if (match.index > cursor) parts.push(message.slice(cursor, match.index));
+      const messageId = match[1] ?? match[2];
+      const target = messagesRef.current.find(item => item.id === messageId);
+      const label = target?.kind === 'relation'
+        ? getPresentationSpec(target.relationType ?? 'reference').label
+        : target?.content?.trim().replace(/\s+/g, ' ').slice(0, 18) || '消息';
+      parts.push(
+        <button
+          key={`${messageId}-${match.index}`}
+          type="button"
+          title={`跳转到消息 ${messageId}`}
+          onClick={() => {
+            setAlertMessage(null);
+            handleNavigateToMessage(messageId);
+          }}
+          style={{
+            display: 'inline-block',
+            margin: '0 3px',
+            padding: '1px 6px',
+            border: '1px solid #60a5fa',
+            borderRadius: 4,
+            background: '#1e3a5f',
+            color: '#bfdbfe',
+            cursor: 'pointer',
+            fontSize: 13,
+          }}
+        >
+          {label}
+        </button>,
+      );
+      cursor = match.index + match[0].length;
+    }
+    if (cursor < message.length) parts.push(message.slice(cursor));
+    return parts.length > 0 ? parts : message;
+  }
 
   const mergeStakeSnapshot = useCallback((messageId: string, stakes: MessageStakes) => {
     const byType = stakes.countsByType ?? {};
@@ -2880,56 +2914,60 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   /**
    * Check whether any selected text messages have non-reference edges to
-   * already-classified text messages that are NOT part of the current selection.
-   *
-   * Defensive expansion: when a selected text message is connected via an edge
-   * to a classify/merge/arrange/summary relation message, the relation's
-   * owned text messages are also treated as "selected".  This prevents false
-   * positives when getGroupedTargetTextMessageIds has already expanded the
-   * selection but an edge exists between a selected text and a classified text
-   * that belongs to the same relation group.
+   * text messages that are NOT part of the current selection.
    */
-  function hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds: string[]): boolean {
-    if (targetTextIds.length === 0) return false;
+  function hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds: string[]): string | null {
     const selected = new Set(targetTextIds);
+    const selectedRelationIds = new Set(
+      effectiveTargetUnits
+        .filter(unit => msgMap.get(unit.messageId)?.kind === 'relation')
+        .map(unit => unit.messageId)
+    );
+    if (selected.size === 0 && selectedRelationIds.size === 0) return null;
+    const selectedIds = new Set([...selected, ...selectedRelationIds]);
+    const describe = (id: string): string => {
+      const message = msgMap.get(id);
+      if (!message) return id;
+      if (message.kind === 'relation') return `${getPresentationSpec(message.relationType ?? 'reference').label}(${id})`;
+      const content = message.content?.trim().replace(/\s+/g, ' ').slice(0, 24);
+      return content ? `「${content}」(${id})` : id;
+    };
+    const describeViolation = (fromId: string, toId: string, type: string): string =>
+      `消息${describe(fromId)}与消息${describe(toId)}存在「${getPresentationSpec(type.toLowerCase()).label}」关系，不能只将其中一方加入分类；`;
+    const crossesBoundary = (fromId: string, toId: string): boolean => {
+      if (fromId === toId) return false;
+      const fromMessage = msgMap.get(fromId);
+      const toMessage = msgMap.get(toId);
+      if (!fromMessage || !toMessage) return false;
+      return selectedIds.has(fromId) !== selectedIds.has(toId);
+    };
 
-    // Defensive expansion: when a selected normal message has an edge to an
-    // expandable relation message (classify/merge/arrange/summary), treat
-    // that relation's owned text messages as also selected.
-    const expandableTypes = new Set(['classify', 'merge', 'arrange', 'summary']);
     for (const e of edges) {
-      const fromMsg = msgMap.get(e.from.messageId);
-      const toMsg = msgMap.get(e.to.messageId);
-      const fromIsSelectedNormal = fromMsg && isContentKind(fromMsg.kind) && selected.has(e.from.messageId);
-      const toIsSelectedNormal = toMsg && isContentKind(toMsg.kind) && selected.has(e.to.messageId);
-      const relationEndpoint = fromIsSelectedNormal
-        ? (toMsg?.kind === 'relation' && expandableTypes.has(toMsg.relationType ?? '') ? e.to.messageId : null)
-        : toIsSelectedNormal
-          ? (fromMsg?.kind === 'relation' && expandableTypes.has(fromMsg.relationType ?? '') ? e.from.messageId : null)
-          : null;
-      if (!relationEndpoint) continue;
-      const owned = collectOwnedByRelation(relationEndpoint, relationById);
-      for (const ownedTextId of owned.textIds) {
-        if (!selected.has(ownedTextId)) selected.add(ownedTextId);
+      // Reference is a citation and does not imply semantic grouping.
+      if (e.relationType === "reference") continue;
+      if (crossesBoundary(e.from.messageId, e.to.messageId)) {
+        return describeViolation(e.from.messageId, e.to.messageId, e.relationType);
       }
     }
 
-    for (const e of edges) {
-      // Skip reference and correct edges: reference is a citation that does
-      // not imply semantic grouping; correct edges are already handled by
-      // expandTextIdsWithCorrections and should not trigger cross-link blocks.
-      if (e.relationType === "reference" || e.relationType === "correct") continue;
-      const fromKind = msgMap.get(e.from.messageId)?.kind;
-      const toKind = msgMap.get(e.to.messageId)?.kind;
-      if (fromKind !== "normal" || toKind !== "normal") continue;
-      const fromSelected = selected.has(e.from.messageId);
-      const toSelected = selected.has(e.to.messageId);
-      if (fromSelected !== toSelected) {
-        const nonTargetMessageId = fromSelected ? e.to.messageId : e.from.messageId;
-        if (classifiedTargetTextIds.has(nonTargetMessageId)) return true;
+    // Re-check persisted relations because some relation endpoints (for
+    // example content-kind messages or relation sources) may not have a
+    // normal-to-normal DemoEdge after the graph is rebuilt.
+    for (const relation of relations) {
+      const relationType = relation.relationType.toUpperCase();
+      if (relationType === 'REFERENCE' || relationType === 'JOIN') continue;
+      const sourceId = relation.sourceMessageId;
+      const endpointIds = [
+        ...(sourceId ? [sourceId] : []),
+        ...(relation.targetRefs ?? []).map(target => target.kind === 'relation' ? target.relationId : target.messageId),
+      ].filter((id): id is string => Boolean(id));
+      if (endpointIds.some(id => selectedIds.has(id)) && endpointIds.some(id => !selectedIds.has(id))) {
+        const selectedId = endpointIds.find(id => selectedIds.has(id));
+        const outsideId = endpointIds.find(id => !selectedIds.has(id));
+        if (selectedId && outsideId) return describeViolation(selectedId, outsideId, relationType);
       }
     }
-    return false;
+    return null;
   }
 
   function enterClassifyTopic(relMsgId: string) {
@@ -2985,7 +3023,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return match?.id ?? null;
   }
 
-  function exitClassifyTopic(_options?: { restoreSnapshot?: boolean }) {
+  function exitClassifyTopic(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }) {
     const entry = classifyStackRef.current.pop();
     const prev = classifyStackRef.current.length > 0
       ? classifyStackRef.current[classifyStackRef.current.length - 1]
@@ -2999,14 +3037,22 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     setClassifyKey(k => k + 1);
     setPreviewClassifyId(null); // exit preview mode when leaving classify
+    if (!prev && _options?.clearSelectionOnRootExit) {
+      setDraftUnits([]);
+      setSourceUnits([]);
+      setTargetUnits([]);
+      setActiveTextSelectId(null);
+      setLastClickedMessageId(null);
+    }
     if (_options?.restoreSnapshot !== false && entry?.snapshot) {
       restoreSnapshot(entry.snapshot, { restoreSelection: false });
     }
+    if (_options?.preserveViewMode) setViewMode(_options.preserveViewMode);
   }
 
   function handleExitClassifyTopic() {
     const targetId = draftUnits[draftUnits.length - 1]?.messageId ?? lastClickedMessageId;
-    exitClassifyTopic();
+    exitClassifyTopic({ clearSelectionOnRootExit: true, preserveViewMode: viewMode });
     if (targetId) setTimeout(() => scrollMsgToCenter(targetId), 150);
   }
 
@@ -3888,8 +3934,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         showAlert(`选中的${orphanLabels.join('、')}标签对应的消息不在分类目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
-      if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        showAlert("分类目标与其他文本消息存在非引用关联，无法建立分类关系");
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds);
+      if (crossLinkError) {
+        showAlert(crossLinkError);
         return;
       }
       const selectedSet = new Set(targetTextIds);
@@ -4062,8 +4109,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         showAlert(`选中的${orphanSummaryLabels.join('、')}标签对应的消息不在总结目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
-      if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        showAlert("总结目标与其他文本消息存在非引用关联，无法建立总结关系");
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds);
+      if (crossLinkError) {
+        showAlert(crossLinkError);
         return;
       }
       const summaryTargetRefs = getClassifyTargetRefs(effectiveTargets);
@@ -4154,8 +4202,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         showAlert(`选中的${orphanMergeLabels.join('、')}标签对应的消息不在归并目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
-      if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
-        showAlert("归并目标与其他文本消息存在非引用关联，无法建立归并关系");
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds);
+      if (crossLinkError) {
+        showAlert(crossLinkError);
         return;
       }
       const mergeTargetRefs = Array.from(new Map(
@@ -4680,9 +4729,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? '');
   });
   const targetTextIdsForValidation = getGroupedTargetTextMessageIds(effectiveTargetUnits);
-  const hasCrossLinkValidationError = (isClassifyType || isSummaryType || isMergeType)
+  const crossLinkValidationMessage = (isClassifyType || isSummaryType || isMergeType || joinOnlyAction)
     && hasTargetsAvailable
     && hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIdsForValidation);
+  const hasCrossLinkValidationError = Boolean(crossLinkValidationMessage);
   const hasOrphanContainerLabel = (isSummaryType || isMergeType)
     && effectiveTargetUnits.some(unit => {
       const targetMessage = msgMap.get(unit.messageId);
@@ -4958,7 +5008,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (hasInvalidCorrectTarget) return "更正关系只能选择一条普通消息片段";
     if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
     if (hasInvalidJoinTarget) return "加入容器的目标不能是装饰关系消息";
-    if (hasCrossLinkValidationError) return "目标与已分类消息存在非引用关联，无法建立关系";
+    if (hasCrossLinkValidationError) return crossLinkValidationMessage as string;
     if (hasOrphanContainerLabel) return "选中的关系标签不属于当前目标集合";
     if (hasClassifyCycle) return "不能将当前分类或其上级分类作为新分类的目标";
     if (hasInvalidDelegationFormat) return secondaryRelationType === 'fulfill'
@@ -6410,6 +6460,20 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     setScrollKey(k => k + 1);
   }, [cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert]);
 
+  function confirmMessageIdNavigation() {
+    const messageId = messageIdInput.trim();
+    if (!messageId) {
+      showAlert('请输入消息 ID');
+      return;
+    }
+    if (!messagesRef.current.some(message => message.id === messageId)) {
+      showAlert(`未找到消息 ${messageId}`);
+      return;
+    }
+    handleNavigateToMessage(messageId);
+    setAutoClassifyMsgId(messageId);
+  }
+
   const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
     if (correctionFilterTargetId === null) {
       handleNavigateToMessage(messageId);
@@ -6720,6 +6784,28 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     <ErrorBoundary>
     <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
       <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top: topControlsFrozen ? topControlsOffset : 0, zIndex: Z_INDEX.popover }}>
+        {!isPreloaded && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid #334155", borderRadius: 6, background: "#111827", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" }}>
+            <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转到消息</span>
+            <input
+              aria-label="消息 ID"
+              value={messageIdInput}
+              onChange={event => setMessageIdInput(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') confirmMessageIdNavigation();
+              }}
+              placeholder="输入消息 ID"
+              style={{ width: 220, padding: "5px 7px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", outline: "none", fontSize: 12 }}
+            />
+            <button
+              type="button"
+              onClick={confirmMessageIdNavigation}
+              style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #3b82f6", background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}
+            >
+              确认
+            </button>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
@@ -6862,13 +6948,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                 const selectedMessageId = draftUnits.length > 0
                   ? draftUnits[draftUnits.length - 1].messageId
                   : lastClickedMessageId;
-                if (nextViewMode === 'graph' && selectedMessageId && traceEntries.length === 0) {
-                  const containingClassifyId = findContainingClassifyTopic(selectedMessageId);
-                  if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
-                    if (currentClassifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
-                    enterClassifyTopic(containingClassifyId);
-                  }
-                }
                 const scrollTargetId = comparisonMode
                   ? comparisonId
                   : selectedMessageId;
@@ -6929,7 +7008,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                     exitTemporaryCategory();
                     return;
                   }
-                  exitClassifyTopic();
+                  handleExitClassifyTopic();
                 }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
                   {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory ? "退出临时分类" : classifyExitLabel}
                 </button>
@@ -7523,7 +7602,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     <PromptModal
       open={alertMessage !== null}
       title="提示"
-      message={alertMessage ?? ''}
+      message={renderAlertMessage(alertMessage ?? '')}
       confirmText="已阅"
       onConfirm={() => setAlertMessage(null)}
     />

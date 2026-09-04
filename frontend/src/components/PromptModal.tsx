@@ -1,11 +1,12 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import PopupOverlay from './PopupOverlay';
 
 interface PromptModalProps {
   open: boolean;
   title: string;
-  message: string;
+  message: ReactNode;
   confirmText?: string;
   confirmDisabled?: boolean;
   cancelText?: string;

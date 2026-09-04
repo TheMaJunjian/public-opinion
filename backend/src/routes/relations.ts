@@ -400,6 +400,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       res.status(400).json({ error: '至少需要一个目标引用' });
       return;
     }
+    let sourceMessageForValidation: { kind: string; relationType: string | null; targetRefs: unknown } | null = null;
     if (data.sourceMessageId) {
       const sourceMessage = await prisma.message.findFirst({
         where: { id: data.sourceMessageId, topicId },
@@ -415,6 +416,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         res.status(400).json({ error: '加入消息的来源必须是分类、总结、排列或归并容器消息' });
         return;
       }
+      sourceMessageForValidation = sourceMessage;
     }
 
     // Validate all target refs
@@ -578,10 +580,19 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       }
     }
 
-    // CLASSIFY, MERGE, and SUMMARY: validate grouping targets.
+    // CLASSIFY, MERGE, SUMMARY, and JOIN: validate grouping boundaries.
     // SUMMARY target-type check and cross-link BFS are delegated to the
     // crossLinkValidator module to keep the route handler lean.
-    if (data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'ARRANGE' || data.relationType === 'SUMMARY') {
+    const isInternalContainerJoin = data.relationType === 'JOIN'
+      && sourceMessageForValidation
+      && Array.isArray(sourceMessageForValidation.targetRefs)
+      && data.targetRefs.every(target => (sourceMessageForValidation!.targetRefs as Array<Record<string, unknown>>).some(existing =>
+        target.kind === existing.kind
+          && (target.kind === 'relation'
+            ? target.relationId === existing.relationId
+            : target.messageId === existing.messageId)
+      ));
+    if ((data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'ARRANGE' || data.relationType === 'SUMMARY' || data.relationType === 'JOIN') && !isInternalContainerJoin) {
       const validationResult = await validateGroupingTargets({
         topicId,
         relationType: data.relationType,

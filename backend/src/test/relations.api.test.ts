@@ -287,6 +287,25 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
+  it('rejects JOIN when its target has a non-reference link to an outside message', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([{ id: 'msg-2', topicId: 'topic-1', kind: 'TEXT' }])
+      .mockResolvedValueOnce([{
+        id: 'rel-reply', relationType: 'REPLY', relSourceId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      }])
+      .mockResolvedValueOnce([{ id: 'msg-1' }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'rel-container', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
+  });
+
   it('rejects JOIN targeting a decoration relation message', async () => {
     (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
       id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
@@ -401,7 +420,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows MERGE when text targets have non-reference cross links to unclassified messages', async () => {
+  it('rejects MERGE when text targets have non-reference cross links to unclassified messages', async () => {
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])
       .mockResolvedValueOnce([{
@@ -415,7 +434,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'MERGE', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 
   it('allows MERGE with classify relation targets when links stay within the selected topic', async () => {
@@ -461,7 +481,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows CLASSIFY when text targets have non-reference cross links to unclassified messages', async () => {
+  it('rejects CLASSIFY when text targets have non-reference cross links to unclassified messages', async () => {
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])
       .mockResolvedValueOnce([{
@@ -474,7 +494,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 
   it('allows CLASSIFY when non-reference links stay within selected targets', async () => {
@@ -568,7 +589,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows CLASSIFY when MERGE relation target text messages cross-link only to unclassified messages', async () => {
+  it('rejects CLASSIFY when MERGE relation target text messages cross-link to unclassified messages', async () => {
     const mockMergeRel = {
       id: 'rel-merge',
       topicId: 'topic-1',
@@ -590,7 +611,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 
   it('rejects MERGE when ARRANGE relation target text messages have cross links to already-classified messages', async () => {
@@ -624,7 +646,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows MERGE when ARRANGE relation target text messages cross-link only to unclassified messages', async () => {
+  it('rejects MERGE when ARRANGE relation target text messages cross-link to unclassified messages', async () => {
     const mockARRANGERel = {
       id: 'rel-supp',
       topicId: 'topic-1',
@@ -646,7 +668,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'MERGE', targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 });
 
@@ -919,7 +942,7 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows SUMMARY when target text messages cross-link only to unclassified messages', async () => {
+  it('rejects SUMMARY when target text messages cross-link to unclassified messages', async () => {
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])
       .mockResolvedValueOnce([{
@@ -933,7 +956,8 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'SUMMARY', targetRefs: [{ kind: 'message', messageId: 'msg-2' }], payload: { title: '总结标题' } });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 });
 

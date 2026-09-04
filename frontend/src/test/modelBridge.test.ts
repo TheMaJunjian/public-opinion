@@ -24,4 +24,42 @@ describe('convertMessagesToDemoModel', () => {
 
     expect(result.messages[0]?.content).toBe(content);
   });
+
+  it('uses one content card for a governance message and its compatibility relation', () => {
+    const message: Message = {
+      id: 'proposal-1',
+      topicId: 'topic-1',
+      kind: 'GOVERNANCE',
+      contentType: 'TEXT',
+      content: '请表决这个提案',
+      createdAt: '2024-01-01T00:01:00.000Z',
+      createdBy: user,
+      relationType: 'PROPOSAL',
+      targetRefs: [{ kind: 'message', messageId: 'text-1' }],
+      relationPayload: { content: '请表决这个提案', operationType: 'DISTRIBUTE_REVENUE' },
+    };
+    const compatibilityRelation: Relation = {
+      id: message.id,
+      topicId: message.topicId,
+      relationType: 'PROPOSAL',
+      sourceMessageId: null,
+      targetRefs: message.targetRefs ?? [],
+      payload: message.relationPayload ?? undefined,
+      createdAt: message.createdAt,
+      createdBy: user,
+    };
+
+    const result = convertMessagesToDemoModel([message], [compatibilityRelation]);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({
+      id: 'proposal-1',
+      kind: 'governance',
+      relationType: 'proposal',
+      relationPayload: message.relationPayload,
+      targetRefs: message.targetRefs,
+    });
+    expect(result.edges).toHaveLength(1);
+    expect(result.edges[0]?.relationMessageId).toBe('proposal-1');
+  });
 });

@@ -4,7 +4,7 @@ import { useParams, useSearchParams, useLocation, useNavigate } from 'react-rout
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, isTraceTextLikeMessage, kindLabel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, demoMessageToRelation, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, isTraceTextLikeMessage, kindLabel } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection,
   RelationType, MessageKind,
@@ -278,14 +278,31 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         const serverRelationIds = new Set(serverRelations.map(relation => relation.id));
         const mergedRelations = [
           ...serverRelations,
-          ...currentRelations.filter(relation => !serverRelationIds.has(relation.id)),
+          ...currentRelations.filter(relation =>
+            !serverRelationIds.has(relation.id)
+            && !['PROPOSAL', 'CODE_CHANGE', 'OPERATIONS'].includes(relation.relationType.toUpperCase()),
+          ),
         ];
         const { messages: serverDemoMsgs, edges: serverDemoEdges } = convertMessagesToDemoModel(
           messagesData.data, mergedRelations
         );
-        const serverMessageIds = new Set(serverDemoMsgs.map(message => message.id));
+        const localMessagesById = new Map(messagesRef.current.map(message => [message.id, message]));
+        const normalizedServerDemoMsgs = serverDemoMsgs.map(serverMessage => {
+          const localMessage = localMessagesById.get(serverMessage.id);
+          const isGovernanceKind = localMessage?.kind === 'governance'
+            || localMessage?.kind === 'code'
+            || localMessage?.kind === 'operations';
+          if (!isGovernanceKind || serverMessage.kind === localMessage?.kind) return serverMessage;
+          return {
+            ...serverMessage,
+            kind: localMessage.kind,
+            backendKind: localMessage.backendKind ?? serverMessage.backendKind,
+            relationPayload: localMessage.relationPayload ?? serverMessage.relationPayload,
+          };
+        });
+        const serverMessageIds = new Set(normalizedServerDemoMsgs.map(message => message.id));
         const mergedDemoMsgs = [
-          ...serverDemoMsgs,
+          ...normalizedServerDemoMsgs,
           ...messagesRef.current.filter(message => !serverMessageIds.has(message.id)),
         ];
         const mergedEdgeKeys = new Set(serverDemoEdges.map(edge =>
@@ -565,6 +582,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const savedTextOnTypeSwitchRef = useRef(""); // cache textarea content when switching to a text-less relation type
   const savedTextBeforeDelegationRef = useRef("");
   const lastTagSecondaryRef = useRef<string>("recommend"); // remember last TAG secondary selection
+  const lastDelegationSecondaryRef = useRef<'create' | 'fulfill'>('create');
   const delegationContentBufferRef = useRef<Record<'create' | 'fulfill', string>>({ create: '', fulfill: '' });
   const previousComposerModeRef = useRef<string>(`${relationType ?? 'plain'}::${secondaryRelationType}`);
   const [relationLabel, setRelationLabel] = useState("");
@@ -596,10 +614,18 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (relationType === 'delegation' && (secondaryRelationType === 'create' || secondaryRelationType === 'fulfill')) {
       const saved = delegationContentBufferRef.current[secondaryRelationType];
       setNewMessageContent(saved || (secondaryRelationType === 'create' ? '报酬数量=100\n委托内容=' : '完成说明='));
-    } else if (wasDelegation && !isDelegation && savedTextBeforeDelegationRef.current) {
+    } else if (wasDelegation && !isDelegation) {
       setNewMessageContent(savedTextBeforeDelegationRef.current);
     }
     previousComposerModeRef.current = mode;
+  }, [relationType, secondaryRelationType]);
+  useEffect(() => {
+    if (relationType !== 'delegation') return;
+    if (secondaryRelationType === 'create' || secondaryRelationType === 'fulfill') {
+      lastDelegationSecondaryRef.current = secondaryRelationType;
+    } else {
+      setSecondaryRelationType(lastDelegationSecondaryRef.current);
+    }
   }, [relationType, secondaryRelationType]);
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
   const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
@@ -1195,7 +1221,14 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   const currentTraceEntry = traceEntries.length > 0 ? traceEntries[traceEntries.length - 1] : null;
   const currentTraceIds = currentTraceEntry?.ids ?? null;
-  const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
+  const relationById = useMemo(() => {
+    const index = new Map(relations.map(relation => [relation.id, relation]));
+    for (const message of messages) {
+      const relation = demoMessageToRelation(message, topic?.id ?? topicId ?? '');
+      if (relation) index.set(relation.id, relation);
+    }
+    return index;
+  }, [messages, relations, topic?.id, topicId]);
   const msgMap = useMemo(() => {
     const map = new Map(messages.map(m => [m.id, m]));
     for (const relation of relations) {
@@ -4434,9 +4467,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           content: proposalContent,
           kind: govKind,
           backendKind: relationType === "proposal" ? "GOVERNANCE" : relationType === "code_change" ? "CODE" : "OPERATIONS",
+          sourceMessageId: backendRel.sourceMessageId,
+          relationType: backendRel.relationType.toLowerCase() as RelationType,
+          relationPayload: backendRel.payload,
+          targetRefs: backendRel.targetRefs,
         };
         setMessages(prev => [...prev, govMsg]);
-        setRelations(prev => [...prev, backendRel]);
         // Governance/ops messages are content-kind — add as message target
         await addTargetToClassifyTopic({ kind: 'message', messageId: backendRel.id });
         const govRoundId = await createSettlementRoundForMessage(
@@ -6733,8 +6769,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                 setNewMessageContent(savedTextOnTypeSwitchRef.current);
               }
               setRelationType(prev => prev === rt ? null : rt);
-              if (rt === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); }
-              else { setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); }
+              if (newType === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); }
+              else if (newType === "delegation") { setSecondaryRelationType(lastDelegationSecondaryRef.current); }
+              else { setSecondaryRelationType(newType === "arrange" ? "vertical" : "none"); }
               if (guideTargetIdRef.current && (rt === 'agree' || rt === 'disagree')) {
                 window.dispatchEvent(new Event('guide-stance-selected'));
               }

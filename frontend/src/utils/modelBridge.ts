@@ -64,10 +64,12 @@ export type DemoMessage = {
   content: string;
   kind: MessageKind;
   backendKind?: string;
+  sourceMessageId?: string | null;
   settlementTargetId?: string;   // Phase 6: target message for ROUND/ROUND_RESULT
   roundPayload?: Record<string,unknown>;  // Phase 6: roundId/result for settlement highlight
   relationType?: RelationType;
   relationPayload?: RelationPayload;
+  targetRefs?: TargetRef[];
   /** Join info for container-add records (加入容器消息) */
   joinInfo?: {
     containerId: string;
@@ -118,6 +120,25 @@ export function resolveCorrectionContent(
 export function correctionSelectionIsStale(content: string, selection: Selection | undefined): boolean {
   return selection?.kind === 'text'
     && content.slice(selection.start, selection.start + selection.len) !== selection.text;
+}
+
+export function demoMessageToRelation(message: DemoMessage, topicId: string): BackendRelation | null {
+  if (!['governance', 'code', 'operations'].includes(message.kind)
+    || !message.relationType || !message.targetRefs) return null;
+  return {
+    id: message.id,
+    topicId,
+    relationType: message.relationType.toUpperCase(),
+    sourceMessageId: message.sourceMessageId ?? null,
+    targetRefs: message.targetRefs,
+    payload: message.relationPayload,
+    createdAt: message.createdAt,
+    createdBy: {
+      id: '',
+      username: message.author,
+      createdAt: message.createdAt,
+    },
+  };
 }
 
 export type DemoEdge = {
@@ -225,8 +246,12 @@ export function convertMessagesToDemoModel(
     content: m.content ?? kindLabel(bk, undefined, stype),
     kind: mapBackendKind(bk),
     backendKind: bk,
+    sourceMessageId: (m as any).relSourceId ?? null,
     settlementTargetId,
     roundPayload,
+      relationType: (m as any).relationType?.toLowerCase() as RelationType | undefined,
+      relationPayload: (m as any).relationPayload ?? undefined,
+      targetRefs: (m as any).targetRefs ?? undefined,
   }});
 
   const demoEdges: DemoEdge[] = [];
@@ -236,6 +261,14 @@ export function convertMessagesToDemoModel(
     // Relation messages use their plain backend ID — no synthetic prefix needed.
     const relMsgId = rel.id;
     const relType: string = rel.relationType.toLowerCase();
+
+    // Governance relations are persisted as content messages. The API may
+    // still expose a compatibility relation projection, but it must not
+    // create a second card for the same backend entity.
+    const persistedMessage = messages.find(message => message.id === rel.id);
+    if (persistedMessage && ['GOVERNANCE', 'CODE', 'OPERATIONS'].includes((persistedMessage as any).kind)) {
+      continue;
+    }
 
     // JOIN relations: internal membership records — skip edge creation.
     const isJoin = relType === 'join';
@@ -346,11 +379,11 @@ export function convertMessagesToDemoModel(
     } // !isJoin
   }
 
-  // Create edges from GOVERNANCE/CODE messages that have relationType and targetRefs
+  // Create edges from content-kind relation messages that have relationType and targetRefs
   // (PROPOSAL / CODE_CHANGE sent via the relation creation path).
   for (const m of messages) {
     const bk = (m as any).kind as string | undefined;
-    if (bk !== 'GOVERNANCE' && bk !== 'CODE') continue;
+    if (bk !== 'GOVERNANCE' && bk !== 'CODE' && bk !== 'OPERATIONS') continue;
     const relType = (m as any).relationType as string | undefined;
     const targetRefs = (m as any).targetRefs as TargetRef[] | undefined;
     if (!relType || !targetRefs || targetRefs.length === 0) continue;

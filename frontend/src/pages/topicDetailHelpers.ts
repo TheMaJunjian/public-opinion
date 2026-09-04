@@ -253,6 +253,8 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     content = `分类：${title ?? `分类（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'summary') {
     content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
+  } else if (relType === 'delegation') {
+    content = getRelationTitle(relation.payload) ?? '';
   } else if (relType === 'proposal' || relType === 'code_change' || relType === 'operations') {
     const proposalContent = getRelationTitle(relation.payload) ?? '';
     content = `${typeName}\n${proposalContent}\n目标：${targetSummary}`;

@@ -3,7 +3,7 @@
  * 生产环境可设置 VITE_DEBUG=false 禁用
  */
 const DEBUG = import.meta.env.VITE_DEBUG !== 'false';
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 export interface OperationLogEntry {
   time: string;
   action: string;

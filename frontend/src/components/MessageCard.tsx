@@ -74,6 +74,9 @@ export default function MessageCard({
   } = ctx;
 
   const bk = (msg as any).backendKind as string | undefined;
+  const isDelegationMsg = msg.kind === 'relation' && msg.relationType === 'delegation';
+  const delegationLabel = msg.relationPayload?.delegationKind === 'FULFILL' ? '完成委托' : '创建委托';
+  const delegationColor = '#f97316';
   const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? '#f59e0b' : bk === 'CODE' ? '#3b82f6' : '#10b981');
   const topicBackground = isSummaryTopic ? '#14352a' : isMergeTopic ? '#1e293b' : '#1f1f1f';
   const topicLabel = isSummaryTopic ? '总结容器' : isMergeTopic ? '归并' : '进行中';
@@ -94,14 +97,14 @@ export default function MessageCard({
           ? '2px solid #fbbf24'
           : isTopicMsg
             ? isSummaryTopic ? '1px solid rgba(52,211,153,0.7)' : isMergeTopic ? '1px solid rgba(148,163,184,0.75)' : '1px solid #444'
-            : isGovernanceMsg ? `1px solid ${govColor}44` : isActiveText ? '2px dashed #0b84ff' : '1px solid #444',
+            : isDelegationMsg ? `1px solid ${delegationColor}66` : isGovernanceMsg ? `1px solid ${govColor}44` : isActiveText ? '2px dashed #0b84ff' : '1px solid #444',
         borderLeft: isWholeSelected
           ? '4px solid #fbbf24'
           : isTopicMsg ? `4px solid ${isSummaryTopic ? '#34d399' : isMergeTopic ? '#94a3b8' : '#6366f1'}`
-          : isGovernanceMsg ? `3px solid ${govColor}` : undefined,
+          : isDelegationMsg ? `3px solid ${delegationColor}` : isGovernanceMsg ? `3px solid ${govColor}` : undefined,
         background: isWholeSelected
           ? 'rgba(91,65,0,0.55)'
-          : isTopicMsg ? topicBackground
+          : isDelegationMsg ? 'rgba(249,115,22,0.1)' : isTopicMsg ? topicBackground
           : isGovernanceMsg ? '#1a1f2e' : '#1f1f1f',
         padding: isTopicMsg ? '10px 12px' : '10px 14px',
         cursor: 'pointer',
@@ -132,6 +135,7 @@ export default function MessageCard({
           {headerLabel ?? (isClassifyTopic ? `分类 ${msg.id}`
             : isSummaryTopic ? `总结 ${msg.id}`
             : isMergeTopic ? `归并 ${msg.id}`
+            : isDelegationMsg ? `${delegationLabel} ${msg.id}`
             : msg.kind === 'relation' ? `关系消息 ${msg.id}`
             : bk === 'ROUND' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '💎 发起价值仲裁' : '⚖️ 发起真假仲裁')
             : bk === 'ROUND_RESULT' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '💎 价值仲裁已结算' : '⚖️ 真假仲裁已结算')
@@ -145,7 +149,7 @@ export default function MessageCard({
             {isClassifyTopic ? '双击进入分类'
               : isSummaryTopic ? '双击进入总结容器'
               : isMergeTopic ? '双击进入归并'
-              : <>{`作者：${msg.author}`}{headerAfterAuthor && ' '}{headerAfterAuthor}</>}
+              : <>{isDelegationMsg && <span style={{ color: delegationColor, fontWeight: 600 }}>{delegationLabel} </span>}{`作者：${msg.author}`}{headerAfterAuthor && ' '}{headerAfterAuthor}</>}
           </div>
           {headerExtra}
         </span>

@@ -563,7 +563,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
   const subTypeCustomBufferRef = useRef(""); // cache textarea content when switching away from CUSTOM subType
   const savedTextOnTypeSwitchRef = useRef(""); // cache textarea content when switching to a text-less relation type
+  const savedTextBeforeDelegationRef = useRef("");
   const lastTagSecondaryRef = useRef<string>("recommend"); // remember last TAG secondary selection
+  const delegationContentBufferRef = useRef<Record<'create' | 'fulfill', string>>({ create: '', fulfill: '' });
+  const previousComposerModeRef = useRef<string>(`${relationType ?? 'plain'}::${secondaryRelationType}`);
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
   useEffect(() => {
@@ -577,12 +580,26 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
   }, [relationType, secondaryRelationType]);
   useEffect(() => {
-    if (relationType !== 'delegation') return;
-    if (secondaryRelationType === 'create') {
-      setNewMessageContent('报酬数量=100\n委托内容=');
-    } else if (secondaryRelationType === 'fulfill') {
-      setNewMessageContent('分配数量=100\n完成说明=');
+    const mode = `${relationType ?? 'plain'}::${secondaryRelationType}`;
+    const previousMode = previousComposerModeRef.current;
+    const wasDelegation = previousMode.startsWith('delegation::');
+    const isDelegation = relationType === 'delegation';
+    if (isDelegation && !wasDelegation) {
+      savedTextBeforeDelegationRef.current = newMessageContent;
     }
+    if (previousMode.startsWith('delegation::')) {
+      const previousKind = previousMode.slice('delegation::'.length);
+      if (previousKind === 'create' || previousKind === 'fulfill') {
+        delegationContentBufferRef.current[previousKind] = newMessageContent;
+      }
+    }
+    if (relationType === 'delegation' && (secondaryRelationType === 'create' || secondaryRelationType === 'fulfill')) {
+      const saved = delegationContentBufferRef.current[secondaryRelationType];
+      setNewMessageContent(saved || (secondaryRelationType === 'create' ? '报酬数量=100\n委托内容=' : '完成说明='));
+    } else if (wasDelegation && !isDelegation && savedTextBeforeDelegationRef.current) {
+      setNewMessageContent(savedTextBeforeDelegationRef.current);
+    }
+    previousComposerModeRef.current = mode;
   }, [relationType, secondaryRelationType]);
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
   const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
@@ -2663,7 +2680,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         return;
       }
       if (relType === "classify" || relType === "summary") {
-        if ((relType === "summary" || relType === "classify") && traceEntries.length > 0 && !isInsideClassify) {
+        if (traceFrameIds.has(messageId)) {
           setTraceExpandedFrameIds(prev => {
             const next = new Set(prev);
             if (next.has(messageId)) next.delete(messageId);
@@ -4260,22 +4277,20 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         return null;
       };
       const isFulfill = secondaryRelationType === 'fulfill';
-      const selectedTargets = effectiveTargets.filter(target => msgMap.get(target.messageId)?.kind === 'relation');
-      const targetRelation = selectedTargets.length === 1
-        ? relations.find(rel => rel.id === selectedTargets[0].messageId)
+      const targetRelation = isFulfill && effectiveTargets.length === 1 && msgMap.get(effectiveTargets[0].messageId)?.kind === 'relation'
+        ? relations.find(rel => rel.id === effectiveTargets[0].messageId)
         : undefined;
-      const amountText = readField([isFulfill ? '分配数量' : '报酬数量', '数量']);
-      const ratioText = readField([isFulfill ? '分配比例' : '报酬比例', '比例']);
+      const amountText = readField(['报酬数量', '数量']);
+      const ratioText = readField(['报酬比例', '比例']);
+      const description = readField([isFulfill ? '完成说明' : '委托内容']);
       const amount = amountText ? Number(amountText) : undefined;
       const ratio = ratioText ? Number(ratioText.replace(/%$/, '')) : undefined;
       const validReward = isFulfill
-        ? (amount === undefined) !== (ratio === undefined)
-          && (amount === undefined || (Number.isInteger(amount) && amount > 0))
-          && (ratio === undefined || (Number.isInteger(ratio) && ratio > 0 && ratio <= 100))
+        ? amount === undefined && ratio === undefined
         : amount !== undefined && Number.isInteger(amount) && amount > 0 && ratio === undefined;
-      if (!content || !validReward || (isFulfill && effectiveTargets.length > 0 && (effectiveTargets.length !== 1 || !targetRelation || targetRelation.relationType.toUpperCase() !== 'DELEGATION'))) {
+      if (!content || !description || !validReward || (isFulfill && (effectiveTargets.length !== 1 || !targetRelation || targetRelation.relationType.toUpperCase() !== 'DELEGATION'))) {
         setSendError(isFulfill
-          ? '完成委托格式：分配数量=100 或 分配比例=30%（二选一）；完成说明=...（分配字段必须放在第一行）'
+          ? '完成委托格式：完成说明=...，并且必须选中一条创建委托消息'
           : '创建委托格式：报酬数量=100；委托内容=...（报酬数量必须放在第一行）');
         return;
       }
@@ -4289,7 +4304,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           payload: buildRelationPayload({
             relationType: 'DELEGATION', content,
             delegationKind: isFulfill ? 'FULFILL' : 'CREATE',
-            rewardAmount: amount, rewardRatio: ratio,
+            rewardAmount: isFulfill ? undefined : amount, rewardRatio: isFulfill ? undefined : ratio,
           }),
         });
         await registerCreatedRelationInCurrentClassify(backendRel);
@@ -4675,20 +4690,19 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
       return null;
     };
-    const amountText = readField([isFulfill ? '分配数量' : '报酬数量', '数量']);
-    const ratioText = readField([isFulfill ? '分配比例' : '报酬比例', '比例']);
+    const amountText = readField(['报酬数量', '数量']);
+    const ratioText = readField(['报酬比例', '比例']);
+    const description = readField([isFulfill ? '完成说明' : '委托内容']);
     const amount = amountText ? Number(amountText) : undefined;
     const ratio = ratioText ? Number(ratioText.replace(/%$/, '')) : undefined;
     const validReward = isFulfill
-      ? (amount === undefined) !== (ratio === undefined)
-        && (amount === undefined || (Number.isInteger(amount) && amount > 0))
-        && (ratio === undefined || (Number.isInteger(ratio) && ratio > 0 && ratio <= 100))
+      ? amount === undefined && ratio === undefined
       : amount !== undefined && Number.isInteger(amount) && amount > 0 && ratio === undefined;
     const selectedTargets = effectiveTargetUnits.filter(target => msgMap.get(target.messageId)?.kind === 'relation');
     const targetRelation = selectedTargets.length === 1
       ? relations.find(rel => rel.id === selectedTargets[0].messageId)
       : undefined;
-    return !content || !validReward || (isFulfill && effectiveTargetUnits.length > 0
+    return !content || !description || !validReward || (isFulfill
       && (effectiveTargetUnits.length !== 1 || !targetRelation || targetRelation.relationType.toUpperCase() !== 'DELEGATION'));
   })();
   const hasInvalidProposalFormat = relationType === 'proposal' && (() => {
@@ -4761,7 +4775,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     if (relationType === 'delegation') {
       if (secondaryRelationType === 'fulfill') {
-        return newMessageContent.trim().length > 0 && sourceUnits.length === 0;
+        return newMessageContent.trim().length > 0 && sourceUnits.length === 0 && effectiveTargetUnits.length === 1;
       }
       return sourceUnits.length === 0 && newMessageContent.trim().length > 0;
     }
@@ -5321,11 +5335,17 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           .filter(membership => traceEntries[traceEntries.length - 1].ids.some(id => membership.targetIds.includes(id)))
           .map(membership => membership.containerId)
         : [])),
+      ...((traceEntries.length > 0
+        ? messagesToShow
+          .filter(message => message.kind === 'relation' && message.relationType
+            && getPresentationSpec(message.relationType).isContainer)
+          .map(message => message.id)
+        : [])),
     ].filter(id => {
       const relationType = msgMap.get(id)?.relationType;
       return relationType ? getPresentationSpec(relationType).isContainer : false;
     }),
-  ), [traceRelationMsgIds, traceEntries, edges, msgMap]);
+  ), [traceRelationMsgIds, traceEntries, edges, msgMap, messagesToShow]);
   const classifyTargetCount = useMemo(
     () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
     [currentClassifyRelMsgId, relationById]
@@ -5663,6 +5683,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     //
     // Trace mode uses the same ordinary visibility hiding as the main view.
     const graphHiddenRelationIds = new Set<string>([
+      ...activeClassifyOwnership.relationIds,
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
@@ -5854,7 +5875,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       listEdgesToRender: listEdges,
       hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
     };
-  }, [messages, edges, traceContainerMemberships, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
+  }, [messages, edges, traceContainerMemberships, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, activeClassifyOwnership, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds, userPreferredJoinByTarget]);
 
   const normalGraphProjection = useMemo(() => {
     const scopedCorrectedMessages = graphMessagesToRender.map(message => {
@@ -5866,15 +5887,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
       : scopedCorrectedMessages;
     const scopedMessages = applyMessageFilter(scopedCleanMessages, msgFilter);
-    const correctedMessages = messages.map(message => {
-      const correction = correctionVersions.get(message.id)?.current;
-      return correction ? { ...message, content: correction.content } : message;
-    });
-    const cleanMessages = cleanVisibleIds
-      ? correctedMessages.filter(message =>
-          cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
-      : correctedMessages;
-    const filteredMessages = applyMessageFilter(cleanMessages, msgFilter);
+    const filteredMessages = applyMessageFilter(scopedCleanMessages, msgFilter);
     const suppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
     const rawEdges = filterContainerEdgesByEffectiveJoins(
       graphEdgesToRender,
@@ -6253,7 +6266,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType ?? relationTypeByRelMsgId.get(relMsgId) ?? "";
     if (relType === "classify" || relType === "summary") {
-      if (traceEntries.length > 0 && !isInsideClassify) {
+      if (traceFrameIds.has(relMsgId)) {
         setTraceExpandedFrameIds(prev => {
           const next = new Set(prev);
           if (next.has(relMsgId)) next.delete(relMsgId);

@@ -1,6 +1,6 @@
 import { signPayloadWithPrivateJwk } from '../utils/signature';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 const PRIVATE_KEY_PREFIX = 'privateKey:';
 const DEVICE_ID_KEY = 'deviceId';
 

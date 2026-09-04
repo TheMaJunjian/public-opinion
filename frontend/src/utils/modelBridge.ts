@@ -5,6 +5,15 @@ export type MessageKind = "normal" | "join" | "relation" | "round" | "round_resu
 
 /** All content-like kinds (display as cards, participate in graph layout) */
 export const CONTENT_KINDS: MessageKind[] = ["normal", "join", "round", "round_result", "governance", "code", "operations"];
+export const READABLE_RELATION_TYPES = new Set([
+  'summary', 'classify', 'proposal', 'delegation', 'code_change', 'operations',
+]);
+
+/** Message kinds that are rendered as readable cards in the graph. */
+export function isCardMessage(message: { kind: MessageKind; relationType?: string } | undefined): boolean {
+  return !!message && (isContentKind(message.kind)
+    || (message.kind === 'relation' && READABLE_RELATION_TYPES.has((message.relationType ?? '').toLowerCase())));
+}
 
 export function isContentKind(k: MessageKind): boolean {
   return CONTENT_KINDS.includes(k as MessageKind);
@@ -13,10 +22,7 @@ export function isContentKind(k: MessageKind): boolean {
 /** Messages with readable content that should consume one trace-distance hop. */
 export function isTraceTextLikeMessage(message: { kind: MessageKind; relationType?: string } | undefined): boolean {
   if (!message) return false;
-  if (isContentKind(message.kind)) return true;
-  if (message.kind !== 'relation') return false;
-  return ['summary', 'classify', 'proposal', 'delegation', 'code_change', 'operations']
-    .includes((message.relationType ?? '').toLowerCase());
+  return isCardMessage(message);
 }
 export type RelationType =
   | "annotation"
@@ -263,6 +269,8 @@ export function convertMessagesToDemoModel(
         content = `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'summary') {
         content = getRelationTitle(rel.payload) ?? `总结（无来源）\n目标：${targetRefsSummary(rel.targetRefs)}`;
+      } else if (['proposal', 'delegation', 'code_change', 'operations'].includes(relType) && rel.payload?.content) {
+        content = rel.payload.content;
       } else if (relType === 'tag' && tagLabel) {
         content = `标签「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (rel.sourceMessageId) {

@@ -59,7 +59,7 @@ npm run build
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `VITE_API_BASE_URL` | `http://localhost:3000/api` | 后端 API 基础 URL |
+| `VITE_API_BASE_URL` | `/api` | 后端 API 基础 URL；开发环境由 Vite 代理到真实后端，部署环境由反向代理转发 |
 
 > 内置 Mock 数据已移除，前端始终请求真实后端。开发时请先启动后端（见 `README/重启后启动开发环境.md`）。
 

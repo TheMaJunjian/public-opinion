@@ -95,10 +95,10 @@ describe('isTraceTextLikeMessage', () => {
   it('counts content messages and textual relation types as trace nodes', () => {
     expect(isTraceTextLikeMessage({ kind: 'code' })).toBe(true);
     expect(isTraceTextLikeMessage({ kind: 'operations' })).toBe(true);
-    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'summary' })).toBe(true);
-    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'classify' })).toBe(true);
-    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'proposal' })).toBe(true);
-    expect(isTraceTextLikeMessage({ kind: 'relation', relationType: 'delegation' })).toBe(true);
+  });
+
+  it.each(['summary', 'classify', 'proposal', 'delegation', 'code_change', 'operations'])('%s 是可读卡片消息', relationType => {
+    expect(isTraceTextLikeMessage({ kind: 'relation', relationType })).toBe(true);
   });
 
   it('does not count ordinary relation labels as trace nodes', () => {

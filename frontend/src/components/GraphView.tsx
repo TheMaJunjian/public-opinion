@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
-import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
+import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isCardMessage, isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
 import { computeFrameAwareColumnCorrection, compactAnnoRefClusters, convergeGroupingAndRightConstraints } from '../utils/layout';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
@@ -2281,7 +2281,9 @@ function GraphViewCanvas(props: GraphViewProps) {
   const messages = inputMessages;
   const edges = inputEdges;
   const traceFrameIds = props.traceFrameIds ?? new Set<string>();
-  const isTraceWindow = traceFrameIds.size > 0 || (props.traceExpandedFrameIds?.size ?? 0) > 0;
+  // Expanded frame IDs are only meaningful inside an active trace window.
+  // Do not let stale expansion state turn the ordinary graph into a trace view.
+  const isTraceWindow = traceFrameIds.size > 0;
   // An entering trace can briefly render with the previous expansion state.
   // Only frames belonging to the current trace may be rendered as expanded.
   const traceExpandedFrameIds = useMemo(
@@ -2545,10 +2547,9 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [traceExpandedFrameIds]);
   const frameBlocks = useMemo(() => {
     const blocks = buildFrameBlocks({ edges, visibleCardIds, msgMap, keepEmptyFrameIds: traceEmbeddedFrameIds, traceMode: isTraceWindow });
-    if (!isTraceWindow) return blocks;
     return blocks.filter(block =>
       !['classify', 'summary'].includes(msgMap.get(block.relMsgId)?.relationType ?? '')
-      || traceEmbeddedFrameIds.has(block.relMsgId),
+      || (isTraceWindow && traceEmbeddedFrameIds.has(block.relMsgId)),
     );
   }, [edges, visibleCardIds, msgMap, traceExpandedFrameIds, traceEmbeddedFrameIds, isTraceWindow]);
   // Compute nesting depth for each frame: root=0, child=parentDepth+1
@@ -2944,6 +2945,8 @@ function GraphViewCanvas(props: GraphViewProps) {
       }
       for (const [relMsgId, frameEdges] of frameEdgesByRelMsg) {
         if (frameEdges.length === 0) continue;
+        const frameType = frameEdges[0].relationType.toLowerCase();
+        if (!isTraceWindow && (frameType === 'classify' || frameType === 'summary')) continue;
         // Skip frames replaced by a non-blank correction (source is a real new relation).
         // Blank-corrected frames (CORRECT with anon source / secondary="none") are included
         // but marked so their SVG border is hidden while the correction badge remains visible.
@@ -3795,7 +3798,7 @@ function GraphViewCanvas(props: GraphViewProps) {
 
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
           const isCorrectableRelation = msg.kind === 'relation'
-            && ['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations'].includes(msg.relationType ?? '');
+            && isCardMessage(msg);
           const isText=activeTextSelectId===msg.id&&(msg.kind==="normal" || isCorrectableRelation);
           const corrBadges = correctionsByTargetMsgId.get(msg.id) ?? [];
           const uniqueCorrBadges = Array.from(new Map(corrBadges.map(b => [b.relMsgId, b])).values());
@@ -3836,6 +3839,10 @@ function GraphViewCanvas(props: GraphViewProps) {
             if (msg.kind === 'governance') return { color: '#f59e0b', label: '提案', bg: 'rgba(245,158,11,0.08)' };
             if (msg.kind === 'code')        return { color: '#14b8a6', label: '代码', bg: 'rgba(20,184,166,0.08)' };
             if (msg.kind === 'operations')  return { color: '#06b6d4', label: '📊 运营', bg: 'rgba(6,182,212,0.08)' };
+            if (msg.kind === 'relation' && msg.relationType === 'delegation') {
+              const isFulfill = msg.relationPayload?.delegationKind === 'FULFILL';
+              return { color: '#f97316', label: isFulfill ? '完成委托' : '创建委托', bg: 'rgba(249,115,22,0.1)' };
+            }
             if (msg.kind === 'round') {
               const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
               return isValue

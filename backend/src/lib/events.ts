@@ -2445,12 +2445,18 @@ async function settleDelegationReward(completionMessageId: string, roundId: stri
     where: { messageId_settlementType: { messageId: targetRef.relationId, settlementType: 'DELEGATION' } },
     select: { lockedPro: true, lockedCon: true },
   });
+  const delegationTarget = await prisma.message.findUnique({
+    where: { id: targetRef.relationId },
+    select: { relationType: true, relationPayload: true },
+  });
+  if (delegationTarget?.relationType !== 'DELEGATION') return 0;
   const poolTotal = (delegationPool?.lockedPro ?? 0) + (delegationPool?.lockedCon ?? 0);
   if (poolTotal <= 0 || !completion.createdById) return 0;
-  const requested = typeof payload.rewardAmount === 'number'
-    ? payload.rewardAmount
-    : typeof payload.rewardRatio === 'number'
-      ? Math.floor(poolTotal * payload.rewardRatio / 100)
+  const delegationPayload = delegationTarget.relationPayload as Record<string, unknown> | null;
+  const requested = typeof delegationPayload?.rewardAmount === 'number'
+    ? delegationPayload.rewardAmount
+    : typeof delegationPayload?.rewardRatio === 'number'
+      ? Math.floor(poolTotal * delegationPayload.rewardRatio / 100)
       : 0;
   const reward = Math.min(poolTotal, Math.max(0, Math.floor(requested)));
   if (reward <= 0) return 0;

@@ -51,6 +51,7 @@ import {
   getJoinRelationsForMessage,
   getJoinRecoveryTargetIds,
   getEffectiveJoinRelationIds,
+  getContainerAncestorChain,
   filterContainerEdgesByEffectiveJoins,
   formatCorrectionRange,
   resolveNavigationTargetId,
@@ -462,39 +463,48 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const relById = new Map(relations.map(r => [r.id, r]));
     const msgMapLocal = new Map(messages.map(m => [m.id, m]));
 
-    const containingTopics = relations
-      .filter(rel => {
-        const rt = rel.relationType?.toUpperCase();
-        return (rt === 'CLASSIFY' || rt === 'SUMMARY') && !rejectedContainerIds.has(rel.id);
-      })
-      .map(rel => {
-        const owned = collectOwnedByRelation(rel.id, relById, new Set(), undefined, rejectedJoinRelationIds);
-        const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
-        const ownsAnchor = expanded.has(anchorId) || owned.relationIds.has(anchorId);
-        return { rel, size: owned.textIds.size + owned.relationIds.size, ownsAnchor };
-      })
-      .filter(item => item.ownsAnchor)
-      // Larger ownership means an outer container. Enter outer-to-inner so
-      // the classify stack represents the actual parent chain.
-      .sort((a, b) => b.size - a.size)
-      .map(item => item.rel.id);
-
-    const tryEnter = (relIds: string[]) => {
-      if (relIds.length === 0) return;
-      classifyStackRef.current = [];
-      setClassifyRelMsgId(null);
-      relIds.forEach(relId => enterClassifyTopic(relId));
-      const deepestRelId = relIds[relIds.length - 1];
-      // If the deepest container is rejected, enter preview (read-only) mode.
-      if (rejectedContainerIds.has(deepestRelId)) {
-        setPreviewClassifyId(deepestRelId);
+    const tryEnter = (relId: string) => {
+      if (classifyRelMsgId === relId) {
+        // Already in this classify — just ensure correct view mode
+        if (hiddenInGraphView.has(msgId)) setViewMode("list");
+        setAutoClassifyMsgId(null);
+        return;
       }
+      if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+      enterClassifyTopic(relId);
+      // If the classify is rejected, enter preview (read-only) mode
+      if (rejectedContainerIds.has(relId)) {
+        setPreviewClassifyId(relId);
+      }
+      if (hiddenInGraphView.has(msgId)) setViewMode("list");
       setAutoClassifyMsgId(null);
     };
 
-    if (containingTopics.length > 0) {
-      tryEnter(containingTopics);
-      return;
+    // ── Find the classify that owns the anchor ──
+    // First pass: direct targetRefs match.
+    for (const rel of relations) {
+      const rt = rel.relationType?.toUpperCase();
+      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      // Don't auto-enter rejected classifies from navigation jumps —
+      // their messages are back on the main canvas.  User can still
+      // enter preview mode by double-clicking the card directly.
+      if (rejectedContainerIds.has(rel.id)) continue;
+      const targets = (rel.targetRefs ?? []) as TargetRef[];
+      if (targets.some(t =>
+        (t.kind === 'relation' && t.relationId === anchorId) ||
+        (t.kind !== 'relation' && t.messageId === anchorId)
+      )) { tryEnter(rel.id); return; }
+    }
+    // Second pass: transitive ownership + CORRECT expansion.
+    for (const rel of relations) {
+      const rt = rel.relationType?.toUpperCase();
+      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      if (rejectedContainerIds.has(rel.id)) continue;
+      const owned = collectOwnedByRelation(rel.id, relById, new Set(), undefined, rejectedJoinRelationIds);
+      const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
+      if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
+        tryEnter(rel.id); return;
+      }
     }
     // Anchor not in any classify → main view.
     if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false }); else setClassifyRelMsgId(null);
@@ -552,7 +562,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   const [relationType, setRelationType] = useState<RelationType | null>(null);
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
-  const [isArrangeLayoutLocked, setIsArrangeLayoutLocked] = useState(false);
   const [subType, setSubType] = useState<string>(""); // SPAM|OFFTOPIC|LOWVALUE|IMPORTANT|CUSTOM or empty
   const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
   const subTypeCustomBufferRef = useRef(""); // cache textarea content when switching away from CUSTOM subType
@@ -916,17 +925,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     while ((match = messageIdPattern.exec(message)) !== null) {
       if (match.index > cursor) parts.push(message.slice(cursor, match.index));
       const messageId = match[1] ?? match[2];
-      const target = messagesRef.current.find(item => item.id === messageId);
-      const label = target?.kind === 'relation'
-        ? getPresentationSpec(target.relationType ?? 'reference').label
-        : target?.content?.trim().replace(/\s+/g, ' ').slice(0, 18) || '消息';
       parts.push(
         <button
           key={`${messageId}-${match.index}`}
           type="button"
           title={`跳转到消息 ${messageId}`}
           onClick={() => {
-            setAlertMessage(null);
             handleNavigateToMessage(messageId);
           }}
           style={{
@@ -941,7 +945,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
             fontSize: 13,
           }}
         >
-          {label}
+          {messageId}
         </button>,
       );
       cursor = match.index + match[0].length;
@@ -1821,14 +1825,28 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const scrollRafRef = useRef<number | null>(null);
   const scrollRaf2Ref = useRef<number | null>(null);
   const scrollRequestIdRef = useRef(0);
+  const viewNavigationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function cancelScrollRafs() {
     if (scrollRafRef.current !== null) { cancelAnimationFrame(scrollRafRef.current); scrollRafRef.current = null; }
     if (scrollRaf2Ref.current !== null) { cancelAnimationFrame(scrollRaf2Ref.current); scrollRaf2Ref.current = null; }
   }
 
+  function scheduleViewNavigation(targetId: string) {
+    if (viewNavigationTimerRef.current !== null) {
+      clearTimeout(viewNavigationTimerRef.current);
+    }
+    viewNavigationTimerRef.current = setTimeout(() => {
+      viewNavigationTimerRef.current = null;
+      scrollMsgToCenter(targetId);
+    }, 100);
+  }
+
   // Cleanup on unmount
-  useEffect(() => () => { cancelScrollRafs(); }, []);
+  useEffect(() => () => {
+    cancelScrollRafs();
+    if (viewNavigationTimerRef.current !== null) clearTimeout(viewNavigationTimerRef.current);
+  }, []);
   // Persist containerWidth to localStorage
   useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
   useEffect(() => {
@@ -2700,7 +2718,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         setSendError('消息已在来源集合中，不能同时加入候选暂存区');
         return prev;
       }
-      const next = exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
+      const next = exists
+        ? prev.filter(u => !unitEquals(u, wholeUnit))
+        : [...prev, wholeUnit];
       lastClickActionsRef.current.push({ type: "toggleWhole", messageId, prevExisted: exists, time: Date.now() });
       const now = Date.now();
       lastClickActionsRef.current = lastClickActionsRef.current.filter(a => now - a.time < 2000);
@@ -2874,6 +2894,50 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return [...ids];
   }
 
+  function promoteCompleteContainerSelections(units: UnitSelection[]): UnitSelection[] {
+    let selected = foldUpToWhole(units);
+    const containerRelations = relations.filter(relation =>
+      ['ARRANGE', 'MERGE', 'SUMMARY'].includes(relation.relationType?.toUpperCase() ?? '')
+    );
+    const relationById = new Map(relations.map(relation => [relation.id, relation]));
+
+    const selectedContainerIds = new Set(
+      selected
+        .filter(unit => containerRelations.some(container => container.id === unit.messageId))
+        .map(unit => unit.messageId)
+    );
+    if (selectedContainerIds.size > 0) {
+      const nestedSelectedIds = new Set<string>();
+      for (const containerId of selectedContainerIds) {
+        const owned = collectOwnedByRelation(containerId, relationById);
+        owned.textIds.forEach(id => nestedSelectedIds.add(id));
+        owned.relationIds.forEach(id => nestedSelectedIds.add(id));
+      }
+      selected = selected.filter(unit =>
+        !nestedSelectedIds.has(unit.messageId) || selectedContainerIds.has(unit.messageId)
+      );
+    }
+
+    // Repeatedly promote inner containers first, then their complete parents.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const selectedIds = new Set(selected.map(unit => unit.messageId));
+      for (const container of containerRelations) {
+        if (selectedIds.has(container.id)) continue;
+        const owned = collectOwnedByRelation(container.id, relationById);
+        if (owned.textIds.size === 0 || ![...owned.textIds].every(id => selectedIds.has(id))) continue;
+        selected = [
+          ...selected.filter(unit => !owned.textIds.has(unit.messageId)),
+          { messageId: container.id, selection: { kind: 'whole' } },
+        ];
+        changed = true;
+        break;
+      }
+    }
+    return selected;
+  }
+
   function getClassifyTargetRefs(units: UnitSelection[]): TargetRef[] {
     const res: TargetRef[] = [];
     const seen = new Set<string>();
@@ -2912,26 +2976,146 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return res;
   }
 
+  function getContainerMembershipTargetError(units: UnitSelection[]): string | null {
+    const selectedIds = new Set(foldUpToWhole(units).map(unit => unit.messageId));
+    const blockedContainerIds = new Set(
+      relations
+        .filter(relation => ['ARRANGE', 'MERGE', 'SUMMARY'].includes(relation.relationType?.toUpperCase() ?? ''))
+        .map(relation => relation.id)
+    );
+    const memberships = relations.filter(relation => {
+      if (relation.relationType?.toUpperCase() !== 'JOIN'
+        || !relation.sourceMessageId
+        || !blockedContainerIds.has(relation.sourceMessageId)) return false;
+      return relation.targetRefs.some(ref =>
+        (ref.kind === 'relation' && selectedIds.has(ref.relationId))
+        || (ref.kind !== 'relation' && selectedIds.has(ref.messageId))
+      );
+    });
+    const errors = memberships.flatMap(membership => {
+      if (!membership.sourceMessageId) return [];
+      const containerType = relations.find(relation => relation.id === membership.sourceMessageId)?.relationType?.toUpperCase();
+      const containerTypeLabel = containerType === 'ARRANGE' ? '排列'
+        : containerType === 'MERGE' ? '归并'
+        : containerType === 'SUMMARY' ? '总结'
+        : containerType ?? '未知';
+      return membership.targetRefs
+        .filter(ref =>
+          (ref.kind === 'relation' && selectedIds.has(ref.relationId))
+          || (ref.kind !== 'relation' && selectedIds.has(ref.messageId))
+        )
+        .map(ref => {
+          const targetId = ref.kind === 'relation' ? ref.relationId : ref.messageId;
+          return `消息(${targetId})已加入${containerTypeLabel}关系消息(${membership.sourceMessageId})，不能作为独立目标。`;
+        });
+    });
+    return errors.length > 0
+      ? `以下消息不能作为具体容器的独立目标：\n${[...new Set(errors)].join('\n')}`
+      : null;
+  }
+
+  function getContainerCycleError(units: UnitSelection[]): string | null {
+    const currentContainerId = currentClassifyRelMsgId ?? latestClassifyRelMsgIdRef.current;
+    if (!currentContainerId) return null;
+    const current = relationById.get(currentContainerId);
+    if (!current || !['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY'].includes(current.relationType.toUpperCase())) return null;
+    const forbiddenIds = new Set([
+      currentContainerId,
+      ...getContainerAncestorChain(currentContainerId, relations),
+    ]);
+    const target = foldUpToWhole(units).find(unit => forbiddenIds.has(unit.messageId));
+    if (!target) return null;
+    const targetType = relationById.get(target.messageId)?.relationType?.toUpperCase();
+    const targetLabel = targetType === 'ARRANGE' ? '排列'
+      : targetType === 'MERGE' ? '归并'
+      : targetType === 'SUMMARY' ? '总结'
+      : targetType === 'CLASSIFY' ? '分类'
+      : '容器';
+    return `不能将${targetLabel}消息(${target.messageId})作为目标，否则会形成容器循环。`;
+  }
+
+  function getJoinContainerCycleError(sourceContainerId: string, targetIds: string[]): string | null {
+    const source = relationById.get(sourceContainerId);
+    if (!source || !['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY'].includes(source.relationType.toUpperCase())) return null;
+    for (const targetId of targetIds) {
+      const target = relationById.get(targetId);
+      if (!target || !['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY'].includes(target.relationType.toUpperCase())) continue;
+      if (sourceContainerId !== targetId && !getContainerAncestorChain(sourceContainerId, relations).includes(targetId)) continue;
+      const targetLabel = target.relationType.toUpperCase() === 'ARRANGE' ? '排列'
+        : target.relationType.toUpperCase() === 'MERGE' ? '归并'
+        : target.relationType.toUpperCase() === 'SUMMARY' ? '总结'
+        : '分类';
+      const sourceLabel = source.relationType.toUpperCase() === 'ARRANGE' ? '排列'
+        : source.relationType.toUpperCase() === 'MERGE' ? '归并'
+        : source.relationType.toUpperCase() === 'SUMMARY' ? '总结'
+        : '分类';
+      return `已有${targetLabel}消息(${targetId})不能加入${sourceLabel}消息(${sourceContainerId})，因为两者已存在包含关系，会形成容器循环。`;
+    }
+    return null;
+  }
+
+  function getDependentDisplayTargets(units: UnitSelection[]): Array<{ messageId: string; dependencyId: string }> {
+    const dependencies: Array<{ messageId: string; dependencyId: string }> = [];
+    const dependentTypes = new Set(['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT', 'AGREE', 'DISAGREE', 'TAG', 'JOIN']);
+    const getFirstTargetId = (targetRefs: TargetRef[]): string | undefined => {
+      const target = targetRefs.find(ref => ref.kind === 'relation' || ref.kind === 'message' || ref.kind === 'text-fragment');
+      return target?.kind === 'relation' ? target.relationId : target?.messageId;
+    };
+    for (const unit of foldUpToWhole(units)) {
+      const relation = relationById.get(unit.messageId);
+      if (!relation) continue;
+      const relationType = relation.relationType.toUpperCase();
+      if (!dependentTypes.has(relationType)) continue;
+      const dependencyId = relationType === 'ANNOTATION'
+        || relationType === 'REFERENCE'
+        || relationType === 'REPLY'
+        || relationType === 'CORRECT'
+        ? relation.sourceMessageId
+        : relationType === 'JOIN'
+          ? relation.sourceMessageId
+          : getFirstTargetId(relation.targetRefs);
+      if (dependencyId && dependencyId !== unit.messageId) {
+        dependencies.push({ messageId: unit.messageId, dependencyId });
+      }
+    }
+    return dependencies;
+  }
+
+  function getDependentDisplayTarget(messageId: string): { messageId: string; dependencyId: string } | null {
+    return getDependentDisplayTargets([{ messageId, selection: { kind: 'whole' } }])[0] ?? null;
+  }
+
   /**
    * Check whether any selected text messages have non-reference edges to
    * text messages that are NOT part of the current selection.
    */
-  function hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds: string[]): string | null {
+  function hasCrossNonReferenceTextLinkForClassifyTargets(
+    targetTextIds: string[],
+    selectionUnits: UnitSelection[] = effectiveTargetUnits,
+  ): string | null {
     const selected = new Set(targetTextIds);
-    const selectedRelationIds = new Set(
-      effectiveTargetUnits
-        .filter(unit => msgMap.get(unit.messageId)?.kind === 'relation')
-        .map(unit => unit.messageId)
-    );
+    const selectedRelationIds = new Set<string>();
+    const selectedContainerOwnedIds: Set<string>[] = [];
+    for (const unit of selectionUnits) {
+      if (msgMap.get(unit.messageId)?.kind !== 'relation') continue;
+      selectedRelationIds.add(unit.messageId);
+      const relationType = relationTypeByRelMsgId.get(unit.messageId);
+      if (relationType === 'classify' || relationType === 'summary'
+        || relationType === 'arrange' || relationType === 'merge') {
+        // A selected container is an opaque target. Its nested messages are
+        // not individually selected, but relations entirely inside it do not
+        // cross the classification boundary.
+        const owned = collectOwnedByRelation(unit.messageId, relationById);
+        selectedContainerOwnedIds.push(new Set([
+          unit.messageId,
+          ...owned.textIds,
+          ...owned.relationIds,
+        ]));
+      }
+    }
     if (selected.size === 0 && selectedRelationIds.size === 0) return null;
     const selectedIds = new Set([...selected, ...selectedRelationIds]);
-    const describe = (id: string): string => {
-      const message = msgMap.get(id);
-      if (!message) return id;
-      if (message.kind === 'relation') return `${getPresentationSpec(message.relationType ?? 'reference').label}(${id})`;
-      const content = message.content?.trim().replace(/\s+/g, ' ').slice(0, 24);
-      return content ? `「${content}」(${id})` : id;
-    };
+    const describe = (id: string): string => `(${id})`;
     const describeViolation = (fromId: string, toId: string, type: string): string =>
       `消息${describe(fromId)}与消息${describe(toId)}存在「${getPresentationSpec(type.toLowerCase()).label}」关系，不能只将其中一方加入分类；`;
     const crossesBoundary = (fromId: string, toId: string): boolean => {
@@ -2939,8 +3123,27 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const fromMessage = msgMap.get(fromId);
       const toMessage = msgMap.get(toId);
       if (!fromMessage || !toMessage) return false;
+      if (selectedContainerOwnedIds.some(owned => owned.has(fromId) && owned.has(toId))) return false;
       return selectedIds.has(fromId) !== selectedIds.has(toId);
     };
+
+    // A directly selected text message inside an unselected MERGE container
+    // cannot be classified independently. Do not expand selected containers
+    // here, because their members are opaque targets.
+    const directlySelectedTextIds = new Set(
+      selectionUnits
+        .filter(unit => isContentKind(msgMap.get(unit.messageId)?.kind ?? 'normal'))
+        .map(unit => unit.messageId)
+    );
+    for (const merge of relations.filter(relation =>
+      relation.relationType.toUpperCase() === 'MERGE' && !selectedRelationIds.has(relation.id)
+    )) {
+      const owned = collectOwnedByRelation(merge.id, relationById);
+      const selectedId = [...directlySelectedTextIds].find(id => owned.textIds.has(id));
+      if (selectedId) {
+        return `消息(${selectedId})已在归并消息(${merge.id})中，不能建立分类关系。`;
+      }
+    }
 
     for (const e of edges) {
       // Reference is a citation and does not imply semantic grouping.
@@ -2955,16 +3158,20 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     // normal-to-normal DemoEdge after the graph is rebuilt.
     for (const relation of relations) {
       const relationType = relation.relationType.toUpperCase();
-      if (relationType === 'REFERENCE' || relationType === 'JOIN') continue;
+      // Container relations describe membership, not a semantic cross-link
+      // between the selected messages and their surrounding messages.
+      if (relationType === 'REFERENCE' || relationType === 'JOIN'
+        || relationType === 'CLASSIFY' || relationType === 'SUMMARY'
+        || relationType === 'ARRANGE' || relationType === 'MERGE') continue;
       const sourceId = relation.sourceMessageId;
       const endpointIds = [
         ...(sourceId ? [sourceId] : []),
         ...(relation.targetRefs ?? []).map(target => target.kind === 'relation' ? target.relationId : target.messageId),
       ].filter((id): id is string => Boolean(id));
-      if (endpointIds.some(id => selectedIds.has(id)) && endpointIds.some(id => !selectedIds.has(id))) {
-        const selectedId = endpointIds.find(id => selectedIds.has(id));
-        const outsideId = endpointIds.find(id => !selectedIds.has(id));
-        if (selectedId && outsideId) return describeViolation(selectedId, outsideId, relationType);
+      const selectedId = endpointIds.find(id => selectedIds.has(id));
+      const outsideId = endpointIds.find(id => !selectedIds.has(id));
+      if (selectedId && outsideId && crossesBoundary(selectedId, outsideId)) {
+        return describeViolation(selectedId, outsideId, relationType);
       }
     }
     return null;
@@ -3052,7 +3259,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   function handleExitClassifyTopic() {
     const targetId = draftUnits[draftUnits.length - 1]?.messageId ?? lastClickedMessageId;
-    exitClassifyTopic({ clearSelectionOnRootExit: true, preserveViewMode: viewMode });
+    exitClassifyTopic({ preserveViewMode: viewMode });
     if (targetId) setTimeout(() => scrollMsgToCenter(targetId), 150);
   }
 
@@ -3321,15 +3528,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     _containerType: string,
     targetMids: Array<string | TargetRef>,
   ) {
-    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'READ', 'UNREAD', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
     const invalidTarget = targetMids
-      .map(target => {
-        const id = typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId;
-        return msgMap.get(id);
-      })
-      .find(message => message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? ''));
+      .map(target => typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId)
+      .map(messageId => getDependentDisplayTarget(messageId))
+      .find(Boolean);
     if (invalidTarget) {
-      setSendError('加入消息的目标不能是绑定在其他消息上的装饰关系消息');
+      setSendError(`消息 ${invalidTarget.messageId} 依赖消息 ${invalidTarget.dependencyId} 显示，不能创建加入消息`);
       return false;
     }
     const joinStake = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
@@ -3417,7 +3621,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
 
     // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
-    const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+    const rawEffectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+    const effectiveTargets = promoteCompleteContainerSelections(rawEffectiveTargets);
     // Validate both stakes — collect all errors
     const errors: string[] = [];
     if (hasTextContent) {
@@ -3478,6 +3683,22 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       return;
     }
 
+    const isContainerRelation = ['classify', 'summary', 'merge', 'arrange'].includes(relationType);
+    const membershipTargetError = isContainerRelation
+      ? getContainerMembershipTargetError(effectiveTargets)
+      : null;
+      const containerCycleError = isContainerRelation && !joinOnlyAction
+      ? getContainerCycleError(effectiveTargets)
+      : null;
+    if (containerCycleError) {
+      showAlert(containerCycleError);
+      return;
+    }
+    if (membershipTargetError) {
+      showAlert(membershipTargetError);
+      return;
+    }
+
     // Adding targets to an existing container uses one JOIN per target.
     if (joinOnlyAction) {
       const containerSource = sourceUnits
@@ -3488,6 +3709,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         return;
       }
       const targetIds = Array.from(new Set(effectiveTargets.map(unit => unit.messageId)));
+      const joinCycleError = getJoinContainerCycleError(containerSource.id, targetIds);
+      if (joinCycleError) {
+        showAlert(joinCycleError);
+        return;
+      }
       const joinCreated = await createJoinRelationsForContainer(containerSource.id, appendContainerType!, targetIds);
       if (!joinCreated) return;
       if (appendContainerType === 'ARRANGE' || appendContainerType === 'MERGE' || appendContainerType === 'SUMMARY') {
@@ -3934,7 +4160,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         showAlert(`选中的${orphanLabels.join('、')}标签对应的消息不在分类目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
-      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds);
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds, effectiveTargets);
       if (crossLinkError) {
         showAlert(crossLinkError);
         return;
@@ -4109,7 +4335,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         showAlert(`选中的${orphanSummaryLabels.join('、')}标签对应的消息不在总结目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
-      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds);
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds, effectiveTargets);
       if (crossLinkError) {
         showAlert(crossLinkError);
         return;
@@ -4202,7 +4428,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         showAlert(`选中的${orphanMergeLabels.join('、')}标签对应的消息不在归并目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
         return;
       }
-      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds);
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds, effectiveTargets);
       if (crossLinkError) {
         showAlert(crossLinkError);
         return;
@@ -4659,32 +4885,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const isArrangeType = relationType === "arrange";
   const isNotifyType = relationType === "notify";
 
-  // Lock arrange layout when appending to an existing ARRANGE frame.
-  // When the user selects an existing arrange relation as a source or target,
-  // lock secondaryRelationType to match the parent frame's layout.
-  useEffect(() => {
-    if (!isArrangeType) {
-      setIsArrangeLayoutLocked(false);
-      return;
-    }
-    // Check sourceUnits first (append to existing arrange), then draft/target
-    const unitsToCheck = sourceUnits.length > 0 ? sourceUnits
-      : draftUnits.length > 0 ? draftUnits : targetUnits;
-    for (const u of unitsToCheck) {
-      const msg = msgMap.get(u.messageId);
-      if (msg?.kind === 'relation') {
-        const rel = relationById.get(u.messageId);
-        if (rel && rel.relationType === 'ARRANGE') {
-          const layout = (rel.payload as any)?.targetLayout;
-          const lockedDir = layout === 'single-row' ? 'horizontal' : 'vertical';
-          setSecondaryRelationType(lockedDir);
-          setIsArrangeLayoutLocked(true);
-          return;
-        }
-      }
-    }
-    setIsArrangeLayoutLocked(false);
-  }, [isArrangeType, draftUnits, targetUnits, msgMap, relationById]);
   const isClassifyType = relationType === "classify";
   const isMergeType = relationType === "merge";
   const isSummaryType = relationType === "summary";
@@ -4713,6 +4913,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
   const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
   const effectiveTargetUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
+  const processedTargetUnits = promoteCompleteContainerSelections(effectiveTargetUnits);
   const hasInvalidCorrectTarget = relationType === 'correct' && (
     sourceUnits.length > 0
     || effectiveTargetUnits.length !== 1
@@ -4723,15 +4924,21 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     && containerRelationTypes.has(relationType.toUpperCase())
     && sourceUnits.length > 0
     && !appendContainerType;
-  const hasInvalidJoinTarget = joinOnlyAction && effectiveTargetUnits.some(unit => {
-    const message = msgMap.get(unit.messageId);
-    const decorationTypes = new Set(['AGREE', 'DISAGREE', 'TAG', 'READ', 'UNREAD', 'ANNOTATION', 'REFERENCE', 'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK']);
-    return message?.kind === 'relation' && decorationTypes.has(message.relationType?.toUpperCase() ?? '');
-  });
-  const targetTextIdsForValidation = getGroupedTargetTextMessageIds(effectiveTargetUnits);
+  const dependentDisplayTargets = (containerRelationTypes.has(relationType?.toUpperCase() ?? '') || joinOnlyAction)
+    ? getDependentDisplayTargets(effectiveTargetUnits)
+    : [];
+  const hasInvalidJoinTarget = dependentDisplayTargets.length > 0;
+  const invalidJoinTargetMessage = dependentDisplayTargets.length > 0
+    ? `消息 ${dependentDisplayTargets[0].messageId} 依赖消息 ${dependentDisplayTargets[0].dependencyId} 显示，不能作为容器目标`
+    : null;
+  const targetTextIdsForValidation = joinOnlyAction
+    ? processedTargetUnits
+        .filter(unit => isContentKind(msgMap.get(unit.messageId)?.kind ?? 'normal'))
+        .map(unit => unit.messageId)
+    : getGroupedTargetTextMessageIds(processedTargetUnits);
   const crossLinkValidationMessage = (isClassifyType || isSummaryType || isMergeType || joinOnlyAction)
     && hasTargetsAvailable
-    && hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIdsForValidation);
+    && hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIdsForValidation, processedTargetUnits);
   const hasCrossLinkValidationError = Boolean(crossLinkValidationMessage);
   const hasOrphanContainerLabel = (isSummaryType || isMergeType)
     && effectiveTargetUnits.some(unit => {
@@ -5007,7 +5214,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
     if (hasInvalidCorrectTarget) return "更正关系只能选择一条普通消息片段";
     if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
-    if (hasInvalidJoinTarget) return "加入容器的目标不能是装饰关系消息";
+    if (hasInvalidJoinTarget) return invalidJoinTargetMessage as string;
     if (hasCrossLinkValidationError) return crossLinkValidationMessage as string;
     if (hasOrphanContainerLabel) return "选中的关系标签不属于当前目标集合";
     if (hasClassifyCycle) return "不能将当前分类或其上级分类作为新分类的目标";
@@ -5707,6 +5914,26 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
       const visibleIds = new Set<string>([...topicTextIds, ...topicRelationIds]);
       const topicMessages = baseMessages.filter(m => visibleIds.has(m.id));
+      // The graph keeps nested SUMMARY targets inside the summary frame, but
+      // the message table should list the dependent target messages alongside
+      // the summary card in the current classify topic.
+      const nestedSummaryTargetIds = new Set<string>();
+      for (const nestedRelationId of topicRelationIds) {
+        const nestedRelation = relationById.get(nestedRelationId);
+        if (nestedRelation?.relationType.toUpperCase() !== 'SUMMARY') continue;
+        const nestedVisible = collectContainerVisibleIds(
+          nestedRelationId,
+          relations,
+          rejectedContainerIds,
+          rejectedJoinRelationIds,
+          userPreferredJoinByTarget,
+        );
+        nestedVisible.textIds.forEach(id => nestedSummaryTargetIds.add(id));
+      }
+      const topicListMessages = [
+        ...topicMessages,
+        ...baseMessages.filter(message => nestedSummaryTargetIds.has(message.id) && !visibleIds.has(message.id)),
+      ];
       // Include edges whose relation message is visible.  For CLASSIFY and SUMMARY
       // edges, keep them even when the target text messages are not in visibleIds —
       // this lets topic cards display correct target counts and lets SUMMARY compute
@@ -5724,7 +5951,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       return {
         graphMessagesToRender: topicMessages,
         graphEdgesToRender: topicEdges,
-        listMessagesToRender: topicMessages,
+        listMessagesToRender: topicListMessages,
         listEdgesToRender: topicEdges,
       };
     }
@@ -6089,6 +6316,25 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           if (!edge.to.messageId.startsWith('anon:')) targetMessageIds.add(edge.to.messageId);
         }
       }
+      const releasedTarget = side === 'disagree' && targetIsContainer
+        ? collectOwnedByRelation(
+            comparisonTargetId,
+            relationById,
+            new Set(),
+            new Set(),
+            rejectedJoinRelationIds,
+            userPreferredJoinByTarget,
+          )
+        : null;
+      if (releasedTarget) {
+        const targetRelation = relationById.get(comparisonTargetId);
+        for (const ref of targetRelation?.targetRefs ?? []) {
+          if (ref.kind === 'relation') releasedTarget.relationIds.add(ref.relationId);
+          else releasedTarget.textIds.add(ref.messageId);
+        }
+      }
+      releasedTarget?.textIds.forEach(id => targetMessageIds.add(id));
+      releasedTarget?.relationIds.forEach(id => targetMessageIds.add(id));
       const baseMessagesWithTarget = [...projectionBaseMessages];
       const baseMessageIds = new Set(baseMessagesWithTarget.map(message => message.id));
       for (const targetId of targetMessageIds) {
@@ -6109,8 +6355,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         ? comparisonAgreeSuppressedRelIds
         : comparisonDisagreeSuppressedRelIds;
       const forcedVisibleIds = side === 'agree' ? targetMessageIds : new Set<string>();
+      releasedTarget?.textIds.forEach(id => forcedVisibleIds.add(id));
+      releasedTarget?.relationIds.forEach(id => forcedVisibleIds.add(id));
       const scopedBaseMessageIds = new Set(projectionBaseMessages.map(message => message.id));
-      const graphMessages = (side === 'agree' || traceStartIdSet.has(comparisonTargetId) ? baseMessagesWithTarget : projectionBaseMessages).filter(message => {
+      const graphMessages = (side === 'agree' || releasedTarget || traceStartIdSet.has(comparisonTargetId) ? baseMessagesWithTarget : projectionBaseMessages).filter(message => {
         if (forcedVisibleIds.has(message.id)) return true;
         if (sideSuppressedRelIds.has(message.id)) return false;
         if (isInsideClassify && scopedBaseMessageIds.has(message.id)) return true;
@@ -6448,6 +6696,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     setMessagePulse(null);
     setTraceEntries([]);
     setTraceKey(k => k + 1);
+    // Navigation from an alert must not remain inside the previous summary/classify.
+    // Let the ownership effect choose the target's containing container afterwards.
+    classifyStackRef.current = [];
+    setClassifyRelMsgId(null);
+    setClassifyKey(k => k + 1);
+    setPreviewClassifyId(null);
+    setAutoClassifyMsgId(messageId);
     // Clear candidates and select the target message as whole
     setDraftUnits([{ messageId, selection: { kind: 'whole' as const } }]);
     setSourceUnits([]);
@@ -6786,7 +7041,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top: topControlsFrozen ? topControlsOffset : 0, zIndex: Z_INDEX.popover }}>
         {!isPreloaded && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid #334155", borderRadius: 6, background: "#111827", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" }}>
-            <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转到消息</span>
+            <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转消息</span>
             <input
               aria-label="消息 ID"
               value={messageIdInput}
@@ -6795,7 +7050,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                 if (event.key === 'Enter') confirmMessageIdNavigation();
               }}
               placeholder="输入消息 ID"
-              style={{ width: 220, padding: "5px 7px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", outline: "none", fontSize: 12 }}
+              style={{ width: 170, padding: "5px 7px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", outline: "none", fontSize: 12 }}
             />
             <button
               type="button"
@@ -6940,14 +7195,23 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
                 }
                 const nextViewMode = viewMode === "list" ? "graph" : "list";
-                const comparisonId = draftUnits.length === 1 ? draftUnits[0].messageId : comparisonTargetId;
+                const navigationUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
+                const comparisonId = navigationUnits.length === 1 ? navigationUnits[0].messageId : comparisonTargetId;
                 if (comparisonMode && nextViewMode === 'list') {
                   setComparisonTargetId(null);
                 }
                 setViewMode(nextViewMode);
-                const selectedMessageId = draftUnits.length > 0
-                  ? draftUnits[draftUnits.length - 1].messageId
-                  : lastClickedMessageId;
+                const selectedMessageIds = new Set(navigationUnits.map(unit => unit.messageId));
+                const selectedMessageId = selectedMessageIds.size === 1
+                  ? selectedMessageIds.values().next().value ?? null
+                  : null;
+                if (nextViewMode === 'graph' && selectedMessageId && traceEntries.length === 0) {
+                  const containingClassifyId = findContainingClassifyTopic(selectedMessageId);
+                  if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
+                    if (currentClassifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+                    enterClassifyTopic(containingClassifyId);
+                  }
+                }
                 const scrollTargetId = comparisonMode
                   ? comparisonId
                   : selectedMessageId;
@@ -6959,7 +7223,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   const navigationTargetId = isCorrectionTarget
                     ? scrollTargetId
                     : resolveNavigationTargetId(scrollTargetId, messages, relations);
-                  setTimeout(() => scrollMsgToCenter(navigationTargetId), 100);
+                  scheduleViewNavigation(navigationTargetId);
                 }
               }} data-shortcut-view-toggle="true" style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
                 {viewMode === "list" ? "切换为消息图" : "切换为消息表"}
@@ -7483,7 +7747,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           correctSecondaryOptions={correctSecondaryOptions}
           proposalSecondaryOptions={proposalSecondaryOptions}
           isArrangeType={isArrangeType}
-          isArrangeLayoutLocked={isArrangeLayoutLocked}
           isClassifyType={isClassifyType}
           isSummaryType={isSummaryType}
           isMergeType={isMergeType}

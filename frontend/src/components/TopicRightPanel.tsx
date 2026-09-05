@@ -80,7 +80,6 @@ interface TopicRightPanelProps {
   correctSecondaryOptions: string[];
   proposalSecondaryOptions: string[];
   isArrangeType: boolean;
-  isArrangeLayoutLocked: boolean;
   isClassifyType: boolean;
   isSummaryType: boolean;
   isMergeType: boolean;
@@ -470,11 +469,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                 <span style={{ opacity: 0.85 }}>附加关系：</span>
                 {opts.map(t => (
                   <button key={t} onClick={() => {
-                    if (p.isArrangeType && p.isArrangeLayoutLocked) return;
                     p.setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t);
                   }}
-                    disabled={p.isArrangeType && p.isArrangeLayoutLocked}
-                    style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.secondaryRelationType === t ? "#0b84ff" : "#222", color: p.secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: (p.isArrangeType && p.isArrangeLayoutLocked) ? "not-allowed" : "pointer", opacity: (p.isArrangeType && p.isArrangeLayoutLocked) ? 0.5 : 1 }}>
+                    style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.secondaryRelationType === t ? "#0b84ff" : "#222", color: p.secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
                     {p.secondaryRelationLabel(t)}
                   </button>
                 ))}

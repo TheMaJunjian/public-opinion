@@ -9,6 +9,8 @@ import { attentionUsersToJson, getAttentionUsersByTargetIds } from '../lib/atten
 import {
   extractTextTargetIds,
   extractNestedRelationIds,
+  CONTAINER_RELATION_TYPES,
+  validateContainerJoinCycle,
   validateGroupingTargets,
 } from '../lib/crossLinkValidator';
 
@@ -427,6 +429,7 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
     const targetRelationIds = data.targetRefs
       .filter(r => r.kind === 'relation')
       .map(r => (r as { kind: 'relation'; relationId: string }).relationId);
+    let hasContainerMessageTarget = false;
 
     // CLASSIFY supports empty targets and relation-message targets (e.g., topic-to-topic grouping).
 
@@ -444,6 +447,9 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         where: { id: { in: uniqueMessageIds }, topicId },
         select: { id: true, kind: true, relationType: true },
       });
+      hasContainerMessageTarget = foundMessages.some(message =>
+        message.kind === 'RELATION' && CONTAINER_RELATION_TYPES.has(message.relationType ?? '')
+      );
       if (foundMessages.length !== uniqueMessageIds.length) {
         res.status(404).json({ error: '部分目标消息不存在或不属于该分类' });
         return;
@@ -592,7 +598,19 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
             ? target.relationId === existing.relationId
             : target.messageId === existing.messageId)
       ));
-    if ((data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'ARRANGE' || data.relationType === 'SUMMARY' || data.relationType === 'JOIN') && !isInternalContainerJoin) {
+    if ((data.relationType === 'CLASSIFY' || data.relationType === 'MERGE' || data.relationType === 'ARRANGE' || data.relationType === 'SUMMARY' || data.relationType === 'JOIN')
+      && !isInternalContainerJoin) {
+      if (data.relationType === 'JOIN' && data.sourceMessageId && (targetRelationIds.length > 0 || hasContainerMessageTarget)) {
+        const cycleResult = await validateContainerJoinCycle({
+          topicId,
+          sourceContainerId: data.sourceMessageId,
+          targetRefs: data.targetRefs,
+        });
+        if (!cycleResult.ok) {
+          res.status(400).json({ error: cycleResult.error });
+          return;
+        }
+      }
       const validationResult = await validateGroupingTargets({
         topicId,
         relationType: data.relationType,

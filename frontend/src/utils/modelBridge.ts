@@ -301,7 +301,8 @@ export function convertMessagesToDemoModel(
       } else if (relType === 'classify') {
         content = `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'summary') {
-        content = getRelationTitle(rel.payload) ?? `总结（无来源）\n目标：${targetRefsSummary(rel.targetRefs)}`;
+        const summaryTitle = getRelationTitle(rel.payload) || `总结（${rel.targetRefs.length}）`;
+        content = `总结：${summaryTitle}`;
       } else if (['proposal', 'delegation', 'code_change', 'operations'].includes(relType) && rel.payload?.content) {
         content = rel.payload.content;
       } else if (relType === 'tag' && tagLabel) {

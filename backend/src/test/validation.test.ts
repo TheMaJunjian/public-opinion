@@ -8,6 +8,28 @@
 
 import { z } from 'zod';
 import { RELATION_TYPES } from '../lib/relationTypes';
+import { collectSelectedGroupTargetTextIds } from '../lib/crossLinkValidator';
+
+describe('group target expansion', () => {
+  it('does not expand unselected grouping relations', () => {
+    const selectedEmptyContainer = {
+      id: 'container-c',
+      relationType: 'CLASSIFY',
+      targetRefs: [],
+    };
+    const unselectedContainer = {
+      id: 'container-a',
+      relationType: 'MERGE',
+      targetRefs: [{ kind: 'message', messageId: 'message-b' }],
+    };
+
+    expect(collectSelectedGroupTargetTextIds({
+      targetTextIds: [],
+      selectedRelationIds: ['container-c'],
+      targetRelations: [selectedEmptyContainer, unselectedContainer],
+    })).toEqual([]);
+  });
+});
 
 // ─── Replicate the validation schemas from routes/relations.ts ─────────────
 // (We re-declare them here so we can test them in isolation)

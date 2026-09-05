@@ -252,7 +252,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
   } else if (relType === 'classify') {
     content = `分类：${title ?? `分类（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
   } else if (relType === 'summary') {
-    content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
+    content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}`;
   } else if (relType === 'delegation') {
     content = getRelationTitle(relation.payload) ?? '';
   } else if (relType === 'proposal' || relType === 'code_change' || relType === 'operations') {

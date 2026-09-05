@@ -1155,6 +1155,8 @@ describe('TopicDetailPage trace container frame projection', () => {
     await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
     fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
     await waitFor(() => expect(screen.getByText('总结 rel-summary')).toBeInTheDocument());
+    expect(screen.getByText('消息 summary-member-a')).toBeInTheDocument();
+    expect(screen.getByText('消息 summary-member-b')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('总结 rel-summary'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));

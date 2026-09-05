@@ -21,33 +21,32 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
   const navRef = useRef<HTMLElement>(null);
   const leftControlsRef = useRef<HTMLDivElement>(null);
   const rightControlsRef = useRef<HTMLDivElement>(null);
-  const [rightControlsPinned, setRightControlsPinned] = useState(true);
+  const [rightControlsRightOffset, setRightControlsRightOffset] = useState(0);
 
   useEffect(() => {
     const nav = navRef.current;
     if (!nav) return;
 
-    const updatePinnedState = () => {
+    const updateLayout = () => {
+      const navRect = nav.getBoundingClientRect();
+      onHeightChange?.(navRect.height);
       const leftControls = leftControlsRef.current;
       const rightControls = rightControlsRef.current;
       if (!leftControls || !rightControls) return;
 
-      const navRect = nav.getBoundingClientRect();
-      onHeightChange?.(navRect.height);
       const leftRect = leftControls.getBoundingClientRect();
       const rightRect = rightControls.getBoundingClientRect();
-      const normalRight = navRect.left + rightControls.offsetLeft + rightRect.width;
-      const pinnedLeft = Math.min(normalRight, window.innerWidth) - rightRect.width;
-      setRightControlsPinned(leftRect.right + 16 <= pinnedLeft);
+      const nextRightOffset = Math.min(0, window.innerWidth - (leftRect.right + 16 + rightRect.width));
+      setRightControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
     };
 
-    updatePinnedState();
-    const observer = new ResizeObserver(updatePinnedState);
+    updateLayout();
+    const observer = new ResizeObserver(updateLayout);
     observer.observe(nav);
-    window.addEventListener('resize', updatePinnedState);
+    window.addEventListener('resize', updateLayout);
     return () => {
       observer.disconnect();
-      window.removeEventListener('resize', updatePinnedState);
+      window.removeEventListener('resize', updateLayout);
     };
   }, [onHeightChange]);
 
@@ -104,8 +103,8 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
           ) : '📌'}
         </button>
       </div>
-      <div aria-hidden="true" className="flex-1 min-w-4" />
-      <div ref={rightControlsRef} className={`${rightControlsPinned ? 'sticky right-0' : ''} flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4`} style={{ zIndex: Z_INDEX.popup }}>
+      <div aria-hidden="true" className="min-w-0 flex-1" />
+      <div ref={rightControlsRef} className="sticky flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4" style={{ right: `${rightControlsRightOffset}px`, zIndex: Z_INDEX.popup }}>
         {user ? (
           <>
             <button

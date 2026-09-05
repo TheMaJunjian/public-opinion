@@ -17,12 +17,31 @@ function makeDelegation(kind: 'CREATE' | 'FULFILL', content: string): Relation {
   };
 }
 
+function makeSummary(): Relation {
+  return {
+    id: 'summary-1',
+    topicId: 'topic-1',
+    relationType: 'SUMMARY',
+    sourceMessageId: null,
+    targetRefs: [{ kind: 'message', messageId: 'text-1' }],
+    payload: { title: '阶段总结' },
+    createdAt: '2024-01-01T00:02:00.000Z',
+    createdBy: user,
+  };
+}
+
 describe('convertMessagesToDemoModel', () => {
   it('preserves delegation content from the relation payload', () => {
     const content = '报酬数量=100\n委托内容=请完成这项工作';
     const result = convertMessagesToDemoModel([] as Message[], [makeDelegation('CREATE', content)]);
 
     expect(result.messages[0]?.content).toBe(content);
+  });
+
+  it('keeps SUMMARY title when rebuilding messages from refreshed relations', () => {
+    const result = convertMessagesToDemoModel([] as Message[], [makeSummary()]);
+
+    expect(result.messages[0]?.content).toBe('总结：阶段总结');
   });
 
   it('uses one content card for a governance message and its compatibility relation', () => {

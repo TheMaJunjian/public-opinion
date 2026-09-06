@@ -1820,7 +1820,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const MIN_RIGHT_PX = 280;
   const MOBILE_DEFAULT_WIDTH = 1240;
-  const MAX_RIGHT_PX = 500;
   const getAvailableWidth = () => document.documentElement.clientWidth || window.innerWidth;
   const getMinimumContainerWidth = () => Math.max(
     getAvailableWidth(),
@@ -6858,9 +6857,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
       const nextWidth = naturalRightPx < MIN_RIGHT_PX
         ? desiredLeftPx + MIN_RIGHT_PX + 12
-        : naturalRightPx > MAX_RIGHT_PX
-          ? desiredLeftPx + MAX_RIGHT_PX + 12
-          : splitterDragRef.current.containerW;
+        : splitterDragRef.current.containerW;
       const effectiveNextWidth = Math.max(nextWidth, getAvailableWidth());
       setContainerWidth(nextWidth);
       setLeftFlex(TOTAL_FLEX * desiredLeftPx / (effectiveNextWidth - 12));

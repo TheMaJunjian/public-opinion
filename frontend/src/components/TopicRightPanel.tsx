@@ -213,7 +213,6 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     gap: 8,
     overflowY: "auto" as const,
     overflowX: "auto" as const,
-    maxHeight: typeof p.stickyTop === "number" ? `calc(100vh - ${p.stickyTop}px)` : "100vh",
     minWidth: p.minWidth,
     boxSizing: "border-box" as const,
     alignSelf: "flex-start",

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, type DemoEdge, type DemoMessage } from '../utils/modelBridge';
-import { formatCorrectionRange, generateCorrectionContent } from '../pages/topicDetailHelpers';
+import { formatCorrectionRange, generateCorrectionContent, isCorrectableCorrectionTarget } from '../pages/topicDetailHelpers';
 import CorrectionComparisonPopup, { computeReplacementDiff, getCorrectionBaseContent, rebuildCorrectionContent } from '../components/CorrectionComparisonPopup';
 
 function message(id: string, createdAt: string, content: string, kind: DemoMessage['kind']): DemoMessage {
@@ -64,6 +64,21 @@ describe('correction versions', () => {
     ], '真的、也对', new Map([[target.id, target]]), first.relationPayload.correctionContent);
 
     expect(result).toBe('原文真的、也对');
+  });
+
+  it('allows an empty replacement to delete a selected fragment', () => {
+    const target = message('delete-target', '2026-01-01T00:00:00.000Z', '原文片段', 'normal');
+
+    expect(generateCorrectionContent([
+      { messageId: target.id, selection: { kind: 'text', start: 2, len: 2, text: '片段' } },
+    ], '', new Map([[target.id, target]]))).toBe('原文');
+  });
+
+  it('accepts readable relation messages as correction text targets', () => {
+    expect(isCorrectableCorrectionTarget({
+      ...message('summary-target', '2026-01-01T00:00:00.000Z', '总结内容', 'relation'),
+      relationType: 'summary',
+    })).toBe(true);
   });
 
   it('does not advance the base when an earlier correction is invalid', () => {

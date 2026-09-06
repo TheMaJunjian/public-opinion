@@ -285,8 +285,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
         </button>
         <span style={{ fontSize: 11, color: "#fff" }}>{p.singleButtonLabel}</span>
       </div>
-      {p.sendValidationLabel && <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>}
-      {p.sendError && <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>}
+      {p.sendValidationLabel
+        ? <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>{p.sendValidationLabel}</div>
+        : p.sendError && <div style={{ color: "#f87171", fontSize: 11, marginTop: 4 }}>{p.sendError}</div>}
       {p.sendWarning && <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
     </>
   );

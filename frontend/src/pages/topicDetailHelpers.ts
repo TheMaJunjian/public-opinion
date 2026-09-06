@@ -16,6 +16,15 @@ export const READ_STATUS_RELATION_TYPES = new Set(['read', 'unread']);
 export const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
 export const CLASSIFY_TARGET_HINT = '文本消息、排列关系消息、分类消息或归并关系消息';
 
+export const CORRECTABLE_RELATION_TYPES = new Set([
+  'classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations',
+]);
+
+export function isCorrectableCorrectionTarget(message: DemoMessage | undefined): boolean {
+  return message?.kind === 'normal'
+    || (message?.kind === 'relation' && CORRECTABLE_RELATION_TYPES.has(message.relationType ?? ''));
+}
+
 export function secondaryRelationLabel(t: string): string {
   if (t === 'none') return '无';
   if (t === 'question') return '疑问';
@@ -889,10 +898,7 @@ export function generateCorrectionContent(
   if (uniqueTargetMids.length !== 1) return null;
   const targetMid = uniqueTargetMids[0];
   const targetMsg = msgMap.get(targetMid);
-  const correctableRelationTypes = new Set(['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations']);
-  const canCorrectTarget = targetMsg?.kind === 'normal'
-    || (targetMsg?.kind === 'relation' && correctableRelationTypes.has(targetMsg.relationType ?? ''));
-  if (!targetMsg || !canCorrectTarget) return null;
+  if (!targetMsg || !isCorrectableCorrectionTarget(targetMsg)) return null;
 
   const textFragments = targetUnits
     .filter(u => u.selection.kind === 'text')

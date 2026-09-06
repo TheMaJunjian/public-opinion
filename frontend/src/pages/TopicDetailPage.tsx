@@ -62,6 +62,7 @@ import {
   getRelationTargetIds,
   getTextTargetIds,
   isValidTagLabel,
+  isCorrectableCorrectionTarget,
   mergeUnits,
   nextId,
   replyAdditionalLabel,
@@ -863,6 +864,22 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendInFlight, setSendInFlight] = useState(false);
   const sendInFlightRef = useRef(false);
+
+  useEffect(() => {
+    setSendError(null);
+  }, [
+    relationType,
+    secondaryRelationType,
+    subType,
+    relationLabel,
+    newMessageContent,
+    draftUnits,
+    sourceUnits,
+    targetUnits,
+    stakeAmount,
+    relStakeAmount,
+  ]);
+
   const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
   const [settlementOpenType, setSettlementOpenType] = useState<'TRUTH' | 'VALUE' | null>(null);
   const [comparisonMode, setComparisonMode] = useState(false);
@@ -2414,6 +2431,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         setSendError('消息已在来源集合中，不能同时加入候选暂存区');
         return prev;
       }
+      setSendError(null);
       return exists ? prev.filter(x => !unitEquals(x, u)) : [...prev, u];
     });
   }
@@ -2718,6 +2736,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         setSendError('消息已在来源集合中，不能同时加入候选暂存区');
         return prev;
       }
+      setSendError(null);
       const next = exists
         ? prev.filter(u => !unitEquals(u, wholeUnit))
         : [...prev, wholeUnit];
@@ -2827,9 +2846,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   function handleTextMouseUp(e: React.MouseEvent, messageId: string) {
     if (!activeTextSelectId || activeTextSelectId !== messageId) return;
     const m = msgMap.get(messageId);
-    const correctableRelationTypes = new Set(['classify', 'summary', 'proposal', 'delegation', 'code_change', 'operations']);
     const canSelectCorrectionText = m?.kind === 'normal'
-      || (m?.kind === 'relation' && correctableRelationTypes.has(m.relationType ?? ''));
+      || isCorrectableCorrectionTarget(m);
     if (!m || !canSelectCorrectionText) return;
     const container = e.currentTarget as HTMLElement;
     const frag = getSelectionFragment(container);
@@ -2842,6 +2860,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         setSendError('消息已在来源集合中，不能同时加入候选暂存区');
         return prev;
       }
+      setSendError(null);
       return exists ? prev.filter(u => !unitEquals(u, fragmentUnit)) : [...prev, fragmentUnit];
     });
     lastAddedFragmentRef.current = { messageId, unit: fragmentUnit, time: Date.now() };
@@ -2936,6 +2955,22 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
     }
     return selected;
+  }
+
+  function resolveEffectiveTargetUnits(
+    draft: UnitSelection[],
+    targets: UnitSelection[],
+    currentRelationType: string | null,
+  ): UnitSelection[] {
+    const rawTargets = draft.length > 0 ? draft : targets;
+    if (currentRelationType === 'correct') {
+      const textTargets = rawTargets.filter(unit => unit.selection.kind === 'text');
+      if (textTargets.length === 1 && rawTargets.every(unit => unit.messageId === textTargets[0].messageId)) {
+        return textTargets;
+      }
+      return rawTargets;
+    }
+    return promoteCompleteContainerSelections(rawTargets);
   }
 
   function getClassifyTargetRefs(units: UnitSelection[]): TargetRef[] {
@@ -3621,8 +3656,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
 
     // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
-    const rawEffectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
-    const effectiveTargets = promoteCompleteContainerSelections(rawEffectiveTargets);
+    const effectiveTargets = resolveEffectiveTargetUnits(draftUnits, targetUnits, relationType);
     // Validate both stakes — collect all errors
     const errors: string[] = [];
     if (hasTextContent) {
@@ -3830,9 +3864,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
 
     // Relation target with CORRECT: no text, no source — create null-source relation
-    const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
-    const hasSecSelector = relationType === "correct" && hasDraftRelTarget;
-    if (relationType === 'correct' && !hasDraftRelTarget && effectiveTargets.length === 1 && text.length > 0) {
+    const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === 'relation');
+    const hasSecSelector = relationType === "correct" && hasRelationTarget;
+    if (relationType === 'correct' && !hasRelationTarget && effectiveTargets.length === 1) {
       const correctionTarget = effectiveTargets[0];
       if (correctionTarget.selection.kind !== 'text') {
         setSendError('更正只能选择原始内容中的一个文本字段');
@@ -4480,7 +4514,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
 
     // For most types below, text is required. Governance/ops types allow empty text when targets exist.
-    if (text.length === 0 && !isGovernanceOrOpsType) return;
+    if (text.length === 0 && !isGovernanceOrOpsType && relationType !== "correct") return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
 
@@ -4912,13 +4946,15 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
   const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
-  const effectiveTargetUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
-  const processedTargetUnits = promoteCompleteContainerSelections(effectiveTargetUnits);
-  const hasInvalidCorrectTarget = relationType === 'correct' && (
+  const effectiveTargetUnits = resolveEffectiveTargetUnits(draftUnits, targetUnits, relationType);
+  const processedTargetUnits = effectiveTargetUnits;
+  const hasCorrectionRelationTarget = relationType === 'correct'
+    && effectiveTargetUnits.some(unit => msgMap.get(unit.messageId)?.kind === 'relation');
+  const hasInvalidCorrectTarget = relationType === 'correct' && !hasCorrectionRelationTarget && (
     sourceUnits.length > 0
     || effectiveTargetUnits.length !== 1
     || effectiveTargetUnits[0].selection.kind !== 'text'
-    || !isContentKind(msgMap.get(effectiveTargetUnits[0].messageId)?.kind ?? 'normal')
+    || !isCorrectableCorrectionTarget(msgMap.get(effectiveTargetUnits[0].messageId))
   );
   const hasInvalidContainerSource = relationType !== null
     && containerRelationTypes.has(relationType.toUpperCase())
@@ -5090,6 +5126,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     // TAG with secondary=none: invalid state, cannot send
     if (relationType === "tag") return false;
     if (isAgreeDisagreeType || isArrangeType) return hasTargetsAvailable;
+    if (relationType === 'correct') {
+      if (hasCorrectionRelationTarget) return secondaryRelationType !== 'none' && !hasTextContent && sourceUnits.length === 0;
+      return !hasInvalidCorrectTarget && hasTargetsAvailable && sourceUnits.length === 0;
+    }
     if (isNotifyType) return (sourceUnits.length > 0 || newMessageContent.trim().length > 0) && hasAttentionNotifyTarget;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
@@ -5127,6 +5167,17 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       if (!hasTargetsAvailable) return "请在画布中选择要归并的目标消息";
       if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    }
+    if (relationType === 'correct') {
+      if (!hasTargetsAvailable) return '请选择要更正的原始内容';
+      if (hasInvalidCorrectTarget) return '更正只能选择原始内容中的一个文本字段';
+      if (hasCorrectionRelationTarget) {
+        if (secondaryRelationType === 'none') return '请选择更正后的关系类型';
+        return `建立更正关系（用${usingDraft ? "候选" : "目标集合"}中的关系目标）`;
+      }
+      return hasTextContent
+        ? `将选中的原始内容修改为「${newMessageContent.trim()}」`
+        : '删除选中的原始内容片段';
     }
     if (isNotifyType) {
       if (!hasAttentionNotifyTarget) return '请选择已有关注与会者的目标消息';
@@ -5212,7 +5263,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return "请输入关系消息贡献点";
     if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
     if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
-    if (hasInvalidCorrectTarget) return "更正关系只能选择一条普通消息片段";
+    if (hasInvalidCorrectTarget) return "更正只能选择原始内容中的一个文本字段";
     if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
     if (hasInvalidJoinTarget) return invalidJoinTargetMessage as string;
     if (hasCrossLinkValidationError) return crossLinkValidationMessage as string;

@@ -115,10 +115,14 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const relationBarRef = useRef<HTMLDivElement>(null);
   const [relationControlsPinned, setRelationControlsPinned] = useState(true);
   const [relationBarHeight, setRelationBarHeight] = useState(0);
+  const [relationBarMinWidth, setRelationBarMinWidth] = useState(0);
 
   const measureRelationBar = () => {
     const relationBar = relationBarRef.current;
-    if (relationBar) setRelationBarHeight(relationBar.getBoundingClientRect().height);
+    if (relationBar) {
+      setRelationBarHeight(relationBar.getBoundingClientRect().height);
+      setRelationBarMinWidth(currentWidth => Math.max(currentWidth, relationBar.scrollWidth));
+    }
   };
 
   useLayoutEffect(() => {
@@ -132,6 +136,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const updatePinnedState = () => {
       setRelationControlsPinned(relationBar.getBoundingClientRect().right <= window.innerWidth + 1);
       setRelationBarHeight(relationBar.getBoundingClientRect().height);
+      setRelationBarMinWidth(currentWidth => Math.max(currentWidth, relationBar.scrollWidth));
     };
 
     updatePinnedState();
@@ -7088,7 +7093,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   return (
     <>
     <ErrorBoundary>
-    <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
+    <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, relationBarMinWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
       <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top: topControlsFrozen ? topControlsOffset : 0, zIndex: Z_INDEX.popover }}>
         {!isPreloaded && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid #334155", borderRadius: 6, background: "#111827", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" }}>

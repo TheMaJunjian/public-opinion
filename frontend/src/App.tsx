@@ -11,11 +11,13 @@ const HomePage = lazy(() => import('./pages/HomePage'));
 const TopicDetailPage = lazy(() => import('./pages/TopicDetailPage'));
 const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 const TutorialModal = lazy(() => import('./components/TutorialModal'));
+const WelfareModal = lazy(() => import('./components/WelfareModal'));
 const GuideOverlay = lazy(() => import('./components/GuideOverlay'));
 
 function AppContent() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [welfareOpen, setWelfareOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideEnabled, setGuideEnabled] = useState(false);
   const [topControlsFrozen, setTopControlsFrozen] = useState(false);
@@ -91,6 +93,7 @@ function AppContent() {
           <Navbar
             onOpenViewer={() => setViewerOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
+            onOpenWelfare={() => setWelfareOpen(true)}
             onOpenGuide={() => { if (guideEnabled) setGuideOpen(true); }}
             guideEnabled={guideEnabled}
             topControlsFrozen={topControlsFrozen}
@@ -121,6 +124,14 @@ function AppContent() {
               <TutorialModal
                 open={tutorialOpen}
                 onClose={() => setTutorialOpen(false)}
+              />
+            </Suspense>
+          )}
+          {welfareOpen && (
+            <Suspense fallback={null}>
+              <WelfareModal
+                open={welfareOpen}
+                onClose={() => setWelfareOpen(false)}
               />
             </Suspense>
           )}

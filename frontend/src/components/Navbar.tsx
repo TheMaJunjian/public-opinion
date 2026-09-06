@@ -7,6 +7,7 @@ import PointsBadge from './PointsBadge';
 interface NavbarProps {
   onOpenViewer?: () => void;
   onOpenTutorial?: () => void;
+  onOpenWelfare?: () => void;
   onOpenGuide?: () => void;
   guideEnabled?: boolean;
   topControlsFrozen?: boolean;
@@ -15,7 +16,7 @@ interface NavbarProps {
 }
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
-export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guideEnabled = false, topControlsFrozen = false, onToggleTopControls, onHeightChange }: NavbarProps) {
+export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, onOpenGuide, guideEnabled = false, topControlsFrozen = false, onToggleTopControls, onHeightChange }: NavbarProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const navRef = useRef<HTMLElement>(null);
@@ -82,6 +83,14 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenGuide, guid
           title="打开教程"
         >
           教程
+        </button>
+        <button
+          type="button"
+          onClick={onOpenWelfare}
+          className="text-indigo-200 hover:text-white text-sm font-medium transition-colors"
+          title="打开福利"
+        >
+          福利
         </button>
         <button
           type="button"

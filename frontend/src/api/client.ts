@@ -148,19 +148,31 @@ export function updateTopic(id: string, data: { status: 'OPEN' | 'ARCHIVED' }) {
   return request<import('../types').Topic>(`/topics/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
-export function getMessages(topicId: string, params?: { page?: number; limit?: number }) {
+export function getMessages(topicId: string, params?: { page?: number; limit?: number; sinceUpdatedAt?: string; sinceId?: string }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.sinceUpdatedAt) qs.set('sinceUpdatedAt', params.sinceUpdatedAt);
+  if (params?.sinceId) qs.set('sinceId', params.sinceId);
   return request<import('../types').PaginatedResponse<import('../types').Message>>(`/topics/${topicId}/messages?${qs}`);
 }
 
-export async function getAllMessages(topicId: string, limit = 200) {
-  const firstPage = await getMessages(topicId, { page: 1, limit });
+export async function getAllMessages(topicId: string, limit = 200, cursor?: { updatedAt: string; id: string }) {
+  const firstPage = await getMessages(topicId, {
+    page: 1,
+    limit,
+    sinceUpdatedAt: cursor?.updatedAt,
+    sinceId: cursor?.id,
+  });
   if (firstPage.pagination.totalPages <= 1) return firstPage;
   const pages = await Promise.all(
     Array.from({ length: firstPage.pagination.totalPages - 1 }, (_, index) =>
-      getMessages(topicId, { page: index + 2, limit }),
+      getMessages(topicId, {
+        page: index + 2,
+        limit,
+        sinceUpdatedAt: cursor?.updatedAt,
+        sinceId: cursor?.id,
+      }),
     ),
   );
   return {

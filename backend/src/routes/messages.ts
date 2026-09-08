@@ -24,13 +24,15 @@ const createMessageSchema = z.object({
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(200).optional().default(20),
+  sinceUpdatedAt: z.string().datetime().optional(),
+  sinceId: z.string().min(1).optional(),
 });
 
 // GET /api/topics/:topicId/messages
 messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
-    const { page, limit } = paginationSchema.parse(req.query);
+    const { page, limit, sinceUpdatedAt, sinceId } = paginationSchema.parse(req.query);
     const skip = (page - 1) * limit;
 
     const topic = await prisma.topic.findUnique({ where: { id: topicId } });
@@ -39,12 +41,27 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
       return;
     }
 
-    const messageWhere = { topicId, supersededBy: null };
+    const messageWhere = {
+      topicId,
+      ...(sinceUpdatedAt ? {} : { supersededBy: null }),
+      ...(sinceUpdatedAt
+        ? {
+            OR: sinceId
+              ? [
+                  { updatedAt: { gt: new Date(sinceUpdatedAt) } },
+                  { updatedAt: new Date(sinceUpdatedAt), id: { gt: sinceId } },
+                ]
+              : [{ updatedAt: { gt: new Date(sinceUpdatedAt) } }],
+          }
+        : {}),
+    };
     const [total, messages] = await Promise.all([
       prisma.message.count({ where: messageWhere }),
       prisma.message.findMany({
         where: messageWhere,
-        orderBy: { createdAt: 'asc' },
+        orderBy: sinceUpdatedAt
+          ? [{ updatedAt: 'asc' as const }, { id: 'asc' as const }]
+          : [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
         skip,
         take: limit,
         include: { createdBy: { select: { id: true, username: true } } },

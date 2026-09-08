@@ -30,6 +30,8 @@ export interface Message {
   contentType: 'TEXT' | 'MARKDOWN';
   content: string;
   createdAt: string;
+  updatedAt?: string;
+  supersededBy?: string | null;
   createdBy: User;
   relationType?: RelationType | null;
   relSourceId?: string | null;

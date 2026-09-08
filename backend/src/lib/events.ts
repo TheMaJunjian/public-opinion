@@ -12,6 +12,21 @@ import { logSettlement, logUserSettlement, logLoserSettlement, logClawback, logC
 import { log, debugLog } from './logger';
 import { writeAuditLog } from './auditLog';
 import { getAttentionUsersByTargetIds } from './attention';
+import { createHash } from 'crypto';
+
+function buildJoinKey(topicId: string, sourceMessageId: string | null, targetRefs: unknown[]): string {
+  const normalizedTargets = targetRefs
+    .map(target => {
+      const ref = target as Record<string, unknown>;
+      return ref.kind === 'relation'
+        ? { kind: ref.kind, relationId: ref.relationId, part: ref.part ?? 'whole' }
+        : { kind: ref.kind, messageId: ref.messageId };
+    })
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return createHash('sha256')
+    .update(JSON.stringify({ topicId, sourceMessageId, targets: normalizedTargets }))
+    .digest('hex');
+}
 
 // ============================================================
 // Event Type Definitions
@@ -1043,30 +1058,6 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
     const note = typeof rpForCreate?.content === 'string' ? rpForCreate.content : '回复通知';
     persistedRelationContent = `${note}\n通知与会者：${[...attentionUserIds].map(id => `与会者 ${id}`).join('、')}；目标：${targetLabels.join('、')}`;
   }
-  let joinContainerUpdate: { id: string; targetRefs: Prisma.InputJsonValue } | null = null;
-  if (effectiveRelationType.toUpperCase() === 'JOIN' && effectiveSourceMessageId) {
-    const source = await prisma.message.findUnique({
-      where: { id: effectiveSourceMessageId },
-      select: { id: true, relationType: true, targetRefs: true },
-    });
-    const sourceType = source?.relationType?.toUpperCase();
-    if (source && (sourceType === 'CLASSIFY' || sourceType === 'SUMMARY' || sourceType === 'ARRANGE' || sourceType === 'MERGE')) {
-      const sourceRefs = (source.targetRefs as Array<Record<string, unknown>> | null) ?? [];
-      const mergedRefs = [...sourceRefs];
-      for (const targetRef of effectiveTargetRefs as Array<Record<string, unknown>>) {
-        const exists = mergedRefs.some(existing =>
-          existing.kind === targetRef.kind && (
-            targetRef.kind === 'relation'
-              ? existing.relationId === targetRef.relationId
-              : existing.messageId === targetRef.messageId
-          )
-        );
-        if (!exists) mergedRefs.push(targetRef);
-      }
-      joinContainerUpdate = { id: source.id, targetRefs: mergedRefs as Prisma.InputJsonValue };
-    }
-  }
-
   const transactionOps: Prisma.PrismaPromise<unknown>[] = [
     prisma.message.create({
       data: {
@@ -1077,14 +1068,14 @@ async function applyRelationCreated(event: RelationCreatedEvent) {
         relSourceId: effectiveSourceMessageId,
         targetRefs: effectiveTargetRefs as Prisma.InputJsonValue,
         relationPayload: persistedPayload as Prisma.InputJsonValue | undefined,
+        joinKey: effectiveRelationType.toUpperCase() === 'JOIN'
+          ? buildJoinKey(topicId, effectiveSourceMessageId ?? null, effectiveTargetRefs)
+          : null,
         contentType: 'TEXT',
         content: persistedRelationContent,
       },
       include: { createdBy: { select: { id: true, username: true } } },
     }),
-    ...(joinContainerUpdate
-      ? [prisma.message.update({ where: { id: joinContainerUpdate.id }, data: { targetRefs: joinContainerUpdate.targetRefs } })]
-      : []),
   ];
   const [message] = await prisma.$transaction(transactionOps) as any[];
 
@@ -2780,10 +2771,19 @@ async function executeClawback(previousRoundId: string, messageId: string, topic
 
 async function applyRelationTargetsUpdated(event: RelationTargetsUpdatedEvent) {
   const { actorId, topicId, payload } = event;
+  const existing = await prisma.message.findUnique({
+    where: { id: payload.relationId },
+    select: { relationType: true, relSourceId: true },
+  });
 
   const updated = await prisma.message.update({
     where: { id: payload.relationId },
-    data: { targetRefs: payload.targetRefs as Prisma.InputJsonValue },
+    data: {
+      targetRefs: payload.targetRefs as Prisma.InputJsonValue,
+      ...(existing?.relationType?.toUpperCase() === 'JOIN'
+        ? { joinKey: buildJoinKey(topicId, existing.relSourceId ?? null, payload.targetRefs) }
+        : {}),
+    },
     include: { createdBy: { select: { id: true, username: true } } },
   });
 

@@ -13,6 +13,7 @@ interface StakeCalculationDeps {
   subTypeStakeMap: React.MutableRefObject<Record<string, number>>;
   existingJoinCount?: number;
   joinOnlyAction?: boolean;
+  reclassificationJoinCount?: number;
   additionalAgreeTargetCount?: number;
   onRelStakeChange: (min: number) => void;
   stakeDefaultLoaded: React.MutableRefObject<boolean>;
@@ -24,7 +25,7 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
   const {
     relationType, secondaryRelationType = 'none', subType, draftUnits, targetUnits, newMessageContent,
     stakeAmount, relStakeAmount, relationStakeMap, subTypeStakeMap,
-    existingJoinCount = 0, joinOnlyAction = false, additionalAgreeTargetCount = 0,
+    existingJoinCount = 0, joinOnlyAction = false, reclassificationJoinCount = 0, additionalAgreeTargetCount = 0,
     onRelStakeChange, stakeDefaultLoaded,
   } = deps;
 
@@ -32,7 +33,8 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
 
   const effectiveMinStake = (() => {
     if (relationType === 'tag' && (secondaryRelationType === 'read' || secondaryRelationType === 'unread')) return 0;
-    if (joinOnlyAction) return 1;
+    const joinMinStake = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
+    if (joinOnlyAction) return joinMinStake;
     const typeMinBase = relationType
       ? (relationStakeMap.current[relationType.toUpperCase()] ?? 10)
       : 10;
@@ -73,13 +75,14 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
     if (joinOnlyAction) {
       const baseTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
       const joinCount = new Set(baseTargets.map(unit => unit.messageId)).size;
-      const joinStakeTotal = joinCount;
+      const joinStakePerTarget = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
+      const joinStakeTotal = joinCount * joinStakePerTarget;
       const joinFeeTotal = joinCount * protocolFeePerOp;
       return {
         stakeTotal: joinStakeTotal,
         protocolFeeTotal: joinFeeTotal,
         total: joinStakeTotal + joinFeeTotal,
-        perStake: 1,
+        perStake: joinStakePerTarget,
         textStake: 0,
         refStakeTotal: 0,
         refCount: 0,
@@ -100,13 +103,18 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
     const relCount = multiTargetCount > 0 ? multiTargetCount : 1;
     const relStakeTotal = relStakeAmount * relCount;
     const relFeeTotal = protocolFeePerOp * relCount;
+    const reclassificationJoinStakePerJoin = relationStakeMap.current['JOIN'] ?? 1;
+    const reclassificationJoinStakeTotal = reclassificationJoinCount * reclassificationJoinStakePerJoin;
+    const reclassificationStakePerJoin = relationStakeMap.current['DISAGREE'] ?? 10;
+    const reclassificationStakeTotal = reclassificationJoinCount * reclassificationStakePerJoin;
+    const reclassificationFeeTotal = reclassificationJoinCount * protocolFeePerOp;
     const isGovOps2 = relationType === 'proposal' || relationType === 'code_change' || relationType === 'operations';
     const govRefCount = isGovOps2 ? (draftUnits.length > 0 ? draftUnits.length : targetUnits.length) : 0;
     const refMin = relationStakeMap.current['REFERENCE'] ?? 10;
     const refStakeTotal = govRefCount > 0 ? govRefCount * refMin : 0;
     const refFeeTotal = govRefCount > 0 ? govRefCount * protocolFeePerOp : 0;
     const isContainerType = relationType === 'classify' || relationType === 'summary' || relationType === 'arrange' || relationType === 'merge';
-    const JOIN_STAKE_PER_TARGET = 1;
+    const JOIN_STAKE_PER_TARGET = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
     const containerJoinCount = isContainerType ? (() => {
       const baseTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
       const uniqueCount = new Set(baseTargets.map(u => u.messageId)).size;
@@ -123,8 +131,8 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
       ? (relationStakeMap.current['REFERENCE'] ?? 10)
       : 0;
     const delegationReferenceFee = delegationReferenceStake > 0 ? protocolFeePerOp : 0;
-    const totalStake = textStake + relStakeTotal + refStakeTotal + joinStakeTotal + delegationRewardStake + delegationReferenceStake;
-    const totalProtocolFee = textFee + relFeeTotal + refFeeTotal + joinFeeTotal + delegationReferenceFee;
+    const totalStake = textStake + relStakeTotal + refStakeTotal + joinStakeTotal + reclassificationJoinStakeTotal + reclassificationStakeTotal + delegationRewardStake + delegationReferenceStake;
+    const totalProtocolFee = textFee + relFeeTotal + refFeeTotal + joinFeeTotal + reclassificationFeeTotal + delegationReferenceFee;
     return {
       stakeTotal: totalStake,
       protocolFeeTotal: totalProtocolFee,
@@ -139,6 +147,12 @@ export default function useStakeCalculation(deps: StakeCalculationDeps) {
       existingJoinAgreeCount: Math.min(containerJoinCount, existingJoinCount),
       joinStakeTotal,
       joinFeeTotal,
+      reclassificationJoinCount,
+      reclassificationJoinStakePerJoin,
+      reclassificationJoinStakeTotal,
+      reclassificationStakePerJoin,
+      reclassificationStakeTotal,
+      reclassificationFeeTotal,
       delegationRewardStake,
       delegationReferenceStake,
       delegationReferenceFee,

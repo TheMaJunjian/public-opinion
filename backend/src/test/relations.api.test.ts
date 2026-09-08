@@ -212,6 +212,30 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(400);
   });
 
+  it('returns 400 when JOIN has no target', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'msg-1', targetRefs: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when JOIN has multiple targets', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'JOIN',
+        sourceMessageId: 'msg-1',
+        targetRefs: [
+          { kind: 'message', messageId: 'msg-2' },
+          { kind: 'message', messageId: 'msg-3' },
+        ],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('每条加入消息必须且只能选择一个目标');
+  });
+
   it('returns 400 when required sourceMessageId is missing', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
@@ -718,7 +742,7 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     expect(res.body.id).toBe('rel-new');
   });
 
-  it('turns a duplicate JOIN into AGREE on the existing JOIN', async () => {
+  it('any user repeating a JOIN agrees with the existing JOIN', async () => {
     (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
       id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
     });
@@ -751,6 +775,23 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     expect(res.status).toBe(201);
     expect(res.body.relationType).toBe('AGREE');
     expect(res.body.targetRefs).toEqual([{ kind: 'relation', relationId: 'join-existing' }]);
+  });
+
+  it('rejects a text fragment as a JOIN target', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'JOIN',
+        sourceMessageId: 'rel-container',
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'second', hash: 'hash-second' }],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('文本片段');
   });
 
   it('creates a relation with a text-fragment target', async () => {

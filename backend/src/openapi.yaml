@@ -79,6 +79,12 @@ components:
         createdAt:
           type: string
           format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        supersededBy:
+          type: string
+          nullable: true
         createdBy:
           $ref: '#/components/schemas/User'
 
@@ -365,6 +371,17 @@ paths:
           schema:
             type: integer
             default: 20
+        - in: query
+          name: sinceUpdatedAt
+          description: 只返回该时间点之后更新的消息；增量响应可包含 supersededBy 非空的删除通知
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: sinceId
+          description: 当 updatedAt 相同时使用的稳定游标 ID
+          schema:
+            type: string
       responses:
         '200':
           description: 消息列表

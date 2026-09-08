@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
@@ -50,6 +51,14 @@ const targetRefSchema = z.discriminatedUnion('kind', [
     part: z.enum(['label', 'decoration', 'frame', 'whole']).optional(),
   }),
 ]);
+
+function sameJoinTargetRef(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'relation') {
+    return left.relationId === right.relationId && (left.part ?? 'whole') === (right.part ?? 'whole');
+  }
+  return left.messageId === right.messageId;
+}
 
 const createRelationSchema = z.object({
   relationType: z.enum(RELATION_TYPES, {
@@ -363,6 +372,11 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
     const topicId = req.params.topicId as string;
     const data = createRelationSchema.parse(req.body);
 
+    if (data.relationType === 'JOIN' && data.targetRefs.length !== 1) {
+      res.status(400).json({ error: '每条加入消息必须且只能选择一个目标' });
+      return;
+    }
+
     const topic = await prisma.topic.findUnique({ where: { id: topicId } });
     if (!topic) {
       res.status(404).json({ error: '分类不存在' });
@@ -430,6 +444,11 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       .filter(r => r.kind === 'relation')
       .map(r => (r as { kind: 'relation'; relationId: string }).relationId);
     let hasContainerMessageTarget = false;
+
+    if (data.relationType === 'JOIN' && data.targetRefs.some(ref => ref.kind === 'text-fragment')) {
+      res.status(400).json({ error: '加入消息不能以文本片段作为目标，必须选择独立消息' });
+      return;
+    }
 
     // CLASSIFY supports empty targets and relation-message targets (e.g., topic-to-topic grouping).
 
@@ -630,12 +649,11 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         : data.payload;
 
     // A container/member pair has one canonical JOIN record. Re-adding the
-    // same target must support that record instead of creating a duplicate
-    // membership record that could compete in the JOIN stack.
+    // same target by any user, including a user who previously disagreed with
+    // it, supports that record by creating AGREE instead of a duplicate JOIN.
     let relationTypeToCreate = data.relationType;
     let targetRefsToCreate = data.targetRefs;
-    if (data.relationType === 'JOIN' && data.targetRefs.length === 1) {
-      const targetRef = data.targetRefs[0];
+    if (data.relationType === 'JOIN') {
       const existingJoins = await prisma.message.findMany({
         where: {
           topicId,
@@ -648,10 +666,10 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
       });
       const sameTarget = existingJoins.find(join => {
         const existingTarget = (join.targetRefs as Array<Record<string, unknown>> | null)?.[0];
-        if (!existingTarget || existingTarget.kind !== targetRef.kind) return false;
-        return targetRef.kind === 'relation'
-          ? existingTarget.relationId === targetRef.relationId
-          : existingTarget.messageId === targetRef.messageId;
+        return !!existingTarget && sameJoinTargetRef(
+          existingTarget,
+          data.targetRefs[0] as unknown as Record<string, unknown>,
+        );
       });
       if (sameTarget) {
         relationTypeToCreate = 'AGREE';
@@ -732,19 +750,55 @@ relationsRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest,
         },
       });
     } else {
-      message = await applyEvent({
-        type: 'RELATION_CREATED',
-        actorId: req.user!.id,
-        topicId,
-        payload: {
-          relationType: relationTypeToCreate,
-          sourceMessageId: data.sourceMessageId ?? null,
-          targetRefs: targetRefsToCreate,
-          relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
-          supersedesRelationId: data.supersedesRelationId ?? null,
-          stakeAmount: data.stakeAmount,
-        },
-      });
+      try {
+        message = await applyEvent({
+          type: 'RELATION_CREATED',
+          actorId: req.user!.id,
+          topicId,
+          payload: {
+            relationType: relationTypeToCreate,
+            sourceMessageId: data.sourceMessageId ?? null,
+            targetRefs: targetRefsToCreate,
+            relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
+            supersedesRelationId: data.supersedesRelationId ?? null,
+            stakeAmount: data.stakeAmount,
+          },
+        });
+      } catch (err) {
+        if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002' || data.relationType !== 'JOIN') {
+          throw err;
+        }
+        const canonicalJoins = await prisma.message.findMany({
+          where: {
+            topicId,
+            kind: 'RELATION',
+            relationType: 'JOIN',
+            relSourceId: data.sourceMessageId ?? null,
+            supersededBy: null,
+          },
+        });
+        const canonicalJoin = canonicalJoins.find(join => {
+          const existingTarget = (join.targetRefs as Array<Record<string, unknown>> | null)?.[0];
+          return !!existingTarget && sameJoinTargetRef(
+            existingTarget,
+            data.targetRefs[0] as unknown as Record<string, unknown>,
+          );
+        });
+        if (!canonicalJoin) throw err;
+        message = await applyEvent({
+          type: 'RELATION_CREATED',
+          actorId: req.user!.id,
+          topicId,
+          payload: {
+            relationType: 'AGREE',
+            sourceMessageId: null,
+            targetRefs: [{ kind: 'relation', relationId: canonicalJoin.id }],
+            relationPayload: (relationPayload ?? undefined) as Record<string, unknown> | undefined,
+            supersedesRelationId: null,
+            stakeAmount: data.stakeAmount,
+          },
+        });
+      }
     }
 
     log('rel-create', `POST type=${relationTypeToCreate} msg=${message.id.slice(-6)} kind=${message.kind}`);

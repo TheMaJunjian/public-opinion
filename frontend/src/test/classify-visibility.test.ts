@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TargetRef } from '../types';
 import { isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
-import { collectContainerVisibleIds, collectOwnedByRelation, expandTextIdsWithSettlementResults, filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getAutoClassifyTargetForSettlementMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getSettlementClassifyJoinTarget, getStaleJoinRelationIds, getUserPreferredJoinByTarget, isAppendToExistingClassifyAction, resolveNavigationTargetId } from '../pages/topicDetailHelpers';
+import { collectContainerVisibleIds, collectOwnedByRelation, expandTextIdsWithSettlementResults, filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getAutoClassifyTargetForSettlementMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getSettlementClassifyJoinTarget, getStaleJoinRelationIds, isAppendToExistingClassifyAction, resolveNavigationTargetId } from '../pages/topicDetailHelpers';
 
 /**
  * classify-visibility.test.ts
@@ -354,7 +354,7 @@ describe('消息加入/移出分类', () => {
     expect(collectOwnedByRelation('classify-new', new Map(relations.map((relation: any) => [relation.id, relation]))).textIds.has('msg-1')).toBe(true);
   });
 
-  it('最新 JOIN 被反对后回退到上一条有效 JOIN', () => {
+  it('最新 JOIN 被反对后按剩余 JOIN 推荐', () => {
     const relations = [
       { id: 'join-old', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-01', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
       { id: 'join-new', relationType: 'JOIN', sourceMessageId: 'classify-2', createdAt: '2026-01-02', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
@@ -362,38 +362,42 @@ describe('消息加入/移出分类', () => {
     expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(['join-new']))).toEqual(new Set(['join-old']));
   });
 
-  it('当前与会者最新发送或赞同的 JOIN 决定个人布局归属', () => {
+  it('当前用户明确赞同的 JOIN 不按推荐分排序', () => {
     const relations = [
-      { id: 'join-b-msg', relationType: 'JOIN', sourceMessageId: 'classify-b', createdAt: '2026-01-01', createdBy: { username: 'alice' }, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
-      { id: 'join-c-msg', relationType: 'JOIN', sourceMessageId: 'classify-c', createdAt: '2026-01-02', createdBy: { username: 'bob' }, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
-      { id: 'agree-b-msg', relationType: 'AGREE', createdAt: '2026-01-03', createdBy: { username: 'alice' }, targetRefs: [{ kind: 'relation', relationId: 'join-b-msg' }] },
+      { id: 'join-old', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-01', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+      { id: 'join-new', relationType: 'JOIN', sourceMessageId: 'classify-2', createdAt: '2026-01-02', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+      { id: 'agree-new', relationType: 'AGREE', sourceMessageId: null, createdAt: '2026-01-03', targetRefs: [{ kind: 'relation', relationId: 'join-new' }] },
     ] as any;
-    const preferred = getUserPreferredJoinByTarget(
-      relations,
-      new Map([['join-b-msg', { relMsgId: 'agree-b-msg', type: 'agree' as const }]]),
-      'alice',
-    );
-    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(), preferred)).toEqual(new Set(['join-b-msg']));
-    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set())).toEqual(new Set(['join-c-msg']));
-    const relationById = new Map([
-      ['classify-b', { id: 'classify-b', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] }],
-      ['classify-c', { id: 'classify-c', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [] }],
-      ...relations.map((relation: any) => [relation.id, relation]),
-    ]) as any;
-    expect(collectOwnedByRelation('classify-b', relationById, new Set(), new Set(), new Set(), preferred).textIds.has('msg-1')).toBe(true);
-    expect(collectOwnedByRelation('classify-c', relationById, new Set(), new Set(), new Set(), preferred).textIds.has('msg-1')).toBe(false);
+    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set())).toEqual(new Set(['join-new']));
   });
 
-  it('个人偏好的 JOIN 被反对后不能继续决定布局', () => {
+  it('多个 JOIN 按 JOIN 消息时间选择最新一条', () => {
+    const relations = [
+      { id: 'join-old', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-03', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+      { id: 'join-new', relationType: 'JOIN', sourceMessageId: 'classify-2', createdAt: '2026-01-01', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+      { id: 'agree-old', relationType: 'AGREE', sourceMessageId: null, createdAt: '2026-01-02', targetRefs: [{ kind: 'relation', relationId: 'join-old' }] },
+      { id: 'agree-new', relationType: 'AGREE', sourceMessageId: null, createdAt: '2026-01-04', targetRefs: [{ kind: 'relation', relationId: 'join-new' }] },
+    ] as any;
+    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set())).toEqual(new Set(['join-old']));
+  });
+
+  it('当前用户明确反对的 JOIN 不按推荐分显示', () => {
+    const relations = [
+      { id: 'join-old', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-01', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+      { id: 'join-new', relationType: 'JOIN', sourceMessageId: 'classify-2', createdAt: '2026-01-02', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
+    ] as any;
+    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(), new Set(['join-old']))).toEqual(new Set(['join-new']));
+  });
+
+  it('当前用户明确反对旧 JOIN 后仍按最新未反对 JOIN 显示', () => {
     const relations = [
       { id: 'classify-1', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [] },
       { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-01', createdBy: { username: 'alice' }, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
       { id: 'classify-2', relationType: 'CLASSIFY', sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
       { id: 'join-2', relationType: 'JOIN', sourceMessageId: 'classify-2', createdAt: '2026-01-02', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
     ] as any;
-    const preferred = new Map([['msg-1', 'join-1']]);
-    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(['join-1']), preferred)).toEqual(new Set(['join-2']));
-    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(), preferred)).toEqual(new Set(['join-1']));
+    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set(['join-1']))).toEqual(new Set(['join-2']));
+    expect(getEffectiveJoinRelationIds(relations, new Set(), new Set())).toEqual(new Set(['join-2']));
   });
 
   it('嵌套容器目标也只保留一条生效 JOIN', () => {
@@ -447,7 +451,7 @@ describe('消息加入/移出分类', () => {
   });
 
 
-  it('最新 JOIN 的容器被反对后回退到上一条有效 JOIN', () => {
+  it('JOIN 所在容器被反对后按其他容器推荐', () => {
     const relations = [
       { id: 'join-old', relationType: 'JOIN', sourceMessageId: 'classify-1', createdAt: '2026-01-01', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },
       { id: 'join-new', relationType: 'JOIN', sourceMessageId: 'classify-2', createdAt: '2026-01-02', targetRefs: [{ kind: 'message', messageId: 'msg-1' }] },

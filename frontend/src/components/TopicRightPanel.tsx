@@ -268,6 +268,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
                 p.totalConsumption.hasRel ? `关系 ${p.totalConsumption.perStake}×${p.totalConsumption.relCount}` : null,
                 (p.totalConsumption as any).refCount > 0 ? `引用 ${(p.totalConsumption as any).refStakeTotal}` : null,
                 (p.totalConsumption as any).joinCount > 0 ? `加入 ${(p.totalConsumption as any).joinStakeTotal + ((p.totalConsumption as any).joinFeeTotal ?? (p.totalConsumption as any).joinBurnTotal ?? 0)}（${(p.totalConsumption as any).joinCount}×${1 + p.stakeFeeAmountRef.current}）` : null,
+                (p.totalConsumption as any).reclassificationJoinCount > 0 ? `撤销加入 ${(p.totalConsumption as any).reclassificationJoinStakeTotal + (p.totalConsumption as any).reclassificationStakeTotal + ((p.totalConsumption as any).reclassificationFeeTotal ?? 0)}（JOIN ${(p.totalConsumption as any).reclassificationJoinStakeTotal} + 反对 ${(p.totalConsumption as any).reclassificationStakeTotal}）` : null,
                 p.totalConsumption.burnTotal > 0 ? `燃烧 ${p.totalConsumption.burnTotal}` : null,
               ].filter(Boolean).join(' + ')}）
             </span>

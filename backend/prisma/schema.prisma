@@ -78,6 +78,7 @@ model Message {
   createdById String
   kind        MessageKind @default(TEXT)
   createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
   // TEXT kind fields
   contentType         ContentType?
@@ -93,6 +94,7 @@ model Message {
   relSourceId   String?
   targetRefs    Json?
   relationPayload Json?
+  joinKey       String?
   supersededBy  String?
 
   topic     Topic    @relation(fields: [topicId], references: [id])

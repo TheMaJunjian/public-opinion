@@ -154,7 +154,7 @@ describe('TopicDetailPage composer refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     // TAG auto-selects "推荐" as secondary — don't click it again or it toggles off
     fireEvent.click(screen.getByRole('button', { name: '标注' }));
-    fireEvent.click(screen.getByText('关系消息 rel-1'));
+    fireEvent.click(screen.getByText('rel-1'));
 
     await waitFor(() => {
       const textarea = screen.getByPlaceholderText('已选择附加关系，此处不可输入');
@@ -265,25 +265,25 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     // On the main canvas only the outer classify topic card should be visible;
     // msg-a, msg-b, rel-merge, and rel-inner are hidden (classified away).
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('rel-outer')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
 
     // Enter the outer topic by double-clicking its card
-    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('rel-outer'));
 
     // After entering outer-topic focus, only the direct CLASSIFY target (rel-inner)
     // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
     // internal content (rel-merge, msg-a, msg-b) should NOT be expanded into this view.
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-inner')).toBeInTheDocument();
+      expect(screen.getByText('rel-inner')).toBeInTheDocument();
     });
     expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
   });
 });
@@ -355,25 +355,25 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
 
     // On the main canvas only the outer classify topic card should be visible.
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('rel-outer')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-middle')).not.toBeInTheDocument();
 
     // Enter the outer topic by double-clicking its card.
-    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('rel-outer'));
 
     // After entering outer-topic focus, only the direct CLASSIFY target (rel-middle)
     // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
     // internal content (rel-inner, rel-merge, msg-a, msg-b) should NOT be expanded.
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-middle')).toBeInTheDocument();
+      expect(screen.getByText('rel-middle')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
   });
@@ -429,15 +429,15 @@ describe('TopicDetailPage summary relation visibility', () => {
     // In list view, summary target text should remain visible.
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+      expect(screen.getByText('rel-summary')).toBeInTheDocument();
     });
-    expect(screen.getByText('消息 msg-1')).toBeInTheDocument();
+    expect(screen.getByText('msg-1')).toBeInTheDocument();
 
-    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+    fireEvent.doubleClick(screen.getByText('rel-summary'));
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByText('消息 msg-1')).toBeInTheDocument();
+    expect(screen.getByText('msg-1')).toBeInTheDocument();
     expect(screen.queryByText('总结 rel-summary')).not.toBeInTheDocument();
   });
 
@@ -588,9 +588,9 @@ describe('TopicDetailPage classify containing merge with nested classify target'
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('rel-outer')).toBeInTheDocument();
     });
-    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('rel-outer'));
 
     // After entering outer-topic focus:
     // - msg-b is a direct text target, should be visible
@@ -599,11 +599,11 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     // - rel-inner (CLASSIFY) is inside rel-merge, shown as topic card only
     // - msg-c is inside rel-inner, should NOT be visible (CLASSIFY is opaque)
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-inner')).toBeInTheDocument();
+      expect(screen.getByText('rel-inner')).toBeInTheDocument();
     });
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.getByText('msg-b')).toBeInTheDocument();
+    expect(screen.queryByText('msg-c')).not.toBeInTheDocument();
   });
 });
 
@@ -706,20 +706,20 @@ describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => 
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
     // Enter the classify topic
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     await waitFor(() => {
       // The arrange relation message must be visible in the topic view
-      expect(screen.getByText('关系消息 rel-supp')).toBeInTheDocument();
+      expect(screen.getByText('rel-supp')).toBeInTheDocument();
     });
     // The arrange's source text (msg-a) must also be visible so its frame can render
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
     // The arrange's target text (msg-b) must be visible
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.getByText('msg-b')).toBeInTheDocument();
   });
 });
 
@@ -773,17 +773,17 @@ describe('TopicDetailPage SUMMARY topic with arrange source visibility', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+      expect(screen.getByText('rel-summary')).toBeInTheDocument();
     });
 
     // Enter the summary topic
-    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+    fireEvent.doubleClick(screen.getByText('rel-summary'));
 
     await waitFor(() => {
-      expect(screen.getByText('关系消息 rel-supp')).toBeInTheDocument();
+      expect(screen.getByText('rel-supp')).toBeInTheDocument();
     });
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.getByText('msg-b')).toBeInTheDocument();
   });
 });
 
@@ -901,15 +901,15 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
     // msg-orig is classified, so it should be hidden
-    expect(screen.queryByText('消息 msg-orig')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-orig')).not.toBeInTheDocument();
     // msg-corr is CORRECT-related to msg-orig, so it should also be hidden
-    expect(screen.queryByText('消息 msg-corr')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-corr')).not.toBeInTheDocument();
     // msg-other is unrelated and should still be visible
-    expect(screen.getByText('消息 msg-other')).toBeInTheDocument();
+    expect(screen.getByText('msg-other')).toBeInTheDocument();
   });
 
   it('shows classified message and its CORRECT-related message when entering classify topic', async () => {
@@ -918,22 +918,22 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     });
     // msg-orig (direct target) must be visible
-    expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
+    expect(screen.getByText('msg-orig')).toBeInTheDocument();
     // msg-corr (CORRECT-related to msg-orig) must be automatically included
-    expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
+    expect(screen.getByText('msg-corr')).toBeInTheDocument();
     // rel-correct (CORRECT relation message) must also be visible
-    expect(screen.getByText('关系消息 rel-correct')).toBeInTheDocument();
+    expect(screen.getByText('rel-correct')).toBeInTheDocument();
     // msg-other (unrelated) must NOT appear
-    expect(screen.queryByText('消息 msg-other')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-other')).not.toBeInTheDocument();
   });
 });
 
@@ -989,20 +989,20 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+      expect(screen.getByText('rel-summary')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+    fireEvent.doubleClick(screen.getByText('rel-summary'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
     });
     // msg-orig (direct target) must be visible
-    expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
+    expect(screen.getByText('msg-orig')).toBeInTheDocument();
     // msg-corr (CORRECT-related to msg-orig) must be automatically included
-    expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
+    expect(screen.getByText('msg-corr')).toBeInTheDocument();
     // rel-correct (CORRECT relation message) must also be visible
-    expect(screen.getByText('关系消息 rel-correct')).toBeInTheDocument();
+    expect(screen.getByText('rel-correct')).toBeInTheDocument();
   });
 
   it('hides CORRECT-related message from graph view when its counterpart is summarized', async () => {
@@ -1053,8 +1053,8 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
-      expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
+      expect(screen.getByText('msg-orig')).toBeInTheDocument();
+      expect(screen.getByText('msg-corr')).toBeInTheDocument();
     });
   });
 });
@@ -1152,13 +1152,13 @@ describe('TopicDetailPage trace container frame projection', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-    await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
-    await waitFor(() => expect(screen.getByText('总结 rel-summary')).toBeInTheDocument());
-    expect(screen.getByText('消息 summary-member-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 summary-member-b')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('rel-classify')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitFor(() => expect(screen.getByText('rel-summary')).toBeInTheDocument());
+    expect(screen.getByText('summary-member-a')).toBeInTheDocument();
+    expect(screen.getByText('summary-member-b')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('总结 rel-summary'));
+    fireEvent.click(screen.getByText('rel-summary'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
     await waitFor(() => {
@@ -1245,13 +1245,13 @@ describe('TopicDetailPage trace container frame projection', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-    await waitFor(() => expect(screen.getByText('分类 rel-a')).toBeInTheDocument());
-    fireEvent.doubleClick(screen.getByText('分类 rel-a'));
-    await waitFor(() => expect(screen.getByText('总结 rel-b')).toBeInTheDocument());
-    fireEvent.doubleClick(screen.getByText('总结 rel-b'));
-    await waitFor(() => expect(screen.getByText('分类 rel-c')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('rel-a')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-a'));
+    await waitFor(() => expect(screen.getByText('rel-b')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-b'));
+    await waitFor(() => expect(screen.getByText('rel-c')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText('分类 rel-c'));
+    fireEvent.click(screen.getByText('rel-c'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
     await waitFor(() => {
@@ -1309,8 +1309,8 @@ describe('TopicDetailPage trace container frame projection', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-    await waitFor(() => expect(screen.getByText('总结 rel-summary')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('总结 rel-summary'));
+    await waitFor(() => expect(screen.getByText('rel-summary')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('rel-summary'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
 
@@ -1378,33 +1378,33 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
 
     // Base view: topic card visible, classified messages hidden, unclassified visible
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-c')).toBeInTheDocument();
 
     // Enter the classify topic
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     // Topic view: classified messages visible, topic card hidden, unclassified hidden
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.getByText('msg-b')).toBeInTheDocument();
+    expect(screen.queryByText('msg-c')).not.toBeInTheDocument();
 
     // Exit the classify topic
     fireEvent.click(screen.getAllByRole('button', { name: '退出分类' })[0]);
 
     // After exit: base view should be restored exactly as before
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-c')).toBeInTheDocument();
   });
 
   it('returns to the main view during trace and restores the classify position after exit', async () => {
@@ -1412,8 +1412,8 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-    await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    await waitFor(() => expect(screen.getByText('rel-classify')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
     await waitFor(() => expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0));
 
     const classifyProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
@@ -1427,8 +1427,8 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '退出追溯' }));
     await waitFor(() => expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0));
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.queryByText('msg-c')).not.toBeInTheDocument();
   });
 });
 
@@ -1552,30 +1552,30 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
     // Directly classified → hidden
-    expect(screen.queryByText('消息 m1')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 m2')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 m4')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 m7')).not.toBeInTheDocument();
+    expect(screen.queryByText('m1')).not.toBeInTheDocument();
+    expect(screen.queryByText('m2')).not.toBeInTheDocument();
+    expect(screen.queryByText('m4')).not.toBeInTheDocument();
+    expect(screen.queryByText('m7')).not.toBeInTheDocument();
     // m6 (arrange target) → hidden
-    expect(screen.queryByText('消息 m6')).not.toBeInTheDocument();
+    expect(screen.queryByText('m6')).not.toBeInTheDocument();
     // m5 (arrange sourceMessageId) → MUST be hidden (was the bug!)
-    expect(screen.queryByText('消息 m5')).not.toBeInTheDocument();
+    expect(screen.queryByText('m5')).not.toBeInTheDocument();
     // m3 (CORRECT cascade) → hidden
-    expect(screen.queryByText('消息 m3')).not.toBeInTheDocument();
+    expect(screen.queryByText('m3')).not.toBeInTheDocument();
     // Relation messages with all endpoints hidden → hidden
-    expect(screen.queryByText('关系消息 r10')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r4')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r11')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r3')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r8')).not.toBeInTheDocument();
+    expect(screen.queryByText('r10')).not.toBeInTheDocument();
+    expect(screen.queryByText('r4')).not.toBeInTheDocument();
+    expect(screen.queryByText('r11')).not.toBeInTheDocument();
+    expect(screen.queryByText('r3')).not.toBeInTheDocument();
+    expect(screen.queryByText('r8')).not.toBeInTheDocument();
     // Topic card → visible
-    expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+    expect(screen.getByText('rel-classify')).toBeInTheDocument();
     // Unrelated → visible
-    expect(screen.getByText('消息 m8')).toBeInTheDocument();
+    expect(screen.getByText('m8')).toBeInTheDocument();
   });
 
   it('shows all owned messages when entering classify topic', async () => {
@@ -1584,30 +1584,30 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     });
 
     // Inside topic: all owned messages visible
-    expect(screen.getByText('消息 m1')).toBeInTheDocument();
-    expect(screen.getByText('消息 m2')).toBeInTheDocument();
-    expect(screen.getByText('消息 m4')).toBeInTheDocument();
-    expect(screen.getByText('消息 m7')).toBeInTheDocument();
+    expect(screen.getByText('m1')).toBeInTheDocument();
+    expect(screen.getByText('m2')).toBeInTheDocument();
+    expect(screen.getByText('m4')).toBeInTheDocument();
+    expect(screen.getByText('m7')).toBeInTheDocument();
     // arrange source + target
-    expect(screen.getByText('消息 m5')).toBeInTheDocument();
-    expect(screen.getByText('消息 m6')).toBeInTheDocument();
+    expect(screen.getByText('m5')).toBeInTheDocument();
+    expect(screen.getByText('m6')).toBeInTheDocument();
     // CORRECT cascade
-    expect(screen.getByText('消息 m3')).toBeInTheDocument();
+    expect(screen.getByText('m3')).toBeInTheDocument();
     // Relation messages
-    expect(screen.getByText('关系消息 r4')).toBeInTheDocument();
-    expect(screen.getByText('关系消息 r11')).toBeInTheDocument();
+    expect(screen.getByText('r4')).toBeInTheDocument();
+    expect(screen.getByText('r11')).toBeInTheDocument();
     // Unrelated → NOT in topic
-    expect(screen.queryByText('消息 m8')).not.toBeInTheDocument();
+    expect(screen.queryByText('m8')).not.toBeInTheDocument();
   });
 });
 
@@ -1661,9 +1661,9 @@ describe('TopicDetailPage opposed annotation visibility in classify graph', () =
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-    await waitFor(() => expect(screen.getByText('分类 rel-classify')).toBeInTheDocument());
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
-    await waitFor(() => expect(screen.getByText('关系消息 rel-annotation')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('rel-classify')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitFor(() => expect(screen.getByText('rel-annotation')).toBeInTheDocument());
     expect(screen.getByText('你已反对 · 点赞同恢复')).toBeInTheDocument();
     expect(screen.queryByText('你已反对此注释')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
@@ -1728,8 +1728,8 @@ describe('TopicDetailPage comparison classify projection', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     fireEvent.click(screen.getByRole('button', { name: '对比' }));
-    await waitFor(() => expect(screen.getByText('分类 rel-classify-preview')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('分类 rel-classify-preview'));
+    await waitFor(() => expect(screen.getByText('rel-classify-preview')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('rel-classify-preview'));
     fireEvent.click(screen.getByRole('button', { name: '审阅' }));
 
     await waitFor(() => {
@@ -1760,8 +1760,8 @@ describe('TopicDetailPage comparison classify projection', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     fireEvent.click(screen.getByRole('button', { name: '对比' }));
-    await waitFor(() => expect(screen.getByText('关系消息 rel-annotation-preview')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('关系消息 rel-annotation-preview'));
+    await waitFor(() => expect(screen.getByText('rel-annotation-preview')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('rel-annotation-preview'));
     fireEvent.click(screen.getByRole('button', { name: '审阅' }));
 
     await waitFor(() => {
@@ -1805,8 +1805,8 @@ describe('TopicDetailPage comparison classify projection', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     fireEvent.click(screen.getByRole('button', { name: '对比' }));
-    await waitFor(() => expect(screen.getByText('关系消息 rel-reference')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('关系消息 rel-reference'));
+    await waitFor(() => expect(screen.getByText('rel-reference')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('rel-reference'));
     fireEvent.click(screen.getByRole('button', { name: '审阅' }));
     await waitFor(() => expect(screen.getByRole('button', { name: '设为追溯消息' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));

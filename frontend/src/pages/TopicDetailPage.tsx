@@ -4,7 +4,7 @@ import { useParams, useSearchParams, useLocation, useNavigate } from 'react-rout
 import { api } from '../api';
 import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, demoMessageToRelation, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, isTraceTextLikeMessage, kindLabel } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, demoMessageToRelation, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeGloballySuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, isTraceTextLikeMessage, kindLabel } from '../utils/modelBridge';
 import type {
   DemoMessage, DemoEdge, UnitSelection,
   RelationType, MessageKind,
@@ -1365,7 +1365,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     return map;
   }, [messages, relations]);
-
   const sendWarning = useMemo((): string | null => {
     if (relationType?.toUpperCase() !== 'DISAGREE') return null;
     const allTargetIds = [...targetUnits, ...draftUnits].map(u => u.messageId);
@@ -1628,10 +1627,16 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
   const readStatusByMessageId = useMemo(() => {
     const latest = new Map<string, { type: 'READ' | 'UNREAD'; createdAt: string }>();
-    if (!user?.id) return new Map<string, 'READ' | 'UNREAD'>();
+    const currentUserId = isPreloaded ? null : user?.id;
+    const currentUsername = displayUser?.username;
+    if (!currentUserId && !currentUsername) return new Map<string, 'READ' | 'UNREAD'>();
     for (const relation of relations) {
       const type = relation.relationType?.toUpperCase();
-      if ((type !== 'READ' && type !== 'UNREAD') || relation.createdBy.id !== user.id) continue;
+      if (type !== 'READ' && type !== 'UNREAD') continue;
+      const isCurrentUser = isPreloaded
+        ? relation.createdBy.username === currentUsername
+        : relation.createdBy.id === currentUserId;
+      if (!isCurrentUser) continue;
       for (const target of relation.targetRefs) {
         if (target.kind !== 'message' && target.kind !== 'text-fragment') continue;
         const previous = latest.get(target.messageId);
@@ -1641,10 +1646,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
     }
     return new Map([...latest].map(([id, value]) => [id, value.type]));
-  }, [relations, user?.id]);
+  }, [displayUser?.username, isPreloaded, relations, user?.id]);
 
-  const homeFilterMessageIds = useMemo(() => {
-    const currentUserId = user?.id;
+  const homeFilterResult = useMemo(() => {
+    const currentUserId = isPreloaded ? null : user?.id;
     const currentUsername = displayUser?.username;
     if (homeFilterMode === null) return null;
     const allMessageIds = new Set(msgMap.keys());
@@ -1659,9 +1664,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     );
     const getMarkedTargets = (type: 'READ' | 'UNREAD') => {
       const ids = new Set<string>();
-      if (!currentUserId) return ids;
       for (const relation of relations) {
-        if (relation.relationType?.toUpperCase() !== type || relation.createdBy.id !== currentUserId) continue;
+        if (relation.relationType?.toUpperCase() !== type) continue;
+        const isCurrentUser = isPreloaded
+          ? relation.createdBy.username === currentUsername
+          : relation.createdBy.id === currentUserId;
+        if (!isCurrentUser) continue;
         for (const target of relation.targetRefs) {
           if ((target.kind === 'message' || target.kind === 'text-fragment') && allMessageIds.has(target.messageId)) {
             ids.add(target.messageId);
@@ -1685,7 +1693,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const statusAnnotationIds = new Set([...allMessageIds].filter(id => isStatusAnnotation(msgMap.get(id))));
     const unreadAnnotationIds = new Set(
       relations
-        .filter(relation => relation.relationType?.toUpperCase() === 'UNREAD' && relation.createdBy.id === currentUserId)
+        .filter(relation => relation.relationType?.toUpperCase() === 'UNREAD')
+        .filter(relation => isPreloaded
+          ? relation.createdBy.username === currentUsername
+          : relation.createdBy.id === currentUserId)
         .map(relation => relation.id)
         .filter(id => allMessageIds.has(id)),
     );
@@ -1712,13 +1723,37 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       [...allMessageIds].filter(id => !claimedMatchIds.has(id)),
     );
 
-    if (homeFilterMode === 'read-self') return readSelfMatchIds;
-    if (homeFilterMode === 'read-related') return collectContext(readRelatedMatchIds);
-    if (homeFilterMode === 'unread-other') return collectContext(unreadOtherMatchIds);
-    const unreadRelatedDisplayIds = collectContext(unreadRelatedMatchIds);
-    for (const id of unreadAnnotationIds) unreadRelatedDisplayIds.add(id);
-    return unreadRelatedDisplayIds;
-  }, [displayUser?.username, edges, homeFilterMode, messages, msgMap, relations, user?.id]);
+    const matchIds = homeFilterMode === 'read-self'
+      ? readSelfMatchIds
+      : homeFilterMode === 'read-related'
+      ? readRelatedMatchIds
+      : homeFilterMode === 'unread-other'
+      ? unreadOtherMatchIds
+      : unreadRelatedMatchIds;
+    const displayIds = collectContext(matchIds);
+    for (const id of unreadAnnotationIds) displayIds.add(id);
+    return { matchIds, displayIds };
+  }, [displayUser?.username, edges, homeFilterMode, isPreloaded, messages, msgMap, relations, user?.id]);
+
+  const homeDisplayRoleByMessageId = useMemo(() => {
+    const roles = new Map<string, 'source' | 'target' | 'source-target'>();
+    const matchIds = homeFilterResult?.matchIds;
+    if (!matchIds) return roles;
+    const addRole = (messageId: string, role: 'source' | 'target') => {
+      if (matchIds.has(messageId)) return;
+      const previous = roles.get(messageId);
+      if (!previous || previous === role) roles.set(messageId, role);
+      else roles.set(messageId, 'source-target');
+    };
+    for (const edge of edges) {
+      if (!matchIds.has(edge.relationMessageId)
+        && !matchIds.has(edge.from.messageId)
+        && !matchIds.has(edge.to.messageId)) continue;
+      addRole(edge.from.messageId, 'source');
+      addRole(edge.to.messageId, 'target');
+    }
+    return roles;
+  }, [edges, homeFilterResult]);
 
   const joinStatusByMessage = useMemo(() => {
     const map = new Map<string, 'valid'>();
@@ -6402,8 +6437,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       ? scopedCorrectedMessages.filter(message =>
           cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
       : scopedCorrectedMessages;
-    const homeScopedMessages = homeFilterMessageIds
-      ? scopedCleanMessages.filter(message => homeFilterMessageIds.has(message.id))
+    const homeScopedMessages = homeFilterResult
+      ? scopedCleanMessages.filter(message => homeFilterResult.displayIds.has(message.id))
       : scopedCleanMessages;
     const scopedMessages = applyMessageFilter(homeScopedMessages, msgFilter);
     const filteredMessages = applyMessageFilter(homeScopedMessages, msgFilter);
@@ -6416,11 +6451,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const cleanEdges = cleanVisibleIds
       ? rawEdges.filter(edge => cleanVisibleIds.visibleRelIds.has(edge.relationMessageId))
       : rawEdges;
-    const homeEdges = homeFilterMessageIds
+    const homeEdges = homeFilterResult
       ? cleanEdges.filter(edge =>
-          homeFilterMessageIds.has(edge.relationMessageId)
-          && (edge.from.messageId.startsWith('anon:') || homeFilterMessageIds.has(edge.from.messageId))
-          && homeFilterMessageIds.has(edge.to.messageId),
+          homeFilterResult.displayIds.has(edge.relationMessageId)
+          && (edge.from.messageId.startsWith('anon:') || homeFilterResult.displayIds.has(edge.from.messageId))
+          && homeFilterResult.displayIds.has(edge.to.messageId),
         )
       : cleanEdges;
 
@@ -6429,7 +6464,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       scopedMessages,
       edges: homeEdges.filter(edge => !suppressedRelIds.has(edge.relationMessageId)),
     };
-  }, [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, homeFilterMessageIds, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
+  }, [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
 
   const comparisonAgreeSuppressedRelIds = useMemo(() => {
     const ids = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
@@ -7096,8 +7131,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     ? messagesWithCorrections.filter(m =>
         cleanVisibleIds.visibleTextIds.has(m.id) || cleanVisibleIds.visibleRelIds.has(m.id))
     : messagesWithCorrections;
-  const homeFilteredMessages = homeFilterMessageIds
-    ? messagesToRenderClean.filter(message => homeFilterMessageIds.has(message.id))
+  const homeFilteredMessages = homeFilterResult
+    ? messagesToRenderClean.filter(message => homeFilterResult.displayIds.has(message.id))
     : messagesToRenderClean;
   // Message type filter: hide settlement/join messages
   const typeFilteredMessages = applyMessageFilter(homeFilteredMessages, msgFilter);
@@ -7162,11 +7197,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const rawEdgesToRenderClean = cleanVisibleIds
     ? rawEdgesToRender.filter(e => cleanVisibleIds.visibleRelIds.has(e.relationMessageId))
     : rawEdgesToRender;
-  const homeEdgesToRender = homeFilterMessageIds
+  const homeEdgesToRender = homeFilterResult
     ? rawEdgesToRenderClean.filter(edge =>
-        homeFilterMessageIds.has(edge.relationMessageId)
-        && (edge.from.messageId.startsWith('anon:') || homeFilterMessageIds.has(edge.from.messageId))
-        && homeFilterMessageIds.has(edge.to.messageId),
+        homeFilterResult.displayIds.has(edge.relationMessageId)
+        && (edge.from.messageId.startsWith('anon:') || homeFilterResult.displayIds.has(edge.from.messageId))
+        && homeFilterResult.displayIds.has(edge.to.messageId),
       )
     : rawEdgesToRenderClean;
   // Filter edges based on current user's DISAGREE stances on relation messages.
@@ -7183,6 +7218,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   // Use all topic edges to determine suppression, then filter only the edges
   // currently being rendered.
   const effectiveSuppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+  const globallySuppressedRelIds = computeGloballySuppressedRelIds(edges, messages);
   const comparisonSuppressedRelIds = comparisonReviewed && comparisonTargetId
     ? comparisonSide === 'agree' ? comparisonAgreeSuppressedRelIds : comparisonDisagreeSuppressedRelIds
     : effectiveSuppressedRelIds;
@@ -7228,15 +7264,25 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
   const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRenderClean, messages, displayUser?.username ?? null);
-  // Precomputed set of relation message IDs that are active stances.
-  const activeStanceRelIds = new Set([...activeStanceMap.values()].map(v => v.relMsgId));
-  // Set of target message IDs that have an active stance against them.
-  const activeStanceTargetIds = new Set(activeStanceMap.keys());
   // Reverse map: stance relation message ID → { target, type } for quick lookup.
   const activeStanceByRelMsgId = (() => {
     const m = new Map<string, { targetRelId: string; type: 'agree' | 'disagree' }>();
     for (const [targetId, v] of activeStanceMap) m.set(v.relMsgId, { targetRelId: targetId, type: v.type });
     return m;
+  })();
+  const stanceEffectByRelMsgId = (() => {
+    const result = new Map<string, { local: boolean; global: boolean }>();
+    for (const edge of rawEdgesToRenderClean) {
+      if (edge.relationType !== 'agree' && edge.relationType !== 'disagree') continue;
+      if (!msgMap.get(edge.to.messageId) || msgMap.get(edge.to.messageId)?.kind !== 'relation') continue;
+      const localSuppressed = effectiveSuppressedRelIds.has(edge.to.messageId);
+      const globalSuppressed = globallySuppressedRelIds.has(edge.to.messageId);
+      result.set(edge.relationMessageId, {
+        local: edge.relationType === 'disagree' ? localSuppressed : !localSuppressed,
+        global: edge.relationType === 'disagree' ? globalSuppressed : !globalSuppressed,
+      });
+    }
+    return result;
   })();
   // Overridden stances: the user's previous stance messages that are no longer active.
   const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null);
@@ -7565,6 +7611,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                     isValueSettlement: (msg as any).roundPayload?.settlementType === 'VALUE',
                     lastClickedMsgId: lastClickedMessageId,
                     readStatus: readStatusByMessageId.get(msg.id),
+                    homeMatch: homeFilterResult?.matchIds.has(msg.id),
+                    homeContextRole: homeDisplayRoleByMessageId.get(msg.id),
                   };
                   const sc = stakeCounts[msg.id];
                   const truthPro = sc?.truth.pro ?? 0;
@@ -7605,6 +7653,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                         : correctionContent;
                     })()
                     : correctionContent;
+                  const activeStanceInfo = activeStanceByRelMsgId.get(msg.id);
+                  const stanceEffect = stanceEffectByRelMsgId.get(msg.id);
+                  const activeTargetStanceInfo = activeStanceMap.get(msg.id);
+                  const isCurrentComparisonTarget = comparisonReviewed && comparisonTargetId === msg.id;
+                  const recommendationMatchesUser = isCurrentComparisonTarget && activeTargetStanceInfo
+                    ? activeTargetStanceInfo.type === comparisonRecommendedDisplay
+                    : null;
 
                   const correctionRecords = msg.relationType !== 'correct'
                     ? edges.filter(edge => edge.relationType === 'correct' && edge.to.messageId === msg.id)
@@ -7623,6 +7678,30 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                       onMouseDown={handleMessageMouseDown}
                       onMouseUp={handleMessageMouseUp}
                       onContentMouseUp={handleTextMouseUp}
+                      headerBetweenIdAuthor={stanceEffect || (isCurrentComparisonTarget && activeTargetStanceInfo) ? (
+                        <>
+                          {stanceEffect && (
+                            <>
+                              <span style={{ color: stanceEffect.local ? '#86efac' : '#fca5a5', fontWeight: 600 }}>
+                                {stanceEffect.local ? '本地生效' : '本地未生效'}
+                              </span>
+                              <span style={{ color: stanceEffect.global ? '#86efac' : '#fca5a5', fontWeight: 600 }}>
+                                {stanceEffect.global ? '对其他用户生效' : '对其他用户未生效'}
+                              </span>
+                            </>
+                          )}
+                          {activeStanceInfo && activeStanceInfo.targetRelId === comparisonTargetId && comparisonReviewed && (
+                            <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
+                              当前推荐显示：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
+                            </span>
+                          )}
+                          {!activeStanceInfo && isCurrentComparisonTarget && activeTargetStanceInfo && (
+                            <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
+                              当前推荐显示：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
+                            </span>
+                          )}
+                        </>
+                      ) : undefined}
                       headerLabel={msg.kind === 'join' ? (
                         <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>{msg.id}</span>
                       ) : correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
@@ -7658,8 +7737,27 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                       onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
                       headerExtra={
                         <>
-                          <div style={{ fontSize: 10, color: "#6b7280" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
-                          <div style={{ display: "flex", gap: 4, fontSize: 11, justifyContent: "flex-end", marginTop: 1 }}>
+                          <div style={{ fontSize: 10, color: "#6b7280", textAlign: "right", width: "100%" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 1, minWidth: 0, width: "100%", gap: 8, flexWrap: "nowrap", whiteSpace: "nowrap", overflow: "hidden" }}>
+                            <div style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0, overflow: "hidden" }}>
+                            {outgoingJoinRelations.length > 0 && (
+                              <button
+                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'outgoing'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('outgoing'); setJoinFilterTargetId(msg.id); }}
+                                title="筛选显示该容器发出的全部加入消息"
+                                style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(16,185,129,0.14)", color: "#a7f3d0", border: "1px solid rgba(16,185,129,0.4)", cursor: "pointer" }}
+                              >加入消息：{outgoingJoinRelations.length} 条</button>
+                            )}
+                            {relatedJoinRelations.length > 0 && (
+                              <button
+                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'incoming'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('incoming'); setJoinFilterTargetId(msg.id); }}
+                                title="筛选显示把此消息加入容器的全部加入消息"
+                                style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinFilterTargetId === msg.id ? "rgba(59,130,246,0.28)" : "rgba(59,130,246,0.14)", color: "#bfdbfe", border: "1px solid rgba(59,130,246,0.4)", cursor: "pointer" }}
+                              >被加入消息：{effectiveJoinCount} 条生效</button>
+                            )}
+                            </div>
+                            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                            <button data-settlement-toggle-truth onClick={(event) => { event.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }} style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }} title="真假仲裁">⚖️</button>
+                            <button data-settlement-toggle-value onClick={(event) => { event.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }} style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }} title="价值仲裁">💎</button>
                             {showTruthProCon && (
                               <span style={{ color: "#a5b4fc" }} title="真假仲裁">
                                 ⚖️{truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
@@ -7674,8 +7772,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                                 {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
                               </span>
                             )}
-                            <button data-settlement-toggle-truth onClick={(e) => { e.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }} style={{ fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }} title="真假仲裁">⚖️</button>
-                            <button data-settlement-toggle-value onClick={(e) => { e.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }} style={{ fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }} title="价值仲裁">💎</button>
+                            </div>
                           </div>
                         </>
                       }
@@ -7688,9 +7785,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                               </span>
                             </div>
                           )}
-                          {!isTopicMsg && msg.kind === "relation" && (
+                          {!isTopicMsg && msg.kind === "relation" && (relType === 'notify' || suppressedRelIds.has(msg.id) || rejectedContainerIds.has(msg.id) || overriddenStanceRelIds.has(msg.id)) && (
                             <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                              <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#9ca3af" }}>{relType ? String(relType) : "关系"}</span>
                               {relType === 'notify' && (() => {
                                 const payload = msg.relationPayload;
                                 const notifyUsers = Array.isArray(payload?.notifyUsers) && payload.notifyUsers.length > 0
@@ -7728,29 +7824,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                               })()}
                               {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>你已反对 · 点赞同恢复</span>}
                               {rejectedContainerIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">社区已反对 · 双击预览</span>}
-                              {activeStanceRelIds.has(msg.id) && (() => { const info = activeStanceByRelMsgId.get(msg.id); if (!info) return null; return info.type === 'disagree' ? <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.15)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.3)" }}>你的反对生效中</span> : <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>你的赞同生效中</span>; })()}
                               {overriddenStanceRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#6b7280", border: "1px solid rgba(255,255,255,0.1)" }}>已失效</span>}
                             </div>
                           )}
-                          {outgoingJoinRelations.length > 0 && (
-                            <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                              <button
-                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'outgoing'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('outgoing'); setJoinFilterTargetId(msg.id); }}
-                                title="筛选显示该容器发出的全部加入消息"
-                                style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(16,185,129,0.14)", color: "#a7f3d0", border: "1px solid rgba(16,185,129,0.4)", cursor: "pointer" }}
-                              >加入消息：{outgoingJoinRelations.length} 条</button>
-                            </div>
-                          )}
-                          {relatedJoinRelations.length > 0 && (
-                            <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                              <button
-                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'incoming'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('incoming'); setJoinFilterTargetId(msg.id); }}
-                                title="筛选显示把此消息加入容器的全部加入消息"
-                                style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinFilterTargetId === msg.id ? "rgba(59,130,246,0.28)" : "rgba(59,130,246,0.14)", color: "#bfdbfe", border: "1px solid rgba(59,130,246,0.4)", cursor: "pointer" }}
-                              >被加入消息：{effectiveJoinCount} 条生效</button>
-                            </div>
-                          )}
-                          {activeStanceTargetIds.has(msg.id) && (() => { const info = activeStanceMap.get(msg.id); if (!info) return null; return <div style={{ marginBottom: 4, display: "flex", gap: 6 }}><span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: info.type === 'disagree' ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)", color: info.type === 'disagree' ? "#fca5a5" : "#86efac", border: info.type === 'disagree' ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(34,197,94,0.3)" }}>{info.type === 'disagree' ? '被反对 · 你的反对生效中' : '被赞同 · 你的赞同生效中'}</span></div>; })()}
                           {summaryCoverages.length > 0 && (
                             <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
                               {summaryCoverages.map(item => <span key={item.summaryId} style={{ minWidth: 0, maxWidth: "100%", fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)", overflowWrap: 'anywhere' }}>非线性视图由总结「{item.title}」覆盖</span>)}
@@ -7827,6 +7903,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   comparisonDisagreeHideMessageIds={comparisonDisagreeGraph?.hideMessageIds}
                   comparisonAgreeSuppressedRelIds={comparisonAgreeSuppressedRelIds} comparisonDisagreeSuppressedRelIds={comparisonDisagreeSuppressedRelIds}
                   autoCenterMessageId={comparisonReviewed ? comparisonTargetId : null}
+                  homeMatchIds={homeFilterResult?.matchIds}
+                  homeContextRoleByMessageId={homeDisplayRoleByMessageId}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
                   onTextMouseUp={handleTextMouseUp} onEdgeLabelSingleClick={handleEdgeLabelSingleClick}

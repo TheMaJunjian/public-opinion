@@ -291,10 +291,12 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     const tf = (relation.payload as Record<string, unknown> | null)?.transformedFrom as string | undefined;
     const fromSuffix = tf === 'AGREE' ? '（来自赞同）' : tf === 'DISAGREE' ? '（来自反对）' : '';
     content = `${displayLabel}${countSuffix}${fromSuffix}\n目标：${targetSummary}`;
+  } else if (relType === 'agree' || relType === 'disagree') {
+    content = `目标：${targetSummary}`;
   } else if (relation.sourceMessageId) {
     content = `${typeName}  ${relation.sourceMessageId} → ${targetSummary}`;
   } else {
-    content = `${typeName}（无来源）\n目标：${targetSummary}`;
+    content = `目标：${targetSummary}`;
   }
   return {
     id: relation.id,

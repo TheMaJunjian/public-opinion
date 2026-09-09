@@ -537,7 +537,9 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
             const placeholderText = isCustomSubType ? "输入自定义理由（最长20字）"
               : isTagWithoutSecondary ? "请先在上方选择推荐或冷藏"
               : textAreaDisabled
-              ? (p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为与会者-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容")
+              ? (p.isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : p.isMergeType ? "归并关系为与会者-消息关系，此处不应输入内容" : p.isGovernanceOrOpsType && p.relationType === "proposal"
+                ? (p.secondaryRelationType === '分配收入' ? "系统自动生成分配收入提案内容" : p.secondaryRelationType === '终止结算' ? "系统自动生成终止结算提案内容" : "输入提案内容（不能为空，支持 Markdown）")
+                : "更正关系目标为关系消息时，此处不应有内容")
               : p.isClassifyType ? "输入分类名称（不能为空）"
               : p.isSummaryType ? "输入总结内容（不能为空）"
               : p.isArrangeType ? "可选：输入文本消息加入排列框架"

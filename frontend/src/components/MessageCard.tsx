@@ -1,6 +1,7 @@
 import type { DemoMessage } from '../utils/modelBridge';
 import { isContentKind } from '../utils/modelBridge';
 import { getPresentationSpec } from '../types';
+import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 
 export interface MessageCardContext {
   isWholeSelected?: boolean;
@@ -19,6 +20,8 @@ export interface MessageCardContext {
   isValueSettlement?: boolean;
   lastClickedMsgId?: string | null;
   readStatus?: 'READ' | 'UNREAD';
+  homeMatch?: boolean;
+  homeContextRole?: 'source' | 'target' | 'source-target';
 }
 
 export interface MessageCardProps {
@@ -32,6 +35,10 @@ export interface MessageCardProps {
   headerExtra?: React.ReactNode;
   /** Override the default message title in the header. */
   headerLabel?: React.ReactNode;
+  /** Content rendered at the far left of the header. */
+  headerLeading?: React.ReactNode;
+  /** Status rendered between the message ID and author. */
+  headerBetweenIdAuthor?: React.ReactNode;
   /** Status rendered after the author. */
   headerAfterAuthor?: React.ReactNode;
   /** Extra badges below header (relation type, stance status, etc.) */
@@ -54,6 +61,8 @@ export default function MessageCard({
   onMouseDown,
   onMouseUp,
   headerAfterAuthor,
+  headerBetweenIdAuthor,
+  headerLeading,
   headerExtra,
   headerLabel,
   badges,
@@ -71,16 +80,39 @@ export default function MessageCard({
     settlementTargetId, settlementTargetContent, isValueSettlement,
     lastClickedMsgId,
     readStatus,
+    homeMatch,
+    homeContextRole,
   } = ctx;
 
   const bk = (msg as any).backendKind as string | undefined;
   const isDelegationMsg = msg.kind === 'relation' && msg.relationType === 'delegation';
-  const delegationLabel = msg.relationPayload?.delegationKind === 'FULFILL' ? '完成委托' : '创建委托';
   const delegationColor = '#f97316';
   const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? '#f59e0b' : bk === 'CODE' ? '#3b82f6' : '#10b981');
   const topicBackground = isSummaryTopic ? '#14352a' : isMergeTopic ? '#1e293b' : '#1f1f1f';
-  const topicLabel = isSummaryTopic ? '总结容器' : isMergeTopic ? '归并' : '进行中';
-  const selectedTypeLabel = isClassifyTopic ? '分类' : isSummaryTopic ? '总结' : isMergeTopic ? '归并' : msg.kind === 'relation' ? (relType ? getPresentationSpec(relType).label : '关系') : '文本';
+  const specificMessageLabel = getRelationMessageLabel(msg);
+  const messageTypeLabel = specificMessageLabel ?? (msg.kind === 'relation'
+    ? getPresentationSpec(relType ?? msg.relationType ?? 'relation').label
+    : msg.kind === 'normal'
+      ? '文本'
+      : msg.kind === 'join'
+        ? '加入'
+        : msg.kind === 'round'
+          ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁' : '真假仲裁')
+          : msg.kind === 'round_result'
+            ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁结算' : '真假仲裁结算')
+            : bk === 'GOVERNANCE' ? '治理提案'
+              : bk === 'CODE' ? '代码'
+                : bk === 'OPERATIONS' ? '运营'
+                  : '消息');
+  const typeBadgeLabel = isClassifyTopic ? '分类' : isSummaryTopic ? '总结' : isMergeTopic ? '归并' : messageTypeLabel;
+  const defaultHeaderLabel = isClassifyTopic || isSummaryTopic || isMergeTopic || isDelegationMsg || msg.kind === 'relation'
+    ? msg.id
+    : bk === 'ROUND' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '发起价值仲裁' : '发起真假仲裁')
+      : bk === 'ROUND_RESULT' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁已结算' : '真假仲裁已结算')
+        : bk === 'GOVERNANCE' ? (specificMessageLabel ? msg.id : '治理提案')
+          : bk === 'CODE' ? '代码'
+            : bk === 'OPERATIONS' ? '运营'
+              : msg.id;
 
   return (
     <div
@@ -110,7 +142,7 @@ export default function MessageCard({
         cursor: 'pointer',
         fontSize: 13,
         boxShadow: isWholeSelected
-          ? '0 0 0 3px #111827, 0 0 0 5px #fbbf24, 0 4px 18px rgba(251,191,36,0.45)'
+          ? '0 4px 18px rgba(251,191,36,0.45)'
           : isTopicMsg ? '0 2px 8px rgba(0,0,0,0.15)' : undefined,
         outline: isWholeSelected ? 'none' : lastClickedMsgId === msg.id ? '1px dashed #0b84ff' : 'none',
         userSelect: isActiveText ? 'text' : 'auto',
@@ -123,36 +155,38 @@ export default function MessageCard({
         opacity: isTopicMsg ? 0.65 : 0.8,
         marginBottom: 4,
         display: 'flex',
-        justifyContent: 'space-between',
+        flexDirection: 'column',
         color: isTopicMsg ? '#94a3b8' : undefined,
       }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
         <span>
-          {isWholeSelected && (
-            <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: '#fbbf24', color: '#111827', fontWeight: 800, opacity: 1 }}>
-              {selectedTypeLabel}
+          {headerLeading}
+          <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? '#fbbf24' : 'rgba(148,163,184,0.16)', color: isWholeSelected ? '#111827' : '#cbd5e1', border: isWholeSelected ? '1px solid #fbbf24' : '1px solid rgba(148,163,184,0.35)', fontWeight: 700, opacity: 1 }}>
+            {typeBadgeLabel}
+          </span>
+          {' '}
+          {homeMatch && (
+            <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: '#0e7490', color: '#cffafe', fontWeight: 700, opacity: 1 }}>
+              命中
             </span>
           )}
-          {headerLabel ?? (isClassifyTopic ? `分类 ${msg.id}`
-            : isSummaryTopic ? `总结 ${msg.id}`
-            : isMergeTopic ? `归并 ${msg.id}`
-            : isDelegationMsg ? `${delegationLabel} ${msg.id}`
-            : msg.kind === 'relation' ? `关系消息 ${msg.id}`
-            : bk === 'ROUND' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '💎 发起价值仲裁' : '⚖️ 发起真假仲裁')
-            : bk === 'ROUND_RESULT' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '💎 价值仲裁已结算' : '⚖️ 真假仲裁已结算')
-            : bk === 'GOVERNANCE' ? '🏛️ 治理提案'
-            : bk === 'CODE' ? '💻 代码'
-            : bk === 'OPERATIONS' ? '📊 运营'
-            : `消息 ${msg.id}`)}
+          {!homeMatch && homeContextRole && (
+            <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: '#374151', color: '#d1d5db', fontWeight: 600, opacity: 1 }}>
+              {homeContextRole === 'source' ? '来源' : homeContextRole === 'target' ? '目标' : '来源/目标'}
+            </span>
+          )}
+          {headerLabel ?? defaultHeaderLabel}
         </span>
         <span style={{ textAlign: 'right' }}>
-          <div>
-            {isClassifyTopic ? '双击进入分类'
-              : isSummaryTopic ? '双击进入总结容器'
-              : isMergeTopic ? '双击进入归并'
-              : <>{isDelegationMsg && <span style={{ color: delegationColor, fontWeight: 600 }}>{delegationLabel} </span>}{`作者：${msg.author}`}{headerAfterAuthor && ' '}{headerAfterAuthor}</>}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+            {headerBetweenIdAuthor}
+            <span>{`作者：${msg.author}`}{headerAfterAuthor && ' '}{headerAfterAuthor}</span>
           </div>
-          {headerExtra}
         </span>
+        </div>
+        <div style={{ width: '100%' }}>
+          {headerExtra}
+        </div>
       </div>
       {readStatus && (
         <div title={readStatus === 'READ' ? '已读' : '未读'} style={{ position: 'absolute', right: 8, bottom: 6, fontSize: 13, color: readStatus === 'READ' ? '#86efac' : '#fca5a5' }}>
@@ -160,16 +194,7 @@ export default function MessageCard({
         </div>
       )}
 
-      {/* Badges (external) or built-in relation type badge */}
-      {badges != null ? badges : (
-        !isTopicMsg && msg.kind === 'relation' && (
-          <div style={{ marginBottom: 4, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.08)', color: '#9ca3af' }}>
-              {relType ? String(relType) : '关系'}
-            </span>
-          </div>
-        )
-      )}
+      {badges}
       {isTopicMsg && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
@@ -183,7 +208,6 @@ export default function MessageCard({
           }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
             {isSummaryTopic && topicMsgTitle ? (
               <>
-                <div style={{ fontSize: 10, color: '#6ee7b7', marginBottom: 3 }}>总结内容</div>
                 <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{topicMsgTitle}</div>
               </>
             ) : topicMsgTitle || (isClassifyTopic ? `分类（${topicMsgTargetCount ?? 0}）`
@@ -195,7 +219,7 @@ export default function MessageCard({
             background: isMergeTopic ? 'rgba(148,163,184,0.18)' : isSummaryTopic ? 'rgba(52,211,153,0.2)' : 'rgba(2,150,80,0.2)',
             color: isMergeTopic ? '#94a3b8' : isSummaryTopic ? '#6ee7b7' : '#86efac',
           }}>
-            {topicLabel}
+            {isClassifyTopic ? '双击进入分类' : isSummaryTopic ? '双击进入总结容器' : '双击进入归并'}
           </span>
         </div>
       )}

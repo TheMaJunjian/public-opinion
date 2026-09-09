@@ -227,9 +227,11 @@ export function convertMessagesToDemoModel(
   const msgContentMap = new Map(messages.map(m => [m.id, m.content]));
   // Build a set of relation IDs to detect when sourceMessageId references a relation message.
   const relationIds = new Set(relations.map(r => r.id));
+  const relationById = new Map(relations.map(relation => [relation.id, relation]));
 
   const demoMessages: DemoMessage[] = messages.filter(m => (m as any).kind !== 'RELATION').map(m => {
     const bk = (m as any).kind ?? 'TEXT';
+    const persistedRelation = relationById.get(m.id);
     // Extract settlement target from ROUND/ROUND_RESULT targetRefs
     let settlementTargetId: string | undefined;
     let roundPayload: Record<string,unknown> | undefined;
@@ -249,9 +251,9 @@ export function convertMessagesToDemoModel(
     sourceMessageId: (m as any).relSourceId ?? null,
     settlementTargetId,
     roundPayload,
-      relationType: (m as any).relationType?.toLowerCase() as RelationType | undefined,
-      relationPayload: (m as any).relationPayload ?? undefined,
-      targetRefs: (m as any).targetRefs ?? undefined,
+      relationType: ((m as any).relationType ?? persistedRelation?.relationType)?.toLowerCase() as RelationType | undefined,
+      relationPayload: (m as any).relationPayload ?? persistedRelation?.payload ?? undefined,
+      targetRefs: (m as any).targetRefs ?? persistedRelation?.targetRefs ?? undefined,
   }});
 
   const demoEdges: DemoEdge[] = [];
@@ -307,10 +309,12 @@ export function convertMessagesToDemoModel(
         content = rel.payload.content;
       } else if (relType === 'tag' && tagLabel) {
         content = `标签「${tagLabel}」\n目标：${targetRefsSummary(rel.targetRefs)}`;
+      } else if (relType === 'agree' || relType === 'disagree') {
+        content = `目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (rel.sourceMessageId) {
         content = `${typeName}  ${rel.sourceMessageId} → ${targetRefsSummary(rel.targetRefs)}`;
       } else {
-        content = `${typeName}（无来源）\n目标：${targetRefsSummary(rel.targetRefs)}`;
+        content = `目标：${targetRefsSummary(rel.targetRefs)}`;
       }
       demoMessages.push({
         id: relMsgId,

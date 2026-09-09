@@ -8,7 +8,7 @@ export type HomeFilterMode =
 
 interface HomeFilterPanelProps {
   mode: HomeFilterMode | null;
-  onChange: (mode: HomeFilterMode) => void;
+  onChange: (mode: HomeFilterMode | null) => void;
 }
 
 const OPTIONS: Array<{ mode: HomeFilterMode; label: string; description: string }> = [
@@ -79,6 +79,13 @@ export default function HomeFilterPanel({ mode, onChange }: HomeFilterPanelProps
             {OPTIONS.map(option => (
               <label
                 key={option.mode}
+                onClick={event => {
+                  if (option.mode === selectedMode) {
+                    event.preventDefault();
+                    onChange(null);
+                    setOpen(false);
+                  }
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'flex-start',

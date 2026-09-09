@@ -1978,8 +1978,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const lastClickActionsRef = useRef<{ type: "toggleWhole"; messageId: string; prevExisted: boolean; time: number }[]>([]);
   const TOTAL_FLEX = 4;
   const MIN_LEFT_PX = 560;
-  const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
   const MIN_RIGHT_PX = 280;
+  const SAVED_LEFT_FLEX_KEY = 'topicLeftFlex';
+  const savedLeftFlex = Number(localStorage.getItem(SAVED_LEFT_FLEX_KEY));
+  const initialLeftFlex = Number.isFinite(savedLeftFlex) && savedLeftFlex > 0 && savedLeftFlex < TOTAL_FLEX
+    ? savedLeftFlex
+    : TOTAL_FLEX / 2;
+  const [leftFlex, setLeftFlex] = useState(initialLeftFlex);
   const MOBILE_DEFAULT_WIDTH = 1240;
   const getAvailableWidth = () => document.documentElement.clientWidth || window.innerWidth;
   const getMinimumContainerWidth = () => Math.max(
@@ -2031,6 +2036,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }, []);
   // Persist containerWidth to localStorage
   useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
+  useEffect(() => { localStorage.setItem(SAVED_LEFT_FLEX_KEY, String(leftFlex)); }, [leftFlex]);
   useEffect(() => {
     const syncContainerWidth = () => {
       const availableWidth = getAvailableWidth();

@@ -35,6 +35,7 @@ import { operationLog } from '../utils/debugLog';
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
 import MessageFilterPanel, { type MessageFilterSettings, applyMessageFilter } from '../components/MessageFilterPanel';
+import HomeFilterPanel, { type HomeFilterMode } from '../components/HomeFilterPanel';
 import {
   ALL_RELATION_TYPES,
   CLASSIFY_TARGET_HINT,
@@ -743,6 +744,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const contentMsgCount = useMemo(() => messages.filter(m => isContentKind(m.kind)).length, [messages]);
   // Message type filter: hide settlement / join messages
   const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: true, hideJoin: true });
+  const [homeFilterMode, setHomeFilterMode] = useState<HomeFilterMode | null>(null);
   const [joinFilterTargetId, setJoinFilterTargetId] = useState<string | null>(null);
   const [joinFilterDirection, setJoinFilterDirection] = useState<'incoming' | 'outgoing'>('incoming');
   const [correctionFilterTargetId, setCorrectionFilterTargetId] = useState<string | null>(null);
@@ -1615,6 +1617,83 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     return new Map([...latest].map(([id, value]) => [id, value.type]));
   }, [relations, user?.id]);
+
+  const homeFilterMessageIds = useMemo(() => {
+    const currentUserId = user?.id;
+    const currentUsername = displayUser?.username;
+    if (homeFilterMode === null) return null;
+    const allMessageIds = new Set(msgMap.keys());
+    const isStatusAnnotation = (message: DemoMessage | undefined) => {
+      const relationType = message?.relationType?.toLowerCase();
+      return relationType === 'read' || relationType === 'unread';
+    };
+    const selfMessageIds = new Set(
+      messages
+        .filter(message => message.author === currentUsername && !isStatusAnnotation(message))
+        .map(message => message.id),
+    );
+    const getMarkedTargets = (type: 'READ' | 'UNREAD') => {
+      const ids = new Set<string>();
+      if (!currentUserId) return ids;
+      for (const relation of relations) {
+        if (relation.relationType?.toUpperCase() !== type || relation.createdBy.id !== currentUserId) continue;
+        for (const target of relation.targetRefs) {
+          if ((target.kind === 'message' || target.kind === 'text-fragment') && allMessageIds.has(target.messageId)) {
+            ids.add(target.messageId);
+          }
+        }
+      }
+      return ids;
+    };
+    const collectContext = (seedIds: Set<string>) => {
+      const ids = new Set(seedIds);
+      for (const edge of edges) {
+        if (!seedIds.has(edge.from.messageId) && !seedIds.has(edge.to.messageId) && !seedIds.has(edge.relationMessageId)) continue;
+        for (const id of [edge.from.messageId, edge.to.messageId, edge.relationMessageId]) {
+          if (allMessageIds.has(id) && !isStatusAnnotation(msgMap.get(id))) ids.add(id);
+        }
+      }
+      return ids;
+    };
+    const readMarkedTargets = getMarkedTargets('READ');
+    const unreadMarkedTargets = getMarkedTargets('UNREAD');
+    const statusAnnotationIds = new Set([...allMessageIds].filter(id => isStatusAnnotation(msgMap.get(id))));
+    const unreadAnnotationIds = new Set(
+      relations
+        .filter(relation => relation.relationType?.toUpperCase() === 'UNREAD' && relation.createdBy.id === currentUserId)
+        .map(relation => relation.id)
+        .filter(id => allMessageIds.has(id)),
+    );
+    const readSelfMatchIds = new Set([...selfMessageIds].filter(id => !readMarkedTargets.has(id)));
+    const readRelatedMatchIds = new Set(
+      [...readMarkedTargets].filter(id => !selfMessageIds.has(id) && !statusAnnotationIds.has(id)),
+    );
+    const unreadRelatedMatchIds = new Set<string>();
+    for (const edge of edges) {
+      if (!selfMessageIds.has(edge.from.messageId) && !selfMessageIds.has(edge.to.messageId)) continue;
+      if (!statusAnnotationIds.has(edge.relationMessageId)) unreadRelatedMatchIds.add(edge.relationMessageId);
+    }
+    for (const id of unreadMarkedTargets) {
+      if (!selfMessageIds.has(id) && !statusAnnotationIds.has(id)) unreadRelatedMatchIds.add(id);
+    }
+    for (const id of unreadAnnotationIds) unreadRelatedMatchIds.add(id);
+    const claimedMatchIds = new Set([
+      ...readSelfMatchIds,
+      ...readRelatedMatchIds,
+      ...unreadRelatedMatchIds,
+      ...statusAnnotationIds,
+    ]);
+    const unreadOtherMatchIds = new Set(
+      [...allMessageIds].filter(id => !claimedMatchIds.has(id)),
+    );
+
+    if (homeFilterMode === 'read-self') return readSelfMatchIds;
+    if (homeFilterMode === 'read-related') return collectContext(readRelatedMatchIds);
+    if (homeFilterMode === 'unread-other') return collectContext(unreadOtherMatchIds);
+    const unreadRelatedDisplayIds = collectContext(unreadRelatedMatchIds);
+    for (const id of unreadAnnotationIds) unreadRelatedDisplayIds.add(id);
+    return unreadRelatedDisplayIds;
+  }, [displayUser?.username, edges, homeFilterMode, messages, msgMap, relations, user?.id]);
 
   const joinStatusByMessage = useMemo(() => {
     const map = new Map<string, 'valid'>();
@@ -6292,8 +6371,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       ? scopedCorrectedMessages.filter(message =>
           cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
       : scopedCorrectedMessages;
-    const scopedMessages = applyMessageFilter(scopedCleanMessages, msgFilter);
-    const filteredMessages = applyMessageFilter(scopedCleanMessages, msgFilter);
+    const homeScopedMessages = homeFilterMessageIds
+      ? scopedCleanMessages.filter(message => homeFilterMessageIds.has(message.id))
+      : scopedCleanMessages;
+    const scopedMessages = applyMessageFilter(homeScopedMessages, msgFilter);
+    const filteredMessages = applyMessageFilter(homeScopedMessages, msgFilter);
     const suppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
     const rawEdges = filterContainerEdgesByEffectiveJoins(
       graphEdgesToRender,
@@ -6303,13 +6385,20 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const cleanEdges = cleanVisibleIds
       ? rawEdges.filter(edge => cleanVisibleIds.visibleRelIds.has(edge.relationMessageId))
       : rawEdges;
+    const homeEdges = homeFilterMessageIds
+      ? cleanEdges.filter(edge =>
+          homeFilterMessageIds.has(edge.relationMessageId)
+          && (edge.from.messageId.startsWith('anon:') || homeFilterMessageIds.has(edge.from.messageId))
+          && homeFilterMessageIds.has(edge.to.messageId),
+        )
+      : cleanEdges;
 
     return {
       messages: filteredMessages,
       scopedMessages,
-      edges: cleanEdges.filter(edge => !suppressedRelIds.has(edge.relationMessageId)),
+      edges: homeEdges.filter(edge => !suppressedRelIds.has(edge.relationMessageId)),
     };
-  }, [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
+  }, [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, homeFilterMessageIds, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
 
   const comparisonAgreeSuppressedRelIds = useMemo(() => {
     const ids = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
@@ -6976,8 +7065,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     ? messagesWithCorrections.filter(m =>
         cleanVisibleIds.visibleTextIds.has(m.id) || cleanVisibleIds.visibleRelIds.has(m.id))
     : messagesWithCorrections;
+  const homeFilteredMessages = homeFilterMessageIds
+    ? messagesToRenderClean.filter(message => homeFilterMessageIds.has(message.id))
+    : messagesToRenderClean;
   // Message type filter: hide settlement/join messages
-  const typeFilteredMessages = applyMessageFilter(messagesToRenderClean, msgFilter);
+  const typeFilteredMessages = applyMessageFilter(homeFilteredMessages, msgFilter);
   const temporaryJoinViewIds = joinFilterTargetId
     ? new Set((joinFilterDirection === 'outgoing'
       ? (joinRelationsBySource.get(joinFilterTargetId) ?? [])
@@ -7039,16 +7131,23 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const rawEdgesToRenderClean = cleanVisibleIds
     ? rawEdgesToRender.filter(e => cleanVisibleIds.visibleRelIds.has(e.relationMessageId))
     : rawEdgesToRender;
+  const homeEdgesToRender = homeFilterMessageIds
+    ? rawEdgesToRenderClean.filter(edge =>
+        homeFilterMessageIds.has(edge.relationMessageId)
+        && (edge.from.messageId.startsWith('anon:') || homeFilterMessageIds.has(edge.from.messageId))
+        && homeFilterMessageIds.has(edge.to.messageId),
+      )
+    : rawEdgesToRenderClean;
   // Filter edges based on current user's DISAGREE stances on relation messages.
   // When the user disagrees with a relation message, all edges produced by that
   // relation are suppressed from this user's view (per-user branch semantics).
   const temporaryEdgesToRender = comparisonViewIds
-    ? rawEdgesToRender
+    ? homeEdgesToRender
     : correctionTemporaryViewIds
-    ? rawEdgesToRender.filter(edge => correctionTemporaryViewIds.has(edge.relationMessageId))
+    ? homeEdgesToRender.filter(edge => correctionTemporaryViewIds.has(edge.relationMessageId))
     : temporaryJoinViewIds
-    ? rawEdgesToRender.filter(edge => temporaryJoinViewIds.has(edge.relationMessageId))
-    : rawEdgesToRender;
+    ? homeEdgesToRender.filter(edge => temporaryJoinViewIds.has(edge.relationMessageId))
+    : homeEdgesToRender;
   // A user's DISAGREE relation may be outside the current classify scope.
   // Use all topic edges to determine suppression, then filter only the edges
   // currently being rendered.
@@ -7223,9 +7322,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
               }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
                 导出
               </button>
-                <button onClick={() => navigate(`/topics/${topicId}?sender=${encodeURIComponent(user?.username ?? '')}`)} disabled={!user?.username} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: user?.username ? "pointer" : "not-allowed", opacity: user?.username ? 1 : 0.5 }} title="在当前主题中查看我的消息">
-                  主页
-                </button>
+                <HomeFilterPanel mode={homeFilterMode} onChange={setHomeFilterMode} />
                 <CleanFilterPanel
                   active={cleanMode}
                   filters={cleanFilters}

@@ -113,41 +113,66 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const navigate = useNavigate();
   const { user, logout, loading: authLoading } = useAuth();
   const relationBarRef = useRef<HTMLDivElement>(null);
-  const [relationControlsPinned, setRelationControlsPinned] = useState(true);
+  const relationLeftControlsRef = useRef<HTMLDivElement>(null);
+  const relationRightControlsRef = useRef<HTMLDivElement>(null);
   const [relationBarHeight, setRelationBarHeight] = useState(0);
   const [relationBarMinWidth, setRelationBarMinWidth] = useState(0);
+  const [relationControlsRightOffset, setRelationControlsRightOffset] = useState(0);
 
   const measureRelationBar = () => {
     const relationBar = relationBarRef.current;
     if (relationBar) {
       setRelationBarHeight(relationBar.getBoundingClientRect().height);
-      setRelationBarMinWidth(currentWidth => Math.max(currentWidth, relationBar.scrollWidth));
+      const leftWidth = relationLeftControlsRef.current?.getBoundingClientRect().width ?? 0;
+      const rightWidth = relationRightControlsRef.current?.getBoundingClientRect().width ?? 0;
+      const contentWidth = leftWidth + rightWidth + 32;
+      setRelationBarMinWidth(current => current === contentWidth ? current : contentWidth);
+      const leftControls = relationLeftControlsRef.current;
+      const rightControls = relationRightControlsRef.current;
+      if (!leftControls || !rightControls) return;
+      const leftRect = leftControls.getBoundingClientRect();
+      const rightRect = rightControls.getBoundingClientRect();
+      const nextRightOffset = Math.min(0, window.innerWidth - (leftRect.right + 16 + rightRect.width));
+      setRelationControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
     }
   };
 
   useLayoutEffect(() => {
     measureRelationBar();
-  }, []);
+  });
 
   useEffect(() => {
     const relationBar = relationBarRef.current;
     if (!relationBar) return;
 
     const updatePinnedState = () => {
-      setRelationControlsPinned(relationBar.getBoundingClientRect().right <= window.innerWidth + 1);
       setRelationBarHeight(relationBar.getBoundingClientRect().height);
-      setRelationBarMinWidth(currentWidth => Math.max(currentWidth, relationBar.scrollWidth));
+      const leftWidth = relationLeftControlsRef.current?.getBoundingClientRect().width ?? 0;
+      const rightWidth = relationRightControlsRef.current?.getBoundingClientRect().width ?? 0;
+      const contentWidth = leftWidth + rightWidth + 32;
+      setRelationBarMinWidth(current => current === contentWidth ? current : contentWidth);
+      const leftControls = relationLeftControlsRef.current;
+      const rightControls = relationRightControlsRef.current;
+      if (!leftControls || !rightControls) return;
+      const leftRect = leftControls.getBoundingClientRect();
+      const rightRect = rightControls.getBoundingClientRect();
+      const nextRightOffset = Math.min(0, window.innerWidth - (leftRect.right + 16 + rightRect.width));
+      setRelationControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
     };
 
     updatePinnedState();
     const observer = new ResizeObserver(updatePinnedState);
     observer.observe(relationBar);
+    if (relationLeftControlsRef.current) observer.observe(relationLeftControlsRef.current);
+    if (relationRightControlsRef.current) observer.observe(relationRightControlsRef.current);
     window.addEventListener('resize', updatePinnedState);
+    window.addEventListener('scroll', updatePinnedState, { passive: true });
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', updatePinnedState);
+      window.removeEventListener('scroll', updatePinnedState);
     };
-  }, []);
+  });
 
   const [topic, setTopic] = useState<Topic | null>(null);
   const [messages, setMessages] = useState<DemoMessage[]>([]);
@@ -7210,12 +7235,14 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   // Overridden stances: the user's previous stance messages that are no longer active.
   const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null);
   const isOwner = user && topic && (topic as any).author?.id === user.id;
+  const relationSpringWidth = Math.max(0, effectiveContainerWidth - relationBarMinWidth);
 
   return (
     <>
     <ErrorBoundary>
     <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, relationBarMinWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
       <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top: topControlsFrozen ? topControlsOffset : 0, zIndex: Z_INDEX.popover }}>
+        <div ref={relationLeftControlsRef} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         {!isPreloaded && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid #334155", borderRadius: 6, background: "#111827", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" }}>
             <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转消息</span>
@@ -7245,9 +7272,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
             </button>
           </>}
         </div>
-        <div aria-hidden="true" style={{ flex: 1, minWidth: 0 }} />
+        </div>
+        <div aria-hidden="true" style={{ flex: "0 0 auto", width: relationSpringWidth, minWidth: 0 }} />
         {!isPreloaded && (
-        <div style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", position: relationControlsPinned ? "sticky" : undefined, right: relationControlsPinned ? 0 : undefined, zIndex: Z_INDEX.header }}>
+        <div ref={relationRightControlsRef} style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", position: "sticky", right: `${relationControlsRightOffset}px`, zIndex: Z_INDEX.header }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
             <button key={rt} onClick={() => {

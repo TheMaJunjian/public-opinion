@@ -376,6 +376,40 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
+
+  });
+
+  it('does not re-add an outer container that shares a child with the current container', async () => {
+    const response = await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({
+      data: response.data.map((relation: Relation) => relation.id === 'rel-outer'
+        ? {
+            ...relation,
+            targetRefs: [
+              { kind: 'relation', relationId: 'rel-middle' },
+              { kind: 'relation', relationId: 'rel-inner' },
+            ],
+          }
+        : relation),
+    });
+
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    let graphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    act(() => graphProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-outer'));
+    await waitFor(() => {
+      graphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      expect(graphProps.messages.some((message: { id: string }) => message.id === 'rel-middle')).toBe(true);
+    });
+
+    act(() => graphProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-middle'));
+    await waitFor(() => {
+      graphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const visibleIds = new Set(graphProps.messages.map((message: { id: string }) => message.id));
+      expect(visibleIds.has('rel-inner')).toBe(true);
+      expect(visibleIds.has('rel-outer')).toBe(false);
+    });
   });
 
 });

@@ -6066,6 +6066,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           }
         }
       }
+      const ancestorContainerIds = new Set(
+        getContainerAncestorChain(currentClassifyRelMsgId, relations),
+      );
       const edgesByRel = new Map<string, DemoEdge[]>();
       for (const e of baseEdges) {
         const arr = edgesByRel.get(e.relationMessageId) ?? [];
@@ -6073,7 +6076,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         edgesByRel.set(e.relationMessageId, arr);
       }
       for (const [relMsgId, relEdges] of edgesByRel) {
-        if (relMsgId === currentClassifyRelMsgId || topicRelationIds.has(relMsgId)) continue;
+        if (relMsgId === currentClassifyRelMsgId
+          || ancestorContainerIds.has(relMsgId)
+          || topicRelationIds.has(relMsgId)) continue;
         const textEndpoints = relEdges
           .flatMap(e => [e.from.messageId, e.to.messageId])
           .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });

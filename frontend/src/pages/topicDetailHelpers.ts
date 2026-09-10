@@ -746,7 +746,7 @@ export function collectOwnedByRelation(
 
 /**
  * Walk up the container chain: find all ancestor containers of a given container
- * by following "加入" relations (CLASSIFY with sourceMessageId) that target it.
+ * through either JOIN records or the container's original targetRefs.
  * Returns a Set of container IDs ordered from innermost to outermost.
  */
 export function getContainerAncestorChain(
@@ -759,18 +759,28 @@ export function getContainerAncestorChain(
 
   while (current && !visited.has(current)) {
     visited.add(current);
-    // Find a "加入" relation (any container type) whose targetRefs contain `current`
+    // Prefer the current JOIN ownership, then fall back to the original container
+    // targets used by records created before JOIN membership was introduced.
     const joinRel = relations.find(r =>
-      JOIN_RELATION_TYPES.has(r.relationType) &&
+      JOIN_RELATION_TYPES.has(r.relationType?.toUpperCase() ?? '') &&
       !!r.sourceMessageId &&
       (r.targetRefs as TargetRef[]).some(ref =>
         (ref.kind === 'relation' && ref.relationId === current) ||
         (ref.kind === 'message' && ref.messageId === current)
       )
     );
-    if (!joinRel || !joinRel.sourceMessageId) break;
-    chain.push(joinRel.sourceMessageId);
-    current = joinRel.sourceMessageId;
+    const directParent = joinRel ? undefined : relations.find(r =>
+      r.id !== current &&
+      ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(r.relationType?.toUpperCase() ?? '') &&
+      (r.targetRefs as TargetRef[]).some(ref =>
+        (ref.kind === 'relation' && ref.relationId === current) ||
+        (ref.kind === 'message' && ref.messageId === current)
+      )
+    );
+    const parentId = joinRel?.sourceMessageId ?? directParent?.id;
+    if (!parentId) break;
+    chain.push(parentId);
+    current = parentId;
   }
 
   return chain;

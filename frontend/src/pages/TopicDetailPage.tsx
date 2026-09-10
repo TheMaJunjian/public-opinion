@@ -899,7 +899,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       before: string;
       after: string;
       target: UnitSelection;
-      mode?: 'direct' | 'source';
+      mode?: 'direct';
       label?: string;
     };
   } | null>(null);
@@ -4033,6 +4033,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
 
     // Relation target with CORRECT: no text, no source — create null-source relation
     const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === 'relation');
+    if (relationType === 'correct' && hasRelationTarget) {
+      setSendError('关系消息不能更正，请选择普通文本消息');
+      return;
+    }
     const hasSecSelector = relationType === "correct" && hasRelationTarget;
     if (relationType === 'correct' && !hasRelationTarget && effectiveTargets.length === 1) {
       const correctionTarget = effectiveTargets[0];
@@ -4724,7 +4728,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const beforeContent = msgMap.get(ancestorTargetMid)?.content ?? generated;
       setComparisonPopup({
         relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
-        reversePreview: { before: beforeContent, after: generated, target: resolvedTargets[0], mode: 'source', label },
+        reversePreview: { before: beforeContent, after: generated, target: resolvedTargets[0], mode: 'direct', label },
       });
       return;
     }
@@ -5229,6 +5233,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     // Ambiguous: both draft and target non-empty — force user to clear one
     if (draftUnits.length > 0 && targetUnits.length > 0) return false;
     if (hasInvalidCorrectTarget || hasInvalidContainerSource || hasInvalidJoinTarget || hasCrossLinkValidationError || hasOrphanContainerLabel || hasClassifyCycle || hasInvalidDelegationFormat || hasInvalidProposalFormat) return false;
+    if (hasCorrectionRelationTarget) return false;
     if (isClassifyType) {
       const hasExistingClassifySource = sourceUnits.some(unit =>
         relations.find(relation => relation.id === unit.messageId)?.relationType?.toUpperCase() === 'CLASSIFY'
@@ -5323,11 +5328,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     if (relationType === 'correct') {
       if (!hasTargetsAvailable) return '请选择要更正的原始内容';
+      if (hasCorrectionRelationTarget) return '关系消息不能作为更正目标，请选择普通文本消息';
       if (hasInvalidCorrectTarget) return '更正只能选择原始内容中的一个文本字段';
-      if (hasCorrectionRelationTarget) {
-        if (secondaryRelationType === 'none') return '请选择更正后的关系类型';
-        return `建立更正关系（用${usingDraft ? "候选" : "目标集合"}中的关系目标）`;
-      }
       return hasTextContent
         ? `将选中的原始内容修改为「${newMessageContent.trim()}」`
         : '删除选中的原始内容片段';
@@ -5416,6 +5418,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return "请输入关系消息贡献点";
     if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
     if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
+    if (hasCorrectionRelationTarget) return "关系消息不能作为更正目标，请选择普通文本消息";
     if (hasInvalidCorrectTarget) return "更正只能选择原始内容中的一个文本字段";
     if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
     if (hasInvalidJoinTarget) return invalidJoinTargetMessage as string;
@@ -6615,31 +6618,21 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     sendInFlightRef.current = true;
     setSendInFlight(true);
     try {
-      if (preview.mode === 'source') {
-        const sourceMessage = await handleSendMessageOnly(preview.after);
-        if (!sourceMessage) return;
-        await handleCreateRelationWithSourcesAndTargets({
-          sources: [{ messageId: sourceMessage.id, selection: { kind: 'whole' } }],
-          targets: [preview.target],
-          label: preview.label ?? relationTypeName('correct'),
-        });
-      } else {
-        const backendRel = await createRel(topicId, {
-          relationType: 'CORRECT',
-          sourceMessageId: null,
-          targetRefs: [unitSelectionToTargetRef(preview.target, msgMap)],
-          payload: { correctionContent: preview.after },
-        });
-        await registerCreatedRelationInCurrentClassify(backendRel);
-        setEdges(prev => [...prev, {
-          id: nextId('edge'),
-          relationMessageId: backendRel.id,
-          relationType: 'correct',
-          from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
-          to: preview.target,
-          relationLabel: relationTypeName('correct'),
-        }]);
-      }
+      const backendRel = await createRel(topicId, {
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [unitSelectionToTargetRef(preview.target, msgMap)],
+        payload: { correctionContent: preview.after },
+      });
+      await registerCreatedRelationInCurrentClassify(backendRel);
+      setEdges(prev => [...prev, {
+        id: nextId('edge'),
+        relationMessageId: backendRel.id,
+        relationType: 'correct',
+        from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
+        to: preview.target,
+        relationLabel: relationTypeName('correct'),
+      }]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
       setComparisonPopup(null);
@@ -8111,6 +8104,14 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       </div>,
       document.body,
     )}
+
+    <PromptModal
+      open={sendInFlight}
+      title="正在发送"
+      message="正在发送消息并更新关联结构，请稍候…"
+      hideActions
+      onConfirm={() => undefined}
+    />
 
     <LeaderboardModal
       open={showLeaderboard}

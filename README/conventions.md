@@ -1,68 +1,46 @@
 # 公论工程约定
 
-> 每次工作前先读本文档。
+> 开始工作前先读本文档。目标是修复根因、保持改动聚焦，并用可复现的检查验证结论。
 
-## 1. 日志诊断
+## 1. 工作流程
 
-### 原则
-- 遇到无法通过代码审查定位的运行时问题，**不要猜测**，用日志定位
-- 解决问题原因，不是解决问题现象
-- 前后端统一输出到 `README/logs/` 目录（前端通过 `debugLog` → `POST /api/debug-log` → 后端写文件）
-- **只输出与当前问题直接相关的日志**，无关的不要输出
-- **问题解决后清理诊断日志**，不保留临时调试代码
+1. 从具体入口开始：问题现象、失败测试、报错、相关文件或控制行为的代码路径。
+2. 修改前提出一个可证伪的原因假设，并执行能确认或推翻它的最小检查。
+3. 只修改解决当前问题所需的代码；保留用户已有改动，不顺手重构无关区域。
+4. 修改后先跑最相关的测试、构建或类型检查，再按影响范围扩大验证。
+5. 完成前检查最终差异，确认没有调试代码、无关格式化或意外生成文件。
 
-### 方法
+修改共享逻辑或重复文案前，先搜索全部引用，确认是否需要同步更新多处实现。
+
+## 2. 日志诊断
+
+无法通过代码、测试或现有错误信息定位运行时问题时，使用日志验证，不基于猜测修改业务代码。
+
 | 场景 | 方式 |
 |------|------|
-| 前端诊断 | `debugLog('tag', 'msg')` — 同时 console + 写入 `README/logs/` |
-| 前端异常 | `debugWarn('tag', 'msg')` — catch 块中记录失败详情 |
+| 前端诊断 | `debugLog('tag', 'msg')`，同时输出到控制台并写入 `README/logs/` |
+| 前端异常 | `debugWarn('tag', 'msg')`，在 `catch` 中记录参数和失败详情 |
 | 后端诊断 | `log('Tag', 'msg')` 或 `debugLog('Tag', 'msg')` |
 
-### 日志格式
+日志要求：
+
+- 格式为 `[模块] 操作描述 key=value`，例如 `[join] create containerId=abc123 type=CLASSIFY targets=xyz,def`。
+- 只记录与当前问题直接相关的参数和状态，不输出敏感信息或大段对象。
+- 前端日志经 `POST /api/debug-log` 写入 `README/logs/`，后端日志直接写入该目录。
+- 问题解决后删除临时诊断日志；业务关键日志和 `catch` 中必要的错误日志可以保留。
+
+## 3. 验证基线
+
+开发中先运行与改动最相关的检查。任务完成前，受影响项目的构建和完整测试必须通过：
+
+```powershell
+# 前端改动
+npm --prefix frontend run build
+npm --prefix frontend test
+
+# 后端改动
+npm --prefix backend run build
+npm --prefix backend test
 ```
-[模块] 操作描述 关键参数
-```
-例如：`[join] createJoinRelationsForContainer called containerId=abc123 type=CLASSIFY targets=xyz,def`
 
-## 2. 代码修改原则
-
-- 先理解全貌再动手
-- 多文件修改用 `multi_replace_string_in_file` 一次性完成
-- 每次修改后跑 `npm run build && npm test` 验证
-- 修改前检查是否有 3 处以上的重复逻辑需要同步更新（如错误消息格式）
-
-## 3. 测试验证基线
-
-```bash
-cd frontend && npm run build   # 必须通过
-cd frontend && npm test         # 10 文件 / 279 测试
-cd backend && npm run build     # 必须通过
-cd backend && npm test          # 8 套件 / 139 测试
-```
-
-## 4. 项目关键概念
-
-- 所有容器类型（CLASSIFY/SUMMARY/ARRANGE/MERGE）的 join 关系用统一的 `createJoinRelationsForContainer` 创建
-- 容器嵌套：容器 A 加入容器 B，只创建 A→B 的 join，不展开 A 的子消息
-- `totalConsumption`：发送前计算总消耗（文本 + 关系 + join + 引用 + 燃烧）
-- `scrollMsgToCenter` 依赖 DOM 上的 `data-msgid` 属性定位消息卡片
-- 框架元素（排列/归并/分类的 SVG rect）之前没有 `data-msgid`，已修复
-
-## 5. 消息类型速查
-
-| kind | 含义 | 渲染 |
-|------|------|------|
-| normal | 文本消息/加入容器记录 | 普通卡片 |
-| relation | 关系消息/容器 | 主题卡片或框架 |
-| round | 结算轮次 | 特殊卡片 |
-| round_result | 结算结果 | 特殊卡片 |
-| governance | 治理提案 | 黄色卡片 |
-| code | 代码变更 | 青色卡片 |
-| operations | 运营公告 | 青色卡片 |
-
-## 6. 消息创建触发原则
-
-- 所有消息统一由前端与会者动作显式触发（点击发送/结算等按钮）
-- 允许一次前端动作按顺序创建多条消息（例如：先结算，再创建结算结果消息）
-- 后端不主动“隐式补发”消息；后端负责校验、记账和状态变更
-- 消息类型不影响触发原则：`normal/relation/round/round_result/governance/code/operations` 均遵循同一规则
+跨前后端契约、共享流程或部署行为的改动需要两端都验证。不要在文档中固定测试数量，以测试命令的实际结果为准。

@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import PopupOverlay from './PopupOverlay';
 
+let bodyScrollLockCount = 0;
+let bodyOverflowBeforeLock = '';
+
 interface PromptModalProps {
   open: boolean;
   title: string;
@@ -38,6 +41,20 @@ export default function PromptModal({
   const dialogRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
   const [offsetY, setOffsetY] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    if (bodyScrollLockCount === 0) {
+      bodyOverflowBeforeLock = document.body.style.overflow;
+    }
+    bodyScrollLockCount += 1;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+      if (bodyScrollLockCount === 0) {
+        document.body.style.overflow = bodyOverflowBeforeLock;
+      }
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) { setOffsetY(0); return; }

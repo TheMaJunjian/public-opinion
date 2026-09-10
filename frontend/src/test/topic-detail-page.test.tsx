@@ -151,6 +151,29 @@ describe('TopicDetailPage home filter container projection', () => {
       expect(messageIds).toEqual(new Set(['outer-classify']));
     });
   });
+
+  it('restores join filtering on ordinary temporary-category exit but not on tag navigation', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /清爽/ }));
+
+    const getLatestGraphProps = () => mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    await act(async () => {
+      getLatestGraphProps().onJoinFilterClick('inner-arrange', 'outgoing');
+    });
+    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
+    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).toBeChecked();
+
+    await act(async () => {
+      getLatestGraphProps().onJoinFilterClick('inner-arrange', 'outgoing');
+    });
+    await act(async () => {
+      getLatestGraphProps().onNavigateToMessage('join-hit');
+    });
+    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).not.toBeChecked();
+  });
 });
 
 describe('TopicDetailPage composer refresh', () => {

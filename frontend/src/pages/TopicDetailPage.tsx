@@ -709,6 +709,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const classifyStackRef = useRef<ClassifyStackEntry[]>([]);
   const temporaryCategoryStackRef = useRef<Array<{
     snapshot: TraceSnapshot;
+    hideJoin: boolean;
     joinFilterTargetId: string | null;
     joinFilterDirection: 'incoming' | 'outgoing';
     correctionFilterTargetId: string | null;
@@ -2446,6 +2447,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     if (isTemporaryCategoryActive && !force) return;
     temporaryCategoryStackRef.current.push({
       snapshot: captureSnapshot(),
+      hideJoin: msgFilter.hideJoin,
       joinFilterTargetId,
       joinFilterDirection,
       correctionFilterTargetId,
@@ -2458,9 +2460,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     });
   }
 
-  function exitTemporaryCategory() {
+  function exitTemporaryCategory(options?: { restoreMessageFilter?: boolean }) {
     const entry = temporaryCategoryStackRef.current.pop();
     if (!entry) return;
+    if (options?.restoreMessageFilter !== false) {
+      setMsgFilter(previous => ({ ...previous, hideJoin: entry.hideJoin }));
+    }
     setJoinFilterTargetId(entry.joinFilterTargetId);
     setJoinFilterDirection(entry.joinFilterDirection);
     setCorrectionFilterTargetId(entry.correctionFilterTargetId);
@@ -2473,10 +2478,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     restoreSnapshot(entry.snapshot);
   }
 
-  function exitAllTemporaryCategories() {
+  function exitAllTemporaryCategories(options?: { restoreMessageFilter?: boolean }) {
     const entries = temporaryCategoryStackRef.current.splice(0);
     const firstEntry = entries[0];
     if (firstEntry) restoreSnapshot(firstEntry.snapshot);
+    if (firstEntry && options?.restoreMessageFilter !== false) {
+      setMsgFilter(previous => ({ ...previous, hideJoin: firstEntry.hideJoin }));
+    }
     setJoinFilterTargetId(null);
     setCorrectionFilterTargetId(null);
     setComparisonMode(false);
@@ -6903,7 +6911,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       }
     }
     if (wasTemporaryCategoryActive) {
-      exitAllTemporaryCategories();
+      exitAllTemporaryCategories({ restoreMessageFilter: false });
       if (targetMessage?.kind === 'join') {
         setClassifyRelMsgId(null);
         setClassifyKey(k => k + 1);

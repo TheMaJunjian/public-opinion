@@ -47,6 +47,24 @@ describe('convertMessagesToDemoModel', () => {
 
     expect(result.messages[0].targetRefs).toEqual([{ kind: 'relation', relationId: 'target-1' }]);
   });
+
+  it('shows relation targets on JOIN messages', () => {
+    const result = convertMessagesToDemoModel([], [{
+      id: 'join-1',
+      topicId: 'topic-1',
+      relationType: 'JOIN',
+      sourceMessageId: 'container-1',
+      targetRefs: [{ kind: 'relation', relationId: 'target-container-1' }],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      createdBy: user,
+    }]);
+
+    expect(result.messages[0]?.joinInfo).toMatchObject({
+      containerId: 'container-1',
+      targetIds: ['target-container-1'],
+    });
+  });
+
   it('preserves delegation content from the relation payload', () => {
     const content = '报酬数量=100\n委托内容=请完成这项工作';
     const result = convertMessagesToDemoModel([] as Message[], [makeDelegation('CREATE', content)]);

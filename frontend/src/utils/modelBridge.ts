@@ -295,8 +295,7 @@ export function convertMessagesToDemoModel(
           containerId: rel.sourceMessageId!,
           containerType: 'JOIN',
           targetIds: rel.targetRefs
-            .filter(r => r.kind === 'message' || r.kind === 'text-fragment')
-            .map(r => (r as { messageId: string }).messageId),
+            .map(r => r.kind === 'relation' ? r.relationId : r.messageId),
         };
       } else if (relType === 'correct') {
         content = rel.payload?.correctionContent ?? '';

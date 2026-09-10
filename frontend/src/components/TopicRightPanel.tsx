@@ -21,6 +21,7 @@ interface TopicRightPanelProps {
   TOTAL_FLEX: number;
   leftFlex: number;
   minWidth: number;
+  maxWidth?: number;
   stickyTop?: number | string;
 
   // Mode
@@ -214,6 +215,7 @@ export default function TopicRightPanel(props: TopicRightPanelProps) {
     overflowY: "auto" as const,
     overflowX: "auto" as const,
     minWidth: p.minWidth,
+    maxWidth: p.maxWidth,
     boxSizing: "border-box" as const,
     alignSelf: "flex-start",
     touchAction: "pan-x pan-y pinch-zoom" as const,

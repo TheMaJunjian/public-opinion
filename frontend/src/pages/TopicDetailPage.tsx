@@ -1982,6 +1982,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const TOTAL_FLEX = 4;
   const MIN_LEFT_PX = 560;
   const MIN_RIGHT_PX = 280;
+  const MAX_RIGHT_PX = 700;
+  const BASE_WIDTH = 1024;
   const SAVED_LEFT_FLEX_KEY = 'topicLeftFlex';
   const savedLeftFlex = Number(localStorage.getItem(SAVED_LEFT_FLEX_KEY));
   const initialLeftFlex = Number.isFinite(savedLeftFlex) && savedLeftFlex > 0 && savedLeftFlex < TOTAL_FLEX
@@ -2000,10 +2002,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const [containerWidth, setContainerWidth] = useState(() => {
     const saved = localStorage.getItem('topicWidth');
     const savedWidth = saved ? Number(saved) : 0;
-    const availableWidth = getAvailableWidth();
-    return Math.max(savedWidth > 0 && savedWidth <= availableWidth ? savedWidth : 0, getMinimumContainerWidth());
+    const maxWidthForRightPanel = Math.ceil(MAX_RIGHT_PX * TOTAL_FLEX / (TOTAL_FLEX - initialLeftFlex) + 12);
+    return Math.max(
+      savedWidth > 0 ? Math.min(savedWidth, maxWidthForRightPanel) : BASE_WIDTH,
+      getMinimumContainerWidth(),
+    );
   });
-  const effectiveContainerWidth = Math.max(containerWidth, getAvailableWidth());
+  const effectiveContainerWidth = Math.max(containerWidth, getMinimumContainerWidth());
   const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
   const splitterDragRef = useRef<{ startX: number; startLeftPx: number; containerW: number } | null>(null);
@@ -2042,8 +2047,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   useEffect(() => { localStorage.setItem(SAVED_LEFT_FLEX_KEY, String(leftFlex)); }, [leftFlex]);
   useEffect(() => {
     const syncContainerWidth = () => {
-      const availableWidth = getAvailableWidth();
-      setContainerWidth(currentWidth => Math.max(currentWidth, availableWidth));
+      setContainerWidth(currentWidth => Math.max(currentWidth, getMinimumContainerWidth()));
     };
     const frame = requestAnimationFrame(() => requestAnimationFrame(syncContainerWidth));
     window.addEventListener('resize', syncContainerWidth);
@@ -6991,9 +6995,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
       const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
       const nextWidth = naturalRightPx < MIN_RIGHT_PX
-        ? desiredLeftPx + MIN_RIGHT_PX + 12
-        : splitterDragRef.current.containerW;
-      const effectiveNextWidth = Math.max(nextWidth, getAvailableWidth());
+        ? Math.max(splitterDragRef.current.containerW, desiredLeftPx + MIN_RIGHT_PX + 12)
+        : naturalRightPx > MAX_RIGHT_PX
+          ? Math.max(BASE_WIDTH, Math.min(splitterDragRef.current.containerW, desiredLeftPx + MAX_RIGHT_PX + 12))
+          : splitterDragRef.current.containerW;
+      const effectiveNextWidth = Math.max(nextWidth, getMinimumContainerWidth());
       setContainerWidth(nextWidth);
       setLeftFlex(TOTAL_FLEX * desiredLeftPx / (effectiveNextWidth - 12));
     }
@@ -7944,6 +7950,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           TOTAL_FLEX={TOTAL_FLEX}
           leftFlex={leftFlex}
           minWidth={MIN_RIGHT_PX}
+          maxWidth={MAX_RIGHT_PX}
           stickyTop={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
           isPreviewMode={isPreviewMode}
           isViewerMode={isPreloaded}

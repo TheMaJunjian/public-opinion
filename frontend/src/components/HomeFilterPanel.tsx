@@ -20,10 +20,17 @@ const OPTIONS: Array<{ mode: HomeFilterMode; label: string; description: string 
 
 export default function HomeFilterPanel({ mode, onChange }: HomeFilterPanelProps) {
   const [open, setOpen] = useState(false);
+  const [hintMode, setHintMode] = useState<HomeFilterMode | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const selectedMode = mode ?? 'unread-related';
+  const selectedMode = mode;
   const isActive = mode !== null;
-  const activeOption = OPTIONS.find(option => option.mode === selectedMode) ?? OPTIONS[2];
+  const activeOption = OPTIONS.find(option => option.mode === selectedMode);
+
+  useEffect(() => {
+    if (hintMode === null) return;
+    const timeoutId = window.setTimeout(() => setHintMode(null), 500);
+    return () => window.clearTimeout(timeoutId);
+  }, [hintMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -39,8 +46,10 @@ export default function HomeFilterPanel({ mode, onChange }: HomeFilterPanelProps
       <button
         type="button"
         onClick={() => {
-          if (mode === null) onChange('unread-related');
-          setOpen(current => !current);
+          setOpen(current => {
+            if (!current) setHintMode('unread-related');
+            return !current;
+          });
         }}
         title="主页：按与我相关的范围查看消息"
         style={{
@@ -92,8 +101,16 @@ export default function HomeFilterPanel({ mode, onChange }: HomeFilterPanelProps
                   gap: 8,
                   padding: '7px 8px',
                   borderRadius: 4,
-                  border: option.mode === selectedMode ? '1px solid #38bdf8' : '1px solid transparent',
-                  background: option.mode === selectedMode ? 'rgba(14,165,233,0.16)' : 'transparent',
+                  border: option.mode === selectedMode
+                    ? '1px solid #38bdf8'
+                    : option.mode === hintMode
+                    ? '1px solid #facc15'
+                    : '1px solid transparent',
+                  background: option.mode === selectedMode
+                    ? 'rgba(14,165,233,0.16)'
+                    : option.mode === hintMode
+                    ? 'rgba(250,204,21,0.16)'
+                    : 'transparent',
                   color: '#e5e7eb',
                   cursor: 'pointer',
                 }}
@@ -103,7 +120,14 @@ export default function HomeFilterPanel({ mode, onChange }: HomeFilterPanelProps
                   name="home-filter-mode"
                   checked={option.mode === selectedMode}
                   onChange={() => onChange(option.mode)}
-                  style={{ marginTop: 2, accentColor: '#38bdf8' }}
+                  style={{
+                    marginTop: 2,
+                    accentColor: option.mode === selectedMode
+                      ? '#38bdf8'
+                      : option.mode === hintMode
+                      ? '#facc15'
+                      : '#38bdf8',
+                  }}
                 />
                 <span>
                   <span style={{ display: 'block', fontSize: 12, fontWeight: 600 }}>{option.label}</span>
@@ -112,9 +136,11 @@ export default function HomeFilterPanel({ mode, onChange }: HomeFilterPanelProps
               </label>
             ))}
           </div>
-          <div style={{ marginTop: 8, color: '#64748b', fontSize: 11 }}>
-            当前：{activeOption.label}
-          </div>
+          {activeOption && (
+            <div style={{ marginTop: 8, color: '#64748b', fontSize: 11 }}>
+              当前：{activeOption.label}
+            </div>
+          )}
         </div>
       )}
     </div>

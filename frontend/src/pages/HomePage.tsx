@@ -6,7 +6,7 @@ import { api } from '../api';
 /**
  * 首页：登录后自动跳转到第一个分类的详情页。
  * 若当前无分类，则自动创建一个默认分类后跳转。
- * 未登录时跳转到登录页。
+ * 未登录时返回登录页；公开导出阅览通过顶部“阅览”入口进入。
  */
 export default function HomePage() {
   const { user, loading: authLoading } = useAuth();
@@ -18,7 +18,7 @@ export default function HomePage() {
 
     if (authLoading) return;
     if (!user) {
-      if (!cancelled) navigate('/login', { replace: true });
+      navigate('/login', { replace: true });
       return () => { cancelled = true; };
     }
 

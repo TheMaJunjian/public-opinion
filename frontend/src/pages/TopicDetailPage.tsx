@@ -1,3 +1,4 @@
+import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, getLatestUserReadStatusByMessageId, partitionHomeContentMatchIds } from './topicDetailHelpers';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
@@ -32,6 +33,9 @@ import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import { applyContainerExpansion } from '../utils/focusContainer';
 import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from '../utils/traceProjection';
 import { operationLog } from '../utils/debugLog';
+
+const VIEWER_USERNAME_KEY = 'export-viewer-username';
+
 import { useCleanView } from '../hooks/useCleanView';
 import CleanFilterPanel from '../components/CleanFilterPanel';
 import MessageFilterPanel, { type MessageFilterSettings, applyMessageFilter } from '../components/MessageFilterPanel';
@@ -92,7 +96,6 @@ type TraceSnapshot = {
 };
 
 type ClassifyStackEntry = { relMsgId: string; snapshot: TraceSnapshot | null };
-
 type TraceEntry = {
   ids: string[];
   snapshot: TraceSnapshot | null;
@@ -144,22 +147,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   useEffect(() => {
     const relationBar = relationBarRef.current;
     if (!relationBar) return;
-
-    const updatePinnedState = () => {
-      setRelationBarHeight(relationBar.getBoundingClientRect().height);
-      const leftWidth = relationLeftControlsRef.current?.getBoundingClientRect().width ?? 0;
-      const rightWidth = relationRightControlsRef.current?.getBoundingClientRect().width ?? 0;
-      const contentWidth = leftWidth + rightWidth + 32;
-      setRelationBarMinWidth(current => current === contentWidth ? current : contentWidth);
-      const leftControls = relationLeftControlsRef.current;
-      const rightControls = relationRightControlsRef.current;
-      if (!leftControls || !rightControls) return;
-      const leftRect = leftControls.getBoundingClientRect();
-      const rightRect = rightControls.getBoundingClientRect();
-      const nextRightOffset = Math.min(0, window.innerWidth - (leftRect.right + 16 + rightRect.width));
-      setRelationControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
-    };
-
+    const updatePinnedState = () => measureRelationBar();
     updatePinnedState();
     const observer = new ResizeObserver(updatePinnedState);
     observer.observe(relationBar);
@@ -192,7 +180,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const [leaderboardRefreshVersion, setLeaderboardRefreshVersion] = useState(0);
   const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   const [isPreloaded, setIsPreloaded] = useState(false);
-  const [viewerUser, setViewerUser] = useState<User | null>(null);
+  const [viewerUser, setViewerUser] = useState<User | null>(() => {
+    const username = localStorage.getItem(VIEWER_USERNAME_KEY)?.trim();
+    return username ? { id: `viewer:${username}`, username, createdAt: '' } : null;
+  });
   const displayUser = isPreloaded ? viewerUser : user;
   const correctionVersions = useMemo(() => {
     const invalidCorrectionIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
@@ -442,10 +433,10 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   }, [topicId, leaderboardRefreshVersion, authLoading]);
 
   useEffect(() => {
-    if (!authLoading && !isPreloaded && !user) {
+    if (!authLoading && !preloadedData && !user) {
       navigate('/login', { replace: true });
     }
-  }, [authLoading, isPreloaded, navigate, user?.username]);
+  }, [authLoading, navigate, preloadedData, user?.username]);
 
   useEffect(() => {
     if (loading || authLoading || loadError || isPreloaded) return;
@@ -1625,103 +1616,73 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return map;
   }, [relations]);
 
+  const traceContainerMemberships = useMemo<TraceContainerMembership[]>(() => {
+    const containerTypeById = new Map(
+      relations
+        .filter(relation => ['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE'].includes(relation.relationType.toUpperCase()))
+        .map(relation => [relation.id, relation.relationType.toLowerCase() as TraceContainerMembership['relationType']]),
+    );
+    return relations
+      .filter(relation => relation.relationType.toUpperCase() === 'JOIN'
+        && effectiveJoinRelationIds.has(relation.id)
+        && relation.sourceMessageId
+        && containerTypeById.has(relation.sourceMessageId))
+      .map(relation => ({
+        containerId: relation.sourceMessageId!,
+        relationType: containerTypeById.get(relation.sourceMessageId!)!,
+        targetIds: (relation.targetRefs ?? [])
+          .filter(ref => ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation')
+          .map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId),
+      }));
+  }, [relations, effectiveJoinRelationIds]);
+
   const readStatusByMessageId = useMemo(() => {
-    const latest = new Map<string, { type: 'READ' | 'UNREAD'; createdAt: string }>();
     const currentUserId = isPreloaded ? null : user?.id;
     const currentUsername = displayUser?.username;
     if (!currentUserId && !currentUsername) return new Map<string, 'READ' | 'UNREAD'>();
-    for (const relation of relations) {
-      const type = relation.relationType?.toUpperCase();
-      if (type !== 'READ' && type !== 'UNREAD') continue;
-      const isCurrentUser = isPreloaded
-        ? relation.createdBy.username === currentUsername
-        : relation.createdBy.id === currentUserId;
-      if (!isCurrentUser) continue;
-      for (const target of relation.targetRefs) {
-        if (target.kind !== 'message' && target.kind !== 'text-fragment') continue;
-        const previous = latest.get(target.messageId);
-        if (!previous || new Date(relation.createdAt).getTime() >= new Date(previous.createdAt).getTime()) {
-          latest.set(target.messageId, { type, createdAt: relation.createdAt });
-        }
-      }
-    }
-    return new Map([...latest].map(([id, value]) => [id, value.type]));
+    return getLatestUserReadStatusByMessageId(relations, relation => isPreloaded
+      ? relation.createdBy.username === currentUsername
+      : relation.createdBy.id === currentUserId);
   }, [displayUser?.username, isPreloaded, relations, user?.id]);
 
   const homeFilterResult = useMemo(() => {
-    const currentUserId = isPreloaded ? null : user?.id;
     const currentUsername = displayUser?.username;
     if (homeFilterMode === null) return null;
     const allMessageIds = new Set(msgMap.keys());
-    const isStatusAnnotation = (message: DemoMessage | undefined) => {
-      const relationType = message?.relationType?.toLowerCase();
-      return relationType === 'read' || relationType === 'unread';
-    };
-    const selfMessageIds = new Set(
-      messages
-        .filter(message => message.author === currentUsername && !isStatusAnnotation(message))
-        .map(message => message.id),
+    const contentIds = new Set(
+      messages.filter(message => isContentKind(message.kind)).map(message => message.id),
     );
-    const getMarkedTargets = (type: 'READ' | 'UNREAD') => {
-      const ids = new Set<string>();
-      for (const relation of relations) {
-        if (relation.relationType?.toUpperCase() !== type) continue;
-        const isCurrentUser = isPreloaded
-          ? relation.createdBy.username === currentUsername
-          : relation.createdBy.id === currentUserId;
-        if (!isCurrentUser) continue;
-        for (const target of relation.targetRefs) {
-          if ((target.kind === 'message' || target.kind === 'text-fragment') && allMessageIds.has(target.messageId)) {
-            ids.add(target.messageId);
-          }
-        }
-      }
-      return ids;
-    };
-    const collectContext = (seedIds: Set<string>) => {
-      const ids = new Set(seedIds);
-      for (const edge of edges) {
-        if (!seedIds.has(edge.from.messageId) && !seedIds.has(edge.to.messageId) && !seedIds.has(edge.relationMessageId)) continue;
-        for (const id of [edge.from.messageId, edge.to.messageId, edge.relationMessageId]) {
-          if (allMessageIds.has(id) && !isStatusAnnotation(msgMap.get(id))) ids.add(id);
-        }
-      }
-      return ids;
-    };
-    const readMarkedTargets = getMarkedTargets('READ');
-    const unreadMarkedTargets = getMarkedTargets('UNREAD');
-    const statusAnnotationIds = new Set([...allMessageIds].filter(id => isStatusAnnotation(msgMap.get(id))));
-    const unreadAnnotationIds = new Set(
-      relations
-        .filter(relation => relation.relationType?.toUpperCase() === 'UNREAD')
-        .filter(relation => isPreloaded
-          ? relation.createdBy.username === currentUsername
-          : relation.createdBy.id === currentUserId)
-        .map(relation => relation.id)
+    const readContentIds = new Set(
+      [...readStatusByMessageId]
+        .filter(([id, status]) => status === 'READ' && contentIds.has(id))
+        .map(([id]) => id)
         .filter(id => allMessageIds.has(id)),
     );
-    const readSelfMatchIds = new Set([...selfMessageIds].filter(id => !readMarkedTargets.has(id)));
-    const readRelatedMatchIds = new Set(
-      [...readMarkedTargets].filter(id => !selfMessageIds.has(id) && !statusAnnotationIds.has(id)),
+    const unreadContentIds = new Set(
+      [...readStatusByMessageId]
+        .filter(([id, status]) => status === 'UNREAD' && contentIds.has(id))
+        .map(([id]) => id)
+        .filter(id => allMessageIds.has(id)),
     );
-    const unreadRelatedMatchIds = new Set<string>();
-    for (const edge of edges) {
-      if (!selfMessageIds.has(edge.from.messageId) && !selfMessageIds.has(edge.to.messageId)) continue;
-      if (!statusAnnotationIds.has(edge.relationMessageId)) unreadRelatedMatchIds.add(edge.relationMessageId);
-    }
-    for (const id of unreadMarkedTargets) {
-      if (!selfMessageIds.has(id) && !statusAnnotationIds.has(id)) unreadRelatedMatchIds.add(id);
-    }
-    for (const id of unreadAnnotationIds) unreadRelatedMatchIds.add(id);
-    const claimedMatchIds = new Set([
-      ...readSelfMatchIds,
-      ...readRelatedMatchIds,
-      ...unreadRelatedMatchIds,
-      ...statusAnnotationIds,
-    ]);
-    const unreadOtherMatchIds = new Set(
-      [...allMessageIds].filter(id => !claimedMatchIds.has(id)),
-    );
+    const { selfContentIds, readRelatedContentIds, unreadRelatedContentIds } = deriveHomeContentMatchSetsBySender({
+      messages,
+      edges,
+      contentIds,
+      currentUsername,
+    });
+    const {
+      readSelfMatchIds,
+      readRelatedMatchIds,
+      unreadRelatedMatchIds,
+      unreadOtherMatchIds,
+    } = partitionHomeContentMatchIds({
+      contentIds,
+      selfContentIds,
+      unreadRelatedContentIds,
+      readRelatedContentIds,
+      readContentIds,
+      unreadContentIds,
+    });
 
     const matchIds = homeFilterMode === 'read-self'
       ? readSelfMatchIds
@@ -1730,15 +1691,24 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       : homeFilterMode === 'unread-other'
       ? unreadOtherMatchIds
       : unreadRelatedMatchIds;
-    const displayIds = collectContext(matchIds);
-    for (const id of unreadAnnotationIds) displayIds.add(id);
+    const excludedContentContextIds = homeFilterMode === 'unread-related'
+      ? undefined
+      : new Set([
+        ...readSelfMatchIds,
+        ...readRelatedMatchIds,
+      ]);
+    const displayIds = buildHomeFilterDisplayIds(matchIds, edges, {
+      includeRelationContext: homeFilterMode === 'unread-related' || homeFilterMode === 'unread-other',
+      excludedContentContextIds,
+    });
     return { matchIds, displayIds };
-  }, [displayUser?.username, edges, homeFilterMode, isPreloaded, messages, msgMap, relations, user?.id]);
+  }, [displayUser?.username, edges, effectiveSuppressedRelIdsForLayout, homeFilterMode, isPreloaded, messages, msgMap, readStatusByMessageId, relations, traceContainerMemberships, user?.id]);
 
   const homeDisplayRoleByMessageId = useMemo(() => {
     const roles = new Map<string, 'source' | 'target' | 'source-target'>();
     const matchIds = homeFilterResult?.matchIds;
-    if (!matchIds) return roles;
+    const displayIds = homeFilterResult?.displayIds;
+    if (!matchIds || !displayIds) return roles;
     const addRole = (messageId: string, role: 'source' | 'target') => {
       if (matchIds.has(messageId)) return;
       const previous = roles.get(messageId);
@@ -1746,9 +1716,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
       else roles.set(messageId, 'source-target');
     };
     for (const edge of edges) {
-      if (!matchIds.has(edge.relationMessageId)
-        && !matchIds.has(edge.from.messageId)
-        && !matchIds.has(edge.to.messageId)) continue;
+      if (!displayIds.has(edge.relationMessageId)) continue;
       addRole(edge.from.messageId, 'source');
       addRole(edge.to.messageId, 'target');
     }
@@ -5512,26 +5480,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
   }
 
-  const traceContainerMemberships = useMemo<TraceContainerMembership[]>(() => {
-    const containerTypeById = new Map(
-      relations
-        .filter(relation => ['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE'].includes(relation.relationType.toUpperCase()))
-        .map(relation => [relation.id, relation.relationType.toLowerCase() as TraceContainerMembership['relationType']]),
-    );
-    return relations
-      .filter(relation => relation.relationType.toUpperCase() === 'JOIN'
-        && effectiveJoinRelationIds.has(relation.id)
-        && relation.sourceMessageId
-        && containerTypeById.has(relation.sourceMessageId))
-      .map(relation => ({
-        containerId: relation.sourceMessageId!,
-        relationType: containerTypeById.get(relation.sourceMessageId!)!,
-        targetIds: (relation.targetRefs ?? [])
-          .filter(ref => ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation')
-          .map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId),
-      }));
-  }, [relations, effectiveJoinRelationIds]);
-
   const { messagesToShow, edgesToShow, traceExpandableContainerIds } = useMemo(() => {
     if (traceEntries.length === 0) {
       return {
@@ -6454,7 +6402,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const homeEdges = homeFilterResult
       ? cleanEdges.filter(edge =>
           homeFilterResult.displayIds.has(edge.relationMessageId)
-          && (edge.from.messageId.startsWith('anon:') || homeFilterResult.displayIds.has(edge.from.messageId))
+          && (edge.from.messageId.startsWith('anon:')
+            || homeFilterResult.displayIds.has(edge.from.messageId)
+            || homeFilterResult.matchIds.has(edge.to.messageId))
           && homeFilterResult.displayIds.has(edge.to.messageId),
         )
       : cleanEdges;
@@ -6755,7 +6705,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const matchingRelMsgs = edges.filter(edge =>
       edge.relationType === kind &&
       edge.to.messageId === messageId &&
-      edge.to.selection.kind === "whole"
+      edge.to.selection.kind === "whole" &&
+      (!homeFilterResult || (
+        homeFilterResult.displayIds.has(edge.relationMessageId) &&
+        (edge.from.messageId.startsWith('anon:') || homeFilterResult.displayIds.has(edge.from.messageId)) &&
+        homeFilterResult.displayIds.has(edge.to.messageId)
+      ))
     ).map(edge => edge.relationMessageId);
     const uniqueRelMsgIds = Array.from(new Set(matchingRelMsgs));
     setLastClickedMessageId(uniqueRelMsgIds[0] ?? messageId);
@@ -7102,7 +7057,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
   }
 
-  if (!authLoading && !isPreloaded && !user) return null;
+  if (!authLoading && !preloadedData && !user) return null;
   if (loading) {
     return <PromptModal
       open
@@ -7200,7 +7155,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
   const homeEdgesToRender = homeFilterResult
     ? rawEdgesToRenderClean.filter(edge =>
         homeFilterResult.displayIds.has(edge.relationMessageId)
-        && (edge.from.messageId.startsWith('anon:') || homeFilterResult.displayIds.has(edge.from.messageId))
+        && (edge.from.messageId.startsWith('anon:')
+          || homeFilterResult.displayIds.has(edge.from.messageId)
+          || homeFilterResult.matchIds.has(edge.to.messageId))
         && homeFilterResult.displayIds.has(edge.to.messageId),
       )
     : rawEdgesToRenderClean;
@@ -7994,7 +7951,13 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           viewerUsername={viewerUser?.username}
           onViewerUsernameChange={username => {
             const normalized = username.trim();
-            setViewerUser(normalized ? { id: `viewer:${normalized}`, username: normalized, createdAt: '' } : null);
+            if (normalized) {
+              localStorage.setItem(VIEWER_USERNAME_KEY, normalized);
+              setViewerUser({ id: `viewer:${normalized}`, username: normalized, createdAt: '' });
+            } else {
+              localStorage.removeItem(VIEWER_USERNAME_KEY);
+              setViewerUser(null);
+            }
           }}
           onExitViewer={() => navigate('/')}
           draftUnits={draftUnits}

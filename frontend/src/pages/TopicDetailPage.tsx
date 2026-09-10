@@ -1700,6 +1700,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     const displayIds = buildHomeFilterDisplayIds(matchIds, edges, {
       includeRelationContext: homeFilterMode === 'unread-related' || homeFilterMode === 'unread-other',
       excludedContentContextIds,
+      containerMemberships: traceContainerMemberships,
     });
     return { matchIds, displayIds };
   }, [displayUser?.username, edges, effectiveSuppressedRelIdsForLayout, homeFilterMode, isPreloaded, messages, msgMap, readStatusByMessageId, relations, traceContainerMemberships, user?.id]);
@@ -1722,7 +1723,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     }
     return roles;
   }, [edges, homeFilterResult]);
-
   const joinStatusByMessage = useMemo(() => {
     const map = new Map<string, 'valid'>();
     for (const relation of relations) {
@@ -5487,6 +5487,37 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
   }
 
+  function renderRelationContentWithTargets(message: DemoMessage) {
+    const targetRefs = message.targetRefs ?? [];
+    if (targetRefs.length === 0) {
+      return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+          {message.content.split(/目标：/u)[0]}
+          <span>目标：</span>
+          {targetRefs.map((target, index) => {
+            const targetId = target.kind === 'relation' ? target.relationId : target.messageId;
+            return (
+              <React.Fragment key={`${target.kind}:${targetId}:${index}`}>
+                {index > 0 && ', '}
+                <button
+                  type="button"
+                  onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
+                  style={{ padding: 0, border: 0, background: 'transparent', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, textDecoration: 'underline', textUnderlineOffset: 2 }}
+                  title={`跳转到目标消息 ${targetId}`}
+                >
+                  {targetId}
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   const { messagesToShow, edgesToShow, traceExpandableContainerIds } = useMemo(() => {
     if (traceEntries.length === 0) {
       return {
@@ -6069,9 +6100,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
           }
         }
       }
-      const ancestorContainerIds = new Set(
-        getContainerAncestorChain(currentClassifyRelMsgId, relations),
-      );
       const edgesByRel = new Map<string, DemoEdge[]>();
       for (const e of baseEdges) {
         const arr = edgesByRel.get(e.relationMessageId) ?? [];
@@ -6079,9 +6107,7 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
         edgesByRel.set(e.relationMessageId, arr);
       }
       for (const [relMsgId, relEdges] of edgesByRel) {
-        if (relMsgId === currentClassifyRelMsgId
-          || ancestorContainerIds.has(relMsgId)
-          || topicRelationIds.has(relMsgId)) continue;
+        if (relMsgId === currentClassifyRelMsgId || topicRelationIds.has(relMsgId)) continue;
         const textEndpoints = relEdges
           .flatMap(e => [e.from.messageId, e.to.messageId])
           .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
@@ -7138,12 +7164,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     : typeFilteredMessages;
   renderedMessageIdsRef.current = new Set(messagesToRenderFiltered.map(message => message.id));
 
-  const rawEdgesToRender = [
-    ...filterContainerEdgesByEffectiveJoins(
-      viewMode === "list" ? listEdgesToRender : graphEdgesToRender,
-      relations,
-      effectiveJoinRelationIds,
-    ),
+  const projectionEdgesToRender = [
+    ...(viewMode === "list" ? listEdgesToRender : graphEdgesToRender),
     ...(viewMode !== "list"
       ? (traceEntries.length > 0 ? graphEdgesToRender : edges).filter(edge =>
           getPresentationSpec(edge.relationType).isContainer &&
@@ -7151,7 +7173,12 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
             graphMessagesToRender.some(message => message.id === edge.relationMessageId))
         )
       : []),
-  ].filter((edge, index, all) => all.findIndex(candidate => candidate.id === edge.id) === index);
+  ];
+  const rawEdgesToRender = filterContainerEdgesByEffectiveJoins(
+    projectionEdgesToRender,
+    relations,
+    effectiveJoinRelationIds,
+  ).filter((edge, index, all) => all.findIndex(candidate => candidate.id === edge.id) === index);
   // Phase 6: Also filter edges through clean view
   const rawEdgesToRenderClean = cleanVisibleIds
     ? rawEdgesToRender.filter(e => cleanVisibleIds.visibleRelIds.has(e.relationMessageId))
@@ -7256,7 +7283,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
     <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, relationBarMinWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
       <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top: topControlsFrozen ? topControlsOffset : 0, zIndex: Z_INDEX.popover }}>
         <div ref={relationLeftControlsRef} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        {!isPreloaded && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid #334155", borderRadius: 6, background: "#111827", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" }}>
             <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转消息</span>
             <input
@@ -7277,7 +7303,6 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
               确认
             </button>
           </div>
-        )}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
@@ -7459,9 +7484,11 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                         ? `更正记录临时分类（${correctionTemporaryViewIds?.size ?? 0}）`
                         : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (topicViewTitle || classifyKindLabel)}
                     </div>
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
-                      {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory ? "临时" : "进行中"}
-                    </span>
+                    {(comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory) && (
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
+                        临时
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
                     {comparisonMode ? (
@@ -7490,7 +7517,9 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                   }
                   handleExitClassifyTopic();
                 }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
-                  {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory ? "退出临时分类" : classifyExitLabel}
+                  {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory
+                    ? "退出临时分类"
+                    : classifyExitLabel}
                 </button>
               </div>
             </div>
@@ -7848,7 +7877,8 @@ export default function TopicDetailPage({ topControlsFrozen = false, topControls
                             </div>
                           </div>
                         </div>
-                      ) : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
+                      ) : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
+                      : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
                     </MessageCard>
                   );
                 })}

@@ -171,6 +171,10 @@ export function buildHomeFilterDisplayIds(
   options: {
     includeRelationContext?: boolean;
     excludedContentContextIds?: ReadonlySet<string>;
+    containerMemberships?: ReadonlyArray<{
+      containerId: string;
+      targetIds: readonly string[];
+    }>;
   } = {},
 ): Set<string> {
   const displayIds = new Set(matchIds);
@@ -197,6 +201,13 @@ export function buildHomeFilterDisplayIds(
         && displayIds.has(edge.to.messageId)
         && !displayIds.has(edge.relationMessageId)) {
         displayIds.add(edge.relationMessageId);
+        changed = true;
+      }
+    }
+    for (const membership of options.containerMemberships ?? []) {
+      if (membership.targetIds.some(targetId => displayIds.has(targetId))
+        && !displayIds.has(membership.containerId)) {
+        displayIds.add(membership.containerId);
         changed = true;
       }
     }
@@ -746,7 +757,7 @@ export function collectOwnedByRelation(
 
 /**
  * Walk up the container chain: find all ancestor containers of a given container
- * through either JOIN records or the container's original targetRefs.
+ * by following JOIN relations that target it.
  * Returns a Set of container IDs ordered from innermost to outermost.
  */
 export function getContainerAncestorChain(
@@ -755,12 +766,12 @@ export function getContainerAncestorChain(
 ): string[] {
   const chain: string[] = [];
   const visited = new Set<string>();
+  const containerRelationTypes = new Set(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE']);
   let current = containerId;
 
   while (current && !visited.has(current)) {
     visited.add(current);
-    // Prefer the current JOIN ownership, then fall back to the original container
-    // targets used by records created before JOIN membership was introduced.
+    // Find a JOIN relation whose targetRefs contain `current`.
     const joinRel = relations.find(r =>
       JOIN_RELATION_TYPES.has(r.relationType?.toUpperCase() ?? '') &&
       !!r.sourceMessageId &&
@@ -770,8 +781,7 @@ export function getContainerAncestorChain(
       )
     );
     const directParent = joinRel ? undefined : relations.find(r =>
-      r.id !== current &&
-      ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(r.relationType?.toUpperCase() ?? '') &&
+      containerRelationTypes.has(r.relationType?.toUpperCase() ?? '') &&
       (r.targetRefs as TargetRef[]).some(ref =>
         (ref.kind === 'relation' && ref.relationId === current) ||
         (ref.kind === 'message' && ref.messageId === current)

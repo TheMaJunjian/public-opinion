@@ -324,6 +324,7 @@ export function convertMessagesToDemoModel(
         kind: msgKind,
         relationType: relType as RelationType,
         relationPayload: rel.payload,
+        targetRefs: rel.targetRefs,
         joinInfo,
       });
     }
@@ -395,6 +396,11 @@ export function convertMessagesToDemoModel(
 
     const lowerRelType = relType.toLowerCase() as RelationType;
     const relMsgId = m.id;
+  demoMessages.sort((a, b) => {
+    const createdAtOrder = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    return createdAtOrder !== 0 ? createdAtOrder : a.id.localeCompare(b.id);
+  });
+
     const relationLabel: string = lowerRelType;
 
     const seenRelationTargetIds = new Set<string>();

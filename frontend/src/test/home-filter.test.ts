@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Relation } from '../types';
-import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, filterUnreadRelatedTraceMatchIds, getLatestUserReadStatusByMessageId, partitionHomeContentMatchIds, partitionHomeFilterMatchIds } from '../pages/topicDetailHelpers';
+import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, filterUnreadRelatedTraceMatchIds, getContainerAncestorChain, getLatestUserReadStatusByMessageId, partitionHomeContentMatchIds, partitionHomeFilterMatchIds } from '../pages/topicDetailHelpers';
 import { buildTraceProjection } from '../utils/traceProjection';
 
 const user = { id: 'user-1', username: 'alice', createdAt: '2026-01-01T00:00:00.000Z' };
@@ -39,6 +39,24 @@ describe('getLatestUserReadStatusByMessageId', () => {
     ], currentRelation => currentRelation.createdBy.id === user.id);
 
     expect(statuses).toEqual(new Map());
+  });
+});
+
+describe('getContainerAncestorChain', () => {
+  it('falls back to legacy container targetRefs when no JOIN relation exists', () => {
+    const chain = getContainerAncestorChain('inner-classify', [
+      {
+        id: 'outer-classify',
+        topicId: 'topic-1',
+        relationType: 'CLASSIFY',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'inner-classify' }],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        createdBy: user,
+      },
+    ]);
+
+    expect(chain).toEqual(['outer-classify']);
   });
 });
 
@@ -269,6 +287,15 @@ describe('partitionHomeFilterMatchIds', () => {
       'inner-arrange',
       'outer-classify',
     ]));
+  });
+
+  it('recursively adds containers joined around a matched message', () => {
+    expect(buildHomeFilterDisplayIds(new Set(['hit']), [], {
+      containerMemberships: [
+        { containerId: 'inner-arrange', targetIds: ['hit'] },
+        { containerId: 'outer-classify', targetIds: ['inner-arrange'] },
+      ],
+    })).toEqual(new Set(['hit', 'inner-arrange', 'outer-classify']));
   });
 
   it('keeps only non-self unread messages from trace distance one', () => {

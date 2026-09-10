@@ -31,6 +31,22 @@ function makeSummary(): Relation {
 }
 
 describe('convertMessagesToDemoModel', () => {
+  it('preserves relation target references for navigation', () => {
+    const result = convertMessagesToDemoModel(
+      [],
+      [{
+        id: 'relation-1',
+        topicId: 'topic-1',
+        relationType: 'AGREE',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'target-1' }],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        createdBy: { id: 'user-1', username: 'tester', createdAt: '' },
+      }],
+    );
+
+    expect(result.messages[0].targetRefs).toEqual([{ kind: 'relation', relationId: 'target-1' }]);
+  });
   it('preserves delegation content from the relation payload', () => {
     const content = '报酬数量=100\n委托内容=请完成这项工作';
     const result = convertMessagesToDemoModel([] as Message[], [makeDelegation('CREATE', content)]);
@@ -80,5 +96,21 @@ describe('convertMessagesToDemoModel', () => {
     });
     expect(result.edges).toHaveLength(1);
     expect(result.edges[0]?.relationMessageId).toBe('proposal-1');
+  });
+
+  it('orders content and relation cards together by creation time', () => {
+    const textMessage: Message = {
+      id: 'text-1',
+      topicId: 'topic-1',
+      kind: 'TEXT',
+      contentType: 'TEXT',
+      content: '较晚的文本消息',
+      createdAt: '2024-01-01T00:03:00.000Z',
+      createdBy: user,
+    };
+
+    const result = convertMessagesToDemoModel([textMessage], [makeSummary()]);
+
+    expect(result.messages.map(message => message.id)).toEqual(['summary-1', 'text-1']);
   });
 });

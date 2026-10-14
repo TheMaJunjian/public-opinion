@@ -18,15 +18,15 @@
 
 | 场景 | 方式 |
 |------|------|
-| 前端诊断 | `debugLog('tag', 'msg')`，同时输出到控制台并写入 `README/logs/` |
-| 前端异常 | `debugWarn('tag', 'msg')`，在 `catch` 中记录参数和失败详情 |
-| 后端诊断 | `log('Tag', 'msg')` 或 `debugLog('Tag', 'msg')` |
+| 前端诊断 | 浏览器控制台、Network 请求及连续变更序号 |
+| 前端异常 | 界面错误提示及控制台错误，重试必须复用幂等编号 |
+| 后端诊断 | 服务进程标准输出、事务记录及对应消息 ID |
 
 日志要求：
 
 - 格式为 `[模块] 操作描述 key=value`，例如 `[join] create containerId=abc123 type=CLASSIFY targets=xyz,def`。
 - 只记录与当前问题直接相关的参数和状态，不输出敏感信息或大段对象。
-- 前端日志经 `POST /api/debug-log` 写入 `README/logs/`，后端日志直接写入该目录。
+- 不把调试日志作为讨论消息或资金记录写入数据库。
 - 问题解决后删除临时诊断日志；业务关键日志和 `catch` 中必要的错误日志可以保留。
 
 ## 3. 验证基线
@@ -34,13 +34,12 @@
 开发中先运行与改动最相关的检查。任务完成前，受影响项目的构建和完整测试必须通过：
 
 ```powershell
-# 前端改动
-npm --prefix frontend run build
-npm --prefix frontend test
+# 在项目根目录运行
+npm run build
+npm test
 
-# 后端改动
-npm --prefix backend run build
-npm --prefix backend test
+# 仅检查类型
+npm run typecheck
 ```
 
 跨前后端契约、共享流程或部署行为的改动需要两端都验证。不要在文档中固定测试数量，以测试命令的实际结果为准。

@@ -2,54 +2,46 @@ name: Tests
 
 on:
   push:
-    branches: [main, "copilot/**"]
+    branches: [main, "codex/**", "copilot/**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  frontend-tests:
-    name: Frontend Tests (Vitest)
+  workspace:
+    name: Node 24 tests and production build
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
 
-      - name: Install frontend dependencies
+      - name: Install workspace dependencies
         run: npm ci
-        working-directory: frontend
 
-      - name: Run frontend tests
+      - name: Run tests
         run: npm test
-        working-directory: frontend
 
-  backend-tests:
-    name: Backend Tests (Jest)
-    runs-on: ubuntu-latest
+      - name: Build the application
+        run: npm run build
 
-    steps:
-      - uses: actions/checkout@v4
+      - name: Validate deployment configuration
+        run: |
+          bash -n deploy/deploy.sh
+          docker compose --env-file deploy/.env.prod.example -f deploy/docker-compose.prod.yml config --quiet
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: backend/package-lock.json
-
-      - name: Install backend dependencies
-        run: npm ci
-        working-directory: backend
-
-      - name: Run backend tests
-        env:
-          JWT_SECRET: ci-test-secret
-          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
-        run: npm test
-        working-directory: backend
+      - name: Build production image
+        run: docker build --tag gonglun:ci .

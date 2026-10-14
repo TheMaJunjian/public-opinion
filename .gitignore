@@ -1,3 +1,13 @@
 .vite/
 README/logs/
 README/debug/
+node_modules/
+**/dist/
+**/coverage/
+data/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+playwright-report/
+test-results/

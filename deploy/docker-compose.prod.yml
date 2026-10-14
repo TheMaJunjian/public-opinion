@@ -1,34 +1,31 @@
-# 生产部署：PostgreSQL + 后端 API + Caddy(HTTPS + 前端静态文件)
-# 使用方式见 README/云服务器部署.md
-services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: gonglun
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 deploy/.env.prod 中设置 POSTGRES_PASSWORD}
-      POSTGRES_DB: gonglun
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gonglun -d gonglun"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+name: gonglun
 
-  api:
+services:
+  app:
     build:
-      context: ../backend
+      context: ..
       dockerfile: Dockerfile
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     environment:
-      DATABASE_URL: postgresql://gonglun:${POSTGRES_PASSWORD}@postgres:5432/gonglun
-      PORT: "3000"
-      JWT_SECRET: ${JWT_SECRET:?请在 deploy/.env.prod 中设置 JWT_SECRET}
       NODE_ENV: production
-    depends_on:
-      postgres:
-        condition: service_healthy
+      HOST: 0.0.0.0
+      TRUST_PROXY: "1"
+      PORT: "3000"
+      GONGLUN_DB: /app/data/gonglun.sqlite
+      GONGLUN_FOUNDER_KEY: ${GONGLUN_FOUNDER_KEY:-}
+    # Loopback access supports founder registration before Caddy is exposed.
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - gonglun_data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 6
 
   caddy:
     image: caddy:2-alpine
@@ -36,15 +33,18 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     environment:
-      DOMAIN: ${DOMAIN:?请在 deploy/.env.prod 中设置 DOMAIN}
+      DOMAIN: ${DOMAIN:?Set DOMAIN in deploy/.env.prod}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-      - ../frontend/dist:/srv/frontend:ro
+    depends_on:
+      app:
+        condition: service_healthy
 
 volumes:
-  postgres_data:
+  gonglun_data:
   caddy_data:
   caddy_config:

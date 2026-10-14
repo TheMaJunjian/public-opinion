@@ -1,0 +1,23 @@
+# Only the new workspace enters the build context.
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!vitest.config.ts
+!Dockerfile
+!apps/
+!apps/**
+!packages/
+!packages/**
+!scripts/
+!scripts/**
+**/node_modules
+**/dist
+**/coverage
+**/data
+**/.env
+**/.env.*
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*

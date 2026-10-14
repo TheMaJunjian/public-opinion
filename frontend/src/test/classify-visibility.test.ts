@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { TargetRef } from '../types';
 import { isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
-import { collectContainerVisibleIds, collectOwnedByRelation, expandTextIdsWithSettlementResults, filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getAutoClassifyTargetForSettlementMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getSettlementClassifyJoinTarget, getStaleJoinRelationIds, isAppendToExistingClassifyAction, resolveNavigationTargetId } from '../pages/topicDetailHelpers';
+import { collectContainerVisibleIds, collectOwnedByRelation } from '../pages/workbench/model/ownership';
+import { expandTextIdsWithSettlementResults, getAutoClassifyTargetForSettlementMessage, getSettlementClassifyJoinTarget, resolveNavigationTargetId } from '../pages/workbench/model/navigation';
+import { filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getStaleJoinRelationIds, isAppendToExistingClassifyAction } from '../pages/workbench/model/membership';
 
 /**
  * classify-visibility.test.ts
@@ -152,25 +154,25 @@ describe('REFERENCE 跟随来源消息', () => {
 
 // ========================= 分类视图 visibleIds =========================
 
-describe('分类视图 visibleIds = topicTextIds ∪ topicRelationIds', () => {
-  it('文本在 topicTextIds → 可见', () => {
+describe('分类视图 visibleIds = classificationTextIds ∪ classificationRelationIds', () => {
+  it('文本在 classificationTextIds → 可见', () => {
     const visibleIds = new Set([...['msg-1'], ...['rel-1']]);
     expect(visibleIds.has('msg-1')).toBe(true);
   });
 
-  it('关系在 topicRelationIds → 可见', () => {
+  it('关系在 classificationRelationIds → 可见', () => {
     const visibleIds = new Set([...['msg-1'], ...['rel-1', 'gov-1']]);
     expect(visibleIds.has('gov-1')).toBe(true);
   });
 
-  it('endpointInTopic 同时检查 topicTextIds 和 topicRelationIds', () => {
-    const topicTextIds = new Set(['text-1']);
-    const topicRelationIds = new Set(['gov-1']);
-    const endpointInTopic = (mid: string) =>
-      topicTextIds.has(mid) || topicRelationIds.has(mid);
-    expect(endpointInTopic('gov-1')).toBe(true);
-    expect(endpointInTopic('text-1')).toBe(true);
-    expect(endpointInTopic('other')).toBe(false);
+  it('endpointInClassification 同时检查 classificationTextIds 和 classificationRelationIds', () => {
+    const classificationTextIds = new Set(['text-1']);
+    const classificationRelationIds = new Set(['gov-1']);
+    const endpointInClassification = (mid: string) =>
+      classificationTextIds.has(mid) || classificationRelationIds.has(mid);
+    expect(endpointInClassification('gov-1')).toBe(true);
+    expect(endpointInClassification('text-1')).toBe(true);
+    expect(endpointInClassification('other')).toBe(false);
   });
 });
 
@@ -245,7 +247,7 @@ describe('结算消息（ROUND）独立性', () => {
   });
 
   it('ROUND 可被手动加入分类（在发送画布创建）', () => {
-    // 模拟 addTargetToClassifyTopic({ kind: 'message', messageId: 'round-1' })
+    // 模拟 addTargetToClassification({ kind: 'message', messageId: 'round-1' })
     const targetRefs: TargetRef[] = [
       { kind: 'message', messageId: 'msg-1' },
       { kind: 'message', messageId: 'round-1' },

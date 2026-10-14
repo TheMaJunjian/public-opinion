@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { computeCorrectionVersions, resolveCorrectionContent, type DemoEdge, type DemoMessage, type RelationType } from '../utils/modelBridge';
-import { relationTypeName } from './GraphView';
+import { relationTypeName } from '../utils/graphTextSelection';
 import { computeCharDiff, renderDiffParts, type DiffPart } from './CharDiffText';
 import PopupOverlay from './PopupOverlay';
 

@@ -1,3 +1,4 @@
+import { messageScopePath } from '../utils/messageRoutes';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -8,7 +9,7 @@ import type { PointsBalance, PointTransaction } from '../types';
  * PointsBadge — 导航栏贡献点显示组件。
  * - 窗口聚焦时自动刷新余额
  * - 点击展开贡献点流水面板
- * - 双击记录项：同 Topic 原地定位（发事件），跨 Topic 路由跳转
+ * - 双击记录项：同 view 原地定位（发事件），跨 view 路由跳转
  */
 export default function PointsBadge() {
   const { user } = useAuth();
@@ -170,7 +171,7 @@ export default function PointsBadge() {
               {transactions.map((tx) => {
                 const txData = tx.data as Record<string, unknown> | null;
                 const hasMessage = !!(txData?.messageId);
-                const canNavigate = !!(txData?.messageId && txData?.topicId);
+                const canNavigate = !!txData?.messageId;
                 return (
                 <li
                   key={tx.id}
@@ -179,18 +180,18 @@ export default function PointsBadge() {
                   onDoubleClick={canNavigate ? (e) => {
                     e.preventDefault();
                     const msgId = txData!.messageId as string;
-                    const tId = txData!.topicId as string;
+                    const tId = txData!.scopeMessageId as string;
                     const roundId = txData?.roundId as string | undefined;
 
-                    // Check if we're already on the same topic page
+                    // Check if we're already on the same view page
                     const currentPath = location.pathname;
-                    const targetPath = `/topics/${tId}`;
+                    const targetPath = messageScopePath(tId);
                     if (currentPath === targetPath || currentPath.startsWith(targetPath + '/')) {
-                      // Same topic — dispatch event for in-place navigation
+                      // Same view — dispatch event for in-place navigation
                       window.dispatchEvent(new CustomEvent('points-navigate', {
                         detail: {
                           messageId: msgId,
-                          topicId: tId,
+                          scopeMessageId: tId,
                           roundId: roundId ?? null,
                           txType: tx.type,
                           txData: txData,  // pass full tx data for settlement highlighting
@@ -199,7 +200,7 @@ export default function PointsBadge() {
                       }));
                       setOpen(false);
                     } else {
-                      // Different topic — full navigation with URL params
+                      // Different view — full navigation with URL params
                       const params = new URLSearchParams();
                       params.set('msg', msgId);
                       if (roundId) {

@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { replayArchive } from '@gonglun/core';
 import type { ExportData } from '../api/client';
 import PopupOverlay from './PopupOverlay';
 
@@ -10,74 +11,87 @@ interface Props {
   onClose: () => void;
 }
 
+export function validateExportForViewing(input: unknown): { data: ExportData; verification: string | null } {
+  if (!input || typeof input !== 'object') throw new Error('导出文件格式无效');
+  const archive = input as ExportData & { format?: string };
+  let verification: string | null = null;
+  if (archive.format === 'gonglun-2') {
+    const replay = replayArchive(archive);
+    verification = `记录连续性及资金守恒校验通过：${replay.sequence} 次变更，${replay.messages.length} 条消息，${replay.accounts.size} 个账户。运营余额 ${replay.operating}，发行总量 ${replay.issued}。`;
+  }
+  if (!archive.scope || typeof archive.scope.title !== 'string' || !Array.isArray(archive.messages) || !Array.isArray(archive.relations)) {
+    throw new Error('格式无效：缺少分类信息、消息或关系列表');
+  }
+  return { data: archive, verification };
+}
+
 export default function ExportViewerModal({ open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [processing, setProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [prepared, setPrepared] = useState<ReturnType<typeof validateExportForViewing> | null>(null);
+  const readingGeneration = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   // Reset state on every open
   useEffect(() => {
+    readingGeneration.current += 1;
     if (open) {
       setSelectedFile(null);
       setProcessing(false);
       setError(null);
+      setPrepared(null);
     }
+    return () => { readingGeneration.current += 1; };
   }, [open]);
 
-  const lastExport = useMemo<{ data: ExportData; title: string } | null>(() => {
+  const lastExport = useMemo(() => {
     try {
       const raw = sessionStorage.getItem(LAST_EXPORT_KEY);
       if (!raw) return null;
-      const data = JSON.parse(raw) as ExportData;
-      return { data, title: data.topic.title };
+      const result = validateExportForViewing(JSON.parse(raw));
+      return { ...result, title: result.data.scope.title };
     } catch { return null; }
   }, []);
 
   const openData = (data: ExportData) => {
-    // Leave the current topic view only after the export file is confirmed.
+    // Leave the current message view only after the export file is confirmed.
     window.dispatchEvent(new Event('prepare-export-viewer'));
     onClose();
     // Navigate to home first to clear preloaded state, then to viewer.
-    // Needed when already on /topics/__preloaded__ — same-route nav won't re-render.
+    // Needed when already on /viewer — same-route nav won't re-render.
     navigate('/', { replace: true });
-    setTimeout(() => navigate('/topics/__preloaded__', { state: { exportData: data }, replace: true }), 0);
+    setTimeout(() => navigate('/viewer', { state: { exportData: data }, replace: true }), 0);
   };
 
   const processAndOpen = () => {
-    if (!selectedFile) return;
-    setError(null);
-    setProcessing(true);
-    const reader = new FileReader();
-    let cancelled = false;
-    reader.onload = () => {
-      if (cancelled) return;
-      try {
-        const text = reader.result as string;
-        const data = JSON.parse(text) as ExportData;
-        if (!data.topic || !Array.isArray(data.messages)) {
-          setError('格式无效：缺少 topic 或 messages 字段');
-          setProcessing(false);
-          return;
-        }
-        sessionStorage.setItem(LAST_EXPORT_KEY, text);
-        openData(data);
-      } catch (error: unknown) {
-        setError(`JSON 解析失败: ${error instanceof Error ? error.message : String(error)}`);
-        setProcessing(false);
-      }
-    };
-    reader.onerror = () => { if (!cancelled) { setError('文件读取失败'); setProcessing(false); } };
-    reader.readAsText(selectedFile);
-    return () => { cancelled = true; };
+    if (!prepared) return;
+    try { sessionStorage.setItem(LAST_EXPORT_KEY, JSON.stringify(prepared.data)); } catch { /* Large archives can still be read without caching. */ }
+    openData(prepared.data);
   };
 
   const selectFile = (file: File) => {
+    const generation = ++readingGeneration.current;
     setError(null);
+    setPrepared(null);
     setSelectedFile(file);
+    setProcessing(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (generation !== readingGeneration.current) return;
+      try {
+        setPrepared(validateExportForViewing(JSON.parse(reader.result as string)));
+      } catch (error: unknown) {
+        setError(`文件校验失败：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        setProcessing(false);
+      }
+    };
+    reader.onerror = () => { if (generation === readingGeneration.current) { setError('文件读取失败'); setProcessing(false); } };
+    reader.readAsText(file);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -143,12 +157,13 @@ export default function ExportViewerModal({ open, onClose }: Props) {
               <span style={{ fontSize: 11, opacity: 0.7 }}>点击打开</span>
             </button>
           )}
+          {!selectedFile && lastExport?.verification && <div role="status" style={{ color: '#86efac', fontSize: 12 }}>{lastExport.verification}</div>}
 
           <div
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            onClick={() => { if (!selectedFile) fileInputRef.current?.click(); }}
+            onClick={() => { if (!processing) fileInputRef.current?.click(); }}
             style={{
               width: '100%', height: 140,
               border: `2px dashed ${dragging ? '#0b84ff' : selectedFile ? '#4ade80' : '#444'}`,
@@ -168,7 +183,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
               <>
                 <div style={{ fontSize: 20 }}>📄</div>
                 <div style={{ color: '#e2e8f0', fontSize: 14 }}>{selectedFile.name}</div>
-                <div style={{ color: '#64748b', fontSize: 11 }}>点击下方按钮阅览</div>
+                <div style={{ color: '#64748b', fontSize: 11 }}>{prepared ? '点击下方按钮阅览；点击此处更换文件' : '点击此处更换文件'}</div>
               </>
             ) : (
               <>
@@ -182,12 +197,15 @@ export default function ExportViewerModal({ open, onClose }: Props) {
           <input
             ref={fileInputRef}
             type="file"
+            aria-label="选择导出文件"
             accept=".json"
             onChange={handleFileChange}
             style={{ display: 'none' }}
           />
 
-          {selectedFile && !processing && (
+          {prepared?.verification && <div role="status" style={{ color: '#86efac', fontSize: 12, padding: '8px 12px', background: 'rgba(34,197,94,0.1)', borderRadius: 6, width: '100%' }}>{prepared.verification}</div>}
+
+          {prepared && !processing && (
             <button onClick={processAndOpen} style={{
               width: '100%', padding: '10px 16px', borderRadius: 8,
               border: 'none', background: '#0b84ff',
@@ -198,7 +216,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
           )}
 
           {error && (
-            <div style={{ color: '#f87171', fontSize: 12, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 6, width: '100%' }}>
+            <div role="alert" style={{ color: '#f87171', fontSize: 12, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 6, width: '100%' }}>
               {error}
             </div>
           )}

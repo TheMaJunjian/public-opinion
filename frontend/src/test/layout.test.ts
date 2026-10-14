@@ -1,3 +1,4 @@
+import { computeMinColumnsForAnnoRefRule1, applyReplyLayoutAdjustmentsWithConstraints as applyReplyLayoutAdjustments, applyAgreeDisagreeColumnOverride, applyGroupingColumnOverride } from '../utils/graphColumnRules';
 /**
  * layout.test.ts — Comprehensive unit tests for the layout pipeline.
  *
@@ -21,10 +22,6 @@ import {
   ROW_GAP,
   GRID_TOP,
   FRAME_PAD,
-  computeMinColumnsForAnnoRefRule1,
-  applyReplyLayoutAdjustments,
-  applyAgreeDisagreeColumnOverride,
-  applyGroupingColumnOverride,
   computeSimpleNoOverlapLayout,
   computeFrameAwareColumnCorrection,
   compactAnnoRefClusters,
@@ -545,9 +542,7 @@ describe('applyAgreeDisagreeColumnOverride', () => {
   });
 
   it('handles multiple AGREE/DISAGREE from the same source', () => {
-    // b agrees with a (col 0) and disagrees with c (col 4) → b should be at col max(0, 5)
-    // But the code processes edges sequentially — the last one wins
-    // This is a known edge case; we test the actual behavior
+    // Keep b to the right of c and to the left of a, irrespective of edge order.
     const normals = [makeNormal('a'), makeNormal('b'), makeNormal('c')];
     const baseCol = { a: 0, b: 0, c: 4 };
     const edges: DemoEdge[] = [
@@ -557,10 +552,11 @@ describe('applyAgreeDisagreeColumnOverride', () => {
     const result = applyAgreeDisagreeColumnOverride({
       normals, edges, col: baseCol, maxCol: 4,
     });
-    // b agrees with a → col 0, then disagrees with c → col 5
-    // The last assignment wins
     expect(result.col['b']).toBe(5);
-    expect(result.maxCol).toBe(5);
+    expect(result.col['a']).toBeGreaterThan(result.col['b']);
+    expect(result.col['c']).toBeLessThan(result.col['b']);
+    expect(result.maxCol).toBe(6);
+    expect(applyAgreeDisagreeColumnOverride({ normals, edges: [...edges].reverse(), col: baseCol, maxCol: 4 }).col).toEqual(result.col);
   });
 });
 
@@ -1358,8 +1354,7 @@ describe('Frame-as-card placement invariants', () => {
 
     // The frame top should be exactly ROW_GAP below card-a's bottom
     expect(frameTop).toBe(GRID_TOP + 86 + ROW_GAP);
-    // = 48 + 86 + 32 = 172
-    expect(frameTop).toBe(172);
+    expect(frameTop).toBe(148);
   });
 
   it('a frame in col 1 and a card in col 0 can be at the same y (different columns)', () => {
@@ -1379,7 +1374,7 @@ describe('Frame-as-card placement invariants', () => {
     // Same as a card: empty canvas → start at (GRID_LEFT, GRID_TOP)
     // Empty layout, next item at col 0 would start at GRID_TOP
     const nextY = GRID_TOP;
-    expect(nextY).toBe(48);
+    expect(nextY).toBe(24);
     const nextX = colX(0);
     expect(nextX).toBe(18);
   });
@@ -1388,8 +1383,8 @@ describe('Frame-as-card placement invariants', () => {
     // Frame 1 at col 0, height 200. Frame 2 at col 0, height 150.
     // Frame 2 should be at frame1.y + frame1.h + ROW_GAP
     const frame1 = { x: colX(0), y: GRID_TOP, width: CARD_W, height: 200 };
-    const frame2ExpectedY = frame1.y + frame1.height + ROW_GAP; // 48 + 200 + 32 = 280 → 286
-    expect(frame2ExpectedY).toBe(286);
+    const frame2ExpectedY = frame1.y + frame1.height + ROW_GAP;
+    expect(frame2ExpectedY).toBe(262);
   });
 
   it('frames and cards only collide when x-ranges overlap', () => {
@@ -1401,9 +1396,7 @@ describe('Frame-as-card placement invariants', () => {
     };
     // card-col0 and frame-col0: same column → stacked
     expect(findOverlaps(layout)).toHaveLength(0);
-    // card-col0 bottom = 48+86 = 134
-    // frame-col0 top = 48+86+32 = 166 → no overlap ✓
-    expect(layout['frame-col0'].y).toBe(172);
+    expect(layout['frame-col0'].y).toBe(148);
   });
 
   it('FRAME_PAD is internal to the frame, not part of top-level placement', () => {

@@ -42,7 +42,7 @@ describe('SettlementPanel voting', () => {
 
   it('shows the API error when voting fails', async () => {
     mockApi.castVote.mockRejectedValue(new Error('余额不足'));
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '投票' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '投票' }));
@@ -82,7 +82,7 @@ describe('SettlementPanel voting', () => {
       },
     });
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '结算' }));
@@ -123,7 +123,7 @@ describe('SettlementPanel voting', () => {
       },
     });
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '结算' }));
@@ -173,7 +173,7 @@ describe('SettlementPanel voting', () => {
       } : undefined,
     }));
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '结算' }));
@@ -204,7 +204,7 @@ describe('SettlementPanel voting', () => {
       votes: [],
     }));
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     expect(await screen.findByText(/预计结算后贡献点 0 点/)).toBeInTheDocument();
     expect(screen.getByText(/损失10 点/)).toBeInTheDocument();
@@ -245,7 +245,7 @@ describe('SettlementPanel voting', () => {
       votes: [],
     }));
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     expect(await screen.findByText(/预计结算后贡献点 5 点/)).toBeInTheDocument();
     await act(async () => {
@@ -273,7 +273,7 @@ describe('SettlementPanel voting', () => {
       personalSettlement: { principal: 11, stakePrincipal: 10, protocolFee: 1, previousAfter: 8, after: 18, change: 7 },
     });
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     expect(await screen.findByText(/当前与会者投入 11 点 → 当前贡献点 18 点，收益7 点/)).toBeInTheDocument();
   });
@@ -297,7 +297,7 @@ describe('SettlementPanel voting', () => {
       personalSettlement: { principal: 13, stakePrincipal: 11, protocolFee: 2, previousAfter: 0, after: 0, change: 0 },
     });
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     expect(await screen.findByText(/当前与会者投入 13 点 → 预计结算后贡献点 11 点，损失2 点/)).toBeInTheDocument();
   });
@@ -332,7 +332,7 @@ describe('SettlementPanel voting', () => {
       votes: [],
     });
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     expect(await screen.findByText('推翻 ✅ TRUE → ❌ FALSE')).toBeInTheDocument();
   });
@@ -364,14 +364,14 @@ describe('SettlementPanel voting', () => {
       votes: [],
     });
 
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '投票' })).toBeInTheDocument());
     expect(screen.getByText('推翻 ✅ TRUE → ⚪ UNKNOWN')).toBeInTheDocument();
   });
 
   it('allows editing a non-positive amount and validates it before submitting', async () => {
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '投票' })).toBeInTheDocument());
     const amount = screen.getByRole('spinbutton');
@@ -381,6 +381,31 @@ describe('SettlementPanel voting', () => {
 
     expect(await screen.findByText('投票押注必须是大于 0 的整数')).toBeInTheDocument();
     expect(mockApi.castVote).not.toHaveBeenCalled();
+  });
+
+  it('keeps a delayed termination pending without publishing a false draw or a result message', async () => {
+    mockApi.getRoundDetail.mockResolvedValue({
+      id: 'round-1', status: 'VOTING', settlementType: 'TRUTH',
+      weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 }, votes: [],
+    });
+    mockApi.closeAndSettle.mockResolvedValue({
+      status: 'VOTING', result: null, endsAt: new Date(Date.now() + 60_000).toISOString(),
+      message: '已请求终止，等待规则规定的截止时间', weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 },
+      resultMessage: { id: 'termination-request', createdAt: new Date().toISOString() },
+    });
+    const onMessageCreated = vi.fn();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const view = render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" onMessageCreated={onMessageCreated} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '结算' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认结算' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('已请求终止，等待规则规定的截止时间');
+    expect(screen.getByRole('button', { name: '等待结算' })).toBeDisabled();
+    expect(onMessageCreated).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'guide-settlement-confirmed' }));
+    expect(mockApi.closeAndSettle).toHaveBeenCalledTimes(1);
+    view.unmount();
+    dispatchSpy.mockRestore();
   });
 
   it('refreshes the target stakes after settlement', async () => {
@@ -396,7 +421,7 @@ describe('SettlementPanel voting', () => {
       weights: { TRUE: 2, FALSE: 0 },
     });
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '结算' }));
@@ -414,7 +439,7 @@ describe('SettlementPanel voting', () => {
     let resolveCreate: ((value: unknown) => void) | undefined;
     mockApi.getMessageRounds.mockResolvedValue({ data: [] });
     mockApi.createRound.mockImplementation(() => new Promise(resolve => { resolveCreate = resolve; }));
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '发起结算' })).toBeEnabled());
     const createButton = screen.getByRole('button', { name: '发起结算' });
@@ -438,7 +463,7 @@ describe('SettlementPanel voting', () => {
       votes: [],
     });
     mockApi.closeAndSettle.mockImplementation(() => new Promise(resolve => { resolveSettlement = resolve; }));
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '结算' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '结算' }));
@@ -455,7 +480,7 @@ describe('SettlementPanel voting', () => {
   it('prevents duplicate voting while the request is pending', async () => {
     let resolveVote: ((value: unknown) => void) | undefined;
     mockApi.castVote.mockImplementation(() => new Promise(resolve => { resolveVote = resolve; }));
-    render(<SettlementPanel messageId="message-1" topicId="topic-1" />);
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: '投票' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: '投票' }));

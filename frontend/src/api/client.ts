@@ -1,6 +1,10 @@
 import { signPayloadWithPrivateJwk } from '../utils/signature';
+import type { Session, Reference } from '@gonglun/core';
+import { cancelCommandBatch, isPendingMessage, queueCommand, runCommandBatch } from './commandBatch';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const CORE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+const BASE_URL = `${CORE_URL}/ui`;
+let csrf = '';
 const PRIVATE_KEY_PREFIX = 'privateKey:';
 const DEVICE_ID_KEY = 'deviceId';
 
@@ -56,33 +60,45 @@ export function getPrivateKeyForUser(username: string): string | null {
   return null;
 }
 
-function getToken(): string | null {
-  return localStorage.getItem('token');
-}
-
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
+  const queued = options.method && options.method !== 'GET' ? queueCommand(path, options) : null;
+  if (queued) return queued as T;
+  const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path);
+  const url = `${core ? CORE_URL : BASE_URL}${path}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
   };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  headers['X-Device-Id'] = getDeviceId();
+  const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
+  if (path === '/auth/signing-key' || path === '/logout') {
+    if (!csrf) await getSession();
+    headers['X-CSRF-Token'] = csrf;
   }
-  // Sign write requests with private key
-  const isAuthBootstrap = ['/auth/login', '/auth/register', '/auth/signing-key'].includes(path);
   if (options.method && options.method !== 'GET' && !isAuthBootstrap) {
+    if (!csrf) await getSession();
+    headers['X-CSRF-Token'] = csrf;
+    const body = JSON.parse(typeof options.body === 'string' ? options.body : '{}');
+    const requestId = body.requestId || crypto.randomUUID();
+    headers['X-Request-Id'] = requestId;
     try {
       const rawKey = getPrivateKeyForCurrentUser();
       if (!rawKey) throw new Error('本设备缺少签名密钥，请重新登录以绑定当前设备');
       const keyData = JSON.parse(rawKey) as JsonWebKey;
-      const rawBody = typeof options.body === 'string' ? options.body : '{}';
-      headers['X-Signature'] = await signPayloadWithPrivateJwk(rawBody, keyData);
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(body)));
+      const bodyHash = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+      const signed = JSON.stringify({ method: options.method, path: new URL(url, location.href).pathname, bodyHash, requestId });
+      headers['X-Signed-Payload'] = btoa(String.fromCharCode(...new TextEncoder().encode(signed)));
+      headers['X-Signature'] = await signPayloadWithPrivateJwk(signed, keyData);
     } catch (error) {
       throw error instanceof Error ? error : new Error('签名失败，请重新登录以绑定当前设备');
     }
   }
-  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  // Retry a lost write response with exactly the same request identity and signature.
+  const fetchOnce = () => fetch(url, { ...options, headers, credentials: 'same-origin' });
+  let res: Response;
+  try { res = await fetchOnce(); }
+  catch (error) { if (!headers['X-Request-Id']) throw error; res = await fetchOnce(); }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText })) as { error?: string; message?: string; code?: string; details?: unknown };
     const details = Array.isArray(err.details)
@@ -102,63 +118,75 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data;
 }
 
-export function register(data: { username: string; password: string; publicKey?: string | null }) {
-  return request<{ message: string; user: import('../types').User }>('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
+type UiSession = Session & { user: Session['user'] & import('../types').User & { publicKey?: string | null } };
+export async function getSession(): Promise<UiSession | null> {
+  const session = await request<UiSession | null>('/session');
+  csrf = session?.csrf ?? '';
+  return session;
 }
-
-export function login(data: { username: string; password: string; publicKey?: string }) {
-  return request<{ message: string; token: string; user: import('../types').User & { publicKey?: string | null } }>('/auth/login', {
+export function getSetup() {
+  return request<{ initialized: boolean; founderKeyRequired: boolean }>('/setup');
+}
+export async function register(data: { username: string; password: string; publicKey?: string | null; founderKey?: string }) {
+  const session = await request<UiSession>('/register', {
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
+  csrf = session.csrf;
+  return { message: '注册成功', user: session.user };
 }
 
-export function rotateSigningKey(data: { password: string; publicKey: string }) {
-  return request<{ message: string; token: string; user: import('../types').User & { publicKey?: string | null } }>('/auth/signing-key', {
+export async function login(data: { username: string; password: string; publicKey?: string }) {
+  const session = await request<UiSession>('/login', {
     method: 'POST',
     body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
   });
+  csrf = session.csrf;
+  return { message: '登录成功', token: 'session', user: session.user };
+}
+
+export async function rotateSigningKey(data: { password: string; publicKey: string }) {
+  const result = await request<{ message: string; session: UiSession; user: UiSession['user'] }>('/auth/signing-key', {
+    method: 'POST',
+    body: JSON.stringify({ ...data, deviceId: getDeviceId() }),
+  });
+  csrf = result.session.csrf;
+  return { ...result, token: 'session' };
 }
 
 export function logout() {
-  return request<{ message: string }>('/auth/logout', { method: 'POST' });
+  return request<{ message: string }>('/logout', { method: 'POST' }).finally(() => { csrf = ''; });
 }
 
-export function getTopics(params?: { query?: string; sort?: string; page?: number; limit?: number }) {
-  const qs = new URLSearchParams();
-  if (params?.query) qs.set('query', params.query);
-  if (params?.sort) qs.set('sort', params.sort);
-  if (params?.page) qs.set('page', String(params.page));
-  if (params?.limit) qs.set('limit', String(params.limit));
-  return request<import('../types').PaginatedResponse<import('../types').Topic>>(`/topics?${qs}`);
+export { cancelCommandBatch };
+export function withCommandBatch<T>(work: () => Promise<T>, onCommitted?: (commandCount: number) => void): Promise<T> {
+  return runCommandBatch(work, body => request('/commands', { method: 'POST', body: JSON.stringify(body) }), onCommitted);
 }
 
-export function createTopic(data: { title: string; body?: string }) {
-  return request<import('../types').Topic>('/topics', { method: 'POST', body: JSON.stringify(data) });
+export function getWorkbenchSnapshot({ signal, ...query }: import('../data/workbench').SnapshotQuery) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+  return request<import('../data/workbench').WorkbenchSnapshot>(`/snapshot?${params}`, { signal });
+}
+export function subscribeChanges(after: number) {
+  return new EventSource(`${CORE_URL}/events?after=${after}`, { withCredentials: true });
 }
 
-export function getTopic(id: string) {
-  return request<import('../types').Topic>(`/topics/${id}`);
+export function getScope(parent = 'root') {
+  return request<import('../types').ScopeView>(`/scope?parent=${encodeURIComponent(parent)}`);
 }
 
-export function updateTopic(id: string, data: { status: 'OPEN' | 'ARCHIVED' }) {
-  return request<import('../types').Topic>(`/topics/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export function getMessages(topicId: string, params?: { page?: number; limit?: number; sinceUpdatedAt?: string; sinceId?: string }) {
+export function getMessages(scopeMessageId: string, params?: { page?: number; limit?: number; sinceUpdatedAt?: string; sinceId?: string }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
   if (params?.sinceUpdatedAt) qs.set('sinceUpdatedAt', params.sinceUpdatedAt);
   if (params?.sinceId) qs.set('sinceId', params.sinceId);
-  return request<import('../types').PaginatedResponse<import('../types').Message>>(`/topics/${topicId}/messages?${qs}`);
+  return request<import('../types').PaginatedResponse<import('../types').Message>>(`/messages?parent=${encodeURIComponent(scopeMessageId)}&${qs}`);
 }
 
-export async function getAllMessages(topicId: string, limit = 200, cursor?: { updatedAt: string; id: string }) {
-  const firstPage = await getMessages(topicId, {
+export async function getAllMessages(scopeMessageId: string, limit = 200, cursor?: { updatedAt: string; id: string }) {
+  const firstPage = await getMessages(scopeMessageId, {
     page: 1,
     limit,
     sinceUpdatedAt: cursor?.updatedAt,
@@ -167,7 +195,7 @@ export async function getAllMessages(topicId: string, limit = 200, cursor?: { up
   if (firstPage.pagination.totalPages <= 1) return firstPage;
   const pages = await Promise.all(
     Array.from({ length: firstPage.pagination.totalPages - 1 }, (_, index) =>
-      getMessages(topicId, {
+      getMessages(scopeMessageId, {
         page: index + 2,
         limit,
         sinceUpdatedAt: cursor?.updatedAt,
@@ -181,57 +209,66 @@ export async function getAllMessages(topicId: string, limit = 200, cursor?: { up
   };
 }
 
-export function createMessage(topicId: string, data: {
+export function createMessage(scopeMessageId: string, data: {
   kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'ROUND_RESULT' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
   content?: string;
   stakeAmount?: number;
+  recommendation?: number;
+  wager?: number;
+  selfAgree?: boolean;
+  sourceRefs?: Reference[];
   targetMessageId?: string;
   note?: string;
   settlementType?: string;
   relationPayload?: Record<string, unknown>;
 }) {
-  return request<import('../types').Message>(`/topics/${topicId}/messages`, {
+  return request<import('../types').Message>('/messages', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, parentMessageId: scopeMessageId === 'root' ? undefined : scopeMessageId }),
   });
 }
 
-export function getRelations(topicId: string, params?: { page?: number; limit?: number }) {
+export function getRelations(scopeMessageId: string, params?: { page?: number; limit?: number }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
-  return request<import('../types').PaginatedResponse<import('../types').Relation>>(`/topics/${topicId}/relations?${qs}`);
+  return request<import('../types').PaginatedResponse<import('../types').Relation>>(`/relations?parent=${encodeURIComponent(scopeMessageId)}&${qs}`);
 }
 
-export function getAttentionUsers(topicId: string) {
-  return request<{ data: Record<string, string[]> }>(`/topics/${topicId}/relations/attention-users`);
+export function getAttentionUsers(scopeMessageId: string) {
+  return request<{ data: Record<string, string[]> }>(`/attention-users?parent=${encodeURIComponent(scopeMessageId)}`);
 }
 
-export function createRelation(topicId: string, data: {
+export function createRelation(scopeMessageId: string, data: {
   relationType: string;
   sourceMessageId?: string | null;
   targetRefs: import('../types').TargetRef[];
   payload?: import('../types').RelationPayload;
   supersedesRelationId?: string;
   stakeAmount?: number;
+  recommendation?: number;
+  wager?: number;
+  selfAgree?: boolean;
+  sourceRefs?: Reference[];
 }) {
-  return request<import('../types').Relation>(`/topics/${topicId}/relations`, {
+  return request<import('../types').Relation>('/relations', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, parentMessageId: scopeMessageId === 'root' ? undefined : scopeMessageId }),
   });
 }
 
 // Update a relation by creating a new version that supersedes the old one.
 // The old relation is preserved in the database but marked as superseded.
-export function updateRelation(topicId: string, relationId: string, data: {
+export function updateRelation(scopeMessageId: string, relationId: string, data: {
   relationType: string;
   targetRefs: import('../types').TargetRef[];
   payload?: import('../types').RelationPayload;
 }) {
-  return request<import('../types').Relation>(`/topics/${topicId}/relations`, {
+  return request<import('../types').Relation>('/relations', {
     method: 'POST',
     body: JSON.stringify({
+      parentMessageId: scopeMessageId === 'root' ? undefined : scopeMessageId,
       relationType: data.relationType,
       targetRefs: data.targetRefs,
       payload: data.payload,
@@ -243,10 +280,10 @@ export function updateRelation(topicId: string, relationId: string, data: {
 // Update a relation's targetRefs in-place without creating a new message version.
 // Unlike updateRelation (which supersedes), this preserves the relation's ID
 // so that external references (stance records, URLs) remain valid.
-export function patchRelationTargets(topicId: string, relationId: string, targetRefs: import('../types').TargetRef[]) {
-  return request<import('../types').Relation>(`/topics/${topicId}/relations/${relationId}`, {
+export function patchRelationTargets(scopeMessageId: string, relationId: string, targetRefs: import('../types').TargetRef[]) {
+  return request<import('../types').Relation>(`/relations/${relationId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ targetRefs }),
+    body: JSON.stringify({ targetRefs, parentMessageId: scopeMessageId === 'root' ? undefined : scopeMessageId }),
   });
 }
 
@@ -274,6 +311,7 @@ export function getCurrentRules() {
 // ============================================================
 
 export function getMessageStakes(messageId: string, settlementType?: 'TRUTH' | 'VALUE') {
+  if (isPendingMessage(messageId)) return Promise.resolve<import('../types').MessageStakes>({ messageId, pool: { lockedPro: 0, lockedCon: 0 }, stakes: [], counts: { pro: 0, con: 0 }, countsByType: { TRUTH: { pro: 0, con: 0 }, VALUE: { pro: 0, con: 0 } } });
   const qs = settlementType ? `?settlementType=${settlementType}` : '';
   return request<import('../types').MessageStakes>(`/messages/${messageId}/stakes${qs}`);
 }
@@ -315,11 +353,11 @@ export function closeAndSettle(roundId: string) {
 // Stance API (Phase 5)
 // ============================================================
 
-export function getUserStances(userId: string, params?: { page?: number; limit?: number; topicId?: string }) {
+export function getUserStances(userId: string, params?: { page?: number; limit?: number; scopeMessageId?: string }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
-  if (params?.topicId) qs.set('topicId', params.topicId);
+  if (params?.scopeMessageId) qs.set('scopeMessageId', params.scopeMessageId);
   return request<import('../types').StanceHistoryResponse>(`/users/${userId}/stances?${qs}`);
 }
 
@@ -356,9 +394,9 @@ export async function getAllUserMessages(userId: string, limit = 200) {
 // Audit Log API (Phase 6)
 // ============================================================
 
-export function getAuditLogs(params?: { topicId?: string; page?: number; limit?: number; action?: string; actorId?: string; entityType?: string; entityId?: string }) {
+export function getAuditLogs(params?: { scopeMessageId?: string; page?: number; limit?: number; action?: string; actorId?: string; entityType?: string; entityId?: string }) {
   const qs = new URLSearchParams();
-  if (params?.topicId) qs.set('topicId', params.topicId);
+  if (params?.scopeMessageId) qs.set('scopeMessageId', params.scopeMessageId);
   if (params?.page) qs.set('page', String(params.page));
   if (params?.limit) qs.set('limit', String(params.limit));
   if (params?.action) qs.set('action', params.action);
@@ -388,12 +426,11 @@ export function getRevenueDistributions(params?: { page?: number; limit?: number
 // ============================================================
 
 export interface TagCountsResponse {
-  topicId: string;
   counts: Record<string, Record<string, number>>;
 }
 
-export function getTopicTagCounts(topicId: string) {
-  return request<TagCountsResponse>(`/topics/${topicId}/tag-counts`);
+export function getMessageTagCounts(scopeMessageId: string) {
+  return request<TagCountsResponse>(`/tag-counts?parent=${encodeURIComponent(scopeMessageId)}`);
 }
 
 // ============================================================
@@ -401,11 +438,11 @@ export function getTopicTagCounts(topicId: string) {
 // ============================================================
 
 export interface ExportData {
+  format?: 'gonglun-2';
   formatVersion: number;
   exportedAt: string;
-  topicId: string;
-  topic: { title: string; body: string | null; status: string };
-  messages: Array<{
+  scope: import('../types').ScopeView;
+  messages: Array<Partial<Pick<import('../types').Message, 'revision' | 'parts' | 'state' | 'spending' | 'executedStance'>> & {
     id: string;
     kind: string;
     contentType: string | null;
@@ -437,6 +474,6 @@ export interface ExportData {
   }>;
 }
 
-export function exportTopic(topicId: string) {
-  return request<ExportData>(`/topics/${topicId}/export`);
+export function exportMessages(scopeMessageId: string) {
+  return request<ExportData>(`/export?parent=${encodeURIComponent(scopeMessageId)}`);
 }

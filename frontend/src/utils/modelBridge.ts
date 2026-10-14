@@ -1,4 +1,5 @@
 import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
+import { resolveStance, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
 
 export type MessageKind = "normal" | "join" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
@@ -10,8 +11,9 @@ export const READABLE_RELATION_TYPES = new Set([
 ]);
 
 /** Message kinds that are rendered as readable cards in the graph. */
-export function isCardMessage(message: { kind: MessageKind; relationType?: string } | undefined): boolean {
+export function isCardMessage(message: { kind: MessageKind; relationType?: string; parts?: Part[] } | undefined): boolean {
   return !!message && (isContentKind(message.kind)
+    || message.parts?.some(part => part.type === 'text' && part.text.length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend')
     || (message.kind === 'relation' && READABLE_RELATION_TYPES.has((message.relationType ?? '').toLowerCase())));
 }
 
@@ -44,7 +46,8 @@ export type RelationType =
   | "proposal"
   | "delegation"
   | "code_change"
-  | "operations";
+  | "operations"
+  | "authorize";
 export type SecondaryRelationType = "none" | "question" | "answer";
 
 export type Selection =
@@ -55,16 +58,25 @@ export type Selection =
 export type UnitSelection = {
   messageId: string;
   selection: Selection;
+  /** Exact address. The legacy selection is only the workbench's visual shorthand. */
+  reference?: Reference;
+  label?: string;
 };
 
 export type DemoMessage = {
   id: string;
+  revision?: number;
+  parts?: Part[];
+  executedStance?: ExecutedStance;
+  state?: MessageState;
+  spending?: CoreMessage['spending'];
   author: string;
   createdAt: string;
   content: string;
   kind: MessageKind;
   backendKind?: string;
   sourceMessageId?: string | null;
+  sourceRefs?: Reference[];
   settlementTargetId?: string;   // Phase 6: target message for ROUND/ROUND_RESULT
   roundPayload?: Record<string,unknown>;  // Phase 6: roundId/result for settlement highlight
   relationType?: RelationType;
@@ -122,14 +134,19 @@ export function correctionSelectionIsStale(content: string, selection: Selection
     && content.slice(selection.start, selection.start + selection.len) !== selection.text;
 }
 
-export function demoMessageToRelation(message: DemoMessage, topicId: string): BackendRelation | null {
+export function demoMessageToRelation(message: DemoMessage): BackendRelation | null {
   if (!['governance', 'code', 'operations'].includes(message.kind)
     || !message.relationType || !message.targetRefs) return null;
   return {
     id: message.id,
-    topicId,
+    revision: message.revision,
+    parts: message.parts,
+    executedStance: message.executedStance,
+    state: message.state,
+    spending: message.spending,
     relationType: message.relationType.toUpperCase(),
     sourceMessageId: message.sourceMessageId ?? null,
+    sourceRefs: message.sourceRefs,
     targetRefs: message.targetRefs,
     payload: message.relationPayload,
     createdAt: message.createdAt,
@@ -142,6 +159,7 @@ export function demoMessageToRelation(message: DemoMessage, topicId: string): Ba
 }
 
 export type DemoEdge = {
+  proposalOnly?: boolean;
   id: string;
   relationMessageId: string;
   relationType: RelationType;
@@ -193,7 +211,7 @@ export function kindLabel(backendKind: string, _targetRefs?: any, settlementType
   const labels: Record<string, string> = {
     TEXT: '[文本消息]',
     GOVERNANCE: '🏛️ 治理提案\n—— 可投票/讨论/结算',
-    CODE: '💻 代码\n—— 结算通过后将自动部署',
+    CODE: '💻 代码\n—— 代码变更需按当前规则授权生效',
     OPERATIONS: '📊 运营\n—— 收入、统计等程序运营信息',
     ROUND: isValue
       ? '💎 发起价值仲裁\n—— 推荐/冷藏标注进入投票\n双击卡片查看结算详情'
@@ -243,12 +261,18 @@ export function convertMessagesToDemoModel(
     const stype = roundPayload?.settlementType as string | undefined;
     return {
     id: m.id,
+    revision: m.revision,
+    parts: m.parts,
+    executedStance: m.executedStance,
+    state: m.state,
+    spending: m.spending,
     author: m.createdBy.username,
     createdAt: m.createdAt,
     content: m.content ?? kindLabel(bk, undefined, stype),
     kind: mapBackendKind(bk),
     backendKind: bk,
-    sourceMessageId: (m as any).relSourceId ?? null,
+    sourceMessageId: (m as any).relSourceId ?? persistedRelation?.sourceMessageId ?? null,
+    sourceRefs: persistedRelation?.sourceRefs,
     settlementTargetId,
     roundPayload,
       relationType: ((m as any).relationType ?? persistedRelation?.relationType)?.toLowerCase() as RelationType | undefined,
@@ -268,9 +292,7 @@ export function convertMessagesToDemoModel(
     // still expose a compatibility relation projection, but it must not
     // create a second card for the same backend entity.
     const persistedMessage = messages.find(message => message.id === rel.id);
-    if (persistedMessage && ['GOVERNANCE', 'CODE', 'OPERATIONS'].includes((persistedMessage as any).kind)) {
-      continue;
-    }
+    if (persistedMessage && (persistedMessage as any).kind !== 'RELATION') seenRelMsgIds.add(rel.id);
 
     // JOIN relations: internal membership records — skip edge creation.
     const isJoin = relType === 'join';
@@ -317,6 +339,11 @@ export function convertMessagesToDemoModel(
       }
       demoMessages.push({
         id: relMsgId,
+        revision: rel.revision,
+        parts: rel.parts,
+        executedStance: rel.executedStance,
+        state: rel.state,
+        spending: rel.spending,
         author: rel.createdBy.username,
         createdAt: rel.createdAt,
         content,
@@ -324,6 +351,8 @@ export function convertMessagesToDemoModel(
         relationType: relType as RelationType,
         relationPayload: rel.payload,
         targetRefs: rel.targetRefs,
+        sourceMessageId: rel.sourceMessageId,
+        sourceRefs: rel.sourceRefs,
         joinInfo,
       });
     }
@@ -356,7 +385,9 @@ export function convertMessagesToDemoModel(
       const edgeId = `${rel.id}::${index}`;
       let toUnit: UnitSelection;
 
-      if (ref.kind === 'message') {
+      if (ref.reference) {
+        toUnit = targetRefToUnit(ref);
+      } else if (ref.kind === 'message') {
         toUnit = { messageId: ref.messageId, selection: { kind: "whole" } };
       } else if (ref.kind === 'text-fragment') {
         const content = msgContentMap.get(ref.messageId) ?? '';
@@ -374,9 +405,10 @@ export function convertMessagesToDemoModel(
 
       demoEdges.push({
         id: edgeId,
+        proposalOnly: rel.parts?.some(part => part.type === 'relation' && part.relation === 'amend'),
         relationMessageId: relMsgId,
         relationType: relType as RelationType,
-        from: { messageId: fromMessageId, selection: { kind: "whole" } },
+        from: rel.sourceRefs?.[0] ? referenceToUnit(rel.sourceRefs[0]) : { messageId: fromMessageId, selection: { kind: "whole" } },
         to: toUnit,
         relationLabel,
       });
@@ -389,6 +421,7 @@ export function convertMessagesToDemoModel(
   for (const m of messages) {
     const bk = (m as any).kind as string | undefined;
     if (bk !== 'GOVERNANCE' && bk !== 'CODE' && bk !== 'OPERATIONS') continue;
+    if (relationById.has(m.id)) continue;
     const relType = (m as any).relationType as string | undefined;
     const targetRefs = (m as any).targetRefs as TargetRef[] | undefined;
     if (!relType || !targetRefs || targetRefs.length === 0) continue;
@@ -406,7 +439,9 @@ export function convertMessagesToDemoModel(
     targetRefs.forEach((ref, index) => {
       const edgeId = `${relMsgId}::gov::${index}`;
       let toUnit: UnitSelection;
-      if (ref.kind === 'message') {
+      if (ref.reference) {
+        toUnit = targetRefToUnit(ref);
+      } else if (ref.kind === 'message') {
         toUnit = { messageId: ref.messageId, selection: { kind: "whole" } };
       } else if (ref.kind === 'text-fragment') {
         const content = msgContentMap.get(ref.messageId) ?? '';
@@ -421,6 +456,7 @@ export function convertMessagesToDemoModel(
       }
       demoEdges.push({
         id: edgeId,
+        proposalOnly: m.parts?.some(part => part.type === 'relation' && part.relation === 'amend'),
         relationMessageId: relMsgId,
         relationType: lowerRelType,
         from: { messageId: relMsgId, selection: { kind: "whole" } },
@@ -456,7 +492,7 @@ export function computeCorrectionVersions(
       targetId: edge.to.messageId,
       baseContent: target.content,
       content,
-      valid: !invalidCorrectionIds.has(correction.id),
+      valid: !edge.proposalOnly && !correction.parts?.some(part => part.type === 'relation' && part.relation === 'amend') && !invalidCorrectionIds.has(correction.id),
       createdAt: correction.createdAt,
       selection: edge.to.selection,
     };
@@ -551,11 +587,12 @@ export function unitSelectionToTargetRef(
   msgMap: Map<string, DemoMessage>
 ): TargetRef {
   const s = unit.selection;
+  const reference = unitSelectionToReference(unit, msgMap);
   if (s.kind === 'whole') {
     if (msgMap.get(unit.messageId)?.kind === "relation") {
-      return { kind: 'relation', relationId: unit.messageId };
+      return { kind: 'relation', relationId: unit.messageId, reference };
     }
-    return { kind: 'message', messageId: unit.messageId };
+    return { kind: 'message', messageId: unit.messageId, reference };
   }
   if (s.kind === 'text') {
     return {
@@ -563,10 +600,50 @@ export function unitSelectionToTargetRef(
       messageId: unit.messageId,
       text: s.text,
       hash: hashText(s.text),
+      reference,
     };
   }
   // edge selection always targets a relation message's label/edge part
-  return { kind: 'relation', relationId: unit.messageId, part: 'label' };
+  return { kind: 'relation', relationId: unit.messageId, part: 'label', reference };
+}
+
+export function unitSelectionToReference(unit: UnitSelection, msgMap: Map<string, DemoMessage>): Reference {
+  if (unit.reference) return structuredClone(unit.reference);
+  const message = msgMap.get(unit.messageId);
+  const reference: Reference = { messageId: unit.messageId };
+  if (message?.revision && unit.selection.kind !== 'whole') reference.revision = message.revision;
+  if (unit.selection.kind === 'text') {
+    reference.partId = message?.parts?.find(part => part.type === 'text' || part.type === 'code' || part.type === 'web')?.id ?? 'content';
+    reference.range = { start: unit.selection.start, end: unit.selection.start + unit.selection.len };
+  } else if (unit.selection.kind === 'edge') {
+    reference.partId = message?.parts?.find(part => part.type === 'relation')?.id ?? 'relation';
+    reference.path = ['relation'];
+  }
+  return reference;
+}
+
+export function referenceToUnit(reference: Reference, text?: string, label?: string): UnitSelection {
+  return {
+    messageId: reference.messageId,
+    reference: structuredClone(reference),
+    ...(label ? { label } : {}),
+    selection: reference.range
+      ? { kind: 'text', start: reference.range.start, len: reference.range.end - reference.range.start, text: text ?? '' }
+      : reference.partId || reference.path || reference.memberId
+        ? { kind: 'edge', edgeId: JSON.stringify(reference) }
+        : { kind: 'whole' },
+  };
+}
+
+export function targetRefToUnit(ref: TargetRef, content = ''): UnitSelection {
+  if (ref.reference) return referenceToUnit(ref.reference, ref.kind === 'text-fragment' ? ref.text : undefined);
+  if (ref.kind === 'text-fragment') {
+    const found = findTextInContent(content, ref.text);
+    return { messageId: ref.messageId, selection: found
+      ? { kind: 'text', start: found.start, len: found.len, text: ref.text }
+      : { kind: 'whole' } };
+  }
+  return { messageId: ref.kind === 'relation' ? ref.relationId : ref.messageId, selection: { kind: 'whole' } };
 }
 
 /**
@@ -591,7 +668,7 @@ export function computeCorrectedEdgeMap(edges: DemoEdge[]): Map<string, Set<stri
 
   const result = new Map<string, Set<string>>();
   for (const e of edges) {
-    if (e.relationType !== 'correct') continue;
+    if (e.relationType !== 'correct' || e.proposalOnly) continue;
     if (e.from.messageId.startsWith('anon:')) continue;
     // e.from.messageId = new (replacement) relation message
     // e.to.messageId   = old (corrected) relation message
@@ -672,6 +749,24 @@ function resolveUltimateStance(
   return { targetId: currentId, type: effectiveType };
 }
 
+/** Whole-message badges must never reinterpret a vote on a reason or member field. */
+function resolveDisplayedStance(edge: DemoEdge, msgMap: Map<string, DemoMessage>, stanceMap: Map<string, { targetId: string; type: 'agree' | 'disagree' }>) {
+  const executed = msgMap.get(edge.relationMessageId)?.executedStance;
+  const addressKey = (reference: Reference) => reference.partId || reference.memberId || reference.path?.length || reference.range
+    || (reference.revision !== undefined && reference.revision !== msgMap.get(reference.messageId)?.revision)
+    ? `reference:${JSON.stringify(reference)}` : reference.messageId;
+  if (executed) return { targetId: addressKey(executed.target), type: executed.side === 'pro' ? 'agree' as const : 'disagree' as const };
+  if (edge.to.reference) {
+    const side = edge.relationType === 'agree' ? 'pro' : 'con';
+    const resolved = resolveStance(edge.to.reference, side, (id, revision) => {
+      const message = msgMap.get(id);
+      return message?.parts && (!revision || message.revision === revision) ? message as unknown as CoreMessage : undefined;
+    });
+    return { targetId: addressKey(resolved.target), type: resolved.side === 'pro' ? 'agree' as const : 'disagree' as const };
+  }
+  return resolveUltimateStance(edge.to.messageId, edge.relationType as 'agree' | 'disagree', stanceMap);
+}
+
 /**
  * Compute the set of relation message IDs that are suppressed for the current user.
  *
@@ -726,7 +821,7 @@ export function computeUserSuppressedRelIds(
     }
 
     // Walk the chain to the ultimate target.
-    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
     const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
@@ -790,7 +885,7 @@ export function computeUserActiveStanceRelIds(
       time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
     }
 
-    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
     const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
@@ -848,7 +943,7 @@ export function computeUserOverriddenStanceRelIds(
       time = relMsg ? new Date(relMsg.createdAt).getTime() : 0;
     }
 
-    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
     const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
 
     userStanceRelIds.add(e.relationMessageId);
@@ -923,11 +1018,11 @@ export function computeTransitiveRelDecStats(
 
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
-    if (e.to.selection.kind !== 'whole') continue;
+    if (e.to.selection.kind !== 'whole' && !e.to.reference && !msgMap.get(e.relationMessageId)?.executedStance) continue;
     const toMsg = msgMap.get(e.to.messageId);
     if (toMsg?.kind !== 'relation') continue;
 
-    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
     const targetId = resolved ? resolved.targetId : e.to.messageId;
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
@@ -978,9 +1073,9 @@ export function computeTransitiveVoteStats(
 
   for (const e of edges) {
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
-    if (e.to.selection.kind !== 'whole') continue;
+    if (e.to.selection.kind !== 'whole' && !e.to.reference && !msgMap.get(e.relationMessageId)?.executedStance) continue;
 
-    const resolved = resolveUltimateStance(e.to.messageId, e.relationType as 'agree' | 'disagree', stanceMap);
+    const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
     const targetId = resolved ? resolved.targetId : e.to.messageId;
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
@@ -1002,11 +1097,17 @@ export function computeGloballySuppressedRelIds(
 ): Set<string> {
   const stats = computeTransitiveVoteStats(edges, messages);
   const relationIds = new Set(messages.filter(message => message.kind === 'relation').map(message => message.id));
-  return new Set(
+  const suppressed = new Set(
     Object.entries(stats)
       .filter(([messageId, value]) => relationIds.has(messageId) && value.disagreeCount > value.agreeCount)
       .map(([messageId]) => messageId),
   );
+  for (const message of messages) {
+    if (!message.state) continue;
+    if (message.state.suppressed) suppressed.add(message.id);
+    else suppressed.delete(message.id);
+  }
+  return suppressed;
 }
 
 /**
@@ -1023,6 +1124,7 @@ export function computeEffectiveSuppressedRelIds(
   const activeStances = computeUserActiveStanceRelIds(edges, messages, currentUsername);
   for (const [targetId, stance] of activeStances) {
     if (!relationIds.has(targetId)) continue;
+    if (messages.find(message => message.id === targetId)?.state) continue;
     if (stance.type === 'agree') suppressed.delete(targetId);
     else suppressed.add(targetId);
   }

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { storePrivateKeyForUser } from '../api/client';
+import { getSetup, storePrivateKeyForUser } from '../api/client';
 import { generateSigningKeyPair } from '../utils/signature';
 
 export default function RegisterPage() {
@@ -11,6 +11,16 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [founderKeyRequired, setFounderKeyRequired] = useState(false);
+  const [founderKey, setFounderKey] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void getSetup().then(setup => {
+      if (active) setFounderKeyRequired(!setup.initialized && setup.founderKeyRequired);
+    }).catch(err => { if (active) setError(err instanceof Error ? err.message : '无法确认站点初始化状态，请刷新重试'); });
+    return () => { active = false; };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,6 +31,7 @@ export default function RegisterPage() {
       return;
     }
     if (password.length > 100) { setError('密码最多100位'); return; }
+    if (founderKeyRequired && !founderKey.trim()) { setError('请填写初始发起人密钥'); return; }
     setError('');
     setLoading(true);
     try {
@@ -30,7 +41,7 @@ export default function RegisterPage() {
       const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
       const publicKey = JSON.stringify(pubJwk);
 
-      await register(normalizedUsername, password, publicKey);
+      await register(normalizedUsername, password, publicKey, founderKeyRequired ? founderKey.trim() : undefined);
       localStorage.setItem('registration-guide-pending', 'true');
       navigate('/');
     } catch (err: unknown) {
@@ -74,6 +85,13 @@ export default function RegisterPage() {
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             />
           </div>
+          {founderKeyRequired && <div>
+            <label htmlFor="founder-key" className="block text-sm font-medium text-gray-700 mb-1">初始发起人密钥</label>
+            <input id="founder-key" type="password" autoComplete="off" value={founderKey}
+              onChange={e => setFounderKey(e.target.value)}
+              placeholder="站点首次初始化时需要"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>}
           <button
             type="submit"
             disabled={loading}

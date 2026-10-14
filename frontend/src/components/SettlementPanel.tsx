@@ -7,7 +7,7 @@ import PromptModal from './PromptModal';
 
 interface Props {
   messageId: string;
-  topicId: string;
+  scopeMessageId: string;
   highlightRoundId?: string | null;
   entryHighlight?: {
     side?: 'PRO' | 'CON';
@@ -381,7 +381,38 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   const [localRound, setLocalRound] = useState(round);
   const [roundDetails, setRoundDetails] = useState<Record<string, SettlementRoundItem>>({});
   const [settleError, setSettleError] = useState<string | null>(null);
+  const [settleNotice, setSettleNotice] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const isWaiting = !!localRound.endsAt && localRound.status !== 'SETTLED';
+
+  useEffect(() => { setLocalRound(round); }, [round]);
+
+  useEffect(() => {
+    if (!isWaiting || !localRound.endsAt) return;
+    const deadline = new Date(localRound.endsAt).getTime();
+    if (!Number.isFinite(deadline)) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const check = async () => {
+      if (cancelled) return;
+      if (Date.now() < deadline) { timer = setTimeout(check, Math.min(60_000, deadline - Date.now() + 100)); return; }
+      try {
+        const detail = await api.getRoundDetail(localRound.id);
+        if (cancelled) return;
+        setLocalRound(detail);
+        if (detail.status === 'SETTLED') {
+          onSettled(localRound.id);
+          window.dispatchEvent(new Event('points-refresh'));
+          window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
+          window.dispatchEvent(new Event('revenue-refresh'));
+          return;
+        }
+      } catch { /* The deadline is a scheduled check, not proof that settlement completed. */ }
+      timer = setTimeout(check, 2_000);
+    };
+    timer = setTimeout(check, Math.min(60_000, Math.max(100, deadline - Date.now() + 100)));
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [isWaiting, localRound.endsAt, localRound.id, messageId, onSettled]);
 
   const isValue = round.settlementType === 'VALUE';
   const weights = localRound.weights ?? { TRUE: 0, FALSE: 0, UNKNOWN: 0 };
@@ -424,7 +455,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   }
 
   async function handleSettle() {
-    if (voting || settling) return;
+    if (voting || settling || isWaiting) return;
     setConfirmOpen(true);
   }
 
@@ -485,6 +516,13 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       setSettling(true);
       setConfirmOpen(false);
       const result = await api.closeAndSettle(localRound.id);
+      if (result.result === null || result.status && result.status !== 'SETTLED') {
+        operationLog('请求终止结算', `round=${localRound.id} status=${result.status ?? '等待截止'}`);
+        setLocalRound(previous => ({ ...previous, status: result.status ?? 'VOTING', endsAt: result.endsAt, result: null, weights: result.weights }));
+        setSettleNotice(result.message || '已请求终止，等待规则规定的截止时间');
+        window.dispatchEvent(new Event('points-refresh'));
+        return;
+      }
       operationLog('完成结算', `round=${localRound.id} result=${result.result}`);
       const settlementLabel = localRound.settlementType === 'VALUE' ? '价值仲裁' : '真假仲裁';
       const resultLabel = result.result === 'TRUE' ? '赞成胜出' : result.result === 'FALSE' ? '反对胜出' : '平局';
@@ -548,15 +586,21 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
         <button
           onClick={() => { window.dispatchEvent(new Event('guide-settle-selected')); void handleSettle(); }}
           data-guide-settle="true"
-          disabled={totalWeight === 0 || voting || settling}
-          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 || voting || settling ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
-          title={totalWeight === 0 ? '暂无押注，无法结算' : voting ? '投票请求处理中' : settling ? '结算请求处理中' : '结算'}
+          disabled={totalWeight === 0 || voting || settling || isWaiting}
+          className={`px-2 py-1 text-white text-xs font-medium rounded transition-colors ${totalWeight === 0 || voting || settling || isWaiting ? 'bg-gray-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
+          title={isWaiting ? '已请求终止，等待截止后结算' : totalWeight === 0 ? '暂无押注，无法结算' : voting ? '投票请求处理中' : settling ? '结算请求处理中' : '结算'}
         >
-          {settling ? '结算中...' : '结算'}
+          {settling ? '结算中...' : isWaiting ? '等待结算' : '结算'}
         </button>
       </div>
 
       {/* Settlement error */}
+      {(settleNotice || isWaiting) && (
+        <div role="status" className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+          {settleNotice || '已请求终止，等待规则规定的截止时间'}
+          {localRound.endsAt && `（${new Date(localRound.endsAt).toLocaleString('zh-CN')}）`}
+        </div>
+      )}
       {settleError && (
         <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
           {settleError}
@@ -652,7 +696,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
         open={confirmOpen}
         title="确认结算"
         guideSettlementConfirm
-        message={`${settlementPrompt}\n\n结算后将根据投票权重分配押注池贡献点，可继续发起结算，但本次结算不可撤销。\n确定要结算此轮次吗？`}
+        message={`${settlementPrompt}\n\n发送后按当前规则终止并分配押注池贡献点；若规则设有等待时间，将在截止后计算。之后的结算可更新结果并重新分配。\n确定要终止此轮次吗？`}
         confirmText={settling ? '结算中...' : '确认结算'}
         confirmDisabled={settling}
         cancelText="取消"

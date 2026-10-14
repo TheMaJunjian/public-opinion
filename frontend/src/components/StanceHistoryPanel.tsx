@@ -1,3 +1,4 @@
+import { messageScopePath } from '../utils/messageRoutes';
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
@@ -5,7 +6,7 @@ import type { StanceRelation, StanceStake, StanceTag } from '../types';
 
 interface Props {
   userId: string;
-  topicId?: string;
+  scopeMessageId?: string;
 }
 
 const TYPE_ICON: Record<string, string> = {
@@ -39,7 +40,7 @@ const STANCE_PAGE_SIZE = 50;
  * StanceHistoryPanel — 与会者表态历史面板
  * 站队（赞同/反对/赞同自己） + 立场（发消息消耗的贡献点） + 表态（标注）
  */
-export default function StanceHistoryPanel({ userId, topicId }: Props) {
+export default function StanceHistoryPanel({ userId, scopeMessageId }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +53,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     try {
       setLoading(true);
       setError(null);
-      const firstPage = await api.getUserStances(userId, { topicId, page: 1, limit: STANCE_PAGE_SIZE });
+      const firstPage = await api.getUserStances(userId, { scopeMessageId, page: 1, limit: STANCE_PAGE_SIZE });
       const pageCount = Math.max(
         1,
         Math.ceil(firstPage.pagination.totalRelations / STANCE_PAGE_SIZE),
@@ -61,7 +62,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
       );
       const remainingPages = await Promise.all(
         Array.from({ length: pageCount - 1 }, (_, index) =>
-          api.getUserStances(userId, { topicId, page: index + 2, limit: STANCE_PAGE_SIZE })
+          api.getUserStances(userId, { scopeMessageId, page: index + 2, limit: STANCE_PAGE_SIZE })
         )
       );
       const pages = [firstPage, ...remainingPages];
@@ -73,7 +74,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [userId, topicId]);
+  }, [userId, scopeMessageId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -96,13 +97,13 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
     { key: 'tags', label: '表态', count: tags.length },
   ];
 
-  function navigateToRecord(rTopicId: string, msgId: string, options?: { settlementId?: string | null; stakeId?: string | null; settlementType?: 'TRUTH' | 'VALUE' }) {
+  function navigateToRecord(recordScopeId: string | null, msgId: string, options?: { settlementId?: string | null; stakeId?: string | null; settlementType?: 'TRUTH' | 'VALUE' }) {
     const params = new URLSearchParams();
     params.set('msg', msgId);
     if (options?.settlementId) params.set('settlement', options.settlementId);
     if (options?.stakeId) params.set('stakeId', options.stakeId);
     if (options?.settlementType) params.set('settlementType', options.settlementType);
-    navigate(`/topics/${rTopicId}?${params}`);
+    navigate(`${messageScopePath(recordScopeId)}?${params}`);
   }
 
   return (
@@ -121,7 +122,7 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
 
       <div className="space-y-2 max-h-96 overflow-auto">
         {activeTab === 'relations' && relations.map(r => {
-          const topicSuffix = topicId ? '' : ` · ${r.topicTitle}`;
+          const scopeSuffix = scopeMessageId ? '' : ` · ${r.scopeTitle}`;
           const targetLabel = r.targetRelationType
             ? (RELATION_TYPE_LABEL[r.targetRelationType] ?? r.targetRelationType)
             : (MESSAGE_KIND_LABEL[r.messageKind] ?? r.messageKind);
@@ -132,16 +133,16 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
             <StanceCard
               key={`rel-${r.id}`}
               icon={TYPE_ICON[r.type] ?? '❓'}
-              title={`${TYPE_LABEL[r.type] ?? r.type} · ${targetLabel}${topicSuffix}`}
+              title={`${TYPE_LABEL[r.type] ?? r.type} · ${targetLabel}${scopeSuffix}`}
               subtitle={`${r.amount} 点 · ${detail} · ${r.targetMessageId?.slice(-8) ?? r.relationMessageId.slice(-8)}`}
               time={r.createdAt}
-              onDoubleClick={() => navigateToRecord(r.topicId, r.relationMessageId, { settlementId: r.targetMessageId, stakeId: r.stakeId })}
+              onDoubleClick={() => navigateToRecord(r.scopeMessageId, r.relationMessageId, { settlementId: r.targetMessageId, stakeId: r.stakeId })}
             />
           );
         })}
 
         {activeTab === 'stakes' && stakes.map(s => {
-          const topicSuffix = topicId ? '' : ` · ${s.topicTitle}`;
+          const scopeSuffix = scopeMessageId ? '' : ` · ${s.scopeTitle}`;
           const kindLabel = MESSAGE_KIND_LABEL[s.messageKind] ?? s.messageKind;
           const detail = s.content
             ? (s.content.length > 60 ? s.content.slice(0, 60) + '…' : s.content)
@@ -150,10 +151,10 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
             <StanceCard
               key={`stake-${s.id}`}
               icon="🔒"
-              title={`${kindLabel} · 消耗 ${s.amount} 点${topicSuffix}`}
+              title={`${kindLabel} · 消耗 ${s.amount} 点${scopeSuffix}`}
               subtitle={`${detail} · ${s.messageId.slice(-8)}`}
               time={s.createdAt}
-              onDoubleClick={() => navigateToRecord(s.topicId, s.messageId, { settlementId: s.messageId, stakeId: s.id })}
+              onDoubleClick={() => navigateToRecord(s.scopeMessageId, s.messageId, { settlementId: s.messageId, stakeId: s.id })}
             />
           );
         })}
@@ -163,16 +164,16 @@ export default function StanceHistoryPanel({ userId, topicId }: Props) {
           const reason = t.subType
             ? (t.subType === 'CUSTOM' && t.customLabel ? t.customLabel : (SUB_TYPE_LABEL[t.subType] ?? t.subType))
             : null;
-          const topicSuffix = topicId ? '' : ` · ${t.topicTitle}`;
+          const scopeSuffix = scopeMessageId ? '' : ` · ${t.scopeTitle}`;
           const targetIdShort = t.targetMessageId?.slice(-8) ?? t.relationMessageId.slice(-8);
           return (
             <StanceCard
               key={`tag-${t.id}`}
               icon="🏷️"
-              title={`${typeLabel}${reason ? ` · ${reason}` : ''}${topicSuffix}`}
+              title={`${typeLabel}${reason ? ` · ${reason}` : ''}${scopeSuffix}`}
               subtitle={`${t.amount} 点 · ${targetIdShort}`}
               time={t.createdAt}
-              onDoubleClick={() => navigateToRecord(t.topicId, t.relationMessageId, { settlementId: t.targetMessageId, stakeId: t.stakeId, settlementType: 'VALUE' })}
+              onDoubleClick={() => navigateToRecord(t.scopeMessageId, t.relationMessageId, { settlementId: t.targetMessageId, stakeId: t.stakeId, settlementType: 'VALUE' })}
             />
           );
         })}

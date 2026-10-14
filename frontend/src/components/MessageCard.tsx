@@ -1,19 +1,23 @@
-import type { DemoMessage } from '../utils/modelBridge';
+import type { DemoMessage, UnitSelection } from '../utils/modelBridge';
 import { isContentKind } from '../utils/modelBridge';
 import { getPresentationSpec } from '../types';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
+import MessageTextPart from './MessageTextPart';
+import MessageElement from './MessageElement';
+import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../utils/messageElementSelection';
+import { getMessageProminence } from '../utils/messageDisplay';
 
 export interface MessageCardContext {
   isWholeSelected?: boolean;
   isActiveText?: boolean;
-  isTopicMsg?: boolean;
-  isClassifyTopic?: boolean;
-  isSummaryTopic?: boolean;
-  isMergeTopic?: boolean;
+  isOrganizationMessage?: boolean;
+  isClassification?: boolean;
+  isSummary?: boolean;
+  isMerge?: boolean;
   isGovernanceMsg?: boolean;
   governanceColor?: string;
-  topicMsgTitle?: string;
-  topicMsgTargetCount?: number;
+  organizationTitle?: string;
+  memberCount?: number;
   relType?: string | null;
   settlementTargetId?: string | undefined;
   settlementTargetContent?: string;
@@ -27,6 +31,7 @@ export interface MessageCardContext {
 export interface MessageCardProps {
   msg: DemoMessage;
   ctx: MessageCardContext;
+  selectedUnits?: readonly UnitSelection[];
   onClick?: (e: React.MouseEvent, msgId: string) => void;
   onDoubleClick?: (e: React.MouseEvent, msgId: string) => void;
   onMouseDown?: (e: React.MouseEvent, msgId: string) => void;
@@ -47,7 +52,7 @@ export interface MessageCardProps {
   overlays?: React.ReactNode;
   /** Click handler for settlement target link (ROUND/RESULT messages) */
   onSettlementTargetClick?: (e: React.MouseEvent, targetId: string) => void;
-  /** Override content area (TopicDetailPage uses renderMessageContentWithAnchorsForList) */
+  /** Override readable content, including existing fragment highlights. */
   children?: React.ReactNode;
   /** onMouseUp handler for content area text selection */
   onContentMouseUp?: (e: React.MouseEvent, msgId: string) => void;
@@ -56,6 +61,7 @@ export interface MessageCardProps {
 export default function MessageCard({
   msg,
   ctx,
+  selectedUnits,
   onClick,
   onDoubleClick,
   onMouseDown,
@@ -72,10 +78,10 @@ export default function MessageCard({
   onContentMouseUp,
 }: MessageCardProps) {
   const {
-    isWholeSelected, isActiveText, isTopicMsg,
-    isClassifyTopic, isSummaryTopic, isMergeTopic,
+    isWholeSelected, isActiveText, isOrganizationMessage,
+    isClassification, isSummary, isMerge,
     isGovernanceMsg, governanceColor,
-    topicMsgTitle, topicMsgTargetCount,
+    organizationTitle, memberCount,
     relType,
     settlementTargetId, settlementTargetContent, isValueSettlement,
     lastClickedMsgId,
@@ -85,10 +91,11 @@ export default function MessageCard({
   } = ctx;
 
   const bk = (msg as any).backendKind as string | undefined;
+  const prominence = getMessageProminence(msg);
   const isDelegationMsg = msg.kind === 'relation' && msg.relationType === 'delegation';
   const delegationColor = '#f97316';
   const govColor = governanceColor ?? (bk === 'GOVERNANCE' ? '#f59e0b' : bk === 'CODE' ? '#3b82f6' : '#10b981');
-  const topicBackground = isSummaryTopic ? '#14352a' : isMergeTopic ? '#1e293b' : '#1f1f1f';
+  const organizationBackground = isSummary ? '#14352a' : isMerge ? '#1e293b' : '#1f1f1f';
   const specificMessageLabel = getRelationMessageLabel(msg);
   const messageTypeLabel = specificMessageLabel ?? (msg.kind === 'relation'
     ? getPresentationSpec(relType ?? msg.relationType ?? 'relation').label
@@ -104,8 +111,8 @@ export default function MessageCard({
               : bk === 'CODE' ? '代码'
                 : bk === 'OPERATIONS' ? '运营'
                   : '消息');
-  const typeBadgeLabel = isClassifyTopic ? '分类' : isSummaryTopic ? '总结' : isMergeTopic ? '归并' : messageTypeLabel;
-  const defaultHeaderLabel = isClassifyTopic || isSummaryTopic || isMergeTopic || isDelegationMsg || msg.kind === 'relation'
+  const typeBadgeLabel = isClassification ? '分类' : isSummary ? '总结' : isMerge ? '归并' : messageTypeLabel;
+  const defaultHeaderLabel = isClassification || isSummary || isMerge || isDelegationMsg || msg.kind === 'relation'
     ? msg.id
     : bk === 'ROUND' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '发起价值仲裁' : '发起真假仲裁')
       : bk === 'ROUND_RESULT' ? ((msg as any).roundPayload?.settlementType === 'VALUE' ? '价值仲裁已结算' : '真假仲裁已结算')
@@ -113,6 +120,10 @@ export default function MessageCard({
           : bk === 'CODE' ? '代码'
             : bk === 'OPERATIONS' ? '运营'
               : msg.id;
+
+  const cardBorder = isWholeSelected ? '2px solid #fbbf24'
+    : isOrganizationMessage ? isSummary ? '1px solid rgba(52,211,153,0.7)' : isMerge ? '1px solid rgba(148,163,184,0.75)' : '1px solid #444'
+      : isDelegationMsg ? `1px solid ${delegationColor}66` : isGovernanceMsg ? `1px solid ${govColor}44` : isActiveText ? '2px dashed #0b84ff' : '1px solid #444';
 
   return (
     <div
@@ -124,26 +135,25 @@ export default function MessageCard({
       onMouseUp={e => onMouseUp?.(e, msg.id)}
       style={{
         position: 'relative',
-        borderRadius: isTopicMsg ? 8 : 6,
-        border: isWholeSelected
-          ? '2px solid #fbbf24'
-          : isTopicMsg
-            ? isSummaryTopic ? '1px solid rgba(52,211,153,0.7)' : isMergeTopic ? '1px solid rgba(148,163,184,0.75)' : '1px solid #444'
-            : isDelegationMsg ? `1px solid ${delegationColor}66` : isGovernanceMsg ? `1px solid ${govColor}44` : isActiveText ? '2px dashed #0b84ff' : '1px solid #444',
+        borderRadius: isOrganizationMessage ? 8 : 6,
+        borderTop: cardBorder,
+        borderRight: cardBorder,
+        borderBottom: cardBorder,
         borderLeft: isWholeSelected
           ? '4px solid #fbbf24'
-          : isTopicMsg ? `4px solid ${isSummaryTopic ? '#34d399' : isMergeTopic ? '#94a3b8' : '#6366f1'}`
-          : isDelegationMsg ? `3px solid ${delegationColor}` : isGovernanceMsg ? `3px solid ${govColor}` : undefined,
-        background: isWholeSelected
+          : isOrganizationMessage ? `4px solid ${isSummary ? '#34d399' : isMerge ? '#94a3b8' : '#6366f1'}`
+          : isDelegationMsg ? `3px solid ${delegationColor}` : isGovernanceMsg ? `3px solid ${govColor}` : cardBorder,
+        backgroundColor: isWholeSelected
           ? 'rgba(91,65,0,0.55)'
-          : isDelegationMsg ? 'rgba(249,115,22,0.1)' : isTopicMsg ? topicBackground
+          : isDelegationMsg ? 'rgba(249,115,22,0.1)' : isOrganizationMessage ? organizationBackground
           : isGovernanceMsg ? '#1a1f2e' : '#1f1f1f',
-        padding: isTopicMsg ? '10px 12px' : '10px 14px',
+        padding: isOrganizationMessage ? '10px 12px' : '10px 14px',
         cursor: 'pointer',
-        fontSize: 13,
+        fontSize: prominence.fontSize,
+        backgroundImage: isWholeSelected ? undefined : prominence.backgroundImage,
         boxShadow: isWholeSelected
           ? '0 4px 18px rgba(251,191,36,0.45)'
-          : isTopicMsg ? '0 2px 8px rgba(0,0,0,0.15)' : undefined,
+          : prominence.boxShadow ?? (isOrganizationMessage ? '0 2px 8px rgba(0,0,0,0.15)' : undefined),
         outline: isWholeSelected ? 'none' : lastClickedMsgId === msg.id ? '1px dashed #0b84ff' : 'none',
         userSelect: isActiveText ? 'text' : 'auto',
         opacity: readStatus === 'READ' ? 0.72 : 1,
@@ -152,18 +162,18 @@ export default function MessageCard({
       {/* Header */}
       <div style={{
         fontSize: 11,
-        opacity: isTopicMsg ? 0.65 : 0.8,
+        opacity: isOrganizationMessage ? 0.65 : 0.8,
         marginBottom: 4,
         display: 'flex',
         flexDirection: 'column',
-        color: isTopicMsg ? '#94a3b8' : undefined,
+        color: isOrganizationMessage ? '#94a3b8' : undefined,
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
         <span>
           {headerLeading}
-          <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? '#fbbf24' : 'rgba(148,163,184,0.16)', color: isWholeSelected ? '#111827' : '#cbd5e1', border: isWholeSelected ? '1px solid #fbbf24' : '1px solid rgba(148,163,184,0.35)', fontWeight: 700, opacity: 1 }}>
+          <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(selectedUnits, messageTypeReference(msg))} label={typeBadgeLabel} style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? '#fbbf24' : 'rgba(148,163,184,0.16)', color: isWholeSelected ? '#111827' : '#cbd5e1', border: isWholeSelected ? '1px solid #fbbf24' : '1px solid rgba(148,163,184,0.35)', fontWeight: 700, opacity: 1 }}>
             {typeBadgeLabel}
-          </span>
+          </MessageElement>
           {' '}
           {homeMatch && (
             <span style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: '#0e7490', color: '#cffafe', fontWeight: 700, opacity: 1 }}>
@@ -195,7 +205,7 @@ export default function MessageCard({
       )}
 
       {badges}
-      {isTopicMsg && (
+      {isOrganizationMessage && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
           gap: 8, marginBottom: 6,
@@ -205,35 +215,42 @@ export default function MessageCard({
             flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
             userSelect: isActiveText ? 'text' : 'auto',
             cursor: isActiveText ? 'text' : 'inherit',
-          }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
-            {isSummaryTopic && topicMsgTitle ? (
+          }}>
+          <MessageTextPart message={msg} activeText={isActiveText} onMouseUp={onContentMouseUp}>
+            {isSummary && organizationTitle ? (
               <>
-                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{topicMsgTitle}</div>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{organizationTitle}</div>
               </>
-            ) : topicMsgTitle || (isClassifyTopic ? `分类（${topicMsgTargetCount ?? 0}）`
-              : isMergeTopic ? `归并（${topicMsgTargetCount ?? 0}）`
-              : `总结（${topicMsgTargetCount ?? 0}）`)}
-          </div>
+            ) : organizationTitle || (isClassification ? `分类（${memberCount ?? 0}）`
+              : isMerge ? `归并（${memberCount ?? 0}）`
+              : `总结（${memberCount ?? 0}）`)}
+          </MessageTextPart></div>
           <span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 999,
-            background: isMergeTopic ? 'rgba(148,163,184,0.18)' : isSummaryTopic ? 'rgba(52,211,153,0.2)' : 'rgba(2,150,80,0.2)',
-            color: isMergeTopic ? '#94a3b8' : isSummaryTopic ? '#6ee7b7' : '#86efac',
+            background: isMerge ? 'rgba(148,163,184,0.18)' : isSummary ? 'rgba(52,211,153,0.2)' : 'rgba(2,150,80,0.2)',
+            color: isMerge ? '#94a3b8' : isSummary ? '#6ee7b7' : '#86efac',
           }}>
-            {isClassifyTopic ? '双击进入分类' : isSummaryTopic ? '双击进入总结容器' : '双击进入归并'}
+            {isClassification ? '双击进入分类' : isSummary ? '双击进入总结容器' : '双击进入归并'}
           </span>
         </div>
       )}
 
       {/* Text selection mode indicator */}
-      {isActiveText && (isContentKind(msg.kind) || isTopicMsg) && (
+      {isActiveText && (isContentKind(msg.kind) || isOrganizationMessage) && (
         <div style={{ fontSize: 11, color: '#0b84ff', marginBottom: 4 }}>
-          文本选择模式：拖选记录 start+len；或点击高亮片段
+          拖选文字即可选择片段，或点击已有高亮片段
         </div>
       )}
 
       {/* Content */}
-      {!isTopicMsg && (
-        <div style={{ fontSize: 13, color: '#f5f5f5' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
+      {!isOrganizationMessage && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {msg.parts.filter(part => part.type === 'text' || part.type === 'code' || part.type === 'web').map(part => (
+            <MessageTextPart key={part.id} message={msg} partId={part.id} activeText={isActiveText} onMouseUp={onContentMouseUp}>{msg.kind === 'normal' && msg.parts!.filter(item => ['text', 'code', 'web'].includes(item.type)).length === 1 ? children : undefined}</MessageTextPart>
+          ))}
+        </div>
+      ) : !isOrganizationMessage && (
+        <div style={{ fontSize: prominence.fontSize, color: '#f5f5f5' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>
           {children != null ? children : (
             isContentKind(msg.kind) && (msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
             const sid = settlementTargetId ?? (msg as any).settlementTargetId as string | undefined;
@@ -279,11 +296,11 @@ export default function MessageCard({
         </div>
       )}
 
-      {/* Topic card description */}
-      {isTopicMsg && (
+      {/* Organization membership */}
+      {isOrganizationMessage && (
         <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <span>由 <span style={{ fontWeight: 600, color: '#cbd5e1' }}>{msg.author}</span> 发起</span>
-          <span>💬 {topicMsgTargetCount ?? 0} 条观点</span>
+          <MessageElement reference={messageMembersReference(msg)} selected={isMessageElementSelected(selectedUnits, messageMembersReference(msg))} label="所含消息">💬 {memberCount ?? 0} 条观点</MessageElement>
           <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
         </div>
       )}

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '../api';
 import type { Message } from '../types';
 
-export default function GovernancePanel({ topicId }: { topicId: string }) {
+export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: string }) {
   const [proposals, setProposals] = useState<Message[]>([]);
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -11,30 +11,30 @@ export default function GovernancePanel({ topicId }: { topicId: string }) {
 
   // Load governance proposals from regular message list (now includes kind: GOVERNANCE)
   useEffect(() => {
-    if (!topicId) return;
+    if (!scopeMessageId) return;
     setLoading(true);
-    api.getMessages(topicId, { limit: 50 })
+    api.getMessages(scopeMessageId, { limit: 50 })
       .then(r => {
         const msgs = r.data as unknown as Array<{ kind?: string; content?: string; id: string; createdAt: string; createdBy: { username: string } }>;
         setProposals(msgs.filter(m => m.kind === 'GOVERNANCE') as unknown as Message[]);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [topicId]);
+  }, [scopeMessageId]);
 
   async function handleSubmit() {
     if (!content.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      await api.createMessage(topicId, {
+      await api.createMessage(scopeMessageId, {
         kind: 'GOVERNANCE',
         contentType: 'TEXT',
         content: content.trim(),
       });
       setContent('');
       // Refresh
-      const r = await api.getMessages(topicId, { limit: 50 });
+      const r = await api.getMessages(scopeMessageId, { limit: 50 });
       const govMsgs = r.data.filter(m => m.kind === 'GOVERNANCE');
       setProposals(govMsgs);
     } catch (e: unknown) {

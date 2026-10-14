@@ -1,5 +1,7 @@
+import type { Part, Reference, ExecutedStance, Json, MessageState, Message as CoreMessage } from '@gonglun/core';
+
 // ============================================================
-// Core User & Topic Types
+// User and workspace views
 // ============================================================
 
 export interface User {
@@ -8,15 +10,10 @@ export interface User {
   createdAt: string;
 }
 
-export interface Topic {
-  id: string;
+/** Describes the current query, never an independent domain entity. */
+export interface ScopeView {
+  messageId: string | null;
   title: string;
-  body?: string;
-  status: 'OPEN' | 'ARCHIVED';
-  createdAt: string;
-  updatedAt: string;
-  createdBy: User;
-  _count?: { messages: number };
 }
 
 // ============================================================
@@ -25,7 +22,11 @@ export interface Topic {
 
 export interface Message {
   id: string;
-  topicId: string;
+  revision?: number;
+  parts?: Part[];
+  executedStance?: ExecutedStance;
+  state?: MessageState;
+  spending?: CoreMessage['spending'];
   kind: string;
   contentType: 'TEXT' | 'MARKDOWN';
   content: string;
@@ -95,7 +96,7 @@ export type RelationType =
  *   Sources: only 'message' or 'text-fragment' (text messages and their fragments)
  *   Targets: any kind — text messages, fragments, or relation messages/parts
  */
-export type TargetRef =
+export type TargetRef = ({ reference?: Reference } & (
   | { kind: 'message'; messageId: string }
   | {
       kind: 'text-fragment';
@@ -108,7 +109,7 @@ export type TargetRef =
       relationId: string;
       /** Which selectable part of the relation is targeted */
       part?: 'label' | 'decoration' | 'frame' | 'whole';
-    };
+    }));
 
 export type RelationTargetLayout = 'single-column' | 'multi-column' | 'single-row';
 
@@ -133,11 +134,17 @@ export interface RelationPayload {
   rewardRatio?: number;
   /** CORRECT stores the complete replacement content directly on the correction relation. */
   correctionContent?: string;
+  correctionValue?: Json;
 }
 
 export interface Relation {
   id: string;
-  topicId: string;
+  revision?: number;
+  parts?: Part[];
+  sourceRefs?: Reference[];
+  executedStance?: ExecutedStance;
+  state?: MessageState;
+  spending?: CoreMessage['spending'];
   relationType: RelationType;
   /**
    * ID of the text message that "sends" / authors this relation.
@@ -244,6 +251,7 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   DELEGATION:  { kind: 'edge-label',        label: '🤝 委托', color: 'green',   formsTrees: false },
   CODE_CHANGE: { kind: 'edge-label',        label: '💻 代码', color: 'teal',  formsTrees: false },
   OPERATIONS:  { kind: 'edge-label',        label: '📊 运营', color: 'cyan',   formsTrees: false },
+  AUTHORIZE:   { kind: 'edge-label',        label: '授权生效', color: 'green', formsTrees: false },
   JOIN:        { kind: 'edge-label',        label: '加入', color: 'slate',  formsTrees: false, isContainer: false },
 };
 
@@ -472,6 +480,7 @@ export interface SettlementRoundItem {
   previousRoundId: string | null;
   openedAt: string;
   closedAt: string | null;
+  endsAt?: string | null;
   note: string | null;
   settlementPro?: number | null;
   settlementCon?: number | null;
@@ -490,7 +499,9 @@ export interface SettlementResult {
   messageId: string;
   resultContent?: string;
   settlementType?: 'TRUTH' | 'VALUE';
-  result: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  result: 'TRUE' | 'FALSE' | 'UNKNOWN' | null;
+  status?: SettlementRoundItem['status'];
+  endsAt?: string | null;
   weights: { TRUE: number; FALSE: number; UNKNOWN: number };
   totalPro: number;
   totalCon: number;
@@ -520,8 +531,8 @@ export interface StanceRelation {
   kind: 'relation';
   id: string;
   relationMessageId: string;
-  topicId: string;
-  topicTitle: string;
+  scopeMessageId: string | null;
+  scopeTitle: string;
   type: string;      // AGREE | DISAGREE
   amount: number;
   stakeId?: string | null;
@@ -535,8 +546,8 @@ export interface StanceRelation {
 export interface StanceStake {
   kind: 'stake';
   id: string;
-  topicId: string;
-  topicTitle: string;
+  scopeMessageId: string | null;
+  scopeTitle: string;
   messageId: string;
   messageKind: string;  // TEXT | RELATION | ROUND | ROUND_RESULT | GOVERNANCE | CODE
   content: string;
@@ -548,8 +559,8 @@ export interface StanceTag {
   kind: 'tag';
   id: string;
   relationMessageId: string;
-  topicId: string;
-  topicTitle: string;
+  scopeMessageId: string | null;
+  scopeTitle: string;
   relationType: string;  // TAG | RECOMMEND | ARCHIVE
   label: string;
   subType: string | null;      // SPAM | OFFTOPIC | LOWVALUE | IMPORTANT | CUSTOM
@@ -626,7 +637,7 @@ export interface AuditLogEntry {
   action: string;
   entityType: string;
   entityId: string | null;
-  topicId: string | null;
+  scopeMessageId: string | null;
   createdAt: string;
   data?: AuditLogData | null;
   actor?: { id: string; username: string } | null;

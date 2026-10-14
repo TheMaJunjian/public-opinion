@@ -18,7 +18,6 @@ import type { Message, Relation } from '../types';
 function makeMsg(id: string, username = 'user'): Message {
   return {
     id,
-    topicId: 'topic1',
     kind: 'TEXT',
     contentType: 'TEXT',
     content: `Content of message ${id}`,
@@ -35,7 +34,6 @@ function makeRelation(
 ): Relation {
   return {
     id,
-    topicId: 'topic1',
     relationType,
     sourceMessageId,
     targetRefs: [targetRef],
@@ -52,7 +50,6 @@ function makeMultiTargetRelation(
 ): Relation {
   return {
     id,
-    topicId: 'topic1',
     relationType,
     sourceMessageId,
     targetRefs,
@@ -151,7 +148,7 @@ describe('computeStanceStats', () => {
   it('handles AGREE with null sourceMessageId (pure-stance)', () => {
     const msgs = [makeMsg('m1')];
     const rel: Relation = {
-      id: 'r1', topicId: 'topic1', relationType: 'AGREE',
+      id: 'r1', relationType: 'AGREE',
       sourceMessageId: null, targetRefs: [{ kind: 'message', messageId: 'm1' }],
       createdAt: new Date().toISOString(), createdBy: { id: 'u-user', username: 'user', createdAt: new Date().toISOString() },
     };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Relation } from '../types';
-import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, filterUnreadRelatedTraceMatchIds, getContainerAncestorChain, getLatestUserReadStatusByMessageId, partitionHomeContentMatchIds, partitionHomeFilterMatchIds } from '../pages/topicDetailHelpers';
+import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, filterUnreadRelatedTraceMatchIds, getLatestUserReadStatusByMessageId, partitionHomeContentMatchIds, partitionHomeFilterMatchIds } from '../pages/workbench/model/filters';
+import { getContainerAncestorChain } from '../pages/workbench/model/ownership';
 import { buildTraceProjection } from '../utils/traceProjection';
 
 const user = { id: 'user-1', username: 'alice', createdAt: '2026-01-01T00:00:00.000Z' };
@@ -14,7 +15,6 @@ function relation(
 ): Relation {
   return {
     id: `${relationType}-${createdAt}`,
-    topicId: 'topic-1',
     relationType,
     sourceMessageId: null,
     targetRefs: [{ kind: 'message', messageId }],
@@ -47,7 +47,6 @@ describe('getContainerAncestorChain', () => {
     const chain = getContainerAncestorChain('inner-classify', [
       {
         id: 'outer-classify',
-        topicId: 'topic-1',
         relationType: 'CLASSIFY',
         sourceMessageId: null,
         targetRefs: [{ kind: 'relation', relationId: 'inner-classify' }],

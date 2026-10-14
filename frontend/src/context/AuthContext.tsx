@@ -9,7 +9,7 @@ interface AuthContextValue {
   token: string | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, publicKey?: string | null) => Promise<void>;
+  register: (username: string, password: string, publicKey?: string | null, founderKey?: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Sign a payload with the stored private key, returns base64 signature or null */
   signPayload: (payload: string) => Promise<string | null>;
@@ -23,52 +23,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
-    const storedUser = localStorage.getItem('user');
-    let tokenExpired = false;
-    if (storedToken) {
-      try {
-        const tokenParts = storedToken.split('.');
-        if (tokenParts.length !== 3) throw new Error('令牌格式无效');
-        const base64Payload = tokenParts[1].replace(/-/g, '+').replace(/_/g, '/');
-        const paddedPayload = base64Payload.padEnd(Math.ceil(base64Payload.length / 4) * 4, '=');
-        const payload = JSON.parse(atob(paddedPayload)) as { exp?: number };
-        tokenExpired = typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now();
-      } catch {
-        tokenExpired = true;
-      }
-    }
-    if (storedToken && storedUser && !tokenExpired) {
-      try {
-        const parsedUser = JSON.parse(storedUser) as { username?: string; publicKey?: string | null };
-        const privateKey = parsedUser.username ? getPrivateKeyForUser(parsedUser.username) : null;
-        const signingKeyReady = Boolean(
-          parsedUser.username
-          && parsedUser.publicKey
-          && privateKey
-          && privateKeyMatchesPublicKey(privateKey, parsedUser.publicKey),
-        );
-        if (!signingKeyReady) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-          if (parsedUser.username) {
-            localStorage.removeItem(`privateKey:${getDeviceId()}:${parsedUser.username}`);
-          }
-        } else {
-          setToken(storedToken);
-          setUser(JSON.parse(storedUser));
-        }
-      } catch {
-        localStorage.removeItem('token');
+    let active = true;
+    api.getSession().then(session => {
+      if (!active) return;
+      if (session) {
+        localStorage.setItem('user', JSON.stringify(session.user));
+        setUser(session.user);
+        setToken('session');
+      } else {
         localStorage.removeItem('user');
-        localStorage.removeItem('privateKey');
+        localStorage.removeItem('token');
       }
-    } else if (tokenExpired) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      localStorage.removeItem('privateKey');
-    }
-    setLoading(false);
+    }).catch(() => {
+      if (active) { setUser(null); setToken(null); }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
   async function login(username: string, password: string) {
@@ -102,13 +71,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.user);
   }
 
-  async function register(username: string, password: string, publicKey?: string | null) {
-    await api.register({ username, password, publicKey: publicKey ?? null });
+  async function register(username: string, password: string, publicKey?: string | null, founderKey?: string) {
+    await api.register({ username, password, publicKey: publicKey ?? null, founderKey });
     await login(username, password);
   }
 
   async function logout() {
-    try { await api.logout(); } catch { /* ignore */ }
+    await api.logout();
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     if (user) localStorage.removeItem(`privateKey:${getDeviceId()}:${user.username}`);

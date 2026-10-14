@@ -28,12 +28,12 @@ html {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .topic-left-panel {
+  .workbench-left-panel {
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
 
-  .topic-left-panel::-webkit-scrollbar {
+  .workbench-left-panel::-webkit-scrollbar {
     display: none;
   }
 }
@@ -47,12 +47,12 @@ html {
   display: none;
 }
 
-.topic-right-panel {
+.workbench-right-panel {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
-.topic-right-panel::-webkit-scrollbar {
+.workbench-right-panel::-webkit-scrollbar {
   display: none;
 }
 
@@ -60,14 +60,14 @@ html {
   .guide-bubble {
     padding-bottom: 64px !important;
   }
-  .topic-left-panel {
+  .workbench-left-panel {
     overflow-x: auto !important;
     scrollbar-width: auto;
     -ms-overflow-style: auto;
     touch-action: pan-x pan-y pinch-zoom;
   }
 
-  .topic-left-panel::-webkit-scrollbar {
+  .workbench-left-panel::-webkit-scrollbar {
     display: initial;
   }
 }

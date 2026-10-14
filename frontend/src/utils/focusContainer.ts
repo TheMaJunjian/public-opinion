@@ -1,7 +1,7 @@
 /**
  * traceContainer.ts — Container expansion logic for trace mode.
  *
- * Extracted from TopicDetailPage.tsx's inline BFS so it can be unit-tested.
+ * Extracted from MessageWorkbenchPage.tsx's inline BFS so it can be unit-tested.
  *
  * Trace-expandable relations (CLASSIFY, SUMMARY) use a two-level
  * visibility model in trace mode:

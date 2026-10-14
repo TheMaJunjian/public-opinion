@@ -1,3 +1,4 @@
+import { messageScopePath } from '../utils/messageRoutes';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
@@ -5,9 +6,6 @@ import type { AuditLogEntry } from '../types';
 
 const ACTION_LABELS: Record<string, string> = {
   USER_REGISTERED: '与会者注册',
-  TOPIC_CREATED: '创建议题',
-  TOPIC_ARCHIVED: '归档议题',
-  TOPIC_REOPENED: '重开议题',
   MESSAGE_CREATED: '发布消息',
   RELATION_CREATED: '建立关系',
   RELATION_SUPERSEDED: '替换关系',
@@ -43,7 +41,6 @@ function entityLinkLabel(entityType: string, entityId: string | null): string | 
   const short = entityId.slice(-6);
   switch (entityType) {
     case 'Message': return `消息 #${short}`;
-    case 'Topic': return `议题 #${short}`;
     case 'User': return `与会者 #${short}`;
     case 'Stake': return `押注 #${short}`;
     case 'VoteStake': return `投票 #${short}`;
@@ -61,7 +58,6 @@ const SETTLEMENT_ACTIONS = new Set([
 
 /** 根据 entityType + entityId + details 生成跳转 URL */
 function resolveNavUrl(e: AuditLogEntry): string | null {
-  if (!e.topicId) return null;
 
   const d = e.data?.details as Record<string, unknown> | undefined;
 
@@ -72,7 +68,7 @@ function resolveNavUrl(e: AuditLogEntry): string | null {
     || (e.entityType === 'Message' && e.entityId ? e.entityId : undefined)
     || (e.entityType === 'Relation' && e.entityId ? e.entityId : undefined);
 
-  if (!msgId) return `/topics/${e.topicId}`;
+  if (!msgId) return messageScopePath(e.scopeMessageId);
 
   const params = new URLSearchParams();
   params.set('msg', msgId);
@@ -84,10 +80,10 @@ function resolveNavUrl(e: AuditLogEntry): string | null {
     params.set('highlightRound', roundId);
   }
 
-  return `/topics/${e.topicId}?${params.toString()}`;
+  return `${messageScopePath(e.scopeMessageId)}?${params.toString()}`;
 }
 
-export default function AuditLogView({ topicId }: { topicId?: string }) {
+export default function AuditLogView({ scopeMessageId }: { scopeMessageId?: string }) {
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -97,11 +93,11 @@ export default function AuditLogView({ topicId }: { topicId?: string }) {
 
   useEffect(() => {
     setLoading(true);
-    api.getAuditLogs({ topicId, page, limit: 30, action: filterAction || undefined })
+    api.getAuditLogs({ scopeMessageId, page, limit: 30, action: filterAction || undefined })
       .then(r => setEntries(r.data))
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [topicId, page, filterAction]);
+  }, [scopeMessageId, page, filterAction]);
 
   return (
     <div className="border border-gray-200 rounded-lg p-4 bg-white">
@@ -142,7 +138,7 @@ export default function AuditLogView({ topicId }: { topicId?: string }) {
                 <span className="text-gray-600 truncate flex-1">
                   {e.data?.summary ?? e.actor?.username ?? '系统'}
                 </span>
-                {e.topicId && (
+                {e.entityId && (
                   <button
                     onClick={ev => {
                       ev.stopPropagation();
@@ -163,7 +159,7 @@ export default function AuditLogView({ topicId }: { topicId?: string }) {
                         {entityLinkLabel(e.entityType, e.entityId)}
                       </span>
                     )}
-                    {e.topicId && (
+                    {e.entityId && (
                       <button
                         onClick={() => {
                           const url = resolveNavUrl(e);

@@ -19,8 +19,8 @@ function makeRelation(id: string): StanceRelation {
     kind: 'relation',
     id,
     relationMessageId: `relation-${id}`,
-    topicId: 'topic-1',
-    topicTitle: '测试分类',
+    scopeMessageId: 'classification-1',
+    scopeTitle: '测试分类',
     type: 'AGREE',
     amount: 1,
     stakeId: `stake-${id}`,
@@ -57,14 +57,14 @@ describe('StanceHistoryPanel', () => {
       return Promise.resolve(makeResponse([makeRelation('first')]));
     });
 
-    render(<StanceHistoryPanel userId="user-1" topicId="topic-1" />);
+    render(<StanceHistoryPanel userId="user-1" scopeMessageId="classification-1" />);
 
     await waitFor(() => {
       expect(screen.getByText(/记录 first/)).toBeInTheDocument();
       expect(screen.getByText(/记录 last/)).toBeInTheDocument();
     });
     expect(mockApi.getUserStances).toHaveBeenCalledWith('user-1', {
-      topicId: 'topic-1',
+      scopeMessageId: 'classification-1',
       page: 2,
       limit: 50,
     });

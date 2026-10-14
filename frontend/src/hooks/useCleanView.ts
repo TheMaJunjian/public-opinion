@@ -15,7 +15,7 @@ interface UseCleanViewInput {
   tagCounts: Record<string, Record<string, number>>;
 }
 
-interface CleanVisibleIds {
+export interface CleanVisibleIds {
   /** 通过过滤器的文本消息 ID */
   visibleTextIds: Set<string>;
   /** 两端文本消息都可见时，纳入的关系消息 ID */

@@ -8,7 +8,7 @@ import { GestureDirection, ShortcutSymbol } from './utils/gestureShortcut';
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const RegisterPage = lazy(() => import('./pages/RegisterPage'));
 const HomePage = lazy(() => import('./pages/HomePage'));
-const TopicDetailPage = lazy(() => import('./pages/TopicDetailPage'));
+const MessageWorkbenchPage = lazy(() => import('./pages/MessageWorkbenchPage'));
 const ExportViewerModal = lazy(() => import('./components/ExportViewerModal'));
 const TutorialModal = lazy(() => import('./components/TutorialModal'));
 const WelfareModal = lazy(() => import('./components/WelfareModal'));
@@ -106,7 +106,9 @@ function AppContent() {
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/" element={<HomePage />} />
-                <Route path="/topics/:topicId" element={<TopicDetailPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
+                <Route path="/messages" element={<MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
+                <Route path="/messages/:messageId" element={<MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
+                <Route path="/viewer" element={<MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
               </Routes>
             </Suspense>
           </main>

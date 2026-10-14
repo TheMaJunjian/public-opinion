@@ -53,15 +53,19 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
   const traceEdges = edges.filter(edge =>
     !excludedRelationIds.has(edge.relationMessageId) || traceStartIds.has(edge.relationMessageId),
   );
+  const representedMembers = new Map<string, Set<string>>();
+  for (const edge of traceEdges) {
+    const members = representedMembers.get(edge.relationMessageId) ?? new Set<string>();
+    members.add(edge.to.messageId); representedMembers.set(edge.relationMessageId, members);
+  }
   for (const membership of containerMemberships) {
     if (excludedRelationIds.has(membership.containerId) && !traceStartIds.has(membership.containerId)) continue;
     if (!messageMap.has(membership.containerId)) continue;
     membership.targetIds.forEach((targetId, index) => {
       if (!messageMap.has(targetId)) return;
-      const alreadyRepresented = traceEdges.some(edge =>
-        edge.relationMessageId === membership.containerId && edge.to.messageId === targetId,
-      );
-      if (alreadyRepresented) return;
+      const represented = representedMembers.get(membership.containerId) ?? new Set<string>();
+      if (represented.has(targetId)) return;
+      represented.add(targetId); representedMembers.set(membership.containerId, represented);
       traceEdges.push({
         id: `trace-membership:${membership.containerId}:${targetId}:${index}`,
         relationMessageId: membership.containerId,
@@ -102,44 +106,49 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
   for (const startId of startIds) if (messageMap.has(startId)) visibleIds.add(startId);
   const distanceMessageIds = new Set(visibleIds);
 
-  const nonCardRelationIds = new Set(
-    messages
-      .filter(message => message.kind === 'relation' && !isTraceTextLikeMessage(message))
-      .map(message => message.id),
-  );
-  let addedRelation = true;
-  while (addedRelation) {
-    addedRelation = false;
-    for (const relationId of nonCardRelationIds) {
-      const ownedEdges = traceEdges.filter(edge => edge.relationMessageId === relationId);
-      const relationType = messageMap.get(relationId)?.relationType?.toLowerCase();
-      const sourceIds = new Set(ownedEdges.map(edge => edge.from.messageId)
-        .filter(id => !id.startsWith('anon:') && id !== relationId && messageMap.has(id)));
-      const targetIds = new Set(ownedEdges.map(edge => edge.to.messageId)
-        .filter(id => !id.startsWith('anon:') && id !== relationId && messageMap.has(id)));
-      const isInlineFrame = relationType === 'merge' || relationType === 'arrange';
-      const isCorrect = relationType === 'correct';
-      const targetWithinTrace = [...targetIds].some(id =>
-        visibleIds.has(id) && (distances.get(id) ?? Number.POSITIVE_INFINITY) < distance,
-      );
-      const shouldComplete = isInlineFrame
-        ? visibleIds.has(relationId) || [...targetIds].some(id => visibleIds.has(id))
-        : isCorrect
-          ? [...sourceIds, ...targetIds].some(id => visibleIds.has(id))
-          : targetWithinTrace;
-      const endpointIds = [...sourceIds, ...targetIds];
-      const allEndpointsVisible = endpointIds.length > 0 && endpointIds.every(id => visibleIds.has(id));
-      if (!shouldComplete && !allEndpointsVisible) continue;
-
-      const dependencyIds = isInlineFrame
-        ? [relationId, ...sourceIds, ...targetIds]
-        : isCorrect
-          ? [relationId, ...sourceIds, ...targetIds]
-          : [relationId, ...sourceIds];
-      for (const id of dependencyIds) {
-        if (visibleIds.has(id)) continue;
-        visibleIds.add(id);
-        addedRelation = true;
+  const nonCardRelationIds = new Set(messages
+    .filter(message => message.kind === 'relation' && !isTraceTextLikeMessage(message))
+    .map(message => message.id));
+  const edgesByRelation = new Map<string, DemoEdge[]>();
+  for (const edge of traceEdges) {
+    const owned = edgesByRelation.get(edge.relationMessageId) ?? [];
+    owned.push(edge); edgesByRelation.set(edge.relationMessageId, owned);
+  }
+  const dependencies = new Map<string, { sourceIds: string[]; targetIds: string[]; completeTargets: boolean; inlineFrame: boolean }>();
+  const dependentsByMessage = new Map<string, Set<string>>();
+  for (const relationId of nonCardRelationIds) {
+    const ownedEdges = edgesByRelation.get(relationId) ?? [];
+    const existing = (id: string) => !id.startsWith('anon:') && id !== relationId && messageMap.has(id);
+    const sourceIds = [...new Set(ownedEdges.map(edge => edge.from.messageId).filter(existing))];
+    const targetIds = [...new Set(ownedEdges.map(edge => edge.to.messageId).filter(existing))];
+    const type = messageMap.get(relationId)?.relationType?.toLowerCase();
+    const inlineFrame = type === 'merge' || type === 'arrange';
+    dependencies.set(relationId, { sourceIds, targetIds, inlineFrame, completeTargets: inlineFrame || type === 'correct' });
+    for (const id of [relationId, ...sourceIds, ...targetIds]) {
+      const dependents = dependentsByMessage.get(id) ?? new Set<string>();
+      dependents.add(relationId); dependentsByMessage.set(id, dependents);
+    }
+  }
+  // Only revisit a relation after one of its dependencies becomes visible.
+  const pending = [...nonCardRelationIds];
+  const queued = new Set(pending);
+  for (let index = 0; index < pending.length; index++) {
+    const relationId = pending[index];
+    queued.delete(relationId);
+    const dependency = dependencies.get(relationId)!;
+    const { sourceIds, targetIds, inlineFrame, completeTargets } = dependency;
+    const endpoints = [...sourceIds, ...targetIds];
+    const shouldComplete = inlineFrame
+      ? visibleIds.has(relationId) || targetIds.some(id => visibleIds.has(id))
+      : completeTargets
+        ? endpoints.some(id => visibleIds.has(id))
+        : targetIds.some(id => visibleIds.has(id) && (distances.get(id) ?? Infinity) < distance);
+    if (!shouldComplete && !(endpoints.length > 0 && endpoints.every(id => visibleIds.has(id)))) continue;
+    for (const id of [relationId, ...sourceIds, ...(completeTargets ? targetIds : [])]) {
+      if (visibleIds.has(id)) continue;
+      visibleIds.add(id);
+      for (const dependent of dependentsByMessage.get(id) ?? []) if (!queued.has(dependent)) {
+        queued.add(dependent); pending.push(dependent);
       }
     }
   }

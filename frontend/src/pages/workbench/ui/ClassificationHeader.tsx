@@ -1,0 +1,68 @@
+import type { DemoMessage } from '../../../utils/modelBridge';
+interface Props {
+  isInsideClassify: boolean; isTemporaryJoinCategory: boolean; correctionFilterTargetId: string | null; comparisonMode: boolean;
+  comparisonTargetCount: number; correctionCount: number; temporaryJoinCount: number; classificationTitle: string; classifyKindLabel: string;
+  comparisonTargetId: string | null; joinFilterTargetId: string | null; currentClassifyRelMsg: DemoMessage | null | undefined;
+  classifyTargetCount: number; classifyExitLabel: string; onExitTemporary: () => void; onExitClassify: () => void;
+}
+export default function ClassificationHeader({ isInsideClassify, isTemporaryJoinCategory, correctionFilterTargetId, comparisonMode,
+  comparisonTargetCount, correctionCount, temporaryJoinCount, classificationTitle, classifyKindLabel, comparisonTargetId, joinFilterTargetId, currentClassifyRelMsg,
+  classifyTargetCount, classifyExitLabel, onExitTemporary: exitTemporaryCategory, onExitClassify: handleExitClassification }: Props) {
+  return (<>
+    {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null || comparisonMode) && (
+      <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
+        <div style={{ border: "1px solid #334155", borderRadius: 10, padding: "8px 10px", background: "linear-gradient(180deg, #162036 0%, #0f172a 100%)", color: "#e2e8f0", boxShadow: "0 6px 16px rgba(0,0,0,0.25)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {comparisonMode
+                  ? `对比临时分类（${comparisonTargetCount}）`
+                  : correctionFilterTargetId !== null
+                    ? `更正记录临时分类（${correctionCount}）`
+                    : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (classificationTitle || classifyKindLabel)}
+              </div>
+              {(comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory) && (
+                <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
+                  临时
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {comparisonMode ? (
+                <span>{comparisonTargetId ? `正在审阅目标消息 ${comparisonTargetId}` : '显示所有影响显示效果的赞同/反对目标消息'}</span>
+              ) : correctionFilterTargetId !== null ? (
+                <span>目标消息 {correctionFilterTargetId} 的全部更正消息</span>
+              ) : isTemporaryJoinCategory ? (
+                <span>目标消息 {joinFilterTargetId} 的全部加入记录</span>
+              ) : (
+                <>
+                  <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{currentClassifyRelMsg?.author ?? "系统"}</span> 发起</span>
+                  <span>💬 {classifyTargetCount} 条观点</span>
+                  <span>{currentClassifyRelMsg ? new Date(currentClassifyRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                </>
+              )}
+            </div>
+          </div>
+          <button onClick={() => {
+            if (comparisonMode) {
+              exitTemporaryCategory();
+              return;
+            }
+            if (correctionFilterTargetId !== null || isTemporaryJoinCategory) {
+              exitTemporaryCategory();
+              return;
+            }
+            handleExitClassification();
+          }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
+            {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory
+              ? "退出临时分类"
+              : classifyExitLabel}
+          </button>
+        </div>
+      </div>
+    )}
+
+
+  </>
+  );
+}

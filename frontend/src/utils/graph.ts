@@ -203,8 +203,8 @@ export function computeTextHops(
  *      model: the container card is shown when any target is within range; the
  *      container's children are expanded when maxHops >= 2.
  *
- * @param messages       All text messages in the topic
- * @param relations      All relations in the topic
+ * @param messages       All text messages in the classification
+ * @param relations      All relations in the classification
  * @param focusMessageIds  The "seed" message IDs for focus mode
  * @param maxHops        Maximum hop distance from focus set
  */
@@ -275,7 +275,7 @@ export function buildFocusSubgraph(
       //   distance=1 → container card visible (children hidden)
       //   distance>=2 → container expanded (all children visible)
       //
-      // Note: the inline BFS in TopicDetailPage.tsx has a more precise expansion
+      // Note: the inline BFS in MessageWorkbenchPage.tsx has a more precise expansion
       // rule that also expands when children are reached through cross-cutting
       // reference edges (minDist > 0 && hasVisibleChild).  That level of
       // precision requires per-message distance tracking not available here.

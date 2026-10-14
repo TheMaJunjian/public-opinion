@@ -313,10 +313,10 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         }
       }
       if (event.pointerId !== pointerIdRef.current) return;
-      const isTopicScrollPanelTouch = event.pointerType === 'touch'
+      const isWorkbenchScrollPanelTouch = event.pointerType === 'touch'
         && event.target instanceof Element
-        && Boolean(event.target.closest('[data-topic-scroll-panel]'));
-      if (event.pointerType === 'touch' && !isTopicScrollPanelTouch && pointsRef.current.length >= 2) {
+        && Boolean(event.target.closest('[data-workbench-scroll-panel]'));
+      if (event.pointerType === 'touch' && !isWorkbenchScrollPanelTouch && pointsRef.current.length >= 2) {
         const first = pointsRef.current[0];
         const current = { x: event.clientX, y: event.clientY };
         if (Math.hypot(event.clientX - first.x, event.clientY - first.y) >= 8

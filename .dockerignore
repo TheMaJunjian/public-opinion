@@ -1,0 +1,16 @@
+.git
+.github
+**/node_modules
+**/dist
+**/coverage
+**/.env
+**/.env.*
+data
+README/logs
+README/debug
+.venv
+.vscode
+backend
+refactor
+apps/web
+*.tsbuildinfo

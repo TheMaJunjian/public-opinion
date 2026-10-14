@@ -1,7 +1,7 @@
 // Test environment setup
 // This file runs before every test file.
 
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 
 Object.defineProperty(window, 'matchMedia', {
 	writable: true,

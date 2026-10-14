@@ -7,7 +7,6 @@ const user: User = { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00
 function makeDelegation(kind: 'CREATE' | 'FULFILL', content: string): Relation {
   return {
     id: `delegation-${kind.toLowerCase()}`,
-    topicId: 'topic-1',
     relationType: 'DELEGATION',
     sourceMessageId: null,
     targetRefs: [],
@@ -20,7 +19,6 @@ function makeDelegation(kind: 'CREATE' | 'FULFILL', content: string): Relation {
 function makeSummary(): Relation {
   return {
     id: 'summary-1',
-    topicId: 'topic-1',
     relationType: 'SUMMARY',
     sourceMessageId: null,
     targetRefs: [{ kind: 'message', messageId: 'text-1' }],
@@ -36,7 +34,6 @@ describe('convertMessagesToDemoModel', () => {
       [],
       [{
         id: 'relation-1',
-        topicId: 'topic-1',
         relationType: 'AGREE',
         sourceMessageId: null,
         targetRefs: [{ kind: 'relation', relationId: 'target-1' }],
@@ -51,7 +48,6 @@ describe('convertMessagesToDemoModel', () => {
   it('shows relation targets on JOIN messages', () => {
     const result = convertMessagesToDemoModel([], [{
       id: 'join-1',
-      topicId: 'topic-1',
       relationType: 'JOIN',
       sourceMessageId: 'container-1',
       targetRefs: [{ kind: 'relation', relationId: 'target-container-1' }],
@@ -81,7 +77,6 @@ describe('convertMessagesToDemoModel', () => {
   it('uses one content card for a governance message and its compatibility relation', () => {
     const message: Message = {
       id: 'proposal-1',
-      topicId: 'topic-1',
       kind: 'GOVERNANCE',
       contentType: 'TEXT',
       content: '请表决这个提案',
@@ -93,7 +88,6 @@ describe('convertMessagesToDemoModel', () => {
     };
     const compatibilityRelation: Relation = {
       id: message.id,
-      topicId: message.topicId,
       relationType: 'PROPOSAL',
       sourceMessageId: null,
       targetRefs: message.targetRefs ?? [],
@@ -119,7 +113,6 @@ describe('convertMessagesToDemoModel', () => {
   it('orders content and relation cards together by creation time', () => {
     const textMessage: Message = {
       id: 'text-1',
-      topicId: 'topic-1',
       kind: 'TEXT',
       contentType: 'TEXT',
       content: '较晚的文本消息',

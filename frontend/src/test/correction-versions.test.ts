@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, type DemoEdge, type DemoMessage } from '../utils/modelBridge';
-import { formatCorrectionRange, generateCorrectionContent, isCorrectableCorrectionTarget } from '../pages/topicDetailHelpers';
+import { formatCorrectionRange, generateCorrectionContent, isCorrectableCorrectionTarget } from '../pages/workbench/model/correction';
 import CorrectionComparisonPopup, { computeReplacementDiff, getCorrectionBaseContent, rebuildCorrectionContent } from '../components/CorrectionComparisonPopup';
 
 function message(id: string, createdAt: string, content: string, kind: DemoMessage['kind']): DemoMessage {

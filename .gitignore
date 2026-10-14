@@ -1,3 +1,12 @@
 .vite/
+node_modules/
+**/node_modules/
+**/dist/
+**/coverage/
+/data/
+*.tsbuildinfo
 README/logs/
 README/debug/
+.env
+.env.*
+!.env.example

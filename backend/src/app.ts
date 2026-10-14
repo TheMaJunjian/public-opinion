@@ -9,16 +9,33 @@ import authRouter from './routes/auth';
 import topicsRouter from './routes/topics';
 import messagesRouter from './routes/messages';
 import relationsRouter from './routes/relations';
+import pointsRouter from './routes/points';
+import rulesRouter from './routes/rules';
+import stakesRouter from './routes/stakes';
+import roundsRouter from './routes/rounds';
+import stancesRouter from './routes/stances';
+import debugLogRouter from './routes/debugLog';
+import auditLogsRouter from './routes/auditLogs';
+import revenueRouter from './routes/revenue';
+import exportRouter from './routes/export';
+import tagsRouter from './routes/tags';
+import usersRouter from './routes/users';
 import { errorHandler } from './middleware/errorHandler';
+import { verifySignature } from './middleware/auth';
 
 const app = express();
 
-app.use(cors());
+app.set('trust proxy', 1);
+
+const corsOrigin = process.env.NODE_ENV === 'production'
+  ? process.env.CORS_ORIGIN || false
+  : true;
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
 // Rate limiters
 // Rate limiters — higher limits in test environments to avoid interference
-const writeLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 60;
+const writeLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 600;
 const authLimiterMax = process.env.NODE_ENV === 'test' ? 1000 : 20;
 
 const authLimiter = rateLimit({
@@ -39,6 +56,14 @@ const writeLimiter = rateLimit({
   skip: (req) => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS',
 });
 
+const debugLogLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '调试日志请求过于频繁，请稍后再试' },
+});
+
 // Load OpenAPI spec and mount Swagger UI
 // __dirname is dist/ in production, src/ in dev; openapi.yaml lives in src/
 const swaggerDocument = YAML.load(path.join(__dirname, '..', 'src', 'openapi.yaml')) as Record<string, unknown>;
@@ -49,6 +74,19 @@ app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/topics', writeLimiter, topicsRouter);
 app.use('/api/topics/:topicId/messages', writeLimiter, messagesRouter);
 app.use('/api/topics/:topicId/relations', writeLimiter, relationsRouter);
+app.use('/api/points', pointsRouter);
+app.use('/api/rules', rulesRouter);
+app.use('/api/messages/:id/stakes', stakesRouter);
+app.use('/', writeLimiter, roundsRouter);
+app.use('/', writeLimiter, stancesRouter);
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/debug-log', debugLogLimiter, debugLogRouter);
+}
+app.use('/', auditLogsRouter);
+app.use('/', revenueRouter);
+app.use('/api/topics/:topicId/export', exportRouter);
+app.use('/', tagsRouter);
+app.use('/', usersRouter);
 
 // Health check
 app.get('/health', (_req, res) => {

@@ -1,0 +1,16 @@
+export const Z_INDEX = {
+  page: 0,
+  header: 10,
+  popover: 50,
+  freezeButton: 60,
+  popup: 190,
+  modal: 1000,
+  guide: 3100,
+  shortcut: 2147483000,
+  shortcutVisual: 2147483002,
+  shortcutContent: 2147483001,
+  shortcutStatus: 2147483003,
+  shortcutCancelled: 2147483004,
+  shortcutFailure: 2147483005,
+  shortcutTransient: 3000,
+} as const;

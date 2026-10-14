@@ -1,0 +1,187 @@
+FAIL src/test/e2e-flow.test.ts
+  鈼?Console
+
+    console.error
+      [鏈鐞嗛敊璇痌 Error: 璇ユ秷鎭凡鏈夎繘琛屼腑鐨勭粨绠楄疆娆?          at applyMessageCreated (D:\Projects\public-opinion\backend\src\lib\events.ts:339:25)
+          at D:\Projects\public-opinion\backend\src\routes\rounds.ts:40:22
+
+      41 |     return;
+      42 |   }
+    > 43 |   console.error('[鏈鐞嗛敊璇痌', err);
+         |           ^
+      44 |   res.status(500).json({ error: '鏈嶅姟鍣ㄥ唴閮ㄩ敊璇? });
+      45 | }
+      46 |
+
+      at errorHandler (src/middleware/errorHandler.ts:43:11)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:71:5)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at node_modules/express/lib/router/index.js:646:15
+      at next (node_modules/express/lib/router/index.js:265:14)
+      at next (node_modules/express/lib/router/route.js:141:14)
+      at src/routes/rounds.ts:60:5
+
+    console.error
+      [鏈鐞嗛敊璇痌 Error: 璇ユ秷鎭凡鏈夎繘琛屼腑鐨勭粨绠楄疆娆?          at applyMessageCreated (D:\Projects\public-opinion\backend\src\lib\events.ts:339:25)
+          at D:\Projects\public-opinion\backend\src\routes\rounds.ts:40:22
+
+      41 |     return;
+      42 |   }
+    > 43 |   console.error('[鏈鐞嗛敊璇痌', err);
+         |           ^
+      44 |   res.status(500).json({ error: '鏈嶅姟鍣ㄥ唴閮ㄩ敊璇? });
+      45 | }
+      46 |
+
+      at errorHandler (src/middleware/errorHandler.ts:43:11)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:71:5)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at Layer.handle_error (node_modules/express/lib/router/layer.js:67:12)
+      at trim_prefix (node_modules/express/lib/router/index.js:326:13)
+      at node_modules/express/lib/router/index.js:286:9
+      at router.process_params (node_modules/express/lib/router/index.js:346:12)
+      at next (node_modules/express/lib/router/index.js:280:10)
+      at node_modules/express/lib/router/index.js:646:15
+      at next (node_modules/express/lib/router/index.js:265:14)
+      at next (node_modules/express/lib/router/route.js:141:14)
+      at src/routes/rounds.ts:60:5
+
+    console.log
+        Round2 status: 500 鏈嶅姟鍣ㄥ唴閮ㄩ敊璇?
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:238:13)
+
+    console.log
+        鉁?Alice: available=160, locked=35, balance=160
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:343:13)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?4. 鍒涘缓鍚勭被鍏崇郴娑堟伅
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+      192 |           targetRefs: [{ kind: 'message', messageId: msgId1 }],
+      193 |         });
+    > 194 |       expect(archive.status).toBe(201);
+          |                              ^
+      195 |     }
+      196 |   });
+      197 |
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:194:30)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?5. 鍙戣捣缁撶畻 鈫?鎶曠エ 鈫?鍏抽棴缁撶畻
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 500
+
+      206 |       .send({ note: '绗竴杞粨绠? });
+      207 |
+    > 208 |     expect(roundRes.status).toBe(201);
+          |                             ^
+      209 |     expect(roundRes.body.status).toBe('VOTING');
+      210 |     const roundId = roundRes.body.id;
+      211 |
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:208:29)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?6. 鍙戣捣鏂颁竴杞粨绠楁帹缈讳笂涓€杞?
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 500
+
+      237 |
+      238 |     console.log('  Round2 status:', roundRes.status, roundRes.body?.error ?? '');
+    > 239 |     expect(roundRes.status).toBe(201);
+          |                             ^
+      240 |     const roundId2 = roundRes.body.id;
+      241 |
+      242 |     // Bob 鎶曠エ FALSE
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:239:29)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?8. 楠岃瘉锛氭墍鏈夋搷浣滈兘浜х敓浜?Message 璁板綍
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 2
+    Received:    0
+
+      296 |     expect(govMsgs.length).toBe(1);                      // 娌荤悊鎻愭
+      297 |     expect(codeMsgs.length).toBe(1);                     // CODE 娑堟伅
+    > 298 |     expect(roundMsgs.length).toBeGreaterThanOrEqual(2);  // 2 杞粨绠?= 鈮? ROUND + 鈮? ROUND_RESULT
+          |                              ^
+      299 |     expect(relMsgs.length).toBeGreaterThanOrEqual(9);    // AGREE + DISAGREE + REF + ANNO + 5脳ARCHIVE + 2 votes
+      300 |
+      301 |     console.log(`  鉁?鎬绘秷鎭? ${allMsgs.length}`);
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:298:30)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?9. 楠岃瘉锛氱粨绠椾骇鐢熶簡 ROUND 鍜?ROUND_RESULT 娑堟伅
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 4
+    Received:    0
+
+      313 |     });
+      314 |
+    > 315 |     expect(roundMsgs.length).toBeGreaterThanOrEqual(4); // 2 ROUND + 2 ROUND_RESULT
+          |                              ^
+      316 |
+      317 |     const rounds = await prisma.settlementRound.findMany({
+      318 |       where: { messageId: msgId1 },
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:315:30)
+
+Test Suites: 1 failed, 7 skipped, 1 of 8 total
+Tests:       5 failed, 122 skipped, 5 passed, 132 total
+Snapshots:   0 total
+Time:        5.39 s
+Ran all test suites with tests matching "E2E".

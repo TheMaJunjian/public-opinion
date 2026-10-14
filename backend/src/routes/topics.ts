@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { applyEvent } from '../lib/events';
 
 const router = Router();
@@ -61,7 +61,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 // POST /api/topics
-router.post('/', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { title, body } = createTopicSchema.parse(req.body);
     const topic = await applyEvent({
@@ -99,7 +99,7 @@ router.get('/:topicId', async (req: Request, res: Response, next: NextFunction) 
 });
 
 // PATCH /api/topics/:topicId
-router.patch('/:topicId', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.patch('/:topicId', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
     const { status } = updateTopicSchema.parse(req.body);

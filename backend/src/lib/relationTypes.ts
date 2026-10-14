@@ -36,16 +36,26 @@ export const RELATION_TYPES = [
   'ANNOTATION',   // 注释
   'REFERENCE',    // 引用
   'REPLY',        // 回复
+  'NOTIFY',       // 通知回复目标消息相关与会者
   'AGREE',        // 赞同（有附带文本消息时，视为支持）
   'DISAGREE',     // 反对（有附带文本消息时，视为反驳）
   'TAG',          // 标注（消息旁的装饰标签，内容不能为空）
+  'READ',         // 已读标注（仅协议费，不押注）
+  'UNREAD',       // 未读标注（仅协议费，不押注）
   'CORRECT',      // 更正
-  'ARRANGE',      // 排列（用户对消息的关系；所有目标均存储在 targetRefs 中；payload.targetLayout 控制排列方向）
+  'ARRANGE',      // 排列（与会者对消息的关系；所有目标均存储在 targetRefs 中；payload.targetLayout 控制排列方向）
   'CLASSIFY',     // 分类
   'MERGE',        // 归并
   'SUMMARY',      // 总结
   'RECOMMEND',    // 推荐
   'ARCHIVE',      // 冷藏
+  'ATTENTION',    // 关注
+  'BLOCK',        // 拉黑
+  'PROPOSAL',     // 提案（修改规则/制度的治理提案，需质押，可投票结算）
+  'DELEGATION',   // 委托（押注作为完成委托的报酬）
+  'CODE_CHANGE',  // 代码变更（修改程序代码的提案，需质押，可投票结算后自动部署）
+  'OPERATIONS',   // 运营（收入、统计等程序运营公告信息）
+  'JOIN',         // 加入（内部成员关系记录，将消息加入容器的链接）
 ] as const;
 
 /** The union type of all known relation types (for TypeScript type safety) */

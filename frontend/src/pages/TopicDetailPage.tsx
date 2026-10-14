@@ -1,589 +1,887 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, getLatestUserReadStatusByMessageId, partitionHomeContentMatchIds } from './topicDetailHelpers';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { ApiError, type ExportData } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { convertMessagesToDemoModel, unitSelectionToTargetRef, computeCorrectedEdgeMap, computeUserFilteredEdges, computeUserSuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats } from '../utils/modelBridge';
+import { convertMessagesToDemoModel, demoMessageToRelation, unitSelectionToTargetRef, computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, computeEffectiveSuppressedRelIds, computeGloballySuppressedRelIds, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, computeTransitiveVoteStats, isContentKind, isTraceTextLikeMessage, kindLabel } from '../utils/modelBridge';
 import type {
-  DemoMessage, DemoEdge, UnitSelection, Selection,
-  RelationType,
+  DemoMessage, DemoEdge, UnitSelection,
+  RelationType, MessageKind,
 } from '../utils/modelBridge';
-import type { Topic, TargetRef, Relation, RelationPayload } from '../types';
-import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
+
+function isTraceExpandableFrameType(relationType: string): boolean {
+  const normalizedType = relationType.toLowerCase();
+  return normalizedType === 'summary' || normalizedType === 'classify';
+}
+import type { Topic, TargetRef, Relation, MessageStakes, User } from '../types';
+import { getPresentationSpec, getRelationTitle } from '../types';
 import GraphView, { clearBrowserSelection, extractTextTargetsForMessage, relationTypeName, getSelectionFragment, buildAnnoTree, renderAnnoNodes } from '../components/GraphView';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { Z_INDEX } from '../constants/zIndex';
+import MessageCard, { type MessageCardContext } from '../components/MessageCard';
+import SettlementPanel from '../components/SettlementPanel';
+import RoundHistory from '../components/RoundHistory';
+import TopicRightPanel from '../components/TopicRightPanel';
+import LeaderboardModal from '../components/LeaderboardModal';
+import PromptModal from '../components/PromptModal';
+import { MessageJumpOverlay } from '../components/PopupOverlay';
+import RegistrationGuideHint from '../components/RegistrationGuideHint';
+import useStakeCalculation from '../hooks/useStakeCalculation';
+import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
+import { applyContainerExpansion } from '../utils/focusContainer';
+import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from '../utils/traceProjection';
+import { operationLog } from '../utils/debugLog';
 
-// ========================= Helpers =========================
+const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
-const ALL_RELATION_TYPES: RelationType[] = [
-  "annotation", "reference", "reply", "agree", "disagree", "tag", "arrange",
-  "correct", "classify", "merge", "summary",
-  // "recommend" and "archive" are now accessible via TAG's secondary relation selector
-];
-
-/** Max characters to display for an existing tag label in the secondary relation selector. */
-const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;
-const CLASSIFY_TARGET_HINT = "文本消息、排列关系消息、分类消息或归并关系消息";
-
-/** Return the display label for a secondary relation option button. */
-function secondaryRelationLabel(t: string): string {
-  if (t === "none") return "无";
-  if (t === "question") return "疑问";
-  if (t === "answer") return "回答";
-  if (t === "vertical") return "纵";
-  if (t === "horizontal") return "横";
-  if (t === "recommend" || t === "archive") return relationTypeName(t);
-  if (ALL_RELATION_TYPES.includes(t as RelationType)) return relationTypeName(t as RelationType);
-  return t; // existing tag label text
-}
-
-function replyAdditionalLabel(t: string): string {
-  if (t === "question") return "疑问";
-  if (t === "answer") return "回答";
-  return "回复";
-}
-
-/** True when a TAG edge's relationLabel carries actual user-entered label text (not the bare type name). */
-function isValidTagLabel(label: string | undefined): label is string {
-  return !!label && label !== 'tag';
-}
-
-function selKey(u: UnitSelection): string {
-  const s = u.selection;
-  if (s.kind === "whole") return `${u.messageId}::whole`;
-  if (s.kind === "edge") return `${u.messageId}::edge:${s.edgeId}`;
-  return `${u.messageId}::text:${s.start}:${s.len}:${s.text}`;
-}
-
-function unitEquals(a: UnitSelection, b: UnitSelection) {
-  return selKey(a) === selKey(b);
-}
-
-function mergeUnits(base: UnitSelection[], added: UnitSelection[]) {
-  const set = new Set(base.map(selKey));
-  const res = [...base];
-  for (const u of added) {
-    const k = selKey(u);
-    if (!set.has(k)) { set.add(k); res.push(u); }
-  }
-  return res;
-}
-
-function foldUpToWhole(units: UnitSelection[]) {
-  const seen = new Set<string>(); const res: UnitSelection[] = [];
-  for (const u of units) {
-    if (seen.has(u.messageId)) continue;
-    seen.add(u.messageId);
-    res.push({ messageId: u.messageId, selection: { kind: "whole" } });
-  }
-  return res;
-}
-
-function describeUnit(u: UnitSelection): string {
-  const s = u.selection;
-  if (s.kind === "whole") return `整条消息 ${u.messageId}`;
-  if (s.kind === "edge") return `关系消息 ${u.messageId} 的边片段 @edge:${s.edgeId}`;
-  return `消息 ${u.messageId} 的片段(start=${s.start}, len=${s.len})「${s.text}」`;
-}
-
-let _nextIdCounter = 1;
-function nextId(prefix: string): string {
-  return `${prefix}-local-${Date.now()}-${_nextIdCounter++}`;
-}
-
-/** Extract a short display ID from a TargetRef for use in relation message content strings. */
-function targetRefDisplayId(r: TargetRef): string {
-  if (r.kind === 'message' || r.kind === 'text-fragment') return r.messageId;
-  return r.relationId;
-}
-
-function buildRelationPayload(params: {
-  relationType: string;
-  label?: string;
-  title?: string;
-  targetLayout?: RelationPayload['targetLayout'];
-}): RelationPayload | undefined {
-  const payload: RelationPayload = {};
-  if (params.label) payload.label = params.label;
-  if (params.title) payload.title = params.title;
-  if (params.targetLayout) payload.targetLayout = params.targetLayout;
-  if ((params.relationType.toUpperCase() === 'MERGE' || params.relationType.toUpperCase() === 'SUMMARY') && !payload.targetLayout) {
-    payload.targetLayout = 'multi-column';
-  }
-  return Object.keys(payload).length > 0 ? payload : undefined;
-}
-
-function relationTargetRefsSummary(targetRefs: TargetRef[]): string {
-  if (targetRefs.length === 0) return '（无目标）';
-  return targetRefs.map(ref => {
-    if (ref.kind === 'message') return `消息 ${ref.messageId}`;
-    if (ref.kind === 'text-fragment') return `消息 ${ref.messageId} 的片段`;
-    return `关系 ${ref.relationId}`;
-  }).join('；');
-}
-
-function buildRelationDemoMessage(relation: Relation): DemoMessage {
-  const relType = relation.relationType.toLowerCase() as RelationType;
-  const label = getRelationLabel(relation.payload);
-  const title = getRelationTitle(relation.payload);
-  const typeName = relationTypeName(relType);
-  const targetSummary = relationTargetRefsSummary(relation.targetRefs);
-  let content: string;
-  if (relType === 'classify') {
-    content = `分类：${title ?? `分类（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
-  } else if (relType === 'summary') {
-    content = `总结：${title ?? `总结（${relation.targetRefs.length}）`}\n目标：${targetSummary}`;
-  } else if (relType === 'tag' && label) {
-    content = `建立${typeName}关系「${label}」\n目标：${targetSummary}`;
-  } else if (relation.sourceMessageId) {
-    content = `建立${typeName}关系\n来源：${relation.sourceMessageId}\n目标：${targetSummary}`;
-  } else {
-    content = `建立${typeName}关系（无来源消息）\n目标：${targetSummary}`;
-  }
-  return {
-    id: relation.id,
-    author: relation.createdBy.username,
-    createdAt: relation.createdAt,
-    kind: 'relation',
-    relationType: relType,
-    relationPayload: relation.payload,
-    content,
-  };
-}
-
-function getTextTargetIds(targetRefs: TargetRef[]): string[] {
-  return Array.from(new Set(
-    targetRefs
-      .filter((ref): ref is Extract<TargetRef, { kind: 'message' | 'text-fragment' }> =>
-        ref.kind === 'message' || ref.kind === 'text-fragment'
-      )
-      .map(ref => ref.messageId)
-  ));
-}
-
-function getRelationTargetIds(targetRefs: TargetRef[]): string[] {
-  return Array.from(new Set(
-    targetRefs
-      .filter((ref): ref is Extract<TargetRef, { kind: 'relation' }> => ref.kind === 'relation')
-      .map(ref => ref.relationId)
-  ));
-}
-
-function collectOwnedByRelation(
-  relationId: string,
-  relationById: Map<string, Relation>,
-  visited = new Set<string>()
-): { textIds: Set<string>; relationIds: Set<string> } {
-  const textIds = new Set<string>();
-  const relationIds = new Set<string>();
-  if (visited.has(relationId)) return { textIds, relationIds };
-  visited.add(relationId);
-  const relation = relationById.get(relationId);
-  if (!relation) return { textIds, relationIds };
-
-  // Collect text messages from targetRefs
-  for (const textId of getTextTargetIds(relation.targetRefs)) textIds.add(textId);
-  // For ARRANGE relations, the sourceMessageId is also an owned text message
-  // (the arranged message is part of the arrange frame).
-  const relType = relation.relationType.toUpperCase();
-  if (relType === 'ARRANGE' && relation.sourceMessageId) {
-    textIds.add(relation.sourceMessageId);
-  }
-  for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
-    relationIds.add(childRelationId);
-    const child = relationById.get(childRelationId);
-    if (!child) continue;
-    const childType = child.relationType.toUpperCase();
-    if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'ARRANGE' && childType !== 'SUMMARY') continue;
-    const nested = collectOwnedByRelation(childRelationId, relationById, visited);
-    nested.textIds.forEach(id => textIds.add(id));
-    nested.relationIds.forEach(id => relationIds.add(id));
-  }
-
-  return { textIds, relationIds };
-}
-
-/**
- * Expand a set of text message IDs by following CORRECT (更正) relations.
- * When text message T is in the input set, this function also adds the other
- * text message T2 from any CORRECT relation that involves T (as source or target).
- * The traversal is repeated until no new messages are found (handles correction chains).
- *
- * Returns a new Set with all the original IDs plus any additionally discovered ones.
- */
-function expandTextIdsWithCorrections(
-  textIds: Set<string>,
-  edges: DemoEdge[],
-  msgMap: Map<string, DemoMessage>
-): Set<string> {
-  const expanded = new Set(textIds);
-  const queue = Array.from(textIds);
-  const visited = new Set<string>();
-  while (queue.length > 0) {
-    const tid = queue.shift()!;
-    if (visited.has(tid)) continue;
-    visited.add(tid);
-    for (const e of edges) {
-      if (e.relationType !== 'correct') continue;
-      if (msgMap.get(e.from.messageId)?.kind !== 'normal' || msgMap.get(e.to.messageId)?.kind !== 'normal') continue;
-      if (e.from.messageId === tid && !expanded.has(e.to.messageId)) {
-        expanded.add(e.to.messageId);
-        queue.push(e.to.messageId);
-      } else if (e.to.messageId === tid && !expanded.has(e.from.messageId)) {
-        expanded.add(e.from.messageId);
-        queue.push(e.from.messageId);
-      }
-    }
-  }
-  return expanded;
-}
-
-/** Deduplicate UnitSelection edges by (messageId + selection.kind), returning unique TargetRefs. */
-function uniqueTargetRefsFromEdges(
-  relEdges: DemoEdge[],
-  msgMap: Map<string, DemoMessage>
-): TargetRef[] {
-  const seen = new Set<string>();
-  const refs: TargetRef[] = [];
-  for (const e of relEdges) {
-    const key = e.to.messageId + '::' + e.to.selection.kind;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    refs.push(unitSelectionToTargetRef(e.to, msgMap));
-  }
-  return refs;
-}
-
-// ========================= Correction content generation =========================
-
-/**
- * For a CORRECT relation, generate the new message content by applying
- * the replacement text to the selected fragment(s) or whole of the target message.
- * Returns null if the inputs are invalid (e.g. multiple target messages).
- */
-function generateCorrectionContent(
-  targetUnits: UnitSelection[],
-  replacementText: string,
-  msgMap: Map<string, DemoMessage>
-): string | null {
-  const uniqueTargetMids = Array.from(new Set(targetUnits.map(u => u.messageId)));
-  if (uniqueTargetMids.length !== 1) return null;
-  const targetMid = uniqueTargetMids[0];
-  const targetMsg = msgMap.get(targetMid);
-  if (!targetMsg || targetMsg.kind !== "normal") return null;
-
-  // Collect text-fragment selections; if any exist, prefer fragment-level correction
-  // even when a whole-message selection is also present (Bug 4 fix: whole→fragment support).
-  const textFragments = targetUnits
-    .filter(u => u.selection.kind === "text")
-    .map(u => u.selection as { kind: "text"; start: number; len: number; text: string });
-
-  if (textFragments.length > 0) {
-    // Apply replacements in reverse order so earlier positions remain valid
-    const sorted = [...textFragments].sort((a, b) => b.start - a.start);
-    let content = targetMsg.content;
-    for (const frag of sorted) {
-      content = content.slice(0, frag.start) + replacementText + content.slice(frag.start + frag.len);
-    }
-    return content;
-  }
-
-  // Whole-message selection only: full replacement
-  return replacementText;
-}
-
-function buildTextCorrectionReplacementMap(
-  edges: DemoEdge[],
-  msgMap: Map<string, DemoMessage>
-): Map<string, string> {
-  const raw = new Map<string, string>();
-  for (const e of edges) {
-    if (e.relationType !== "correct") continue;
-    if (e.from.messageId.startsWith("anon:")) continue;
-    const fromMsg = msgMap.get(e.from.messageId);
-    const toMsg = msgMap.get(e.to.messageId);
-    if (fromMsg?.kind !== "normal" || toMsg?.kind !== "normal") continue;
-    raw.set(e.to.messageId, e.from.messageId);
-  }
-  const resolved = new Map<string, string>();
-  function resolve(id: string, seen = new Set<string>()): string {
-    const next = raw.get(id);
-    if (!next) return id;
-    if (seen.has(id)) return id;
-    seen.add(id);
-    const finalId = resolve(next, seen);
-    resolved.set(id, finalId);
-    return finalId;
-  }
-  for (const oldId of raw.keys()) resolve(oldId);
-  return resolved;
-}
-
-function applyTextCorrectionInheritance(
-  edges: DemoEdge[],
-  msgMap: Map<string, DemoMessage>
-): DemoEdge[] {
-  const replaceMap = buildTextCorrectionReplacementMap(edges, msgMap);
-  if (replaceMap.size === 0) return edges;
-  const next: DemoEdge[] = [];
-  const seen = new Set<string>();
-  let changed = false;
-  for (const e of edges) {
-    if (e.relationType === "correct") {
-      next.push(e);
-      continue;
-    }
-    const fromIsNormal = msgMap.get(e.from.messageId)?.kind === "normal";
-    const toIsNormal = msgMap.get(e.to.messageId)?.kind === "normal";
-    const mappedFrom = fromIsNormal ? (replaceMap.get(e.from.messageId) ?? e.from.messageId) : e.from.messageId;
-    const mappedTo = toIsNormal ? (replaceMap.get(e.to.messageId) ?? e.to.messageId) : e.to.messageId;
-    const updated: DemoEdge = (mappedFrom === e.from.messageId && mappedTo === e.to.messageId)
-      ? e
-      : {
-          ...e,
-          from: { ...e.from, messageId: mappedFrom },
-          to: { ...e.to, messageId: mappedTo },
-        };
-    const edgeKey = `${updated.relationMessageId}::${updated.relationType}::${selKey(updated.from)}::${selKey(updated.to)}::${updated.relationLabel}`;
-    if (seen.has(edgeKey)) {
-      changed = true;
-      continue;
-    }
-    seen.add(edgeKey);
-    if (updated !== e) changed = true;
-    next.push(updated);
-  }
-  if (!changed && next.length === edges.length) return edges;
-  return next;
-}
-
-// ========================= Character-level diff for comparison popup =========================
-
-type DiffPart = { type: 'keep' | 'del' | 'ins'; text: string };
-
-/** Maximum string length (chars) for which character-level diff is computed. Beyond this, plain display is used. */
-const MAX_DIFF_LENGTH = 500;
-
-/**
- * Compute a character-level diff between two strings.
- * Returns separate part arrays for the original and new text, each annotated
- * with keep/del/ins so changed characters can be highlighted.
- * Falls back to plain (no diff) for strings longer than MAX_DIFF_LENGTH chars.
- */
-function computeCharDiff(orig: string, next: string): { origParts: DiffPart[]; nextParts: DiffPart[] } {
-  const n = orig.length, m = next.length;
-  if (n > MAX_DIFF_LENGTH || m > MAX_DIFF_LENGTH) {
-    return { origParts: [{ type: 'keep', text: orig }], nextParts: [{ type: 'keep', text: next }] };
-  }
-  // LCS dynamic programming
-  const dp: number[][] = Array(n + 1).fill(null).map(() => new Array(m + 1).fill(0));
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      dp[i][j] = orig[i - 1] === next[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
-    }
-  }
-  // Backtrack
-  const origSegs: DiffPart[] = [], nextSegs: DiffPart[] = [];
-  let i = n, j = m;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && orig[i - 1] === next[j - 1]) {
-      origSegs.unshift({ type: 'keep', text: orig[i - 1] });
-      nextSegs.unshift({ type: 'keep', text: next[j - 1] });
-      i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      nextSegs.unshift({ type: 'ins', text: next[j - 1] });
-      j--;
-    } else {
-      origSegs.unshift({ type: 'del', text: orig[i - 1] });
-      i--;
-    }
-  }
-  // Merge consecutive same-type segments
-  function merge(segs: DiffPart[]): DiffPart[] {
-    const res: DiffPart[] = [];
-    for (const s of segs) {
-      if (res.length > 0 && res[res.length - 1].type === s.type) res[res.length - 1].text += s.text;
-      else res.push({ ...s });
-    }
-    return res;
-  }
-  return { origParts: merge(origSegs), nextParts: merge(nextSegs) };
-}
-
-function renderDiffParts(parts: DiffPart[], side: 'orig' | 'next'): React.ReactNode {
-  return parts.map((p, idx) => {
-    const isChanged = (side === 'orig' && p.type === 'del') || (side === 'next' && p.type === 'ins');
-    return (
-      <span key={idx} style={isChanged ? {
-        background: side === 'orig' ? 'rgba(220,50,50,0.35)' : 'rgba(50,200,80,0.35)',
-        borderRadius: 2,
-        outline: side === 'orig' ? '1px solid rgba(220,50,50,0.6)' : '1px solid rgba(50,200,80,0.6)',
-      } : undefined}>{p.text}</span>
-    );
-  });
-}
-
-// ========================= StructureView / IncomingOutgoingList =========================
-
-const INCOMING_OUTGOING_LIST_MAX_H = 120; // max height (px) for each incoming/outgoing edge list in the structure view
-
-function fmtSel(u: UnitSelection) {
-  if (u.selection.kind === "whole") return `${u.messageId}（整条消息）`;
-  if (u.selection.kind === "edge") return `${u.messageId}（关系边 ${u.selection.edgeId}）`;
-  const sel = u.selection;
-  const preview = sel.text.slice(0, 12) + (sel.text.length > 12 ? '…' : '');
-  return `${u.messageId}（文本片段 第${sel.start}位起 共${sel.len}字「${preview}」）`;
-}
-
-function IncomingOutgoingList(props: { focusIds: string[]; edges: DemoEdge[]; kind: "in" | "out"; messages: DemoMessage[] }) {
-  const { focusIds, edges, kind, messages } = props;
-  const rows = focusIds.map(id => {
-    const m = messages.find(mm => mm.id === id);
-    let arr: DemoEdge[] = [];
-    if (m && m.kind === "relation") {
-      arr = edges.filter(e => e.relationMessageId === id);
-    } else {
-      arr = kind === "in" ? edges.filter(e => e.to.messageId === id) : edges.filter(e => e.from.messageId === id);
-    }
-    return { focusId: id, entries: arr };
-  });
-  const hasAny = rows.some(r => r.entries.length > 0);
-  if (!hasAny) return <div style={{ fontSize: 12, opacity: 0.6 }}>无</div>;
-  return (
-    <div style={{ fontSize: 12 }}>
-      <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: INCOMING_OUTGOING_LIST_MAX_H, overflow: "auto" }}>
-        {rows.map(r => (
-          <li key={r.focusId} style={{ marginBottom: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{r.focusId}</div>
-            {r.entries.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>无</div> : (
-              <ul style={{ listStyle: "none", paddingLeft: 10, margin: 0 }}>
-                {r.entries.map(e => (
-                  <li key={e.id} style={{ marginBottom: 4 }}>
-                    {relationTypeName(e.relationType)}：{fmtSel(e.from)} → {fmtSel(e.to)}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function StructureView(props: { focusIds: string[]; messages: DemoMessage[]; edges: DemoEdge[] }) {
-  const { focusIds, messages, edges } = props;
-  const msgMap = new Map(messages.map(m => [m.id, m]));
-  if (!focusIds || focusIds.length === 0) {
-    return (
-      <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>结构视图（全局模式·简化）</div>
-        <div style={{ fontSize: 12, opacity: 0.7 }}>（进入焦点后显示：左侧指向我 / 右侧我指向）</div>
-      </div>
-    );
-  }
-  return (
-    <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>结构视图（焦点模式 · 多焦点）</div>
-      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>
-        当前焦点消息：
-        {focusIds.map((id, idx) => {
-          const m = msgMap.get(id);
-          return <span key={id} style={{ marginLeft: idx === 0 ? 4 : 8 }}>{m ? `${m.id} · ${m.author}` : id}</span>;
-        })}
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <div style={{ flex: 1, border: "1px solid #333", borderRadius: 6, padding: 6, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>左侧（Incoming：指向焦点集合）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="in" messages={messages} />
-        </div>
-        <div style={{ flex: 1, border: "1px solid #333", borderRadius: 6, padding: 6, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>右侧（Outgoing：焦点集合指向）</div>
-          <IncomingOutgoingList focusIds={focusIds} edges={edges} kind="out" messages={messages} />
-        </div>
-      </div>
-    </div>
-  );
-}
+import { useCleanView } from '../hooks/useCleanView';
+import CleanFilterPanel from '../components/CleanFilterPanel';
+import MessageFilterPanel, { type MessageFilterSettings, applyMessageFilter } from '../components/MessageFilterPanel';
+import HomeFilterPanel, { type HomeFilterMode } from '../components/HomeFilterPanel';
+import {
+  ALL_RELATION_TYPES,
+  CLASSIFY_TARGET_HINT,
+  MAX_TAG_LABEL_DISPLAY_LENGTH,
+  SUB_TYPE_OPTIONS,
+  applyTextCorrectionInheritance,
+  buildRelationDemoMessage,
+  buildRelationPayload,
+  collectContainerVisibleIds,
+  collectOwnedByRelation,
+  describeUnit,
+  expandTextIdsWithCorrections,
+  getRejectedJoinRelationIds,
+  getJoinRelationsForMessage,
+  getJoinRecoveryTargetIds,
+  getEffectiveJoinRelationIds,
+  getContainerAncestorChain,
+  filterContainerEdgesByEffectiveJoins,
+  formatCorrectionRange,
+  resolveNavigationTargetId,
+  expandTextIdsWithSettlementResults,
+  foldUpToWhole,
+  generateCorrectionContent,
+  getRelationTargetIds,
+  getTextTargetIds,
+  isValidTagLabel,
+  isCorrectableCorrectionTarget,
+  mergeUnits,
+  nextId,
+  replyAdditionalLabel,
+  secondaryRelationLabel,
+  selKey,
+  subTypeLabel,
+  targetRefDisplayId,
+  uniqueTargetRefsFromEdges,
+  unitEquals,
+} from './topicDetailHelpers';
 
 // ========================= TopicDetailPage =========================
 
 type ViewMode = "list" | "graph";
 
-type FocusSnapshot = {
+type TraceSnapshot = {
+  viewMode: ViewMode;
   leftScroll: { top: number; left: number } | null;
+  pageScroll: { top: number; left: number } | null;
   rightScroll: { top: number; left: number } | null;
   draftUnits: UnitSelection[];
   sourceUnits: UnitSelection[];
   targetUnits: UnitSelection[];
   activeTextSelectId: string | null;
   lastClickedMessageId: string | null;
-  focusHop: number;
+  traceDistance: number;
 };
 
-type FocusEntry = {
+type ClassifyStackEntry = { relMsgId: string; snapshot: TraceSnapshot | null };
+type TraceEntry = {
   ids: string[];
-  snapshot: FocusSnapshot | null;
-  mode: "focus" | "topic";
+  snapshot: TraceSnapshot | null;
+  mode: "trace" | "topic";
   topicRelMsgId?: string;
+  classifyRelMsgId: string | null;
+  classifyStack: ClassifyStackEntry[];
 };
 
-export default function TopicDetailPage() {
+interface TopicDetailPageProps {
+  topControlsFrozen?: boolean;
+  topControlsOffset?: number;
+}
+
+export default function TopicDetailPage({ topControlsFrozen = false, topControlsOffset = 68 }: TopicDetailPageProps) {
   const { topicId } = useParams<{ topicId: string }>();
-  const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { user, logout, loading: authLoading } = useAuth();
+  const relationBarRef = useRef<HTMLDivElement>(null);
+  const relationLeftControlsRef = useRef<HTMLDivElement>(null);
+  const relationRightControlsRef = useRef<HTMLDivElement>(null);
+  const [relationBarHeight, setRelationBarHeight] = useState(0);
+  const [relationBarMinWidth, setRelationBarMinWidth] = useState(0);
+  const [relationControlsRightOffset, setRelationControlsRightOffset] = useState(0);
+
+  const measureRelationBar = () => {
+    const relationBar = relationBarRef.current;
+    if (relationBar) {
+      setRelationBarHeight(relationBar.getBoundingClientRect().height);
+      const leftWidth = relationLeftControlsRef.current?.getBoundingClientRect().width ?? 0;
+      const rightWidth = relationRightControlsRef.current?.getBoundingClientRect().width ?? 0;
+      const contentWidth = leftWidth + rightWidth + 32;
+      setRelationBarMinWidth(current => current === contentWidth ? current : contentWidth);
+      const leftControls = relationLeftControlsRef.current;
+      const rightControls = relationRightControlsRef.current;
+      if (!leftControls || !rightControls) return;
+      const leftRect = leftControls.getBoundingClientRect();
+      const rightRect = rightControls.getBoundingClientRect();
+      const nextRightOffset = Math.min(0, window.innerWidth - (leftRect.right + 16 + rightRect.width));
+      setRelationControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
+    }
+  };
+
+  useLayoutEffect(() => {
+    measureRelationBar();
+  });
+
+  useEffect(() => {
+    const relationBar = relationBarRef.current;
+    if (!relationBar) return;
+    const updatePinnedState = () => measureRelationBar();
+    updatePinnedState();
+    const observer = new ResizeObserver(updatePinnedState);
+    observer.observe(relationBar);
+    if (relationLeftControlsRef.current) observer.observe(relationLeftControlsRef.current);
+    if (relationRightControlsRef.current) observer.observe(relationRightControlsRef.current);
+    window.addEventListener('resize', updatePinnedState);
+    window.addEventListener('scroll', updatePinnedState, { passive: true });
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updatePinnedState);
+      window.removeEventListener('scroll', updatePinnedState);
+    };
+  });
 
   const [topic, setTopic] = useState<Topic | null>(null);
   const [messages, setMessages] = useState<DemoMessage[]>([]);
   const [edges, setEdges] = useState<DemoEdge[]>([]);
+  const edgesRef = useRef<DemoEdge[]>([]);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
   const [relations, setRelations] = useState<Relation[]>([]);
+  const [attentionUsersByTarget, setAttentionUsersByTarget] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showUnauthenticatedNotice, setShowUnauthenticatedNotice] = useState(false);
+  const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
+  // Per-message stake counts, split by TRUTH/VALUE settlement type
+  const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
+  const [messageBettorCounts, setMessageBettorCounts] = useState<Record<string, number>>({});
+  const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
+  const [leaderboardRefreshVersion, setLeaderboardRefreshVersion] = useState(0);
+  const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
+  const [isPreloaded, setIsPreloaded] = useState(false);
+  const [viewerUser, setViewerUser] = useState<User | null>(() => {
+    const username = localStorage.getItem(VIEWER_USERNAME_KEY)?.trim();
+    return username ? { id: `viewer:${username}`, username, createdAt: '' } : null;
+  });
+  const displayUser = isPreloaded ? viewerUser : user;
+  const correctionVersions = useMemo(() => {
+    const invalidCorrectionIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    return computeCorrectionVersions(messages, edges, invalidCorrectionIds);
+  }, [messages, edges, displayUser?.username]);
+
+  // ── Preloaded data (from export viewer) ──
+  const location = useLocation();
+  const preloadedData = (location.state as { exportData?: ExportData })?.exportData ?? null;
+  const preloadedLoaded = useRef(false);
 
   useEffect(() => {
-    if (!topicId) return;
-    let cancelled = false;
-    async function load() {
-      try {
-        setLoading(true); setLoadError(null);
-        const [topicData, messagesData, relationsData] = await Promise.all([
-          api.getTopic(topicId!),
-          api.getMessages(topicId!, { limit: 200 }),
-          api.getRelations(topicId!, { limit: 200 }),
-        ]);
-        if (cancelled) return;
-        setTopic(topicData);
-        const { messages: demoMsgs, edges: demoEdges } = convertMessagesToDemoModel(
-          messagesData.data, relationsData.data
-        );
-        setRelations(relationsData.data);
-        setMessages(demoMsgs);
-        setEdges(demoEdges);
-      } catch (e: any) {
-        if (cancelled) return;
-        setLoadError(String(e?.message ?? e));
-      } finally {
-        if (!cancelled) setLoading(false);
+    if (!preloadedData || preloadedLoaded.current) return;
+    preloadedLoaded.current = true;
+
+    // Convert export data to the same shape as API returns
+    const topicData: Topic = {
+      id: '__preloaded__',
+      title: preloadedData.topic.title,
+      body: preloadedData.topic.body ?? undefined,
+      status: preloadedData.topic.status as 'OPEN' | 'ARCHIVED',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: { id: '__system__', username: '导出数据', createdAt: '' },
+    };
+    const backendMessages: any[] = preloadedData.messages.map(m => ({
+      ...m,
+      topicId: '__preloaded__',
+      createdBy: { id: '', username: m.author, createdAt: '' },
+    }));
+    const backendRelations: any[] = preloadedData.relations.map(r => ({
+      id: r.id, topicId: '__preloaded__',
+      relationType: r.relationType ?? 'REFERENCE',
+      sourceMessageId: r.sourceMessageId,
+      targetRefs: r.targetRefs ?? [],
+      payload: r.payload ?? undefined,
+      createdAt: r.createdAt,
+      createdBy: { id: '', username: r.author, createdAt: '' },
+    }));
+
+    const { messages: demoMsgs, edges: demoEdges } = convertMessagesToDemoModel(
+      backendMessages, backendRelations
+    );
+    setTopic(topicData);
+    setRelations(backendRelations);
+    const preloadedAttention: Record<string, string[]> = {};
+    for (const relation of backendRelations) {
+      if (relation.relationType.toUpperCase() !== 'ATTENTION') continue;
+      for (const ref of relation.targetRefs) {
+        if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
+        const users = preloadedAttention[ref.messageId] ?? [];
+        if (!users.includes(relation.createdBy.id)) users.push(relation.createdBy.id);
+        preloadedAttention[ref.messageId] = users;
       }
     }
-    load();
-    return () => { cancelled = true; };
-  }, [topicId]);
+    setAttentionUsersByTarget(preloadedAttention);
+    setMessages(demoMsgs);
+    setEdges(demoEdges);
+    setStakeCounts({});
+    setMessageBettorCounts({});
+    setAuthorStakes({});
+    setLoading(false);
+    setIsPreloaded(true);
+  }, [preloadedData]);
+
+  const viewerUsers = useMemo(() => {
+    if (!isPreloaded) return [];
+    const usernames = new Set<string>();
+    messages.forEach(message => { if (message.author) usernames.add(message.author); });
+    relations.forEach(relation => { if (relation.createdBy?.username) usernames.add(relation.createdBy.username); });
+    return [...usernames].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map(username => ({ id: `viewer:${username}`, username, createdAt: '' }));
+  }, [isPreloaded, messages, relations]);
+
+  useEffect(() => {
+    if (!isPreloaded || viewerUsers.length === 0) return;
+    setViewerUser(current => current && viewerUsers.some(candidate => candidate.username === current.username)
+      ? current
+      : viewerUsers[0]);
+  }, [isPreloaded, viewerUsers]);
+
+  useEffect(() => {
+    if (!topicId || preloadedData || authLoading || !user) return;
+    let cancelled = false;
+    let refreshInFlight = false;
+    let lastMessageCursor: { updatedAt: string; id: string } | null = null;
+    async function load(showLoading: boolean) {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        if (showLoading) {
+          setLoading(true);
+          setLoadError(null);
+        }
+        const [topicData, messagesData, attentionData, usersData] = await Promise.all([
+          api.getTopic(topicId!),
+          api.getAllMessages(topicId!, 200, showLoading ? undefined : lastMessageCursor ?? undefined),
+          api.getAttentionUsers(topicId!),
+          showLoading && api.getUsers ? api.getUsers() : Promise.resolve({ data: [] as User[] }),
+        ]);
+        if (cancelled) return;
+        const newestMessage = messagesData.data[messagesData.data.length - 1];
+        if (newestMessage) {
+          lastMessageCursor = {
+            updatedAt: newestMessage.updatedAt ?? newestMessage.createdAt,
+            id: newestMessage.id,
+          };
+        }
+        setTopic(topicData);
+        setAttentionUsersByTarget(attentionData.data);
+        if (usersData.data.length > 0) setRegisteredUsers(usersData.data);
+        if (!showLoading && messagesData.data.length === 0) return;
+        const supersededMessageIds = new Set(
+          messagesData.data.filter(message => message.supersededBy).map(message => message.id),
+        );
+        const activeMessages = messagesData.data.filter(message => !message.supersededBy);
+        const currentRelations = relationsRef.current.filter(relation => !supersededMessageIds.has(relation.id));
+        const currentMessages = messagesRef.current.filter(message => !supersededMessageIds.has(message.id));
+        const currentEdges = edgesRef.current.filter(edge =>
+          !supersededMessageIds.has(edge.relationMessageId)
+          && !supersededMessageIds.has(edge.from.messageId)
+          && !supersededMessageIds.has(edge.to.messageId),
+        );
+        const serverRelations: Relation[] = activeMessages
+          .filter(message => message.kind === 'RELATION' && message.relationType)
+          .map(message => ({
+            id: message.id,
+            topicId: message.topicId,
+            relationType: message.relationType!,
+            sourceMessageId: message.relSourceId ?? null,
+            targetRefs: message.targetRefs ?? [],
+            payload: message.relationPayload ?? undefined,
+            createdAt: message.createdAt,
+            createdBy: message.createdBy,
+          }));
+        const serverRelationIds = new Set(serverRelations.map(relation => relation.id));
+        const mergedRelations = [
+          ...serverRelations,
+          ...currentRelations.filter(relation =>
+            !serverRelationIds.has(relation.id)
+            && !['PROPOSAL', 'CODE_CHANGE', 'OPERATIONS'].includes(relation.relationType.toUpperCase()),
+          ),
+        ];
+        const { messages: serverDemoMsgs, edges: serverDemoEdges } = convertMessagesToDemoModel(
+          activeMessages, mergedRelations
+        );
+        const serverMessageIds = new Set(serverDemoMsgs.map(message => message.id));
+        const mergedDemoMsgs = [
+          ...serverDemoMsgs,
+          ...currentMessages.filter(message => !serverMessageIds.has(message.id)),
+        ];
+        const mergedEdgeKeys = new Set(serverDemoEdges.map(edge =>
+          `${edge.relationMessageId}::${edge.from.messageId}::${edge.to.messageId}::${edge.relationType}`
+        ));
+        const mergedDemoEdges = [
+          ...serverDemoEdges,
+          ...currentEdges.filter(edge => !mergedEdgeKeys.has(
+            `${edge.relationMessageId}::${edge.from.messageId}::${edge.to.messageId}::${edge.relationType}`
+          )),
+        ];
+        setRelations(mergedRelations);
+        operationLog('加载主题关系', `count=${mergedRelations.length}`);
+        setMessages(mergedDemoMsgs);
+        setEdges(mergedDemoEdges);
+
+        // Refresh new messages and existing targets affected by those messages.
+        const knownMessageIds = new Set(messagesRef.current.map(message => message.id));
+        const refreshStakeIds = new Set(
+          mergedDemoMsgs
+            .filter(message => showLoading || !knownMessageIds.has(message.id))
+            .map(message => message.id),
+        );
+        if (!showLoading) {
+          for (const message of messagesData.data) {
+            for (const target of message.targetRefs ?? []) {
+              if (target.kind === 'relation') refreshStakeIds.add(target.relationId);
+              else refreshStakeIds.add(target.messageId);
+            }
+          }
+        }
+        const allMsgIds = [...refreshStakeIds];
+        if (allMsgIds.length > 0) {
+          try {
+            const stakes = await Promise.all(
+              allMsgIds.map((id: string) =>
+                api.getMessageStakes(id).then(r => {
+                  const msg = mergedDemoMsgs.find((m: { id: string; author: string }) => m.id === id);
+                  const authorStake = msg
+                    ? r.stakes
+                        .filter(s => s.user.username === msg.author && s.side === 'PRO')
+                        .reduce((sum, s) => sum + s.amount, 0)
+                    : 0;
+                  const byType = r.countsByType ?? {};
+                  return {
+                    id,
+                    truth: byType.TRUTH ?? { pro: 0, con: 0 },
+                    value: byType.VALUE ?? { pro: 0, con: 0 },
+                    authorStake,
+                    bettors: new Set(r.stakes.map(s => s.user.id || s.user.username)).size,
+                  };
+                })
+              )
+            );
+            const map: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }> = {};
+            const aMap: Record<string, number> = {};
+            const bettorsMap: Record<string, number> = {};
+            for (const s of stakes) {
+              map[s.id] = { truth: s.truth, value: s.value };
+              aMap[s.id] = s.authorStake;
+              bettorsMap[s.id] = s.bettors;
+            }
+            // For RECOMMEND/ARCHIVE relations: mirror text target's VALUE stake counts onto
+            // the annotation relation message so badges show correct VALUE stats.
+            for (const rel of mergedRelations) {
+              const rt = rel.relationType?.toUpperCase();
+              if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
+                const trefs = rel.targetRefs as Array<{ messageId?: string }> | undefined;
+                const textTargetId = trefs?.[0]?.messageId;
+                if (textTargetId && map[textTargetId]) {
+                  map[rel.id] = map[textTargetId];
+                }
+              }
+            }
+            if (!cancelled) {
+              setStakeCounts(prev => ({ ...prev, ...map }));
+              setAuthorStakes(prev => ({ ...prev, ...aMap }));
+              setMessageBettorCounts(prev => ({ ...prev, ...bettorsMap }));
+            }
+          } catch {
+            // stake fetch is best-effort; don't block the page
+          }
+        }
+      } catch (e: any) {
+        if (cancelled) return;
+        if (showLoading) setLoadError(String(e?.message ?? e));
+      } finally {
+        refreshInFlight = false;
+        if (!cancelled && showLoading) setLoading(false);
+      }
+    }
+    load(true);
+    const refreshTimer = window.setInterval(() => { void load(false); }, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+    };
+  }, [topicId, leaderboardRefreshVersion, authLoading]);
+
+  useEffect(() => {
+    if (!authLoading && !preloadedData && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [authLoading, navigate, preloadedData, user?.username]);
+
+  useEffect(() => {
+    if (loading || authLoading || loadError || isPreloaded) return;
+    if (!user) {
+      setShowUnauthenticatedNotice(true);
+      return;
+    }
+    if (localStorage.getItem('registration-guide-pending') === 'true') {
+      localStorage.removeItem('registration-guide-pending');
+      setShowRegistrationGuide(true);
+    }
+  }, [authLoading, isPreloaded, loadError, loading, user]);
+
+  // Messages that have no DOM element in the non-linear graph view.
+  // Mirror of GraphView's hiddenTargetIds logic — used to decide whether
+  // to auto-switch to linear view when navigating to such a message.
+  const hiddenInGraphView = useMemo(() => {
+    const ids = new Set<string>();
+    // 1) CORRECT relation messages are not rendered as independent cards
+    for (const m of messages) {
+      if (m.kind === 'relation' && m.relationType === 'correct') ids.add(m.id);
+    }
+    // 2) Corrected text targets that are not themselves correction sources
+    //    (GraphView.hiddenCorrectedTargetIds)
+    const correctedTargets = new Set<string>();
+    const correctionSources = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === 'correct' && !e.from.messageId.startsWith('anon:')) {
+        correctedTargets.add(e.to.messageId);
+        correctionSources.add(e.from.messageId);
+      }
+    }
+    for (const id of correctedTargets) {
+      if (!correctionSources.has(id)) ids.add(id);
+    }
+    // 3) Summary text targets that are not themselves summary sources
+    //    (GraphView.hiddenSummaryTargetIds)
+    const summaryRelMsgIds = new Set<string>();
+    for (const e of edges) {
+      if (e.relationType === 'summary') summaryRelMsgIds.add(e.relationMessageId);
+    }
+    for (const e of edges) {
+      if (e.relationType === 'summary' && !summaryRelMsgIds.has(e.to.messageId)) {
+        ids.add(e.to.messageId);
+      }
+    }
+    return ids;
+  }, [edges, messages]);
+
+  // Auto-enter classify topic if msg belongs to one
+  const [autoClassifyMsgId, setAutoClassifyMsgId] = useState<string | null>(null);
+  useEffect(() => {
+    if (loading || relations.length === 0) return;
+    const msgId = autoClassifyMsgId;
+    if (!msgId) return;
+
+    const msgRel = relations.find(r => r.id === msgId);
+    const msgRelType = msgRel?.relationType?.toUpperCase();
+    // Determine the "anchor" — the message whose classify determines where
+    // this message is displayed on the canvas.
+    // - ANNOTATION / REFERENCE / REPLY / CORRECT → displayed alongside source
+    // - AGREE / DISAGREE / TAG → displayed alongside target (as decorations)
+    // - Other types / text messages → the message itself is the anchor
+    let anchorId = msgId;
+    if (msgRel) {
+      const srcId = msgRel.sourceMessageId ?? null;
+      const firstTextTarget = ((msgRel.targetRefs ?? []) as TargetRef[])
+        .find(t => t.kind === 'message' || t.kind === 'text-fragment');
+      const tgtId = firstTextTarget ? firstTextTarget.messageId : null;
+      if (msgRelType === 'ANNOTATION' || msgRelType === 'REFERENCE'
+       || msgRelType === 'REPLY'   || msgRelType === 'CORRECT') {
+        anchorId = srcId || msgId;
+      } else if (msgRelType === 'AGREE' || msgRelType === 'DISAGREE'
+              || msgRelType === 'TAG') {
+        anchorId = tgtId || msgId;
+      }
+    }
+    // Build lookup for ownership expansion
+    const relById = new Map(relations.map(r => [r.id, r]));
+    const msgMapLocal = new Map(messages.map(m => [m.id, m]));
+
+    const tryEnter = (relId: string) => {
+      if (classifyRelMsgId === relId) {
+        // Already in this classify — just ensure correct view mode
+        if (hiddenInGraphView.has(msgId)) setViewMode("list");
+        setAutoClassifyMsgId(null);
+        return;
+      }
+      if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+      enterClassifyTopic(relId);
+      // If the classify is rejected, enter preview (read-only) mode
+      if (rejectedContainerIds.has(relId)) {
+        setPreviewClassifyId(relId);
+      }
+      if (hiddenInGraphView.has(msgId)) setViewMode("list");
+      setAutoClassifyMsgId(null);
+    };
+
+    // ── Find the classify that owns the anchor ──
+    // First pass: direct targetRefs match.
+    for (const rel of relations) {
+      const rt = rel.relationType?.toUpperCase();
+      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      // Don't auto-enter rejected classifies from navigation jumps —
+      // their messages are back on the main canvas.  User can still
+      // enter preview mode by double-clicking the card directly.
+      if (rejectedContainerIds.has(rel.id)) continue;
+      const targets = (rel.targetRefs ?? []) as TargetRef[];
+      if (targets.some(t =>
+        (t.kind === 'relation' && t.relationId === anchorId) ||
+        (t.kind !== 'relation' && t.messageId === anchorId)
+      )) { tryEnter(rel.id); return; }
+    }
+    // Second pass: transitive ownership + CORRECT expansion.
+    for (const rel of relations) {
+      const rt = rel.relationType?.toUpperCase();
+      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+      if (rejectedContainerIds.has(rel.id)) continue;
+      const owned = collectOwnedByRelation(rel.id, relById, new Set(), undefined, rejectedJoinRelationIds);
+      const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
+      if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
+        tryEnter(rel.id); return;
+      }
+    }
+    // Anchor not in any classify → main view.
+    if (classifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false }); else setClassifyRelMsgId(null);
+    if (hiddenInGraphView.has(msgId)) setViewMode("list");
+    setAutoClassifyMsgId(null);
+  }, [loading, relations, autoClassifyMsgId, hiddenInGraphView, edges, messages]);
+
+  // Phase 3: auto-open settlement from URL params (triggered by points-navigate)
+  const pendingScrollMsgRef = useRef<string | null>(null);
+  useEffect(() => {
+    const targetMsgId = searchParams.get('msg');
+    const settlementMsgId = searchParams.get('settlement');
+    if (targetMsgId || settlementMsgId) {
+      const msgId = targetMsgId || settlementMsgId!;
+      pendingScrollMsgRef.current = msgId;
+      setAutoClassifyMsgId(msgId); // try auto-enter classify
+      // Clear all selections and select the target message
+      setDraftUnits([{ messageId: msgId, selection: { kind: "whole" } }]);
+      setActiveTextSelectId(null);
+      if (settlementMsgId) {
+        const settlementTypeParam = searchParams.get('settlementType');
+        const settlementType = settlementTypeParam === 'VALUE' ? 'VALUE' : 'TRUTH';
+        openSettlement(settlementMsgId, settlementType);
+        const highlightRoundId = searchParams.get('highlightRound');
+        if (highlightRoundId) sessionStorage.setItem('settlementHighlightRound', highlightRoundId);
+        const highlight: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } = {};
+        const stakeId = searchParams.get('stakeId');
+        const voteId = searchParams.get('voteId');
+        const side = searchParams.get('side');
+        const vote = searchParams.get('vote');
+        const username = searchParams.get('username');
+        if (stakeId) highlight.stakeId = stakeId;
+        if (voteId) highlight.voteId = voteId;
+        if (side === 'PRO' || side === 'CON') highlight.side = side;
+        if (vote === 'TRUE' || vote === 'FALSE') highlight.vote = vote;
+        if (username) highlight.username = username;
+        setSettlementEntryHighlight(Object.keys(highlight).length > 0 ? highlight : null);
+        if (Object.keys(highlight).length > 0) setTimeout(() => setSettlementEntryHighlight(null), 1500);
+        searchParams.delete('settlement');
+        searchParams.delete('settlementType');
+        searchParams.delete('highlightRound');
+        searchParams.delete('stakeId');
+        searchParams.delete('voteId');
+        searchParams.delete('side');
+        searchParams.delete('vote');
+        searchParams.delete('username');
+      }
+      searchParams.delete('msg');
+      setSearchParams(searchParams, { replace: true });
+      setScrollKey(k => k + 1);
+      // Trigger scroll directly (also needed for same-topic nav where messages don't change)
+      setTimeout(() => scrollMsgToCenter(msgId), 150);
+    }
+  }, [searchParams, setSearchParams]);
 
   const [relationType, setRelationType] = useState<RelationType | null>(null);
   const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
+  const [subType, setSubType] = useState<string>(""); // SPAM|OFFTOPIC|LOWVALUE|IMPORTANT|CUSTOM or empty
+  const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
+  const subTypeCustomBufferRef = useRef(""); // cache textarea content when switching away from CUSTOM subType
+  const savedTextOnTypeSwitchRef = useRef(""); // cache textarea content when switching to a text-less relation type
+  const savedTextBeforeDelegationRef = useRef("");
+  const lastTagSecondaryRef = useRef<string>("recommend"); // remember last TAG secondary selection
+  const lastDelegationSecondaryRef = useRef<'create' | 'fulfill'>('create');
+  const delegationContentBufferRef = useRef<Record<'create' | 'fulfill', string>>({ create: '', fulfill: '' });
+  const previousComposerModeRef = useRef<string>(`${relationType ?? 'plain'}::${secondaryRelationType}`);
   const [relationLabel, setRelationLabel] = useState("");
   const [newMessageContent, setNewMessageContent] = useState("");
+  const [messageIdInput, setMessageIdInput] = useState("");
+  useEffect(() => {
+    if (relationType !== 'proposal') return;
+    if (secondaryRelationType === '终止结算' || secondaryRelationType === '分配收入') {
+      setNewMessageContent('');
+    } else if (secondaryRelationType === '充值分账') {
+      setNewMessageContent('充值总额=1000\n收入池分成=100\n指定与会者=user-id');
+    } else if (secondaryRelationType === '运营收入注入') {
+      setNewMessageContent('收入金额=1000\n来源=服务收入');
+    }
+  }, [relationType, secondaryRelationType]);
+  useEffect(() => {
+    const mode = `${relationType ?? 'plain'}::${secondaryRelationType}`;
+    const previousMode = previousComposerModeRef.current;
+    const wasDelegation = previousMode.startsWith('delegation::');
+    const isDelegation = relationType === 'delegation';
+    if (isDelegation && !wasDelegation) {
+      savedTextBeforeDelegationRef.current = newMessageContent;
+    }
+    if (previousMode.startsWith('delegation::')) {
+      const previousKind = previousMode.slice('delegation::'.length);
+      if (previousKind === 'create' || previousKind === 'fulfill') {
+        delegationContentBufferRef.current[previousKind] = newMessageContent;
+      }
+    }
+    if (relationType === 'delegation' && (secondaryRelationType === 'create' || secondaryRelationType === 'fulfill')) {
+      const saved = delegationContentBufferRef.current[secondaryRelationType];
+      setNewMessageContent(saved || (secondaryRelationType === 'create' ? '报酬数量=100\n委托内容=' : '完成说明='));
+    } else if (wasDelegation && !isDelegation) {
+      setNewMessageContent(savedTextBeforeDelegationRef.current);
+    }
+    previousComposerModeRef.current = mode;
+  }, [relationType, secondaryRelationType]);
+  useEffect(() => {
+    if (relationType !== 'delegation') return;
+    if (secondaryRelationType === 'create' || secondaryRelationType === 'fulfill') {
+      lastDelegationSecondaryRef.current = secondaryRelationType;
+    } else {
+      setSecondaryRelationType(lastDelegationSecondaryRef.current);
+    }
+  }, [relationType, secondaryRelationType]);
   const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
   const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
   const [targetUnits, setTargetUnits] = useState<UnitSelection[]>([]);
+  const selectionLogInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!selectionLogInitializedRef.current) {
+      selectionLogInitializedRef.current = true;
+      return;
+    }
+    const describe = (units: UnitSelection[]) => units.map(unit => {
+      const selection = unit.selection;
+      const detail = selection.kind === 'whole'
+        ? '整条'
+        : selection.kind === 'text'
+          ? `字符${selection.start}-${selection.start + selection.len}`
+          : `边${selection.edgeId}`;
+      return `${unit.messageId}[${detail}]`;
+    }).join(',') || '空';
+    operationLog('选择变化', `暂存区=${describe(draftUnits)} 来源集合=${describe(sourceUnits)} 目标集合=${describe(targetUnits)}`);
+  }, [draftUnits, sourceUnits, targetUnits]);
   const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
-  const [focusEntries, setFocusEntries] = useState<FocusEntry[]>([]);
-  // Counter incremented on every exitFocus/exitAllFocus to force GraphView
+  const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
+  const [traceExpandedFrameIds, setTraceExpandedFrameIds] = useState<Set<string>>(new Set());
+  // Counter incremented on every exitTrace/exitAllTrace to force GraphView
   // remount, avoiding React DOM reconciliation bugs (removeChild errors)
   // that occur when the SVG canvas structure changes drastically.
-  const [focusExitKey, setFocusExitKey] = useState(0);
+  const [classifyKey, setClassifyKey] = useState(0);
+  const [traceKey, setTraceKey] = useState(0);
+  const [scrollKey, setScrollKey] = useState(0);
+  // Classify state — independent from the trace system.
+  // When non-null, the view is scoped to the CLASSIFY/SUMMARY relation's owned messages.
+  const [classifyRelMsgId, setClassifyRelMsgId] = useState<string | null>(null);
+  const isInsideClassify = classifyRelMsgId !== null;
+  const currentClassifyRelMsgId = classifyRelMsgId;
+  // Stack-based snapshot store for nested classify enter/exit.
+  // Each entry holds the classify id and the snapshot captured before entering it.
+  const classifyStackRef = useRef<ClassifyStackEntry[]>([]);
+  const temporaryCategoryStackRef = useRef<Array<{
+    snapshot: TraceSnapshot;
+    hideJoin: boolean;
+    joinFilterTargetId: string | null;
+    joinFilterDirection: 'incoming' | 'outgoing';
+    correctionFilterTargetId: string | null;
+    comparisonMode: boolean;
+    comparisonReviewed: boolean;
+    comparisonTargetId: string | null;
+    comparisonSide: 'agree' | 'disagree';
+    comparisonReviewBaseMessages: DemoMessage[] | null;
+    comparisonReviewBaseEdges: DemoEdge[] | null;
+  }>>([]);
+  // Preview mode: when entering a rejected classify, the view is read-only
+  // with a grey filter.  null = normal mode, string = classify ID being previewed.
+  const [previewClassifyId, setPreviewClassifyId] = useState<string | null>(null);
+  const isPreviewMode = previewClassifyId !== null;
+  // Fetch tag counts for clean view
+  const [tagCounts, setTagCounts] = useState<Record<string, Record<string, number>>>({});
+  useEffect(() => {
+    if (!topicId) return;
+    api.getTopicTagCounts(topicId).then(res => setTagCounts(res.counts)).catch(() => {});
+  }, [topicId, messages.length]);
+  // Phase 6: Clean view — multi-dimensional filter rules
+  const {
+    cleanMode, cleanFilters, cleanVisibleIds,
+    addFilter: addCleanFilter, removeFilter: removeCleanFilter,
+    updateFilter: updateCleanFilter, clearFilters: clearCleanFilters,
+  } = useCleanView({ messages, edges, stakeCounts, tagCounts });
+  const cleanSender = searchParams.get('sender');
+  const skipCleanSenderInitRef = useRef(false);
+  useEffect(() => {
+    if (!cleanSender) {
+      skipCleanSenderInitRef.current = false;
+      return;
+    }
+    if (skipCleanSenderInitRef.current) return;
+    if (messages.length === 0) return;
+    if (cleanFilters.some(rule => rule.kind === 'sender' && rule.username === cleanSender)) return;
+    clearCleanFilters();
+    addCleanFilter({ id: `url-sender-${cleanSender}`, kind: 'sender', username: cleanSender });
+  }, [cleanSender, messages.length, cleanFilters, addCleanFilter, clearCleanFilters]);
+  const clearCleanView = useCallback(() => {
+    skipCleanSenderInitRef.current = true;
+    clearCleanFilters();
+    if (searchParams.has('sender')) {
+      const nextSearchParams = new URLSearchParams(searchParams);
+      nextSearchParams.delete('sender');
+      setSearchParams(nextSearchParams, { replace: true });
+    }
+  }, [clearCleanFilters, searchParams, setSearchParams]);
+  const contentMsgCount = useMemo(() => messages.filter(m => isContentKind(m.kind)).length, [messages]);
+  // Message type filter: hide settlement / join messages
+  const [msgFilter, setMsgFilter] = useState<MessageFilterSettings>({ hideSettlement: true, hideJoin: true });
+  const [homeFilterMode, setHomeFilterMode] = useState<HomeFilterMode | null>(null);
+  const [joinFilterTargetId, setJoinFilterTargetId] = useState<string | null>(null);
+  const [joinFilterDirection, setJoinFilterDirection] = useState<'incoming' | 'outgoing'>('incoming');
+  const [correctionFilterTargetId, setCorrectionFilterTargetId] = useState<string | null>(null);
+  const setMessagesRef = useRef(setMessages);
+  setMessagesRef.current = setMessages;
+  const messagesRef = useRef<DemoMessage[]>([]);
+  messagesRef.current = messages;
+  const renderedMessageIdsRef = useRef<Set<string>>(new Set());
+  const renderedRelationIdsRef = useRef<Set<string>>(new Set());
+  const pendingCorrectionNavigationRef = useRef<{ messageId: string } | null>(null);
+  const navigationVisibilityRef = useRef<{
+    cleanMode: boolean;
+    cleanVisibleIds: { visibleTextIds: Set<string>; visibleRelIds: Set<string> } | null;
+    msgFilter: MessageFilterSettings;
+  }>({ cleanMode: false, cleanVisibleIds: null, msgFilter });
+  navigationVisibilityRef.current = { cleanMode, cleanVisibleIds, msgFilter };
+  const pendingScrollDependencyIdsRef = useRef<string[]>([]);
+
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
-  const [focusHop, setFocusHop] = useState<number>(1);
+  const [guideActive, setGuideActive] = useState(false);
+  const guideTargetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const startGuide = () => {
+      setDraftUnits([]);
+      setSourceUnits([]);
+      setTargetUnits([]);
+      setRelationType(null);
+      setSecondaryRelationType('none');
+      setNewMessageContent('');
+      setActiveTextSelectId(null);
+      clearBrowserSelection();
+      guideTargetIdRef.current = null;
+      setGuideActive(true);
+      setViewMode('graph');
+    };
+    const stopGuide = () => {
+      guideTargetIdRef.current = null;
+      setGuideActive(false);
+      if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+      if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+      setMessagePulse(null);
+    };
+    const clearGuideVisuals = () => {
+      if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+      if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+      setMessagePulse(null);
+    };
+    window.addEventListener('guide-start', startGuide);
+    window.addEventListener('guide-stop', stopGuide);
+    window.addEventListener('guide-clear-visuals', clearGuideVisuals);
+    return () => {
+      window.removeEventListener('guide-start', startGuide);
+      window.removeEventListener('guide-stop', stopGuide);
+      window.removeEventListener('guide-clear-visuals', clearGuideVisuals);
+    };
+  }, [messages]);
+
+  useEffect(() => {
+    if (!guideActive) return;
+    const targetId = guideTargetIdRef.current;
+    const selected = targetId ? draftUnits.some(unit => unit.messageId === targetId && unit.selection.kind === 'whole') : false;
+    window.dispatchEvent(new CustomEvent('guide-selection-changed', { detail: { messageId: targetId, selected } }));
+    if (selected) window.dispatchEvent(new Event('guide-selection-complete'));
+  }, [draftUnits, guideActive]);
+
+  const handleSettlementMessageCreated = useCallback((m: any) => {
+    const normalized = { ...m, author: m.author || user?.username || '', kind: m.kind || 'round' };
+    setMessagesRef.current((prev: any) => {
+      const exists = prev.some((item: DemoMessage) => item.id === normalized.id);
+      return exists ? prev : [...prev, normalized];
+    });
+    if (isInsideClassify && currentClassifyRelMsgId) {
+      void attachMessageToCurrentClassify(normalized.id).catch((error) => {
+        console.warn('结算结果加入当前分类失败', { messageId: normalized.id, error });
+      });
+      setClassifyKey(k => k + 1);
+    }
+    setTimeout(() => scrollMsgToCenter(normalized.settlementTargetId ?? normalized.id), 50);
+  }, [user, isInsideClassify, currentClassifyRelMsgId]);
+
+  // Phase 6: expose for SettlementPanel direct access
+  useEffect(() => { (window as any).__addSettlementMessage = handleSettlementMessageCreated; return () => { delete (window as any).__addSettlementMessage; }; }, [handleSettlementMessageCreated]);
+
+  // Scroll to message after data loads and renders (also triggers on trace changes for in-place nav).
+  // View-switch decisions (graph→list for hidden messages) are made in the auto-classify
+  // effect above; this effect only handles the actual scrolling.
+  useEffect(() => {
+    if (!loading && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
+      // A pending navigation may target a JOIN record itself. Do not resolve
+      // it to the joined target; the JOIN card is the requested destination.
+      const dependencyIds = pendingScrollDependencyIdsRef.current;
+      pendingScrollDependencyIdsRef.current = [];
+      scrollMsgToCenter(pendingScrollMsgRef.current, { dependencyIds });
+      pendingScrollMsgRef.current = null;
+    }
+  }, [loading, messages, classifyKey, traceKey, scrollKey, viewMode]);
+
+  useEffect(() => {
+    const pendingNavigation = pendingCorrectionNavigationRef.current;
+    if (!pendingNavigation || correctionFilterTargetId !== null) return;
+    const targetExists = messagesRef.current.some(message => message.id === pendingNavigation.messageId)
+      || relationsRef.current.some(relation => relation.id === pendingNavigation.messageId);
+    if (!targetExists) return;
+    pendingCorrectionNavigationRef.current = null;
+    handleNavigateToMessage(pendingNavigation.messageId);
+  }, [correctionFilterTargetId, viewMode, loading, messages, edges, relations, scrollKey]);
+
+  useEffect(() => () => {
+    if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+    if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+  }, []);
+  const [traceDistance, setTraceDistance] = useState<number>(1);
+  const changeTraceDistance = useCallback((update: (distance: number) => number) => {
+    setTraceDistance(currentDistance => update(currentDistance));
+    setTraceExpandedFrameIds(new Set());
+    setLastClickedMessageId(null);
+    setTraceKey(key => key + 1);
+  }, []);
   // Popup state for decoration double-click (shows sender info)
   const [decorationPopup, setDecorationPopup] = useState<{
     messageId: string; kind: "agree" | "disagree";
@@ -593,30 +891,665 @@ export default function TopicDetailPage() {
   const [tagPopup, setTagPopup] = useState<{
     messageId: string; tagLabel: string; relMsgIds: string[];
     x: number; y: number;
+    subDetails?: Array<{subType:string;customLabel?:string;count:number}>;
   } | null>(null);
   const [comparisonPopup, setComparisonPopup] = useState<{
     relMsgId: string;
     x: number; y: number;
+    reversePreview?: {
+      before: string;
+      after: string;
+      target: UnitSelection;
+      mode?: 'direct';
+      label?: string;
+    };
   } | null>(null);
   const [mergeInfoPopup, setMergeInfoPopup] = useState<{
     relMsgId: string;
     x: number; y: number;
   } | null>(null);
   // DEBUG
-  const [debugRects, setDebugRects] = useState("");
+  const [stakeAmount, setStakeAmount] = useState<number | ''>(10);
+  const [relStakeAmount, setRelStakeAmount] = useState<number | ''>(10);
+  const [minSelfStake, setMinSelfStake] = useState(10);
+  const stakeAmountRef = useRef<number>(10);
+  const relStakeRef = useRef<number>(10);
+  stakeAmountRef.current = typeof stakeAmount === 'number' ? stakeAmount : 0;
+  relStakeRef.current = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
+  const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendInFlight, setSendInFlight] = useState(false);
+  const sendInFlightRef = useRef(false);
 
-  const currentFocusEntry = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1] : null;
-  const currentFocusIds = currentFocusEntry?.ids ?? null;
-  const relationById = useMemo(() => new Map(relations.map(relation => [relation.id, relation])), [relations]);
-  const msgMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
-  const appendCreatedRelation = useCallback((backendRel: Relation) => {
-    setRelations(prev => [...prev, backendRel]);
-    setMessages(prev => [...prev, buildRelationDemoMessage(backendRel)]);
+  useEffect(() => {
+    setSendError(null);
+  }, [
+    relationType,
+    secondaryRelationType,
+    subType,
+    relationLabel,
+    newMessageContent,
+    draftUnits,
+    sourceUnits,
+    targetUnits,
+    stakeAmount,
+    relStakeAmount,
+  ]);
+
+  const [settlementOpenMsgId, setSettlementOpenMsgId] = useState<string | null>(null);
+  const [settlementOpenType, setSettlementOpenType] = useState<'TRUTH' | 'VALUE' | null>(null);
+  const [comparisonMode, setComparisonMode] = useState(false);
+  const [comparisonReviewed, setComparisonReviewed] = useState(false);
+
+  useEffect(() => {
+    const syncGuideAvailability = () => {
+      const token = localStorage.getItem('token');
+      const enabled = Boolean(user && token && !isPreloaded && !isPreviewMode && !comparisonMode && !comparisonReviewed);
+      window.dispatchEvent(new CustomEvent('guide-availability-changed', { detail: { enabled } }));
+    };
+    syncGuideAvailability();
+    return () => {
+      window.dispatchEvent(new CustomEvent('guide-availability-changed', { detail: { enabled: false } }));
+    };
+  }, [user, isPreloaded, isPreviewMode, comparisonMode, comparisonReviewed]);
+  const [comparisonTargetId, setComparisonTargetId] = useState<string | null>(null);
+  const [comparisonSide, setComparisonSide] = useState<'agree' | 'disagree'>('agree');
+  const [comparisonReviewBaseMessages, setComparisonReviewBaseMessages] = useState<DemoMessage[] | null>(null);
+  const [comparisonReviewBaseEdges, setComparisonReviewBaseEdges] = useState<DemoEdge[] | null>(null);
+
+  // Helper: open settlement with explicit type (defaults to TRUTH for old code paths)
+  const openSettlement = useCallback((msgId: string, type: 'TRUTH' | 'VALUE' = 'TRUTH') => {
+    if (comparisonReviewed) return;
+    setSettlementOpenMsgId(msgId);
+    setSettlementOpenType(type);
+  }, [comparisonReviewed]);
+  const closeSettlement = useCallback(() => {
+    setSettlementOpenMsgId(null);
+    setSettlementOpenType(null);
+  }, []);
+  // Phase 6: auto-scroll settlement panel into view
+  useEffect(() => {
+    if (!settlementOpenMsgId) return;
+    setTimeout(() => {
+      document.querySelector('[data-settlement-panel]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
+  }, [settlementOpenMsgId]);
+  const [settlementEntryHighlight, setSettlementEntryHighlight] = useState<{
+    side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string;
+    stakeId?: string; voteId?: string;
+  } | null>(null);
+  const [stanceHighlight, setStanceHighlight] = useState<{ stanceMsgId: string; evidenceMsgIds: string[] } | null>(null);
+  const stanceHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showStanceHistory, setShowStanceHistory] = useState(false);
+  const [showAuditLog, setShowAuditLog] = useState(false);
+  const [showRevenue, setShowRevenue] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [alertMessage, setAlertMessage] = useState<string | null>(null);
+
+  const showAlert = useCallback((message: string) => {
+    setAlertMessage(message);
   }, []);
 
-  // Per-edge corrected index: old relation-message ID → set of corrected edge IDs.
-  // Used to skip corrected fragments when double-clicking to select all fragments.
-  const correctedEdgeMap = useMemo(() => computeCorrectedEdgeMap(edges), [edges]);
+  function renderAlertMessage(message: string): React.ReactNode {
+    const parts: React.ReactNode[] = [];
+    const messageIdPattern = /消息(?:「[^」]*」)?\(([^)]+)\)|消息\s+([A-Za-z0-9_-]+)/g;
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+    while ((match = messageIdPattern.exec(message)) !== null) {
+      if (match.index > cursor) parts.push(message.slice(cursor, match.index));
+      const messageId = match[1] ?? match[2];
+      parts.push(
+        <button
+          key={`${messageId}-${match.index}`}
+          type="button"
+          title={`跳转到消息 ${messageId}`}
+          onClick={() => {
+            handleNavigateToMessage(messageId);
+          }}
+          style={{
+            display: 'inline-block',
+            margin: '0 3px',
+            padding: '1px 6px',
+            border: '1px solid #60a5fa',
+            borderRadius: 4,
+            background: '#1e3a5f',
+            color: '#bfdbfe',
+            cursor: 'pointer',
+            fontSize: 13,
+          }}
+        >
+          {messageId}
+        </button>,
+      );
+      cursor = match.index + match[0].length;
+    }
+    if (cursor < message.length) parts.push(message.slice(cursor));
+    return parts.length > 0 ? parts : message;
+  }
+
+  const mergeStakeSnapshot = useCallback((messageId: string, stakes: MessageStakes) => {
+    const byType = stakes.countsByType ?? {};
+    setStakeCounts(prev => ({
+      ...prev,
+      [messageId]: {
+        truth: byType.TRUTH ?? { pro: 0, con: 0 },
+        value: byType.VALUE ?? { pro: 0, con: 0 },
+      },
+    }));
+    const bettors = new Set(stakes.stakes.map(s => s.user.id || s.user.username)).size;
+    setMessageBettorCounts(prev => ({ ...prev, [messageId]: bettors }));
+  }, []);
+
+  async function blockCorrectionForSecondBettor(messageId: string): Promise<boolean> {
+    try {
+      const stakes = await api.getMessageStakes(messageId);
+      mergeStakeSnapshot(messageId, stakes);
+      const bettors = new Set(stakes.stakes.map(stake => stake.user.id || stake.user.username)).size;
+      if (bettors >= 2) {
+        showAlert('目标消息已有第二位与会者押注，不能再发送更正消息');
+        return true;
+      }
+    } catch {
+      // The backend remains authoritative when the best-effort refresh fails.
+    }
+    return false;
+  }
+
+  // Phase 5: Refs to avoid stale closure in points-navigate handler
+  // (initialized empty; values synced via useEffect below after all useMemos run)
+  const traceEntriesRef = useRef<TraceEntry[]>([]);
+  const classifyRelMsgIdRef = useRef<string | null>(null);
+  const relationsRef = useRef<Relation[]>([]);
+  const relationByIdRef = useRef<Map<string, Relation>>(new Map());
+  const relationTypeByRelMsgIdRef = useRef<Map<string, string>>(new Map());
+
+  // Phase 5: Listen for points-navigate custom event (in-place navigation from PointsBadge)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        messageId: string; topicId: string; roundId: string | null; txType: string;
+        txData?: Record<string, unknown> | null; username?: string;
+      };
+      const { messageId, roundId, txType, txData, username } = detail;
+
+      // Read latest state from refs (avoids stale closure)
+      const currentRelations = relationsRef.current;
+      const currentRelationById = relationByIdRef.current;
+
+      // ── Smart classify enter/exit ──
+      const currentClassifyId = classifyRelMsgIdRef.current;
+      if (currentClassifyId) {
+        const owned = collectOwnedByRelation(currentClassifyId, currentRelationById);
+        const allOwnedIds = new Set([...owned.textIds, ...owned.relationIds]);
+        if (!allOwnedIds.has(messageId)) {
+          exitClassifyTopic({ restoreSnapshot: false });
+        }
+      }
+
+      // Auto-enter classify if target belongs to one (and not already in one)
+      if (!classifyRelMsgIdRef.current) {
+        for (const rel of currentRelations) {
+          const rt = rel.relationType?.toUpperCase();
+          if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
+          const targets = (rel.targetRefs ?? []) as TargetRef[];
+          if (targets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId === messageId)) {
+            enterClassifyTopic(rel.id);
+            break;
+          }
+        }
+      }
+
+      // Clear existing draft and select target message
+      setDraftUnits([{ messageId: messageId, selection: { kind: "whole" } }]);
+      setActiveTextSelectId(null);
+      pendingScrollMsgRef.current = messageId;
+
+      // Phase 5: Open settlement panel for all stake/vote/settlement transactions
+      const settlementTypes = ['STAKE_LOCK', 'VOTE_LOCK', 'SETTLEMENT_GAIN', 'SETTLEMENT_LOSS', 'CLAWBACK'];
+      const highlightMessageTypes = ['MINT', 'STAKE_LOCK', 'VOTE_LOCK'];
+
+      if (settlementTypes.includes(txType)) {
+        openSettlement(messageId);
+        if (roundId) sessionStorage.setItem('settlementHighlightRound', roundId);
+
+        // Extract settlement entry highlight from txData
+        const highlight: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string; stakeId?: string; voteId?: string } = {};
+        if (txData?.side) highlight.side = txData.side as 'PRO' | 'CON';
+        if (txData?.vote) highlight.vote = txData.vote as 'TRUE' | 'FALSE';
+        if (txData?.stakeId) highlight.stakeId = txData.stakeId as string;
+        if (txData?.voteId) highlight.voteId = txData.voteId as string;
+
+        // For SETTLEMENT_GAIN/LOSS: derive highlight from settlementResult
+        if (!highlight.side && !highlight.vote && txData?.settlementResult) {
+          const result = txData.settlementResult as string;
+          if (txType === 'SETTLEMENT_GAIN') {
+            if (result === 'TRUE') { highlight.side = 'PRO'; highlight.vote = 'TRUE'; }
+            else if (result === 'FALSE') { highlight.side = 'CON'; highlight.vote = 'FALSE'; }
+          } else if (txType === 'SETTLEMENT_LOSS' || txType === 'CLAWBACK') {
+            if (result === 'TRUE') { highlight.side = 'CON'; highlight.vote = 'FALSE'; }
+            else if (result === 'FALSE') { highlight.side = 'PRO'; highlight.vote = 'TRUE'; }
+          }
+        }
+
+        if (username) highlight.username = username;
+        setSettlementEntryHighlight(Object.keys(highlight).length > 0 ? highlight : null);
+        setTimeout(() => setSettlementEntryHighlight(null), 1000);
+      } else {
+        closeSettlement();
+        setSettlementEntryHighlight(null);
+      }
+
+      // Phase 5: Message card highlight — any tx linked to a message gets a golden flash
+      if (highlightMessageTypes.includes(txType) && txData?.messageId) {
+        setStanceHighlight({ stanceMsgId: messageId, evidenceMsgIds: [] });
+        if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
+        stanceHighlightTimerRef.current = setTimeout(() => {
+          setStanceHighlight(null);
+        }, 1000);
+      } else if (!settlementTypes.includes(txType)) {
+        setStanceHighlight(null);
+      }
+    };
+
+    window.addEventListener('points-navigate', handler);
+    return () => window.removeEventListener('points-navigate', handler);
+  }, []);
+
+  // Transitive vote stats drive both canvas visibility and JOIN recovery cost.
+  const voteStats = useMemo(
+    () => computeTransitiveVoteStats(edges, messages),
+    [edges, messages]
+  );
+  const comparisonTargets = useMemo(
+    () => Object.entries(voteStats)
+      .filter(([, stats]) => stats.agreeCount + stats.disagreeCount > 0)
+      .map(([id, stats]) => ({ message: messages.find(message => message.id === id), ...stats }))
+      .filter((item): item is { message: DemoMessage; agreeCount: number; disagreeCount: number; agreeKey: string; disagreeKey: string } => {
+        const message = item.message;
+        if (!message) return false;
+        return !isContentKind(message.kind);
+      }),
+    [messages, voteStats],
+  );
+  const comparisonStakeTotals = useMemo(() => {
+    const totals = new Map<string, { agree: number; disagree: number }>();
+    for (const edge of edges) {
+      if (edge.relationType !== 'agree' && edge.relationType !== 'disagree') continue;
+      const current = totals.get(edge.to.messageId) ?? { agree: 0, disagree: 0 };
+      current[edge.relationType] += authorStakes[edge.relationMessageId] ?? 0;
+      totals.set(edge.to.messageId, current);
+    }
+    return totals;
+  }, [edges, authorStakes]);
+  const comparisonRecommendedDisplay = useMemo(() => {
+    if (!comparisonTargetId) return 'agree' as const;
+    const totals = comparisonStakeTotals.get(comparisonTargetId);
+    return totals && totals.disagree > totals.agree ? 'disagree' as const : 'agree' as const;
+  }, [comparisonStakeTotals, comparisonTargetId]);
+  const effectiveSuppressedRelIdsForLayout = useMemo(
+    () => computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null),
+    [edges, messages, displayUser?.username],
+  );
+  const rejectedContainerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'CLASSIFY' && relation.relationType !== 'SUMMARY' && relation.relationType !== 'ARRANGE' && relation.relationType !== 'MERGE') continue;
+      if (effectiveSuppressedRelIdsForLayout.has(relation.id)) ids.add(relation.id);
+    }
+    return ids;
+  }, [relations, effectiveSuppressedRelIdsForLayout]);
+  const rejectedJoinRelationIds = useMemo(
+    () => new Set(getRejectedJoinRelationIds(relations, voteStats)),
+    [relations, voteStats]
+  );
+
+  const stakeDefaultLoaded = useRef(false);
+  const relationStakeMap = useRef<Record<string, number>>({});
+  const subTypeStakeMap = useRef<Record<string, number>>({});
+  const existingJoinCount = useMemo(() => {
+    const containerTypes = new Set(['classify', 'summary', 'arrange', 'merge']);
+    if (!relationType || !containerTypes.has(relationType)) return 0;
+    const sourceContainer = sourceUnits
+      .map(unit => relations.find(relation => relation.id === unit.messageId))
+      .find(relation => relation?.relationType?.toUpperCase() === relationType.toUpperCase());
+    if (!sourceContainer) return 0;
+    const targets = draftUnits.length > 0 ? draftUnits : targetUnits;
+    const targetIds = new Set(targets.map(target => target.messageId));
+    return relations.filter(relation =>
+      relation.relationType?.toUpperCase() === 'JOIN' &&
+      relation.sourceMessageId === sourceContainer.id &&
+      (relation.targetRefs as Array<{ kind?: string; messageId?: string }>).some(ref =>
+        (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId && targetIds.has(ref.messageId)
+      )
+    ).length;
+  }, [relationType, sourceUnits, targetUnits, draftUnits, relations]);
+  const containerRelationTypes = new Set(['CLASSIFY', 'ARRANGE', 'MERGE', 'SUMMARY']);
+  const appendContainerType = (() => {
+    if (!relationType || !containerRelationTypes.has(relationType.toUpperCase())) return null;
+    if (newMessageContent.trim().length > 0 || (draftUnits.length === 0 && targetUnits.length === 0)) return null;
+    if (sourceUnits.length !== 1) return null;
+    const source = relations.find(relation => relation.id === sourceUnits[0].messageId);
+    return source?.relationType?.toUpperCase() === relationType.toUpperCase() ? relationType.toUpperCase() : null;
+  })();
+  const joinOnlyAction = appendContainerType !== null;
+  const reclassificationJoinCount = useMemo(() => {
+    if (relationType !== 'classify') return 0;
+    const selectedIds = new Set((draftUnits.length > 0 ? draftUnits : targetUnits).map(unit => unit.messageId));
+    if (selectedIds.size === 0) return 0;
+    return relations.filter(relation =>
+      (relation.relationType?.toUpperCase() === 'CLASSIFY' || relation.relationType?.toUpperCase() === 'SUMMARY') &&
+      relations.some(join =>
+        join.relationType?.toUpperCase() === 'JOIN' &&
+        join.sourceMessageId === relation.id &&
+        !rejectedJoinRelationIds.has(join.id) &&
+        (join.targetRefs as TargetRef[]).some(ref =>
+          selectedIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+        )
+      )
+    ).reduce((count, relation) => count + relations.filter(join =>
+      join.relationType?.toUpperCase() === 'JOIN' &&
+      join.sourceMessageId === relation.id &&
+      !rejectedJoinRelationIds.has(join.id) &&
+      (join.targetRefs as TargetRef[]).some(ref =>
+        selectedIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+      )
+    ).length, 0);
+  }, [relationType, draftUnits, targetUnits, relations, rejectedJoinRelationIds]);
+  const additionalAgreeTargetIds = useMemo(() => {
+    if (relationType !== 'agree' || sourceUnits.length > 0) return [];
+    const targets = draftUnits.length > 0 ? draftUnits : targetUnits;
+    return getJoinRecoveryTargetIds(
+      Array.from(new Set(targets.map(target => target.messageId))),
+      relations,
+      rejectedContainerIds,
+    );
+  }, [relationType, sourceUnits.length, draftUnits, targetUnits, relations, rejectedContainerIds]);
+
+  const { effectiveMinStake, totalConsumption, stakeFeeAmountRef } = useStakeCalculation({
+    relationType, secondaryRelationType, subType, draftUnits, targetUnits, newMessageContent,
+    stakeAmount, relStakeAmount, relationStakeMap, subTypeStakeMap,
+    existingJoinCount,
+    joinOnlyAction,
+    reclassificationJoinCount,
+    additionalAgreeTargetCount: additionalAgreeTargetIds.length,
+    onRelStakeChange: (min) => { setMinSelfStake(min); setRelStakeAmount(min); },
+    stakeDefaultLoaded,
+  });
+
+  useEffect(() => {
+    if (!settlementOpenMsgId) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Keep panel open if clicking inside it or on the settlement toggle buttons
+      if (
+        target.closest('[data-settlement-panel]') ||
+        target.closest('[data-settlement-toggle-truth]') ||
+        target.closest('[data-settlement-toggle-value]') ||
+        target.closest('[data-prompt-modal="true"]') ||
+        target.closest('[data-guide-overlay="true"]')
+      ) return;
+      closeSettlement();
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [settlementOpenMsgId]);
+
+  // Keep available points in sync + load rule default stake
+  useEffect(() => {
+    const update = () => {
+      Promise.all([
+        api.getPointsBalance(),
+        api.getCurrentRules().catch(() => null),
+      ]).then(([b, rule]) => {
+        setAvailablePoints(b.points.available);
+        // Set initial default from rule on first load only
+        if (!stakeDefaultLoaded.current) {
+          const defaultStake = (rule?.parameters as Record<string, unknown> | null)?.selfStakeOnCreate as number ?? 10;
+          const map = (rule?.parameters as Record<string, unknown> | null)?.relationTypeMinStake as Record<string, number> | null;
+          if (map) relationStakeMap.current = map;
+          const subMap = (rule?.parameters as Record<string, unknown> | null)?.subTypeMinStake as Record<string, number> | null;
+          if (subMap) subTypeStakeMap.current = subMap;
+          const feeAmount = (rule?.parameters as Record<string, unknown> | null)?.stakeFeeAmount as number;
+          if (typeof feeAmount === 'number') stakeFeeAmountRef.current = feeAmount;
+          setMinSelfStake(defaultStake);
+          setStakeAmount(Math.min(defaultStake, b.points.available));
+          stakeDefaultLoaded.current = true;
+        } else {
+          // Clamp to available on refresh
+          setStakeAmount(prev => {
+            if (typeof prev !== 'number') return prev;
+            return Math.max(minSelfStake, Math.min(prev, b.points.available));
+          });
+        }
+      }).catch(() => {});
+    };
+    update();
+    window.addEventListener('points-refresh', update);
+    return () => window.removeEventListener('points-refresh', update);
+  }, []);
+
+  // Listen for stake count refreshes (triggered after vote/settle)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId } = (e as CustomEvent<{ messageId: string }>).detail;
+      api.getMessageStakes(messageId).then(s => {
+        mergeStakeSnapshot(messageId, s);
+      }).catch(() => {});
+    };
+    window.addEventListener('stakes-refresh', handler);
+    return () => window.removeEventListener('stakes-refresh', handler);
+  }, [mergeStakeSnapshot]);
+
+  const currentTraceEntry = traceEntries.length > 0 ? traceEntries[traceEntries.length - 1] : null;
+  const currentTraceIds = currentTraceEntry?.ids ?? null;
+  const relationById = useMemo(() => {
+    const index = new Map(relations.map(relation => [relation.id, relation]));
+    for (const message of messages) {
+      const relation = demoMessageToRelation(message, topic?.id ?? topicId ?? '');
+      if (relation) index.set(relation.id, relation);
+    }
+    return index;
+  }, [messages, relations, topic?.id, topicId]);
+  const msgMap = useMemo(() => {
+    const map = new Map(messages.map(m => [m.id, m]));
+    for (const relation of relations) {
+      if (!map.has(relation.id)) map.set(relation.id, buildRelationDemoMessage(relation));
+    }
+    return map;
+  }, [messages, relations]);
+  const sendWarning = useMemo((): string | null => {
+    if (relationType?.toUpperCase() !== 'DISAGREE') return null;
+    const allTargetIds = [...targetUnits, ...draftUnits].map(u => u.messageId);
+    const targetMsgs = allTargetIds.map(id => msgMap.get(id)).filter(Boolean) as DemoMessage[];
+    const hasContainer = targetMsgs.some(m => m.kind === 'relation' && ['classify','summary','merge','arrange'].includes(m.relationType ?? ''));
+    const hasRecommend = targetMsgs.some(m => m.kind === 'relation' && m.relationType === 'recommend');
+    if (hasContainer) return '反对此容器：若反对超过赞同，容器将被驳回（隐藏内部消息）';
+    if (hasRecommend) return '反对推荐标注：将转为冷藏标注（ARCHIVE）';
+    return null;
+  }, [relationType, targetUnits, draftUnits, msgMap]);
+  const appendCreatedRelation = useCallback((backendRel: Relation) => {
+    // Skip adding duplicate relations (deduplicated on backend)
+    // When deduplicated, update the existing relation/message in state instead
+    const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
+    if (isDedup) {
+      // Update existing relation and message with fresh data (e.g. incremented sendCount)
+      relationsRef.current = relationsRef.current.map(r => r.id === backendRel.id ? backendRel : r);
+      setRelations(prev => prev.map(r => r.id === backendRel.id ? backendRel : r));
+      setMessages(prev => prev.map(m => m.id === backendRel.id ? buildRelationDemoMessage(backendRel) : m));
+    } else {
+      relationsRef.current = relationsRef.current.some(r => r.id === backendRel.id)
+        ? relationsRef.current
+        : [...relationsRef.current, backendRel];
+      setRelations(prev => prev.some(r => r.id === backendRel.id) ? prev : [...prev, backendRel]);
+      setMessages(prev => prev.some(m => m.id === backendRel.id) ? prev : [...prev, buildRelationDemoMessage(backendRel)]);
+    }
+    const relType = backendRel.relationType?.toUpperCase();
+    const targetMsgIds: string[] = [];
+    if (relType === 'AGREE' || relType === 'DISAGREE') {
+      targetMsgIds.push(...backendRel.targetRefs
+        .filter((ref) => 
+          (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
+        .map(ref => (ref as { messageId: string }).messageId));
+      targetMsgIds.push(...backendRel.targetRefs
+        .filter((ref): ref is { kind: 'relation'; relationId: string } =>
+          ref.kind === 'relation' && 'relationId' in ref)
+        .map(ref => ref.relationId));
+      // Add edge for AGREE/DISAGREE relation
+      const srcMsgId = backendRel.sourceMessageId ?? null;
+      const fromMsgId = srcMsgId || `anon:${backendRel.id}`;
+      for (const mid of targetMsgIds) {
+        const edge: DemoEdge = {
+          id: nextId("edge"),
+          relationMessageId: backendRel.id,
+          relationType: relType.toLowerCase() as RelationType,
+          from: { messageId: fromMsgId, selection: { kind: "whole" } },
+          to: { messageId: mid, selection: { kind: "whole" } },
+          relationLabel: relationTypeName(relType.toLowerCase()),
+        };
+        setEdges(prev => [...prev, edge]);
+      }
+    }
+    // For RECOMMEND/ARCHIVE: populate targetMsgIds from text targets
+    if (relType === 'RECOMMEND' || relType === 'ARCHIVE') {
+      targetMsgIds.push(...backendRel.targetRefs
+        .filter((ref) => 
+          (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
+        .map(ref => (ref as { messageId: string }).messageId));
+    }
+    // Self-stake amount for the relation message itself
+    const rawPayload2 = (backendRel as unknown as Record<string, unknown>).relationPayload
+      ?? backendRel.payload;
+    const relPayload2 = rawPayload2 as Record<string, unknown> | null;
+    const selfStake = (relPayload2?.amount as number) ?? relStakeRef.current;
+    setAuthorStakes(prev => ({ ...prev, [backendRel.id]: selfStake }));
+    // Re-fetch stakeCounts from backend (authoritative, avoids client-side sync issues)
+    const allIds = [backendRel.id, ...targetMsgIds];
+    for (const mid of allIds) {
+      api.getMessageStakes(mid).then(s => {
+        mergeStakeSnapshot(mid, s);
+      }).catch(() => {});
+    }
+    // For RECOMMEND/ARCHIVE: the stake is on the text target, so also mirror its
+    // stake counts onto the annotation relation message for badge display.
+    if (relType === 'RECOMMEND' || relType === 'ARCHIVE') {
+      const textTarget = targetMsgIds[0];
+      if (textTarget) {
+        api.getMessageStakes(textTarget).then(s => {
+          mergeStakeSnapshot(textTarget, s);
+          const byType = s.countsByType ?? {};
+          setStakeCounts(prev => ({
+            ...prev,
+            [backendRel.id]: {
+              truth: byType.TRUTH ?? { pro: 0, con: 0 },
+              value: byType.VALUE ?? { pro: 0, con: 0 },
+            },
+          }));
+          const bettors = new Set(s.stakes.map(st => st.user.id || st.user.username)).size;
+          setMessageBettorCounts(prev => ({ ...prev, [backendRel.id]: bettors }));
+        }).catch(() => {});
+      }
+    }
+    window.dispatchEvent(new Event('points-refresh'));
+    // Notify SettlementPanel to reload stakes for target messages
+    for (const mid of targetMsgIds) {
+      window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId: mid } }));
+    }
+    // Phase 6: auto-create settlement ROUND message card.
+    // Skip if an un-settled ROUND card already exists for this target.
+    // (Backend ensures SettlementRound via ensureVotingRound; frontend just creates the card.)
+    if (topicId) {
+      // For annotations (RECOMMEND/ARCHIVE), the settlement is on the text target, not the relation
+      const isAnnotation = relType === 'RECOMMEND' || relType === 'ARCHIVE';
+      const settleTargetId = (relType === 'AGREE' || relType === 'DISAGREE' || isAnnotation) && targetMsgIds.length > 0
+        ? targetMsgIds[0]
+        : backendRel.id;
+      // Only count ROUND cards of the SAME settlement type (TRUTH vs VALUE)
+      const roundSt = isAnnotation ? 'VALUE' : 'TRUTH';
+      const rounds = messagesRef.current.filter(m =>
+        m.kind === 'round' && m.settlementTargetId === settleTargetId
+          && (m as any).roundPayload?.settlementType === roundSt
+      );
+      const results = messagesRef.current.filter(m =>
+        m.kind === 'round_result' && m.settlementTargetId === settleTargetId
+      );
+      if (rounds.length <= results.length) {
+        const relAuthor = backendRel.createdBy?.username ?? '?';
+        const roundPromise = new Promise<string | null>((resolve) => {
+          api.createMessage(topicId!, { kind: 'ROUND', content: undefined, targetMessageId: settleTargetId, settlementType: roundSt }).then(roundMsg => {
+            setMessages((prev: any) => [...prev, {
+              id: roundMsg.id,
+              author: roundMsg.createdBy?.username || relAuthor,
+              createdAt: roundMsg.createdAt,
+              content: kindLabel('ROUND', undefined, roundSt),
+              kind: 'round',
+              backendKind: 'ROUND',
+              settlementTargetId: settleTargetId,
+              roundPayload: { settlementType: roundSt, roundId: (roundMsg as any).relationPayload?.roundId },
+            }]);
+            scrollMsgToCenter(settleTargetId);
+            resolve(roundMsg.id);
+          }).catch(() => resolve(null));
+        });
+        return roundPromise;
+      }
+    }
+    return Promise.resolve(null);
+  }, [topicId, mergeStakeSnapshot]);
+
+  const createRel = useCallback(async (topicId: string, data: Parameters<typeof api.createRelation>[1]) => {
+    const amount = relStakeRef.current;
+    try {
+      return await api.createRelation(topicId, { ...data, stakeAmount: data.stakeAmount ?? amount });
+    } catch (e: any) {
+      const isTokenFailure = e instanceof ApiError && e.status === 401 && (
+        e.code === 'AUTH_TOKEN_MISSING'
+        || e.code === 'AUTH_TOKEN_INVALID'
+        || e.code === 'AUTH_TOKEN_EXPIRED'
+      );
+      if (isTokenFailure) {
+        logout();
+        navigate('/login', { state: { reason: e.message } });
+      }
+      throw e;
+    }
+  }, [logout, navigate]);
+
+  // Listen for relation-created events (triggered after vote creates AGREE/DISAGREE relation)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<Relation>).detail;
+      if (detail && detail.id && detail.relationType) {
+        appendCreatedRelation(detail);
+        // For RECOMMEND/ARCHIVE from voting: create edge for badge display
+        const rt = detail.relationType?.toUpperCase();
+        if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
+          const isDup = !!(detail as unknown as Record<string, unknown>).deduplicated;
+          if (!isDup) {
+            const targetIds = detail.targetRefs
+              .filter(ref => (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
+              .map(ref => (ref as { messageId: string }).messageId);
+            const anonSrcId = `anon:${detail.id}`;
+            setEdges(prev => {
+              const newEdges = targetIds.filter(mid =>
+                !prev.some(e => e.relationMessageId === detail.id && e.to.messageId === mid)
+              ).map(mid => ({
+                id: nextId("edge"),
+                relationMessageId: detail.id,
+                relationType: rt.toLowerCase() as RelationType,
+                from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+                to: { messageId: mid, selection: { kind: "whole" as const } },
+                relationLabel: relationTypeName(rt.toLowerCase()),
+              }));
+              return [...prev, ...newEdges];
+            });
+          }
+        }
+      }
+    };
+    window.addEventListener('relation-created', handler);
+    return () => window.removeEventListener('relation-created', handler);
+  }, [appendCreatedRelation]);
+
   const lastInheritedEdgeSignatureRef = useRef<string>('');
 
   useEffect(() => {
@@ -635,12 +1568,6 @@ export default function TopicDetailPage() {
     }
   }, [edges, msgMap, setEdges]);
 
-  /** Returns edge IDs for a relation message, excluding any that have been individually corrected. */
-  function getUncorrectedEdgeIds(relationMessageId: string): string[] {
-    const correctedIds = correctedEdgeMap.get(relationMessageId);
-    return getEdgeIdsForRelation(relationMessageId).filter(id => !correctedIds?.has(id));
-  }
-
   // TAG-only source messages in the linear list view: messages used exclusively as old-style
   // TAG relation sources should not appear as list items (their label is shown on the tag badge).
   const tagSourceIdsForList = useMemo(() => {
@@ -648,11 +1575,12 @@ export default function TopicDetailPage() {
     const shouldKeepVisible = new Set<string>();
     for (const e of edges) {
       const fromKind = msgMap.get(e.from.messageId)?.kind;
-      if (e.relationType === "tag" && fromKind === "normal") {
+      const toKind = msgMap.get(e.to.messageId)?.kind;
+      if (e.relationType === "tag" && fromKind && isContentKind(fromKind as MessageKind)) {
         hiddenTagSourceIds.add(e.from.messageId);
       }
-      if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
-      if (e.relationType !== "tag" && fromKind === "normal") {
+      if (toKind && isContentKind(toKind as MessageKind)) shouldKeepVisible.add(e.to.messageId);
+      if (e.relationType !== "tag" && fromKind && isContentKind(fromKind as MessageKind)) {
         shouldKeepVisible.add(e.from.messageId);
       }
     }
@@ -660,12 +1588,159 @@ export default function TopicDetailPage() {
     return hiddenTagSourceIds;
   }, [edges, msgMap]);
 
-  // Transitive vote stats: agree/disagree counts projected through stance chains
-  // to the ultimate target, so "agree on disagree on rel-arr" counts as disagree on rel-arr.
-  const voteStats = useMemo(
-    () => computeTransitiveVoteStats(edges, messages),
-    [edges, messages]
+  const effectiveJoinRelationIds = useMemo(
+    () => getEffectiveJoinRelationIds(
+      relations,
+      rejectedContainerIds,
+      rejectedJoinRelationIds,
+      effectiveSuppressedRelIdsForLayout,
+    ),
+    [relations, rejectedContainerIds, rejectedJoinRelationIds, effectiveSuppressedRelIdsForLayout]
   );
+
+  const joinRelationsByTarget = useMemo(() => {
+    const map = new Map<string, Relation[]>();
+    for (const message of messages) {
+      const joins = getJoinRelationsForMessage(message.id, relations);
+      if (joins.length > 0) map.set(message.id, joins);
+    }
+    return map;
+  }, [messages, relations]);
+  const joinRelationsBySource = useMemo(() => {
+    const map = new Map<string, Relation[]>();
+    for (const relation of relations) {
+      if (relation.relationType?.toUpperCase() !== 'JOIN' || !relation.sourceMessageId) continue;
+      const existing = map.get(relation.sourceMessageId) ?? [];
+      existing.push(relation);
+      map.set(relation.sourceMessageId, existing);
+    }
+    return map;
+  }, [relations]);
+
+  const traceContainerMemberships = useMemo<TraceContainerMembership[]>(() => {
+    const containerTypeById = new Map(
+      relations
+        .filter(relation => ['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE'].includes(relation.relationType.toUpperCase()))
+        .map(relation => [relation.id, relation.relationType.toLowerCase() as TraceContainerMembership['relationType']]),
+    );
+    return relations
+      .filter(relation => relation.relationType.toUpperCase() === 'JOIN'
+        && effectiveJoinRelationIds.has(relation.id)
+        && relation.sourceMessageId
+        && containerTypeById.has(relation.sourceMessageId))
+      .map(relation => ({
+        containerId: relation.sourceMessageId!,
+        relationType: containerTypeById.get(relation.sourceMessageId!)!,
+        targetIds: (relation.targetRefs ?? [])
+          .filter(ref => ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation')
+          .map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId),
+      }));
+  }, [relations, effectiveJoinRelationIds]);
+
+  const readStatusByMessageId = useMemo(() => {
+    const currentUserId = isPreloaded ? null : user?.id;
+    const currentUsername = displayUser?.username;
+    if (!currentUserId && !currentUsername) return new Map<string, 'READ' | 'UNREAD'>();
+    return getLatestUserReadStatusByMessageId(relations, relation => isPreloaded
+      ? relation.createdBy.username === currentUsername
+      : relation.createdBy.id === currentUserId);
+  }, [displayUser?.username, isPreloaded, relations, user?.id]);
+
+  const homeFilterResult = useMemo(() => {
+    const currentUsername = displayUser?.username;
+    if (homeFilterMode === null) return null;
+    const allMessageIds = new Set(msgMap.keys());
+    const contentIds = new Set(
+      messages.filter(message => isContentKind(message.kind)).map(message => message.id),
+    );
+    const readContentIds = new Set(
+      [...readStatusByMessageId]
+        .filter(([id, status]) => status === 'READ' && contentIds.has(id))
+        .map(([id]) => id)
+        .filter(id => allMessageIds.has(id)),
+    );
+    const unreadContentIds = new Set(
+      [...readStatusByMessageId]
+        .filter(([id, status]) => status === 'UNREAD' && contentIds.has(id))
+        .map(([id]) => id)
+        .filter(id => allMessageIds.has(id)),
+    );
+    const { selfContentIds, readRelatedContentIds, unreadRelatedContentIds } = deriveHomeContentMatchSetsBySender({
+      messages,
+      edges,
+      contentIds,
+      currentUsername,
+    });
+    const {
+      readSelfMatchIds,
+      readRelatedMatchIds,
+      unreadRelatedMatchIds,
+      unreadOtherMatchIds,
+    } = partitionHomeContentMatchIds({
+      contentIds,
+      selfContentIds,
+      unreadRelatedContentIds,
+      readRelatedContentIds,
+      readContentIds,
+      unreadContentIds,
+    });
+
+    const matchIds = homeFilterMode === 'read-self'
+      ? readSelfMatchIds
+      : homeFilterMode === 'read-related'
+      ? readRelatedMatchIds
+      : homeFilterMode === 'unread-other'
+      ? unreadOtherMatchIds
+      : unreadRelatedMatchIds;
+    const excludedContentContextIds = homeFilterMode === 'unread-related'
+      ? undefined
+      : new Set([
+        ...readSelfMatchIds,
+        ...readRelatedMatchIds,
+      ]);
+    const displayIds = buildHomeFilterDisplayIds(matchIds, edges, {
+      includeRelationContext: homeFilterMode === 'unread-related' || homeFilterMode === 'unread-other',
+      excludedContentContextIds,
+      containerMemberships: traceContainerMemberships,
+    });
+    return { matchIds, displayIds };
+  }, [displayUser?.username, edges, effectiveSuppressedRelIdsForLayout, homeFilterMode, isPreloaded, messages, msgMap, readStatusByMessageId, relations, traceContainerMemberships, user?.id]);
+
+  const homeDisplayRoleByMessageId = useMemo(() => {
+    const roles = new Map<string, 'source' | 'target' | 'source-target'>();
+    const matchIds = homeFilterResult?.matchIds;
+    const displayIds = homeFilterResult?.displayIds;
+    if (!matchIds || !displayIds) return roles;
+    const addRole = (messageId: string, role: 'source' | 'target') => {
+      if (matchIds.has(messageId)) return;
+      const previous = roles.get(messageId);
+      if (!previous || previous === role) roles.set(messageId, role);
+      else roles.set(messageId, 'source-target');
+    };
+    for (const edge of edges) {
+      if (!displayIds.has(edge.relationMessageId)) continue;
+      addRole(edge.from.messageId, 'source');
+      addRole(edge.to.messageId, 'target');
+    }
+    return roles;
+  }, [edges, homeFilterResult]);
+  const joinStatusByMessage = useMemo(() => {
+    const map = new Map<string, 'valid'>();
+    for (const relation of relations) {
+      if (relation.relationType?.toUpperCase() !== 'JOIN') continue;
+      if (effectiveJoinRelationIds.has(relation.id)) map.set(relation.id, 'valid');
+    }
+    return map;
+  }, [relations, effectiveJoinRelationIds]);
+
+  // Real-time: if the previewed classify becomes active (no longer rejected),
+  // exit preview mode so the user gets full interaction capabilities.
+  useEffect(() => {
+    if (previewClassifyId && !rejectedContainerIds.has(previewClassifyId)) {
+      setPreviewClassifyId(null);
+    }
+  }, [rejectedContainerIds, previewClassifyId]);
+
   const relationTypeByRelMsgId = useMemo(() => {
     const map = new Map<string, RelationType>();
     for (const relation of relations) {
@@ -673,6 +1748,13 @@ export default function TopicDetailPage() {
     }
     return map;
   }, [relations]);
+
+  // Phase 5: Keep refs in sync with derived state for points-navigate handler
+  traceEntriesRef.current = traceEntries;
+  classifyRelMsgIdRef.current = classifyRelMsgId;
+  relationsRef.current = relations;
+  relationByIdRef.current = relationById;
+  relationTypeByRelMsgIdRef.current = relationTypeByRelMsgId as unknown as Map<string, string>;
   const replacedRelationMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -684,82 +1766,135 @@ export default function TopicDetailPage() {
     }
     return ids;
   }, [edges, msgMap]);
+  // Full ownership: all CLASSIFY relations regardless of approval status.
+  // Used by preview mode and auto-classify to find targets even in rejected classifies.
   const classifyOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'CLASSIFY') continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), undefined, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
     return { textIds, relationIds };
-  }, [relations, relationById]);
+  }, [relations, relationById, rejectedJoinRelationIds]);
+
+  // Active ownership: only non-rejected CLASSIFY relations.
+  // Used by visibility logic — rejected classifies don't hide their messages.
+  const activeClassifyOwnership = useMemo(() => {
+    const textIds = new Set<string>();
+    const relationIds = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'CLASSIFY') continue;
+      if (rejectedContainerIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds, rejectedJoinRelationIds);
+      owned.textIds.forEach(id => textIds.add(id));
+      owned.relationIds.forEach(id => relationIds.add(id));
+    }
+    return { textIds, relationIds };
+  }, [relations, relationById, rejectedContainerIds, rejectedJoinRelationIds]);
   const mergeOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'MERGE') continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), undefined, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
     return { textIds, relationIds };
-  }, [relations, relationById]);
+  }, [relations, relationById, rejectedJoinRelationIds]);
+  // Full ownership: all SUMMARY relations regardless of approval status.
   const summaryOwnership = useMemo(() => {
     const textIds = new Set<string>();
     const relationIds = new Set<string>();
     for (const relation of relations) {
       if (relation.relationType !== 'SUMMARY') continue;
-      const owned = collectOwnedByRelation(relation.id, relationById);
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), undefined, rejectedJoinRelationIds);
       owned.textIds.forEach(id => textIds.add(id));
       owned.relationIds.forEach(id => relationIds.add(id));
     }
     return { textIds, relationIds };
-  }, [relations, relationById]);
+  }, [relations, relationById, rejectedJoinRelationIds]);
+
+  // Active ownership: only non-rejected SUMMARY relations.
+  const activeSummaryOwnership = useMemo(() => {
+    const textIds = new Set<string>();
+    const relationIds = new Set<string>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'SUMMARY') continue;
+      if (rejectedContainerIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), rejectedContainerIds, rejectedJoinRelationIds);
+      owned.textIds.forEach(id => textIds.add(id));
+      owned.relationIds.forEach(id => relationIds.add(id));
+    }
+    return { textIds, relationIds };
+  }, [relations, relationById, rejectedContainerIds, rejectedJoinRelationIds]);
+  const summaryCoverageByMessageId = useMemo(() => {
+    const map = new Map<string, Array<{ summaryId: string; title: string }>>();
+    for (const relation of relations) {
+      if (relation.relationType !== 'SUMMARY') continue;
+      const targetIds = new Set<string>();
+      for (const ref of relation.targetRefs as TargetRef[]) {
+        if (ref.kind === 'relation') targetIds.add(ref.relationId);
+        else targetIds.add(ref.messageId);
+      }
+      const title = getRelationTitle(relation.payload) || `总结（${targetIds.size}）`;
+      for (const targetId of targetIds) {
+        const existing = map.get(targetId) ?? [];
+        existing.push({ summaryId: relation.id, title });
+        map.set(targetId, existing);
+      }
+    }
+    return map;
+  }, [relations]);
 
   // Expand classify/summary ownership text IDs to include text messages that have
   // CORRECT (更正) relations with any already-owned message. This ensures that when
   // T1 is classified/summarized, the correcting message T2 (and the CORRECT relation
   // message) are automatically treated as part of the same group.
-  const classifyOwnershipTextIdsExpanded = useMemo(
-    () => expandTextIdsWithCorrections(classifyOwnership.textIds, edges, msgMap),
-    [classifyOwnership, edges, msgMap]
+  const activeClassifyOwnershipTextIdsExpanded = useMemo(
+    () => {
+      const base = expandTextIdsWithCorrections(activeClassifyOwnership.textIds, edges, msgMap);
+      return expandTextIdsWithSettlementResults(base, messages);
+    },
+    [activeClassifyOwnership, edges, msgMap, messages]
   );
-  const summaryOwnershipTextIdsExpanded = useMemo(
-    () => expandTextIdsWithCorrections(summaryOwnership.textIds, edges, msgMap),
-    [summaryOwnership, edges, msgMap]
+  const activeSummaryOwnershipTextIdsExpanded = useMemo(
+    () => expandTextIdsWithCorrections(activeSummaryOwnership.textIds, edges, msgMap),
+    [activeSummaryOwnership, edges, msgMap]
   );
 
-  const classifiedTargetTextIds = classifyOwnershipTextIdsExpanded;
+  const classifiedTargetTextIds = activeClassifyOwnershipTextIdsExpanded;
   const classifiedTargetClassifyRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'CLASSIFY') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
   const classifiedTargetMergeRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'MERGE') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
   const classifiedTargetARRANGERelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'ARRANGE') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
   const classifiedTargetSummaryRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
-    classifyOwnership.relationIds.forEach(id => {
+    activeClassifyOwnership.relationIds.forEach(id => {
       if (relationById.get(id)?.relationType.toUpperCase() === 'SUMMARY') ids.add(id);
     });
     return ids;
-  }, [classifyOwnership, relationById]);
+  }, [activeClassifyOwnership, relationById]);
 
   function collectExclusiveRelationMsgIds(hiddenTextIds: Set<string>, ownedRelationIds: Set<string>) {
     const ids = new Set<string>();
@@ -770,21 +1905,22 @@ export default function TopicDetailPage() {
       edgesByRel.set(e.relationMessageId, arr);
     }
     for (const [relMsgId, relEdges] of edgesByRel) {
-      const relType = relEdges[0]?.relationType;
-      if (relType === 'classify' || relType === 'summary' || relType === 'merge') continue;
+      const relType = String(relEdges[0]?.relationType ?? '').toLowerCase();
+      if (relType === 'classify' || relType === 'summary' || relType === 'merge' || relType === 'join') continue;
       if (ownedRelationIds.has(relMsgId)) continue;
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])
-        .filter(mid => msgMap.get(mid)?.kind === 'normal');
+        .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
       if (textEndpoints.length > 0) {
         if (relType === 'reference') {
           // Cross-topic REFERENCE: only hide the relation message when its source
           // (from) message is classified/hidden.  If the source is visible but the
           // target is in another classify topic, the reference should still appear
           // alongside the source in the linear and graph views.
-          const sourceHidden = relEdges.some(e =>
-            msgMap.get(e.from.messageId)?.kind === 'normal' && hiddenTextIds.has(e.from.messageId)
-          );
+          const sourceHidden = relEdges.some(e => {
+            const fromM = msgMap.get(e.from.messageId);
+            return fromM && isContentKind(fromM.kind) && (hiddenTextIds.has(e.from.messageId) || ownedRelationIds.has(e.from.messageId));
+          });
           if (sourceHidden) {
             ids.add(relMsgId);
           }
@@ -806,41 +1942,77 @@ export default function TopicDetailPage() {
   }
 
   const listExclusiveRelMsgIds = useMemo(
-    () => collectExclusiveRelationMsgIds(classifyOwnershipTextIdsExpanded, classifyOwnership.relationIds),
-    [edges, msgMap, classifyOwnershipTextIdsExpanded, classifyOwnership.relationIds]
+    () => collectExclusiveRelationMsgIds(activeClassifyOwnershipTextIdsExpanded, activeClassifyOwnership.relationIds),
+    [edges, msgMap, activeClassifyOwnershipTextIdsExpanded, activeClassifyOwnership.relationIds]
   );
   const graphHiddenTextIds = useMemo(() => {
-    const ids = new Set<string>(classifyOwnershipTextIdsExpanded);
-    summaryOwnershipTextIdsExpanded.forEach(id => ids.add(id));
+    const ids = new Set<string>(activeClassifyOwnershipTextIdsExpanded);
+    activeSummaryOwnershipTextIdsExpanded.forEach(id => ids.add(id));
     // MERGE displays as a group frame whose targets remain visible as cards on the canvas,
     // so mergeOwnership.textIds is intentionally excluded here.
     return ids;
-  }, [classifyOwnershipTextIdsExpanded, summaryOwnershipTextIdsExpanded]);
+  }, [activeClassifyOwnershipTextIdsExpanded, activeSummaryOwnershipTextIdsExpanded]);
+
   const graphOwnedRelationIds = useMemo(() => {
-    const ids = new Set<string>(classifyOwnership.relationIds);
+    const ids = new Set<string>(activeClassifyOwnership.relationIds);
     mergeOwnership.relationIds.forEach(id => ids.add(id));
-    summaryOwnership.relationIds.forEach(id => ids.add(id));
+    activeSummaryOwnership.relationIds.forEach(id => ids.add(id));
     return ids;
-  }, [classifyOwnership, mergeOwnership, summaryOwnership]);
+  }, [activeClassifyOwnership, mergeOwnership, activeSummaryOwnership]);
   const graphExclusiveRelMsgIds = useMemo(
     () => collectExclusiveRelationMsgIds(graphHiddenTextIds, graphOwnedRelationIds),
     [edges, msgMap, graphHiddenTextIds, graphOwnedRelationIds]
   );
+
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
+  const leftPanelTouchRef = useRef<{ x: number } | null>(null);
+  const fixedHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
+  const [fixedHorizontalScroll, setFixedHorizontalScroll] = useState<{ left: number; bottom: number; width: number; contentWidth: number; scale: number } | null>(null);
+  const [leftPanelMinHeight, setLeftPanelMinHeight] = useState(0);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
+  const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
+  const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messagePulseRafRef = useRef<number | null>(null);
   // Saved scroll positions for each view mode, so switching modes does not reset to top.
   const viewModeScrollRef = useRef<{ graph: { top: number; left: number } | null; list: { top: number; left: number } | null }>({ graph: null, list: null });
-  const prevFocusLenRef = useRef(0);
+  const prevTraceLenRef = useRef(0);
   const lastAddedFragmentRef = useRef<{ messageId: string; unit: UnitSelection; time: number } | null>(null);
   const mouseDownRef = useRef<{ x: number; y: number; messageId: string | null } | null>(null);
   const lastDragOrSelectTimeRef = useRef<number>(0);
   const lastClickActionsRef = useRef<{ type: "toggleWhole"; messageId: string; prevExisted: boolean; time: number }[]>([]);
   const TOTAL_FLEX = 4;
-  const MIN_LEFT_FLEX = 0.6;
-  const MAX_LEFT_FLEX = TOTAL_FLEX - MIN_LEFT_FLEX;
-  const [leftFlex, setLeftFlex] = useState(TOTAL_FLEX / 2);
+  const MIN_LEFT_PX = 560;
+  const MIN_RIGHT_PX = 280;
+  const MAX_RIGHT_PX = 700;
+  const BASE_WIDTH = 1024;
+  const SAVED_LEFT_FLEX_KEY = 'topicLeftFlex';
+  const savedLeftFlex = Number(localStorage.getItem(SAVED_LEFT_FLEX_KEY));
+  const initialLeftFlex = Number.isFinite(savedLeftFlex) && savedLeftFlex > 0 && savedLeftFlex < TOTAL_FLEX
+    ? savedLeftFlex
+    : TOTAL_FLEX / 2;
+  const [leftFlex, setLeftFlex] = useState(initialLeftFlex);
+  const MOBILE_DEFAULT_WIDTH = 1240;
+  const getAvailableWidth = () => document.documentElement.clientWidth || window.innerWidth;
+  const getMinimumContainerWidth = () => Math.max(
+    getAvailableWidth(),
+    MIN_LEFT_PX + MIN_RIGHT_PX + 12,
+    window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)').matches
+      ? MOBILE_DEFAULT_WIDTH
+      : 0,
+  );
+  const [containerWidth, setContainerWidth] = useState(() => {
+    const saved = localStorage.getItem('topicWidth');
+    const savedWidth = saved ? Number(saved) : 0;
+    const maxWidthForRightPanel = Math.ceil(MAX_RIGHT_PX * TOTAL_FLEX / (TOTAL_FLEX - initialLeftFlex) + 12);
+    return Math.max(
+      savedWidth > 0 ? Math.min(savedWidth, maxWidthForRightPanel) : BASE_WIDTH,
+      getMinimumContainerWidth(),
+    );
+  });
+  const effectiveContainerWidth = Math.max(containerWidth, getMinimumContainerWidth());
+  const [splitterActive, setSplitterActive] = useState(false);
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
-  const splitterDragRef = useRef<{ startX: number; startFlex: number } | null>(null);
+  const splitterDragRef = useRef<{ startX: number; startLeftPx: number; containerW: number } | null>(null);
   // Ref to track the ID of a newly sent message that should be scrolled into view.
   const pendingScrollMsgIdRef = useRef<string | null>(null);
   // Track pending requestAnimationFrame handles so they can be cancelled before
@@ -848,52 +2020,387 @@ export default function TopicDetailPage() {
   // rAF callbacks accessing nodes that React has already removed.
   const scrollRafRef = useRef<number | null>(null);
   const scrollRaf2Ref = useRef<number | null>(null);
+  const scrollRequestIdRef = useRef(0);
+  const viewNavigationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function cancelScrollRafs() {
     if (scrollRafRef.current !== null) { cancelAnimationFrame(scrollRafRef.current); scrollRafRef.current = null; }
     if (scrollRaf2Ref.current !== null) { cancelAnimationFrame(scrollRaf2Ref.current); scrollRaf2Ref.current = null; }
   }
 
+  function scheduleViewNavigation(targetId: string) {
+    if (viewNavigationTimerRef.current !== null) {
+      clearTimeout(viewNavigationTimerRef.current);
+    }
+    viewNavigationTimerRef.current = setTimeout(() => {
+      viewNavigationTimerRef.current = null;
+      scrollMsgToCenter(targetId);
+    }, 100);
+  }
+
   // Cleanup on unmount
-  useEffect(() => () => cancelScrollRafs(), []);
+  useEffect(() => () => {
+    cancelScrollRafs();
+    if (viewNavigationTimerRef.current !== null) clearTimeout(viewNavigationTimerRef.current);
+  }, []);
+  // Persist containerWidth to localStorage
+  useEffect(() => { localStorage.setItem('topicWidth', String(containerWidth)); }, [containerWidth]);
+  useEffect(() => { localStorage.setItem(SAVED_LEFT_FLEX_KEY, String(leftFlex)); }, [leftFlex]);
+  useEffect(() => {
+    const syncContainerWidth = () => {
+      setContainerWidth(currentWidth => Math.max(currentWidth, getMinimumContainerWidth()));
+    };
+    const frame = requestAnimationFrame(() => requestAnimationFrame(syncContainerWidth));
+    window.addEventListener('resize', syncContainerWidth);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', syncContainerWidth);
+    };
+  }, []);
+  useEffect(() => {
+    const updateFixedHorizontalScroll = () => {
+      const panel = leftPanelRef.current;
+      const isTouchDevice = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+      if (!panel || isTouchDevice) {
+        setFixedHorizontalScroll(null);
+        return;
+      }
+      const rect = panel.getBoundingClientRect();
+      const visibleTop = Math.max(rect.top, 0);
+      const visibleBottom = Math.min(rect.bottom, window.innerHeight);
+      const scale = panel.offsetWidth > 0 ? rect.width / panel.offsetWidth : 1;
+      const visibleLeft = Math.max(rect.left, 0);
+      const visibleRight = Math.min(rect.right, window.innerWidth);
+      const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+      const comparisonWidths = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'))
+        .map(viewport => viewport.scrollWidth);
+      const contentWidth = Math.max(panel.scrollWidth, ...comparisonWidths, 0) * scale;
+      if (visibleBottom <= visibleTop || visibleWidth <= 0 || contentWidth <= rect.width + 1) {
+        setFixedHorizontalScroll(null);
+        return;
+      }
+      setFixedHorizontalScroll({
+        left: visibleLeft,
+        bottom: 0,
+        width: visibleWidth,
+        contentWidth,
+        scale,
+      });
+    };
+    const scheduleUpdate = () => window.requestAnimationFrame(updateFixedHorizontalScroll);
+    updateFixedHorizontalScroll();
+    scheduleUpdate();
+    window.addEventListener('resize', updateFixedHorizontalScroll);
+    window.addEventListener('scroll', updateFixedHorizontalScroll, { passive: true });
+    const observer = new ResizeObserver(updateFixedHorizontalScroll);
+    if (leftPanelRef.current) {
+      observer.observe(leftPanelRef.current);
+      Array.from(leftPanelRef.current.children).forEach(element => observer.observe(element));
+      leftPanelRef.current.querySelectorAll<HTMLElement>('[data-comparison-viewport], [data-jump-canvas]')
+        .forEach(element => observer.observe(element));
+    }
+    const mutationObserver = new MutationObserver(() => {
+      updateFixedHorizontalScroll();
+    });
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+    return () => {
+      window.removeEventListener('resize', updateFixedHorizontalScroll);
+      window.removeEventListener('scroll', updateFixedHorizontalScroll);
+      observer.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [comparisonReviewed, viewMode, containerWidth, leftFlex]);
+
+  useEffect(() => {
+    const panel = leftPanelRef.current;
+    const fixedScroll = fixedHorizontalScrollRef.current;
+    if (!panel || !fixedScroll) return;
+    const getHorizontalMax = (element: HTMLElement) => Math.max(0, element.scrollWidth - element.clientWidth);
+    const getScrollProgress = (element: HTMLElement) => {
+      const max = getHorizontalMax(element);
+      return max > 0 ? element.scrollLeft / max : 0;
+    };
+    const getFixedProgress = () => {
+      const max = getHorizontalMax(fixedScroll);
+      return max > 0 ? fixedScroll.scrollLeft / max : 0;
+    };
+    const syncPanelToFixedScroll = () => {
+      const progress = Math.max(0, Math.min(1, getFixedProgress()));
+      panel.scrollLeft = getHorizontalMax(panel) * progress;
+      for (const viewport of panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]')) {
+        viewport.scrollLeft = getHorizontalMax(viewport) * progress;
+      }
+    };
+    const syncFixedScrollToPanel = () => {
+      const comparisonViewport = panel.querySelector<HTMLElement>('[data-comparison-viewport]');
+      const source = comparisonViewport && getHorizontalMax(comparisonViewport) > 0
+        ? comparisonViewport
+        : panel;
+      if (!source) return;
+      const progress = Math.max(0, Math.min(1, getScrollProgress(source)));
+      fixedScroll.scrollLeft = getHorizontalMax(fixedScroll) * progress;
+    };
+    fixedScroll.addEventListener('scroll', syncPanelToFixedScroll, { passive: true });
+    panel.addEventListener('scroll', syncFixedScrollToPanel, { passive: true });
+    const comparisonViewports = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'));
+    comparisonViewports.forEach(viewport => viewport.addEventListener('scroll', syncFixedScrollToPanel, { passive: true }));
+    syncFixedScrollToPanel();
+    return () => {
+      fixedScroll.removeEventListener('scroll', syncPanelToFixedScroll);
+      panel.removeEventListener('scroll', syncFixedScrollToPanel);
+      comparisonViewports.forEach(viewport => viewport.removeEventListener('scroll', syncFixedScrollToPanel));
+    };
+  }, [fixedHorizontalScroll]);
+
+  useEffect(() => {
+    const updateLeftPanelMinHeight = () => {
+      const panel = leftPanelRef.current;
+      if (!panel) return;
+      const panelRect = panel.getBoundingClientRect();
+      const scale = panel.offsetWidth > 0 ? panelRect.width / panel.offsetWidth : 1;
+      const minHeight = Math.max(0, Math.ceil((window.innerHeight - panelRect.top) / Math.max(scale, 0.01)));
+      setLeftPanelMinHeight(current => current === minHeight ? current : minHeight);
+    };
+    updateLeftPanelMinHeight();
+    window.addEventListener('resize', updateLeftPanelMinHeight);
+    const zoomObserver = new MutationObserver(updateLeftPanelMinHeight);
+    const zoomRoot = document.querySelector('[style*="scale("]');
+    if (zoomRoot) zoomObserver.observe(zoomRoot, { attributes: true, attributeFilter: ['style'] });
+    return () => {
+      window.removeEventListener('resize', updateLeftPanelMinHeight);
+      zoomObserver.disconnect();
+    };
+  }, [loading]);
+
+  // Check auth before sending: redirect to login if not logged in
+  function requireAuth(): boolean {
+    const token = localStorage.getItem('token');
+    if (!user || !token) {
+      logout();
+      navigate('/login', { state: { reason: '发送消息需要登录' } });
+      return false;
+    }
+    return true;
+  }
+
+  // Handle auth errors: logout and redirect to login
+  async function handleAuthError(err: unknown) {
+    const apiError = err as { status?: number; code?: string; message?: string };
+    const authFailureCodes = new Set([
+      'AUTH_TOKEN_MISSING',
+      'AUTH_TOKEN_INVALID',
+      'AUTH_TOKEN_EXPIRED',
+    ]);
+    if (apiError.status === 401 && authFailureCodes.has(apiError.code ?? '')) {
+      await logout();
+      navigate('/login', {
+        state: {
+          reason: `认证失败：${apiError.message ?? '登录令牌无效或已过期'}。请求接口：${(err as any)?.path ?? '未知'}`,
+        },
+      });
+      return true;
+    }
+    return false;
+  }
 
   // Scroll the left panel canvas so the message with the given ID is centered.
   // Polls via requestAnimationFrame until the card appears in the DOM.
   // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
   const MAX_SCROLL_ATTEMPTS = 60;
-  function scrollMsgToCenter(msgId: string) {
-    pendingScrollMsgIdRef.current = msgId;
+
+  function showMessagePulse(targetId: string, element: HTMLElement, requestId = scrollRequestIdRef.current) {
+    if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
+    if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
+    messagePulseRafRef.current = requestAnimationFrame(() => {
+      messagePulseRafRef.current = null;
+      if (requestId !== scrollRequestIdRef.current) return;
+      let pulseElement = element;
+      if (!pulseElement.isConnected) {
+        const currentCandidates = leftPanelRef.current
+          ? findMessageElements(leftPanelRef.current, targetId)
+          : [];
+        pulseElement = currentCandidates.find(candidate =>
+          candidate.hasAttribute('data-rel-overlay') && candidate.getAttribute('data-msgid') === targetId,
+        ) ?? currentCandidates[0];
+      }
+      if (!pulseElement?.isConnected) return;
+      const targetElements = pulseElement.hasAttribute('data-rel-overlay')
+        ? findMessageElements(leftPanelRef.current!, targetId)
+            .filter(candidate => candidate.hasAttribute('data-rel-overlay'))
+        : findMessageElements(leftPanelRef.current!, targetId);
+      const targetRects = targetElements
+        .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
+        .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
+      const rect = targetRects.reduce((bounds, candidateRect) => {
+        const left = Math.min(bounds.left, candidateRect.left);
+        const top = Math.min(bounds.top, candidateRect.top);
+        const right = Math.max(bounds.right, candidateRect.right);
+        const bottom = Math.max(bounds.bottom, candidateRect.bottom);
+        return new DOMRect(left, top, right - left, bottom - top);
+      }, pulseElement.getBoundingClientRect());
+      const visualRoot = pulseElement.hasAttribute('data-rel-overlay')
+        ? pulseElement.closest('[data-jump-canvas]') as HTMLElement | null
+        : null;
+      const visualRect = rect;
+      setMessagePulse({ element: pulseElement, rect, visualRoot, visualRect });
+      messagePulseTimerRef.current = setTimeout(() => {
+        setMessagePulse(current => current?.element === pulseElement ? null : current);
+        if (requestId === scrollRequestIdRef.current) messagePulseTimerRef.current = null;
+      }, 500);
+    });
+  }
+
+  function findMessageElements(container: HTMLElement, messageId: string): HTMLElement[] {
+    const directElements = Array.from(container.querySelectorAll('[data-msgid]'))
+      .filter(node => {
+        const element = node as HTMLElement;
+        if (element.getAttribute('data-msgid') === messageId) return true;
+        return element.getAttribute('data-jump-msgids')?.split(/\s+/).includes(messageId) ?? false;
+      }) as HTMLElement[];
+    return directElements;
+  }
+
+  function scrollMsgToCenter(msgId: string, options?: { dependencyIds?: string[] }) {
+    const targetId = msgId;
+    const dependencyIds = options?.dependencyIds ?? [];
+    const requestId = ++scrollRequestIdRef.current;
+    pendingScrollMsgIdRef.current = targetId;
     let attempts = 0;
     const tryScroll = () => {
       attempts++;
-      if (attempts > MAX_SCROLL_ATTEMPTS) { pendingScrollMsgIdRef.current = null; return; }
-      if (pendingScrollMsgIdRef.current !== msgId) return; // superseded by newer message
+      if (requestId !== scrollRequestIdRef.current) return;
+      if (attempts > MAX_SCROLL_ATTEMPTS) {
+        pendingScrollMsgIdRef.current = null;
+        pendingScrollDependencyIdsRef.current = [];
+        return;
+      }
+      if (pendingScrollMsgIdRef.current !== targetId) return; // superseded by newer message
       const container = leftPanelRef.current;
       if (!container) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
-      const el = container.querySelector(`[data-msgid="${msgId}"]`) as HTMLElement | null;
-      if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
-      pendingScrollMsgIdRef.current = null;
-      const elRect = el.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
-      const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
-      const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
-      container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
-      container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const containerOutsideViewport = containerRect.bottom <= 0
+        || containerRect.top >= viewportHeight
+        || containerRect.right <= 0
+        || containerRect.left >= viewportWidth;
+      if (containerOutsideViewport) {
+        container.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        scrollRafRef.current = requestAnimationFrame(tryScroll);
+        return;
+      }
+      const dependencyReady = dependencyIds.every(dependencyId =>
+        findMessageElements(container, dependencyId).some(element => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }),
+      );
+      if (!dependencyReady) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
+      const targetRelation = relationsRef.current.find(relation => relation.id === targetId);
+      const targetEdge = edgesRef.current.find(edge => edge.relationMessageId === targetId);
+      const isDecorationTarget = targetRelation
+        ? ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetRelation.relationType.toUpperCase())
+          || getPresentationSpec(targetRelation.relationType).kind === 'inline-badge'
+        : ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetEdge?.relationType?.toUpperCase() ?? '');
+      const candidates = findMessageElements(container, targetId);
+      const comparisonPair = container.querySelector('[data-comparison-pair]');
+      const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
+      const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
+      const directOverlayCandidates = overlayCandidates.filter(candidate => candidate.getAttribute('data-msgid') === targetId);
+      const overlayComparisonCandidates = comparisonCandidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
+      const preferredCandidates = isDecorationTarget
+        ? (directOverlayCandidates.length > 0 ? directOverlayCandidates : overlayCandidates.length > 0 ? overlayCandidates : candidates)
+        : candidates;
+      const preferredComparisonCandidates = isDecorationTarget && overlayComparisonCandidates.length > 0
+        ? overlayComparisonCandidates
+        : comparisonCandidates;
+      const el = comparisonPair
+        ? preferredComparisonCandidates[0] ?? null
+        : isDecorationTarget
+          ? preferredCandidates[0] ?? null
+          : preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
+      if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
+      const elRect = el.getBoundingClientRect();
+      if (elRect.width === 0 || elRect.height === 0) {
+        scrollRafRef.current = requestAnimationFrame(tryScroll);
+        return;
+      }
+      pendingScrollMsgIdRef.current = null;
+      const comparisonView = el.closest('[data-comparison-view="agree"]');
+      const comparisonViewport = comparisonView?.querySelector('[data-comparison-viewport="agree"]') as HTMLDivElement | null;
+        const comparisonPairElement = comparisonView?.closest('[data-comparison-pair]');
+        if (comparisonViewport && comparisonPairElement) {
+        const comparisonViewportRect = comparisonViewport.getBoundingClientRect();
+        const comparisonTargetTop = comparisonViewport.scrollTop + elRect.top - comparisonViewportRect.top + elRect.height / 2 - comparisonViewport.clientHeight / 2;
+        const comparisonTargetLeft = comparisonViewport.scrollLeft + elRect.left - comparisonViewportRect.left + elRect.width / 2 - comparisonViewport.clientWidth / 2;
+        const comparisonTop = Math.max(0, comparisonTargetTop);
+        const comparisonLeft = Math.max(0, comparisonTargetLeft);
+          const comparisonScrollTargets = comparisonPairElement.querySelectorAll('[data-comparison-viewport], [data-comparison-scroll-vertical]');
+        comparisonScrollTargets.forEach(node => { (node as HTMLElement).scrollTop = comparisonTop; });
+          const horizontalScroll = comparisonPairElement.querySelector('[data-comparison-scroll-horizontal]') as HTMLElement | null;
+          const horizontalTargets = comparisonPairElement.querySelectorAll('[data-comparison-viewport], [data-comparison-scroll-horizontal]');
+        horizontalTargets.forEach(node => { (node as HTMLElement).scrollLeft = comparisonLeft; });
+        if (horizontalScroll) horizontalScroll.scrollLeft = comparisonLeft;
+      } else {
+        const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
+        const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
+        container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
+        container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
+      }
+      // The left panel may itself be only partly visible in the browser viewport.
+      // Re-read after the inner scroll, then move the outer page if the target is
+      // still outside the actual viewport before creating the jump overlay.
+      requestAnimationFrame(() => {
+        if (requestId !== scrollRequestIdRef.current) return;
+        let currentElement = el;
+        if (!currentElement.isConnected) {
+          const currentCandidates = findMessageElements(container, targetId);
+          currentElement = currentCandidates.find(candidate =>
+            isDecorationTarget && candidate.hasAttribute('data-rel-overlay')
+              && candidate.getAttribute('data-msgid') === targetId,
+          ) ?? currentCandidates.find(candidate => isDecorationTarget && candidate.hasAttribute('data-rel-overlay'))
+            ?? currentCandidates[0];
+        }
+        if (!currentElement?.isConnected) return;
+        const currentRect = currentElement.getBoundingClientRect();
+        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        const targetOutsideViewport = currentRect.bottom <= 0
+          || currentRect.top >= viewportHeight
+          || currentRect.right <= 0
+          || currentRect.left >= viewportWidth;
+        if (targetOutsideViewport) {
+          currentElement.scrollIntoView({ block: 'center', inline: 'nearest' });
+          requestAnimationFrame(() => {
+            if (requestId === scrollRequestIdRef.current) showMessagePulse(targetId, currentElement, requestId);
+          });
+          return;
+        }
+        showMessagePulse(targetId, currentElement, requestId);
+      });
+      // The left panel handles the inner scroll; the target scrollIntoView above
+      // handles the outer page when the panel itself is outside the viewport.
     };
     cancelScrollRafs();
     scrollRafRef.current = requestAnimationFrame(tryScroll);
   }
 
-  function captureSnapshot(): FocusSnapshot {
+  function captureSnapshot(): TraceSnapshot {
+    const pageScroll = document.scrollingElement;
     return {
+      viewMode,
       leftScroll: leftPanelRef.current ? { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft } : null,
+      pageScroll: pageScroll ? { top: pageScroll.scrollTop, left: pageScroll.scrollLeft } : null,
       rightScroll: rightPanelRef.current ? { top: rightPanelRef.current.scrollTop, left: rightPanelRef.current.scrollLeft } : null,
       draftUnits: draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       sourceUnits: sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       targetUnits: targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })),
       activeTextSelectId,
       lastClickedMessageId,
-      focusHop,
+      traceDistance,
     };
   }
 
@@ -905,14 +2412,19 @@ export default function TopicDetailPage() {
     if (left !== null) container.scrollLeft = Math.min(Math.max(0, left), maxLeft);
   }
 
-  function restoreSnapshot(s: FocusSnapshot | null) {
+  function restoreSnapshot(s: TraceSnapshot | null, opts?: { restoreSelection?: boolean }) {
     if (!s) return;
-    setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
-    setSourceUnits(s.sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
-    setTargetUnits(s.targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+    scrollRequestIdRef.current++;
+    const restoreSel = opts?.restoreSelection !== false; // 默认 true，追溯模式恢复候选区
+    if (restoreSel) {
+      setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+      setSourceUnits(s.sourceUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+      setTargetUnits(s.targetUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
+    }
     setActiveTextSelectId(s.activeTextSelectId);
     setLastClickedMessageId(s.lastClickedMessageId);
-    setFocusHop(s.focusHop);
+    setTraceDistance(s.traceDistance);
+    setViewMode(s.viewMode);
     // Cancel any in-flight scroll rAF before scheduling new ones so that stale
     // callbacks never touch DOM nodes after React has reconciled them away.
     cancelScrollRafs();
@@ -921,48 +2433,170 @@ export default function TopicDetailPage() {
         scrollRafRef.current = null;
         scrollRaf2Ref.current = null;
         clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
+        clampAndSetScroll(document.scrollingElement as HTMLDivElement | null, s.pageScroll?.top ?? null, s.pageScroll?.left ?? null);
         clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
       });
     });
   }
 
-  function enterFocus(messageId: string, options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
+  function enterTemporaryCategory(force = false) {
+    const isTemporaryCategoryActive = joinFilterTargetId !== null
+      || correctionFilterTargetId !== null
+      || comparisonMode
+      || comparisonReviewed;
+    if (isTemporaryCategoryActive && !force) return;
+    temporaryCategoryStackRef.current.push({
+      snapshot: captureSnapshot(),
+      hideJoin: msgFilter.hideJoin,
+      joinFilterTargetId,
+      joinFilterDirection,
+      correctionFilterTargetId,
+      comparisonMode,
+      comparisonReviewed,
+      comparisonTargetId,
+      comparisonSide,
+      comparisonReviewBaseMessages,
+      comparisonReviewBaseEdges,
+    });
+  }
+
+  function exitTemporaryCategory(options?: { restoreMessageFilter?: boolean }) {
+    const entry = temporaryCategoryStackRef.current.pop();
+    if (!entry) return;
+    if (options?.restoreMessageFilter !== false) {
+      setMsgFilter(previous => ({ ...previous, hideJoin: entry.hideJoin }));
+    }
+    setJoinFilterTargetId(entry.joinFilterTargetId);
+    setJoinFilterDirection(entry.joinFilterDirection);
+    setCorrectionFilterTargetId(entry.correctionFilterTargetId);
+    setComparisonMode(entry.comparisonMode);
+    setComparisonReviewed(entry.comparisonReviewed);
+    setComparisonTargetId(entry.comparisonTargetId);
+    setComparisonSide(entry.comparisonSide);
+    setComparisonReviewBaseMessages(entry.comparisonReviewBaseMessages);
+    setComparisonReviewBaseEdges(entry.comparisonReviewBaseEdges);
+    restoreSnapshot(entry.snapshot);
+  }
+
+  function exitAllTemporaryCategories(options?: { restoreMessageFilter?: boolean }) {
+    const entries = temporaryCategoryStackRef.current.splice(0);
+    const firstEntry = entries[0];
+    if (firstEntry) restoreSnapshot(firstEntry.snapshot);
+    if (firstEntry && options?.restoreMessageFilter !== false) {
+      setMsgFilter(previous => ({ ...previous, hideJoin: firstEntry.hideJoin }));
+    }
+    setJoinFilterTargetId(null);
+    setCorrectionFilterTargetId(null);
+    setComparisonMode(false);
+    setComparisonReviewed(false);
+    setComparisonTargetId(null);
+    setComparisonReviewBaseMessages(null);
+    setComparisonReviewBaseEdges(null);
+  }
+
+  useEffect(() => {
+    const prepareViewer = () => {
+      exitAllTemporaryCategories();
+      setTraceEntries([]);
+      setTraceKey(key => key + 1);
+      if (classifyStackRef.current.length > 0 || classifyRelMsgId !== null) {
+        classifyStackRef.current = [];
+        setClassifyRelMsgId(null);
+        setClassifyKey(key => key + 1);
+        setPreviewClassifyId(null);
+      }
+    };
+    window.addEventListener('prepare-export-viewer', prepareViewer);
+    return () => window.removeEventListener('prepare-export-viewer', prepareViewer);
+  }, [classifyRelMsgId]);
+
+  function enterTrace(messageId: string, options?: { replace?: boolean; mode?: "trace" | "topic"; topicRelMsgId?: string }) {
     if (!messageId) return;
+    operationLog(`进入${options?.mode === 'topic' ? '分类' : '追溯'}`, `message=${messageId}`);
     const snapshot = captureSnapshot();
-    const entry: FocusEntry = { ids: [messageId], snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
-    setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
+    const entry: TraceEntry = {
+      ids: [messageId], snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
+      classifyRelMsgId, classifyStack: [...classifyStackRef.current],
+    };
+    setTraceExpandedFrameIds(new Set());
+    setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
+    if (options?.mode !== 'topic') {
+      classifyStackRef.current = [];
+      setClassifyRelMsgId(null);
+      setClassifyKey(key => key + 1);
+      cancelScrollRafs();
+      scrollRequestIdRef.current++;
+      if (leftPanelRef.current) {
+        leftPanelRef.current.scrollTop = 0;
+        leftPanelRef.current.scrollLeft = 0;
+      }
+      if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = 0;
+        document.scrollingElement.scrollLeft = 0;
+      }
+    }
   }
 
-  function enterFocusMultiple(messageIds: string[], options?: { replace?: boolean; mode?: "focus" | "topic"; topicRelMsgId?: string }) {
+  function enterTraceMultiple(messageIds: string[], options?: { replace?: boolean; mode?: "trace" | "topic"; topicRelMsgId?: string }) {
     if (!messageIds || messageIds.length === 0) return;
+    operationLog(`进入${options?.mode === 'topic' ? '分类' : '追溯'}`, `messages=${messageIds.join(',')}`);
     const snapshot = captureSnapshot();
-    const entry: FocusEntry = { ids: messageIds, snapshot, mode: options?.mode ?? "focus", topicRelMsgId: options?.topicRelMsgId };
-    setFocusEntries(prev => options?.replace ? [entry] : [...prev, entry]);
-    // Bump exit key to force GraphView clean remount when entering focus,
+    const entry: TraceEntry = {
+      ids: messageIds, snapshot, mode: options?.mode ?? "trace", topicRelMsgId: options?.topicRelMsgId,
+      classifyRelMsgId, classifyStack: [...classifyStackRef.current],
+    };
+    setTraceExpandedFrameIds(new Set());
+    setTraceEntries(prev => options?.replace ? [entry] : [...prev, entry]);
+    if (options?.mode !== 'topic') {
+      classifyStackRef.current = [];
+      setClassifyRelMsgId(null);
+      setClassifyKey(key => key + 1);
+      cancelScrollRafs();
+      scrollRequestIdRef.current++;
+      if (leftPanelRef.current) {
+        leftPanelRef.current.scrollTop = 0;
+        leftPanelRef.current.scrollLeft = 0;
+      }
+      if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = 0;
+        document.scrollingElement.scrollLeft = 0;
+      }
+    }
+    // Bump exit key to force GraphView clean remount when entering trace,
     // avoiding React 18 concurrent reconciliation removeChild errors.
-    setFocusExitKey(k => k + 1);
+    setTraceKey(k => k + 1);
   }
 
-  function exitFocus() {
-    // Pop the focus stack and bump the exit key to force GraphView remount,
+  function exitTrace() {
+    // Pop the trace stack and bump the exit key to force GraphView remount,
     // avoiding React 18 concurrent reconciliation bugs (removeChild errors).
-    // The ErrorBoundary provides a safety net with automatic retry.
-    const snapshot = focusEntries.length > 0 ? focusEntries[focusEntries.length - 1].snapshot : null;
-    setFocusEntries(prev => {
+    const entry = traceEntries.length > 0 ? traceEntries[traceEntries.length - 1] : null;
+    const snapshot = entry?.snapshot ?? null;
+    operationLog('退出追溯', `depth=${traceEntries.length}`);
+    setTraceEntries(prev => {
       if (prev.length === 0) return prev;
       return prev.slice(0, -1);
     });
-    setFocusExitKey(k => k + 1);
-    if (snapshot) restoreSnapshot(snapshot);
+    setTraceExpandedFrameIds(new Set());
+    setTraceKey(k => k + 1);
+    classifyStackRef.current = entry?.classifyStack ?? [];
+    setClassifyRelMsgId(entry?.classifyRelMsgId ?? null);
+    setClassifyKey(key => key + 1);
+    if (snapshot) restoreSnapshot(snapshot, { restoreSelection: true });
   }
 
-  function exitAllFocus() {
-    const snapshot = focusEntries.length > 0 ? focusEntries[0].snapshot : null;
-    setFocusEntries(prev => {
+  function exitAllTrace() {
+    const snapshot = traceEntries.length > 0 ? traceEntries[0].snapshot : null;
+    operationLog('退出全部追溯', `depth=${traceEntries.length}`);
+    setTraceEntries(prev => {
       if (prev.length === 0) return prev;
       return [];
     });
-    setFocusExitKey(k => k + 1);
+    setTraceExpandedFrameIds(new Set());
+    setTraceKey(k => k + 1);
+    classifyStackRef.current = traceEntries.length > 0 ? traceEntries[0].classifyStack : [];
+    setClassifyRelMsgId(traceEntries.length > 0 ? traceEntries[0].classifyRelMsgId : null);
+    setClassifyKey(key => key + 1);
     if (snapshot) restoreSnapshot(snapshot);
   }
 
@@ -979,12 +2613,17 @@ export default function TopicDetailPage() {
     const u: UnitSelection = { messageId, selection: { kind: "text", start, len, text } };
     setDraftUnits(prev => {
       const exists = prev.some(x => unitEquals(x, u));
+      if (!exists && sourceUnits.some(unit => unit.messageId === messageId)) {
+        setSendError('消息已在来源集合中，不能同时加入候选暂存区');
+        return prev;
+      }
+      setSendError(null);
       return exists ? prev.filter(x => !unitEquals(x, u)) : [...prev, u];
     });
   }
 
   /**
-   * When inside a CLASSIFY / SUMMARY topic focus, register a newly created
+  * When inside a CLASSIFY / SUMMARY topic view, register a newly created
    * message or relation as a target of the parent CLASSIFY/SUMMARY so it
    * stays scoped inside the topic after exit.
    *
@@ -996,84 +2635,145 @@ export default function TopicDetailPage() {
   function addTargetToClassifyTopic(
     newTargetRef: TargetRef,
     onUpdated?: (newRelId: string) => void,
-  ) {
-    if (!isTopicFocus || !topicFocusRelMsgId || !topicId) return;
-    const topicRelation = relationById.get(topicFocusRelMsgId);
+  ): Promise<void> | void {
+    const currentClassifyId = latestClassifyRelMsgIdRef.current;
+    if (!currentClassifyId || !topicId) return;
+    const topicRelation = relationsRef.current.find(r => r.id === currentClassifyId);
     if (!topicRelation) return;
     const existingRefs = (topicRelation.targetRefs ?? []) as TargetRef[];
-    const updatedRefs = [...existingRefs, newTargetRef];
-    api.updateRelation(topicId, topicFocusRelMsgId, {
-      relationType: topicRelation.relationType,
-      targetRefs: updatedRefs,
-      payload: topicRelation.payload,
-    })
-      .then(updatedRel => {
-        const newRelId = updatedRel.id;
-        const oldRelId = topicFocusRelMsgId;
-        // Replace old relation with superseding new one.
-        // Also update any parent relation's targetRefs that reference the old ID,
-        // so the ownership chain (collectOwnedByRelation) stays intact.
-        setRelations(prev => {
-          const filtered = prev.filter(r => r.id !== oldRelId);
-          // Rewrite targetRefs in any relation that points to the superseded relation
-          return filtered.map(r => {
-            const refs = (r.targetRefs ?? []) as TargetRef[];
-            const hasOldRef = refs.some(ref => ref.kind === 'relation' && ref.relationId === oldRelId);
-            if (!hasOldRef) return r;
-            return {
-              ...r,
-              targetRefs: refs.map(ref =>
-                ref.kind === 'relation' && ref.relationId === oldRelId
-                  ? { ...ref, relationId: newRelId }
-                  : ref
-              ),
-            };
-          }).concat(updatedRel);
-        });
-        setMessages(prev => {
-          const filtered = prev.filter(m => m.id !== oldRelId);
-          return [...filtered, buildRelationDemoMessage(updatedRel)];
-        });
-        setFocusEntries(prev => {
-          if (prev.length === 0) return prev;
-          const last = prev[prev.length - 1];
-          if (last.mode !== "topic" || last.topicRelMsgId !== oldRelId) return prev;
-          return [...prev.slice(0, -1), { ...last, topicRelMsgId: newRelId }];
-        });
-        setEdges(prev => {
-          let next = prev.map(e => {
-            // Update edges emitted by the superseded relation message
-            if (e.relationMessageId === oldRelId) {
-              return {
-                ...e,
-                relationMessageId: newRelId,
-                from: e.from.messageId === `anon:${oldRelId}`
-                  ? { ...e.from, messageId: `anon:${newRelId}` }
-                  : e.from,
-              };
-            }
-            // Update edges that target the superseded relation message
-            if (e.to.messageId === oldRelId && e.to.selection.kind === 'whole') {
-              return {
-                ...e,
-                to: { ...e.to, messageId: newRelId },
-              };
-            }
-            return e;
+    const exists = existingRefs.some(ref => {
+      if (newTargetRef.kind === 'relation') {
+        return ref.kind === 'relation' && ref.relationId === newTargetRef.relationId;
+      }
+      return (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === newTargetRef.messageId;
+    });
+    if (exists) {
+      onUpdated?.(currentClassifyId);
+      return;
+    }
+    // Container membership is an append-only JOIN event. Keep the container
+    // relation ID stable while recording the new membership as a message.
+    return createJoinRelationsForContainer(currentClassifyId, topicRelation.relationType, [newTargetRef])
+      .then(success => {
+        if (!success) return;
+        if (!isInsideClassify) {
+          const edgeTargetId = newTargetRef.kind === 'relation'
+            ? newTargetRef.relationId
+            : newTargetRef.messageId;
+          const anonSrcId = `anon:${currentClassifyId}`;
+          const newEdge: DemoEdge = {
+            id: nextId("edge"),
+            relationMessageId: currentClassifyId,
+            relationType: "classify" as RelationType,
+            from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+            to: { messageId: edgeTargetId, selection: { kind: "whole" as const } },
+            relationLabel: relationTypeName("classify"),
+          };
+          setEdges(prev => {
+            const key = `${newEdge.relationMessageId}::${newEdge.to.messageId}`;
+            if (prev.some(e => `${e.relationMessageId}::${e.to.messageId}` === key)) return prev;
+            return [...prev, newEdge];
           });
-          onUpdated?.(newRelId);
-          return next;
-        });
+        }
+        onUpdated?.(currentClassifyId);
       })
       .catch(e => console.warn('更新分类目标失败:', e));
   }
 
+  async function registerCreatedRelationInCurrentClassify(backendRel: Relation): Promise<string | null> {
+    const roundId = await appendCreatedRelation(backendRel);
+    const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
+    if (!isDedup) {
+      const rt = backendRel.relationType?.toUpperCase();
+      const isGovOps = rt === 'PROPOSAL' || rt === 'CODE_CHANGE' || rt === 'OPERATIONS';
+      const isDecoration = new Set([
+        'AGREE', 'DISAGREE', 'TAG', 'READ', 'UNREAD', 'ANNOTATION', 'REFERENCE',
+        'REPLY', 'NOTIFY', 'CORRECT', 'RECOMMEND', 'ARCHIVE', 'ATTENTION', 'BLOCK',
+      ]).has(rt ?? '');
+      if (isInsideClassify && currentClassifyRelMsgId && !isDecoration) {
+        await attachMessageToCurrentClassify(isGovOps ? backendRel.id : backendRel.id);
+      }
+    }
+    if (roundId) {
+      await attachMessageToCurrentClassify(roundId);
+    }
+    return roundId;
+  }
+
+  async function attachMessageToCurrentClassify(messageId: string) {
+    if (!isInsideClassify || !currentClassifyRelMsgId || !messageId) return;
+    const currentClassifyRel = relationsRef.current.find(r => r.id === currentClassifyRelMsgId);
+    if (!currentClassifyRel) return;
+    const joinType = currentClassifyRel.relationType?.toUpperCase() === 'SUMMARY' ? 'SUMMARY' : 'CLASSIFY';
+
+    // A message sent inside a container is completed by one JOIN request:
+    // source=container, target=message. The backend records the container
+    // target in the same transaction as the JOIN message.
+    await createJoinRelationsForContainer(currentClassifyRelMsgId, joinType, [messageId]);
+  }
+
+  async function createSettlementRoundForMessage(
+    settleTargetId: string,
+    fallbackAuthor: string,
+    settlementType: 'TRUTH' | 'VALUE' = 'TRUTH',
+  ): Promise<string | null> {
+    if (!topicId) return null;
+    const rounds = messagesRef.current.filter(m =>
+      m.kind === 'round' && m.settlementTargetId === settleTargetId
+        && ((m as any).roundPayload?.settlementType ?? 'TRUTH') === settlementType
+    );
+    const results = messagesRef.current.filter(m =>
+      m.kind === 'round_result' && m.settlementTargetId === settleTargetId
+    );
+    if (rounds.length > results.length) return null;
+    const roundMsg = await api.createMessage(topicId, {
+      kind: 'ROUND',
+      content: undefined,
+      targetMessageId: settleTargetId,
+      settlementType,
+    });
+    setMessages((prev: any) => [...prev, {
+      id: roundMsg.id,
+      author: roundMsg.createdBy?.username || fallbackAuthor,
+      createdAt: roundMsg.createdAt,
+      content: kindLabel('ROUND', undefined, settlementType),
+      kind: 'round',
+      backendKind: 'ROUND',
+      settlementTargetId: settleTargetId,
+      roundPayload: { settlementType, roundId: (roundMsg as any).relationPayload?.roundId },
+    }]);
+    // Trace mode always renders from the trace window on the main canvas.
+    // Do not let a stale classify state from the same React transition project
+    // the selected nested message back into an empty parent frame.
+    if (isInsideClassify && currentClassifyRelMsgId && traceEntries.length === 0) {
+      await attachMessageToCurrentClassify(roundMsg.id);
+      setClassifyKey(k => k + 1);
+    }
+    scrollMsgToCenter(settleTargetId);
+    return roundMsg.id;
+  }
+
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
+    if (!requireAuth()) return null;
     const text = overrideContent ?? newMessageContent;
     if (text.trim().length === 0) return null;
     if (!topicId) return null;
+    const pts = typeof stakeAmount === 'number' ? stakeAmount : 0;
+    if (pts < 10) {
+      setSendError('文本消息最低押注为 10 点');
+      return null;
+    }
+    const totalNeeded = pts + stakeFeeAmountRef.current + (isInsideClassify ? 1 + stakeFeeAmountRef.current : 0);
+    if (totalNeeded > availablePoints) {
+      const parts = [`文本 ${pts}`, `协议费 ${stakeFeeAmountRef.current}`];
+      if (isInsideClassify) parts.push(`加入容器 ${1 + stakeFeeAmountRef.current}`);
+      setSendError(`贡献点余额不足（可用 ${availablePoints}，需要 ${totalNeeded} 点 = ${parts.join(' + ')}）`);
+      return null;
+    }
+    setSendError(null);
     try {
-      const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT' });
+      const backendMsg = await api.createMessage(topicId, { content: text, contentType: 'TEXT', stakeAmount: pts });
+      operationLog('发送消息', `message=${backendMsg.id} length=${text.length} stake=${pts}`);
       const msg: DemoMessage = {
         id: backendMsg.id,
         author: backendMsg.createdBy.username,
@@ -1082,42 +2782,64 @@ export default function TopicDetailPage() {
         kind: "normal",
       };
       setMessages(prev => [...prev, msg]);
-      if (isTopicFocus) {
-        setFocusEntries(prev => {
-          if (prev.length === 0) return prev;
-          const last = prev[prev.length - 1];
-          if (last.mode !== "topic") return prev;
-          return [...prev.slice(0, -1), { ...last, ids: [...last.ids, msg.id] }];
-        });
-        if (topicFocusRelMsgId) {
-          // Persist the new message as a target of the classify/summary topic
-          // so the message remains scoped inside the topic after exit / reload.
-          addTargetToClassifyTopic(
-            { kind: 'message', messageId: msg.id },
-            (newRelId) => {
-              // Add a classify/summary edge for the new message so the topic
-              // card reflects the updated target count in GraphView.
-              const relType = (topicFocusRelType === "summary" ? "summary" : "classify") as RelationType;
-              const alreadyLinked = false; // fresh target, no existing edge
-              if (!alreadyLinked) {
-                setEdges(prev => [...prev, {
-                  id: nextId("edge"),
-                  relationMessageId: newRelId,
-                  relationType: relType,
-                  from: { messageId: `anon:${newRelId}`, selection: { kind: "whole" } },
-                  to: { messageId: msg.id, selection: { kind: "whole" } },
-                  relationLabel: relationTypeName(relType),
-                }]);
-              }
-            },
-          );
+      // Fetch real stake counts from backend (not optimistic)
+      api.getMessageStakes(msg.id).then(s => {
+        mergeStakeSnapshot(msg.id, s);
+        setAuthorStakes(prev => ({ ...prev, [msg.id]: s.stakes.find(st => st.side === 'PRO' && st.user.username === msg.author)?.amount ?? 0 }));
+      }).catch(() => {});
+      // Reset to rule default
+      setStakeAmount(minSelfStake);
+      if (!overrideContent) setNewMessageContent("");
+      scrollMsgToCenter(msg.id);
+      window.dispatchEvent(new Event('points-refresh'));
+      // Phase 6: auto-create settlement ROUND message card (skip if already exists)
+      const rounds = messagesRef.current.filter(m =>
+        m.kind === 'round' && m.settlementTargetId === msg.id
+      );
+      const results = messagesRef.current.filter(m =>
+        m.kind === 'round_result' && m.settlementTargetId === msg.id
+      );
+      if (rounds.length <= results.length) {
+        try {
+          const roundMsg = await api.createMessage(topicId, { kind: 'ROUND', content: undefined, targetMessageId: msg.id, settlementType: 'TRUTH' });
+          setMessages((prev: any) => [...prev, {
+            id: roundMsg.id,
+            author: roundMsg.createdBy?.username || msg.author,
+            createdAt: roundMsg.createdAt,
+            content: kindLabel('ROUND', undefined, 'TRUTH'),
+            kind: 'round',
+            backendKind: 'ROUND',
+            settlementTargetId: msg.id,
+            roundPayload: { settlementType: 'TRUTH', roundId: (roundMsg as any).relationPayload?.roundId },
+          }]);
+          await attachMessageToCurrentClassify(roundMsg.id);
+          scrollMsgToCenter(msg.id);
+        } catch { /* round creation optional */ }
+      }
+      if (isInsideClassify) {
+        if (currentClassifyRelMsgId) {
+          try {
+            // Create a join message on the main canvas that adds the new message
+            // to the current classify. This is the primary ownership action.
+            await attachMessageToCurrentClassify(msg.id);
+          } catch (e: any) {
+            setSendError(`加入容器记录创建失败: ${e?.message ?? e}`);
+            setTimeout(() => setSendError(null), 4000);
+          }
         }
+        setClassifyKey(k => k + 1); // force StructureView remount AFTER classify updated
       }
       if (!overrideContent) setNewMessageContent("");
       scrollMsgToCenter(msg.id);
+      window.dispatchEvent(new Event('points-refresh'));
       return msg;
     } catch (e: any) {
-      alert(`发送消息失败: ${e?.message ?? e}`);
+      if (await handleAuthError(e)) return null;
+      const detail = e instanceof ApiError
+        ? `${e.message}（HTTP ${e.status}，接口 ${e.path}${e.code ? `，错误码 ${e.code}` : ''}）`
+        : (e?.message ?? '发送失败');
+      setSendError(detail);
+      setTimeout(() => setSendError(null), 4000);
       return null;
     }
   }
@@ -1166,11 +2888,28 @@ export default function TopicDetailPage() {
     if (e.button !== 0) return;
     if (Date.now() - lastDragOrSelectTimeRef.current < 350) return;
     e.stopPropagation();
+    if (comparisonMode) {
+      setComparisonTargetId(messageId);
+      setComparisonReviewed(false);
+      setComparisonReviewBaseMessages(null);
+      setComparisonReviewBaseEdges(null);
+      setComparisonSide('agree');
+      setLastClickedMessageId(messageId);
+      setDraftUnits([{ messageId, selection: { kind: 'whole' } }]);
+      return;
+    }
     setLastClickedMessageId(messageId);
     const wholeUnit: UnitSelection = { messageId, selection: { kind: "whole" } };
     setDraftUnits(prev => {
       const exists = prev.some(u => unitEquals(u, wholeUnit));
-      const next = exists ? prev.filter(u => !unitEquals(u, wholeUnit)) : [...prev, wholeUnit];
+      if (!exists && sourceUnits.some(unit => unit.messageId === messageId)) {
+        setSendError('消息已在来源集合中，不能同时加入候选暂存区');
+        return prev;
+      }
+      setSendError(null);
+      const next = exists
+        ? prev.filter(u => !unitEquals(u, wholeUnit))
+        : [...prev, wholeUnit];
       lastClickActionsRef.current.push({ type: "toggleWhole", messageId, prevExisted: exists, time: Date.now() });
       const now = Date.now();
       lastClickActionsRef.current = lastClickActionsRef.current.filter(a => now - a.time < 2000);
@@ -1188,15 +2927,79 @@ export default function TopicDetailPage() {
       // Use msg.relationType directly — more reliable than relationTypeByRelMsgId
       // which depends on edges and can be stale after ErrorBoundary recovery.
       const relType = m.relationType;
+      if (relType === "correct") {
+        if (viewMode === "list") {
+          setComparisonPopup({ relMsgId: messageId, x: e.clientX, y: e.clientY });
+          return;
+        }
+        const targetId = edges.find(edge => edge.relationMessageId === messageId)?.to.messageId;
+        if (targetId) {
+          enterTemporaryCategory(true);
+          setJoinFilterTargetId(null);
+          setCorrectionFilterTargetId(targetId);
+          setViewMode("list");
+        }
+        return;
+      }
       if (relType === "classify" || relType === "summary") {
+        if (traceFrameIds.has(messageId)) {
+          setTraceExpandedFrameIds(prev => {
+            const next = new Set(prev);
+            if (next.has(messageId)) next.delete(messageId);
+            else next.add(messageId);
+            return next;
+          });
+          setTraceKey(key => key + 1);
+          return;
+        }
+        if (relationType === "correct") {
+          // In correction mode, the container card is the selectable text target;
+          // do not navigate away from the current canvas.
+          if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+          else setActiveTextSelectId(messageId);
+          return;
+        }
         // Always clear any text selection before entering classification to prevent
         // the browser's native double-click text selection from persisting into the new view.
         setActiveTextSelectId(null);
         clearBrowserSelection();
         enterClassifyTopic(messageId);
+        // If entering a rejected classify, enter preview mode
+        if (rejectedContainerIds.has(messageId)) {
+          setPreviewClassifyId(messageId);
+        }
+        return;
+      }
+      if (relType === "merge") {
+        // Rejected MERGE: just toggle active state, no special action needed
+        if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
         return;
       }
       if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+      return;
+    }
+    // Phase 6: settlement → switch to list view + gold highlight + open panel
+    if (m?.kind === "round" || m?.kind === "round_result") {
+      if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+      const targetId = (m as any).settlementTargetId || messageId;
+      setLastClickedMessageId(targetId);
+      setStanceHighlight({ stanceMsgId: targetId, evidenceMsgIds: [] });
+      if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
+      stanceHighlightTimerRef.current = setTimeout(() => setStanceHighlight(null), 1000);
+      // Switch to linear view so settlement panel has room to expand
+      setViewMode("list");
+      // Highlight specific round in settlement panel
+      const rp = (m as any).roundPayload;
+      const roundIdToHighlight = rp?.roundId ?? (m.kind === 'round_result' ? messageId : null);
+      if (roundIdToHighlight) sessionStorage.setItem('settlementHighlightRound', roundIdToHighlight as string);
+      const classifyRel = relations.find(r =>
+        r.relationType === 'CLASSIFY' &&
+        (r.targetRefs as Array<{ messageId?: string }>).some(t => t.messageId === targetId)
+      );
+      if (classifyRel) enterClassifyTopic(classifyRel.id);
+      // Use round's own settlementType to open the correct panel (TRUTH or VALUE)
+      const stype = (rp?.settlementType as 'TRUTH' | 'VALUE') ?? 'TRUTH';
+      if (settlementOpenMsgId === targetId) { closeSettlement(); } else { openSettlement(targetId, stype); }
       return;
     }
     if (currentlyActive) {
@@ -1213,7 +3016,9 @@ export default function TopicDetailPage() {
   function handleTextMouseUp(e: React.MouseEvent, messageId: string) {
     if (!activeTextSelectId || activeTextSelectId !== messageId) return;
     const m = msgMap.get(messageId);
-    if (!m || m.kind !== "normal") return;
+    const canSelectCorrectionText = m?.kind === 'normal'
+      || isCorrectableCorrectionTarget(m);
+    if (!m || !canSelectCorrectionText) return;
     const container = e.currentTarget as HTMLElement;
     const frag = getSelectionFragment(container);
     clearBrowserSelection();
@@ -1221,6 +3026,11 @@ export default function TopicDetailPage() {
     const fragmentUnit: UnitSelection = { messageId, selection: { kind: "text", start: frag.start, len: frag.len, text: frag.text } };
     setDraftUnits(prev => {
       const exists = prev.some(u => unitEquals(u, fragmentUnit));
+      if (!exists && sourceUnits.some(unit => unit.messageId === messageId)) {
+        setSendError('消息已在来源集合中，不能同时加入候选暂存区');
+        return prev;
+      }
+      setSendError(null);
       return exists ? prev.filter(u => !unitEquals(u, fragmentUnit)) : [...prev, fragmentUnit];
     });
     lastAddedFragmentRef.current = { messageId, unit: fragmentUnit, time: Date.now() };
@@ -1237,6 +3047,12 @@ export default function TopicDetailPage() {
 
   function commitDraftTo(role: "source" | "target") {
     if (draftUnits.length === 0) return;
+    const oppositeUnits = role === "source" ? targetUnits : sourceUnits;
+    const oppositeMessageIds = new Set(oppositeUnits.map(unit => unit.messageId));
+    if (draftUnits.some(unit => oppositeMessageIds.has(unit.messageId))) {
+      setSendError(`消息已在${role === "source" ? "目标" : "来源"}集合中，不能同时加入${role === "source" ? "来源" : "目标"}集合`);
+      return;
+    }
     if (role === "source") setSourceUnits(prev => mergeUnits(prev, draftUnits));
     else setTargetUnits(prev => mergeUnits(prev, draftUnits));
     setDraftUnits([]); setActiveTextSelectId(null);
@@ -1255,7 +3071,7 @@ export default function TopicDetailPage() {
   function getGroupedTargetTextMessageIds(units: UnitSelection[]): string[] {
     const ids = new Set<string>();
     for (const unit of foldUpToWhole(units)) {
-      if (msgMap.get(unit.messageId)?.kind === "normal") {
+      if (msgMap.get(unit.messageId)?.kind && isContentKind(msgMap.get(unit.messageId)!.kind)) {
         ids.add(unit.messageId);
         continue;
       }
@@ -1267,6 +3083,66 @@ export default function TopicDetailPage() {
     return [...ids];
   }
 
+  function promoteCompleteContainerSelections(units: UnitSelection[]): UnitSelection[] {
+    let selected = foldUpToWhole(units);
+    const containerRelations = relations.filter(relation =>
+      ['ARRANGE', 'MERGE', 'SUMMARY'].includes(relation.relationType?.toUpperCase() ?? '')
+    );
+    const relationById = new Map(relations.map(relation => [relation.id, relation]));
+
+    const selectedContainerIds = new Set(
+      selected
+        .filter(unit => containerRelations.some(container => container.id === unit.messageId))
+        .map(unit => unit.messageId)
+    );
+    if (selectedContainerIds.size > 0) {
+      const nestedSelectedIds = new Set<string>();
+      for (const containerId of selectedContainerIds) {
+        const owned = collectOwnedByRelation(containerId, relationById);
+        owned.textIds.forEach(id => nestedSelectedIds.add(id));
+        owned.relationIds.forEach(id => nestedSelectedIds.add(id));
+      }
+      selected = selected.filter(unit =>
+        !nestedSelectedIds.has(unit.messageId) || selectedContainerIds.has(unit.messageId)
+      );
+    }
+
+    // Repeatedly promote inner containers first, then their complete parents.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const selectedIds = new Set(selected.map(unit => unit.messageId));
+      for (const container of containerRelations) {
+        if (selectedIds.has(container.id)) continue;
+        const owned = collectOwnedByRelation(container.id, relationById);
+        if (owned.textIds.size === 0 || ![...owned.textIds].every(id => selectedIds.has(id))) continue;
+        selected = [
+          ...selected.filter(unit => !owned.textIds.has(unit.messageId)),
+          { messageId: container.id, selection: { kind: 'whole' } },
+        ];
+        changed = true;
+        break;
+      }
+    }
+    return selected;
+  }
+
+  function resolveEffectiveTargetUnits(
+    draft: UnitSelection[],
+    targets: UnitSelection[],
+    currentRelationType: string | null,
+  ): UnitSelection[] {
+    const rawTargets = draft.length > 0 ? draft : targets;
+    if (currentRelationType === 'correct') {
+      const textTargets = rawTargets.filter(unit => unit.selection.kind === 'text');
+      if (textTargets.length === 1 && rawTargets.every(unit => unit.messageId === textTargets[0].messageId)) {
+        return textTargets;
+      }
+      return rawTargets;
+    }
+    return promoteCompleteContainerSelections(rawTargets);
+  }
+
   function getClassifyTargetRefs(units: UnitSelection[]): TargetRef[] {
     const res: TargetRef[] = [];
     const seen = new Set<string>();
@@ -1274,7 +3150,7 @@ export default function TopicDetailPage() {
       const mid = u.messageId;
       const m = msgMap.get(mid);
       if (!m) continue;
-      if (m.kind === "normal") {
+      if (m.kind && isContentKind(m.kind)) {
         const key = `message:${mid}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1282,179 +3158,325 @@ export default function TopicDetailPage() {
         continue;
       }
       const relType = relationTypeByRelMsgId.get(mid);
-      if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") continue;
-      // ARRANGE / MERGE: expand to their contained text messages (layout containers),
-      // AND also keep the container itself as a relation-kind target so it gets
-      // hidden from the parent view (list + graph) when classified.
-      if (relType === "arrange" || relType === "merge") {
-        const relKey = `relation:${mid}`;
-        if (!seen.has(relKey)) {
-          seen.add(relKey);
-          res.push({ kind: "relation", relationId: mid });
+      if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") {
+        // Non-container relation types (proposal, code_change, operations etc.)
+        // are treated as relation-kind targets — they become opaque cards when classified.
+        if (relType !== undefined) {
+          const key = "relation:" + mid;
+          if (!seen.has(key)) {
+            seen.add(key);
+            res.push({ kind: "relation", relationId: mid });
+          }
         }
-        const owned = collectOwnedByRelation(mid, relationById);
-        for (const textId of owned.textIds) {
-          const key = `message:${textId}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          res.push({ kind: "message", messageId: textId });
-        }
-      } else {
-        const key = `relation:${mid}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        res.push({ kind: "relation", relationId: mid });
+        continue;
       }
+      // All container types (classify/summary/arrange/merge): add as a single
+      // relation-kind target.  The container itself joins the parent — its
+      // children do NOT get individual join relations to the parent.
+      const key = `relation:${mid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      res.push({ kind: "relation", relationId: mid });
     }
     return res;
   }
 
+  function getContainerMembershipTargetError(units: UnitSelection[]): string | null {
+    const selectedIds = new Set(foldUpToWhole(units).map(unit => unit.messageId));
+    const blockedContainerIds = new Set(
+      relations
+        .filter(relation => ['ARRANGE', 'MERGE', 'SUMMARY'].includes(relation.relationType?.toUpperCase() ?? ''))
+        .map(relation => relation.id)
+    );
+    const memberships = relations.filter(relation => {
+      if (relation.relationType?.toUpperCase() !== 'JOIN'
+        || !relation.sourceMessageId
+        || !blockedContainerIds.has(relation.sourceMessageId)) return false;
+      return relation.targetRefs.some(ref =>
+        (ref.kind === 'relation' && selectedIds.has(ref.relationId))
+        || (ref.kind !== 'relation' && selectedIds.has(ref.messageId))
+      );
+    });
+    const errors = memberships.flatMap(membership => {
+      if (!membership.sourceMessageId) return [];
+      const containerType = relations.find(relation => relation.id === membership.sourceMessageId)?.relationType?.toUpperCase();
+      const containerTypeLabel = containerType === 'ARRANGE' ? '排列'
+        : containerType === 'MERGE' ? '归并'
+        : containerType === 'SUMMARY' ? '总结'
+        : containerType ?? '未知';
+      return membership.targetRefs
+        .filter(ref =>
+          (ref.kind === 'relation' && selectedIds.has(ref.relationId))
+          || (ref.kind !== 'relation' && selectedIds.has(ref.messageId))
+        )
+        .map(ref => {
+          const targetId = ref.kind === 'relation' ? ref.relationId : ref.messageId;
+          return `消息(${targetId})已加入${containerTypeLabel}关系消息(${membership.sourceMessageId})，不能作为独立目标。`;
+        });
+    });
+    return errors.length > 0
+      ? `以下消息不能作为具体容器的独立目标：\n${[...new Set(errors)].join('\n')}`
+      : null;
+  }
+
+  function getContainerCycleError(units: UnitSelection[]): string | null {
+    const currentContainerId = currentClassifyRelMsgId ?? latestClassifyRelMsgIdRef.current;
+    if (!currentContainerId) return null;
+    const current = relationById.get(currentContainerId);
+    if (!current || !['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY'].includes(current.relationType.toUpperCase())) return null;
+    const forbiddenIds = new Set([
+      currentContainerId,
+      ...getContainerAncestorChain(currentContainerId, relations),
+    ]);
+    const target = foldUpToWhole(units).find(unit => forbiddenIds.has(unit.messageId));
+    if (!target) return null;
+    const targetType = relationById.get(target.messageId)?.relationType?.toUpperCase();
+    const targetLabel = targetType === 'ARRANGE' ? '排列'
+      : targetType === 'MERGE' ? '归并'
+      : targetType === 'SUMMARY' ? '总结'
+      : targetType === 'CLASSIFY' ? '分类'
+      : '容器';
+    return `不能将${targetLabel}消息(${target.messageId})作为目标，否则会形成容器循环。`;
+  }
+
+  function getJoinContainerCycleError(sourceContainerId: string, targetIds: string[]): string | null {
+    const source = relationById.get(sourceContainerId);
+    if (!source || !['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY'].includes(source.relationType.toUpperCase())) return null;
+    for (const targetId of targetIds) {
+      const target = relationById.get(targetId);
+      if (!target || !['CLASSIFY', 'MERGE', 'ARRANGE', 'SUMMARY'].includes(target.relationType.toUpperCase())) continue;
+      if (sourceContainerId !== targetId && !getContainerAncestorChain(sourceContainerId, relations).includes(targetId)) continue;
+      const targetLabel = target.relationType.toUpperCase() === 'ARRANGE' ? '排列'
+        : target.relationType.toUpperCase() === 'MERGE' ? '归并'
+        : target.relationType.toUpperCase() === 'SUMMARY' ? '总结'
+        : '分类';
+      const sourceLabel = source.relationType.toUpperCase() === 'ARRANGE' ? '排列'
+        : source.relationType.toUpperCase() === 'MERGE' ? '归并'
+        : source.relationType.toUpperCase() === 'SUMMARY' ? '总结'
+        : '分类';
+      return `已有${targetLabel}消息(${targetId})不能加入${sourceLabel}消息(${sourceContainerId})，因为两者已存在包含关系，会形成容器循环。`;
+    }
+    return null;
+  }
+
+  function getDependentDisplayTargets(units: UnitSelection[]): Array<{ messageId: string; dependencyId: string }> {
+    const dependencies: Array<{ messageId: string; dependencyId: string }> = [];
+    const dependentTypes = new Set(['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT', 'AGREE', 'DISAGREE', 'TAG', 'JOIN']);
+    const getFirstTargetId = (targetRefs: TargetRef[]): string | undefined => {
+      const target = targetRefs.find(ref => ref.kind === 'relation' || ref.kind === 'message' || ref.kind === 'text-fragment');
+      return target?.kind === 'relation' ? target.relationId : target?.messageId;
+    };
+    for (const unit of foldUpToWhole(units)) {
+      const relation = relationById.get(unit.messageId);
+      if (!relation) continue;
+      const relationType = relation.relationType.toUpperCase();
+      if (!dependentTypes.has(relationType)) continue;
+      const dependencyId = relationType === 'ANNOTATION'
+        || relationType === 'REFERENCE'
+        || relationType === 'REPLY'
+        || relationType === 'CORRECT'
+        ? relation.sourceMessageId
+        : relationType === 'JOIN'
+          ? relation.sourceMessageId
+          : getFirstTargetId(relation.targetRefs);
+      if (dependencyId && dependencyId !== unit.messageId) {
+        dependencies.push({ messageId: unit.messageId, dependencyId });
+      }
+    }
+    return dependencies;
+  }
+
+  function getDependentDisplayTarget(messageId: string): { messageId: string; dependencyId: string } | null {
+    return getDependentDisplayTargets([{ messageId, selection: { kind: 'whole' } }])[0] ?? null;
+  }
+
   /**
    * Check whether any selected text messages have non-reference edges to
-   * already-classified text messages that are NOT part of the current selection.
-   *
-   * Defensive expansion: when a selected text message is connected via an edge
-   * to a classify/merge/arrange/summary relation message, the relation's
-   * owned text messages are also treated as "selected".  This prevents false
-   * positives when getGroupedTargetTextMessageIds has already expanded the
-   * selection but an edge exists between a selected text and a classified text
-   * that belongs to the same relation group.
+   * text messages that are NOT part of the current selection.
    */
-  function hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds: string[]): boolean {
-    if (targetTextIds.length === 0) return false;
+  function hasCrossNonReferenceTextLinkForClassifyTargets(
+    targetTextIds: string[],
+    selectionUnits: UnitSelection[] = effectiveTargetUnits,
+  ): string | null {
     const selected = new Set(targetTextIds);
+    const selectedRelationIds = new Set<string>();
+    const selectedContainerOwnedIds: Set<string>[] = [];
+    for (const unit of selectionUnits) {
+      if (msgMap.get(unit.messageId)?.kind !== 'relation') continue;
+      selectedRelationIds.add(unit.messageId);
+      const relationType = relationTypeByRelMsgId.get(unit.messageId);
+      if (relationType === 'classify' || relationType === 'summary'
+        || relationType === 'arrange' || relationType === 'merge') {
+        // A selected container is an opaque target. Its nested messages are
+        // not individually selected, but relations entirely inside it do not
+        // cross the classification boundary.
+        const owned = collectOwnedByRelation(unit.messageId, relationById);
+        selectedContainerOwnedIds.push(new Set([
+          unit.messageId,
+          ...owned.textIds,
+          ...owned.relationIds,
+        ]));
+      }
+    }
+    if (selected.size === 0 && selectedRelationIds.size === 0) return null;
+    const selectedIds = new Set([...selected, ...selectedRelationIds]);
+    const describe = (id: string): string => `(${id})`;
+    const describeViolation = (fromId: string, toId: string, type: string): string =>
+      `消息${describe(fromId)}与消息${describe(toId)}存在「${getPresentationSpec(type.toLowerCase()).label}」关系，不能只将其中一方加入分类；`;
+    const crossesBoundary = (fromId: string, toId: string): boolean => {
+      if (fromId === toId) return false;
+      const fromMessage = msgMap.get(fromId);
+      const toMessage = msgMap.get(toId);
+      if (!fromMessage || !toMessage) return false;
+      if (selectedContainerOwnedIds.some(owned => owned.has(fromId) && owned.has(toId))) return false;
+      return selectedIds.has(fromId) !== selectedIds.has(toId);
+    };
 
-    // Defensive expansion: when a selected normal message has an edge to an
-    // expandable relation message (classify/merge/arrange/summary), treat
-    // that relation's owned text messages as also selected.
-    const expandableTypes = new Set(['classify', 'merge', 'arrange', 'summary']);
-    for (const e of edges) {
-      const fromMsg = msgMap.get(e.from.messageId);
-      const toMsg = msgMap.get(e.to.messageId);
-      const fromIsSelectedNormal = fromMsg?.kind === 'normal' && selected.has(e.from.messageId);
-      const toIsSelectedNormal = toMsg?.kind === 'normal' && selected.has(e.to.messageId);
-      const relationEndpoint = fromIsSelectedNormal
-        ? (toMsg?.kind === 'relation' && expandableTypes.has(toMsg.relationType ?? '') ? e.to.messageId : null)
-        : toIsSelectedNormal
-          ? (fromMsg?.kind === 'relation' && expandableTypes.has(fromMsg.relationType ?? '') ? e.from.messageId : null)
-          : null;
-      if (!relationEndpoint) continue;
-      const owned = collectOwnedByRelation(relationEndpoint, relationById);
-      for (const ownedTextId of owned.textIds) {
-        if (!selected.has(ownedTextId)) selected.add(ownedTextId);
+    // A directly selected text message inside an unselected MERGE container
+    // cannot be classified independently. Do not expand selected containers
+    // here, because their members are opaque targets.
+    const directlySelectedTextIds = new Set(
+      selectionUnits
+        .filter(unit => isContentKind(msgMap.get(unit.messageId)?.kind ?? 'normal'))
+        .map(unit => unit.messageId)
+    );
+    for (const merge of relations.filter(relation =>
+      relation.relationType.toUpperCase() === 'MERGE' && !selectedRelationIds.has(relation.id)
+    )) {
+      const owned = collectOwnedByRelation(merge.id, relationById);
+      const selectedId = [...directlySelectedTextIds].find(id => owned.textIds.has(id));
+      if (selectedId) {
+        return `消息(${selectedId})已在归并消息(${merge.id})中，不能建立分类关系。`;
       }
     }
 
     for (const e of edges) {
-      // Skip reference and correct edges: reference is a citation that does
-      // not imply semantic grouping; correct edges are already handled by
-      // expandTextIdsWithCorrections and should not trigger cross-link blocks.
-      if (e.relationType === "reference" || e.relationType === "correct") continue;
-      const fromKind = msgMap.get(e.from.messageId)?.kind;
-      const toKind = msgMap.get(e.to.messageId)?.kind;
-      if (fromKind !== "normal" || toKind !== "normal") continue;
-      const fromSelected = selected.has(e.from.messageId);
-      const toSelected = selected.has(e.to.messageId);
-      if (fromSelected !== toSelected) {
-        const nonTargetMessageId = fromSelected ? e.to.messageId : e.from.messageId;
-        if (classifiedTargetTextIds.has(nonTargetMessageId)) return true;
+      // Reference is a citation and does not imply semantic grouping.
+      if (e.relationType === "reference") continue;
+      if (crossesBoundary(e.from.messageId, e.to.messageId)) {
+        return describeViolation(e.from.messageId, e.to.messageId, e.relationType);
       }
     }
-    return false;
-  }
 
-  function getClassifyTargetTextIdsByRelMsgId(relMsgId: string): string[] {
-    const relation = relationById.get(relMsgId);
-    return relation ? getTextTargetIds(relation.targetRefs) : [];
-  }
-
-  function getClassifyTargetRelationIdsByRelMsgId(relMsgId: string): string[] {
-    const relation = relationById.get(relMsgId);
-    return relation
-      ? getRelationTargetIds(relation.targetRefs).filter(mid =>
-          msgMap.get(mid)?.kind === "relation" &&
-          (
-            relationTypeByRelMsgId.get(mid) === "classify" ||
-            relationTypeByRelMsgId.get(mid) === "merge" ||
-            relationTypeByRelMsgId.get(mid) === "arrange" ||
-            relationTypeByRelMsgId.get(mid) === "summary"
-          )
-        )
-      : [];
+    // Re-check persisted relations because some relation endpoints (for
+    // example content-kind messages or relation sources) may not have a
+    // normal-to-normal DemoEdge after the graph is rebuilt.
+    for (const relation of relations) {
+      const relationType = relation.relationType.toUpperCase();
+      // Container relations describe membership, not a semantic cross-link
+      // between the selected messages and their surrounding messages.
+      if (relationType === 'REFERENCE' || relationType === 'JOIN'
+        || relationType === 'CLASSIFY' || relationType === 'SUMMARY'
+        || relationType === 'ARRANGE' || relationType === 'MERGE') continue;
+      const sourceId = relation.sourceMessageId;
+      const endpointIds = [
+        ...(sourceId ? [sourceId] : []),
+        ...(relation.targetRefs ?? []).map(target => target.kind === 'relation' ? target.relationId : target.messageId),
+      ].filter((id): id is string => Boolean(id));
+      const selectedId = endpointIds.find(id => selectedIds.has(id));
+      const outsideId = endpointIds.find(id => !selectedIds.has(id));
+      if (selectedId && outsideId && crossesBoundary(selectedId, outsideId)) {
+        return describeViolation(selectedId, outsideId, relationType);
+      }
+    }
+    return null;
   }
 
   function enterClassifyTopic(relMsgId: string) {
-    const targetTextIds = getClassifyTargetTextIdsByRelMsgId(relMsgId);
-    const targetRelationIds = getClassifyTargetRelationIdsByRelMsgId(relMsgId);
-    const targetIds = new Set<string>(targetTextIds);
-    for (const targetRelationId of targetRelationIds) {
-      if (relationTypeByRelMsgId.get(targetRelationId) === "classify" ||
-          relationTypeByRelMsgId.get(targetRelationId) === "summary") {
-        targetIds.add(targetRelationId);
-        continue;
+    // Save snapshot so we can restore on exit
+    const snapshot = captureSnapshot();
+    cancelScrollRafs();
+    scrollRequestIdRef.current++;
+    if (leftPanelRef.current) {
+      leftPanelRef.current.scrollTop = 0;
+      leftPanelRef.current.scrollLeft = 0;
+    }
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollTop = 0;
+      document.scrollingElement.scrollLeft = 0;
+    }
+    classifyStackRef.current.push({ relMsgId, snapshot });
+    setClassifyRelMsgId(relMsgId);
+    setClassifyKey(k => k + 1);
+  }
+  function findContainingClassifyTopic(messageId: string): string | null {
+    const targetRelation = relationById.get(messageId);
+    let anchorId = messageId;
+    if (targetRelation) {
+      const relationType = targetRelation.relationType.toUpperCase();
+      const sourceId = targetRelation.sourceMessageId ?? null;
+      const firstTarget = (targetRelation.targetRefs ?? []).find(ref =>
+        ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation',
+      );
+      const targetId = firstTarget?.kind === 'relation'
+        ? firstTarget.relationId
+        : firstTarget?.messageId;
+      if (['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT'].includes(relationType)) {
+        anchorId = sourceId || messageId;
+      } else if (['AGREE', 'DISAGREE', 'TAG'].includes(relationType)) {
+        anchorId = targetId || messageId;
       }
-      const owned = collectOwnedByRelation(targetRelationId, relationById);
-      owned.textIds.forEach(id => targetIds.add(id));
-      owned.relationIds.forEach(id => targetIds.add(id));
     }
-    if (targetIds.size === 0) {
-      if (!msgMap.has(relMsgId)) return;
-      enterFocusMultiple([relMsgId], { mode: "topic", topicRelMsgId: relMsgId });
-      setFocusHop(0);
-      return;
+    let match: { id: string; size: number } | null = null;
+    for (const relation of relations) {
+      if (!['CLASSIFY', 'SUMMARY'].includes(relation.relationType) || rejectedContainerIds.has(relation.id)) continue;
+      const owned = collectOwnedByRelation(
+        relation.id,
+        relationById,
+        new Set(),
+        rejectedContainerIds,
+        rejectedJoinRelationIds,
+      );
+      if (!owned.textIds.has(anchorId) && !owned.relationIds.has(anchorId)) continue;
+      const size = owned.textIds.size + owned.relationIds.size;
+      if (!match || size < match.size) match = { id: relation.id, size };
     }
-    enterFocusMultiple(Array.from(targetIds), { mode: "topic", topicRelMsgId: relMsgId });
-    setFocusHop(0);
+    return match?.id ?? null;
   }
 
-  function getEdgeIdsForRelation(relationMessageId: string) {
-    return edges.filter(e => e.relationMessageId === relationMessageId).map(e => e.id);
+  function exitClassifyTopic(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }) {
+    const entry = classifyStackRef.current.pop();
+    const prev = classifyStackRef.current.length > 0
+      ? classifyStackRef.current[classifyStackRef.current.length - 1]
+      : null;
+    if (prev) {
+      // Return to parent classify
+      setClassifyRelMsgId(prev.relMsgId);
+    } else {
+      // Exit to main view
+      setClassifyRelMsgId(null);
+    }
+    setClassifyKey(k => k + 1);
+    setPreviewClassifyId(null); // exit preview mode when leaving classify
+    if (!prev && _options?.clearSelectionOnRootExit) {
+      setDraftUnits([]);
+      setSourceUnits([]);
+      setTargetUnits([]);
+      setActiveTextSelectId(null);
+      setLastClickedMessageId(null);
+    }
+    if (_options?.restoreSnapshot !== false && entry?.snapshot) {
+      restoreSnapshot(entry.snapshot, { restoreSelection: false });
+    }
+    if (_options?.preserveViewMode) setViewMode(_options.preserveViewMode);
   }
 
-  function relationAllFragmentsSelected(relationMessageId: string, units: UnitSelection[]) {
-    const edgeIds = getUncorrectedEdgeIds(relationMessageId);
-    if (edgeIds.length === 0) return units.some(u => u.messageId === relationMessageId && u.selection.kind === "whole");
-    const have = new Set(units.filter(u => u.messageId === relationMessageId && u.selection.kind === "edge").map(u => (u.selection as any).edgeId));
-    return edgeIds.every(id => have.has(id));
+  function handleExitClassifyTopic() {
+    const targetId = draftUnits[draftUnits.length - 1]?.messageId ?? lastClickedMessageId;
+    exitClassifyTopic({ preserveViewMode: viewMode });
+    if (targetId) setTimeout(() => scrollMsgToCenter(targetId), 150);
   }
 
-  function ensureRelationWholeSynced(relationMessageId: string) {
-    setDraftUnits(prev => {
-      const shouldHaveWhole = relationAllFragmentsSelected(relationMessageId, prev);
-      const wholeUnit: UnitSelection = { messageId: relationMessageId, selection: { kind: "whole" } };
-      const hasWhole = prev.some(u => unitEquals(u, wholeUnit));
-      let next = [...prev];
-      if (shouldHaveWhole && !hasWhole) next.push(wholeUnit);
-      else if (!shouldHaveWhole && hasWhole) next = next.filter(u => !unitEquals(u, wholeUnit));
-      return next;
-    });
-  }
-
-  function handleEdgeLabelSingleClick(e: React.MouseEvent, relationMessageId: string, edgeId: string) {
+  function handleEdgeLabelSingleClick(e: React.MouseEvent, relationMessageId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relationMessageId);
-    const unit: UnitSelection = { messageId: relationMessageId, selection: { kind: "edge", edgeId } };
-    setDraftUnits(prev => {
-      const exists = prev.some(u => unitEquals(u, unit));
-      const next = exists ? prev.filter(u => !unitEquals(u, unit)) : [...prev, unit];
-      setTimeout(() => ensureRelationWholeSynced(relationMessageId), 0);
-      return next;
-    });
+    toggleWholeUnit(relationMessageId);
   }
 
   function handleEdgeLabelDoubleClick(e: React.MouseEvent, relationMessageId: string) {
     e.stopPropagation();
     setLastClickedMessageId(relationMessageId);
-    const wholeUnit: UnitSelection = { messageId: relationMessageId, selection: { kind: "whole" } };
-    const edgeIds = getUncorrectedEdgeIds(relationMessageId);
-    const edgeUnits = edgeIds.map(id => ({ messageId: relationMessageId, selection: { kind: "edge", edgeId: id } as Selection }));
-    setDraftUnits(prev => {
-      const hasWhole = prev.some(u => unitEquals(u, wholeUnit));
-      if (hasWhole) return prev.filter(u => !(u.messageId === relationMessageId && (u.selection.kind === "whole" || u.selection.kind === "edge")));
-      const merged = mergeUnits(prev, edgeUnits as UnitSelection[]);
-      if (!merged.some(u => unitEquals(u, wholeUnit))) merged.push(wholeUnit);
-      return merged;
-    });
+    toggleWholeUnit(relationMessageId);
   }
 
   /**
@@ -1462,23 +3484,26 @@ export default function TopicDetailPage() {
    * new relation message in state, and return a DemoEdge for the caller to append.
    * Returns null if the API call fails (error is shown via alert).
    */
-  async function sendTagRelation(targetMid: string, tagLabel: string): Promise<DemoEdge | null> {
+  async function sendTagRelation(targetMid: string, tagLabel: string, subType?: string, customLabel?: string): Promise<DemoEdge | null> {
     if (!topicId) return null;
     const backendTargetRef = unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap);
     try {
-      const backendRel = await api.createRelation(topicId, {
-        relationType: 'TAG',
+      const isReadStatus = secondaryRelationType === 'read' || secondaryRelationType === 'unread';
+      const statusType = secondaryRelationType.toUpperCase();
+      const payload: Record<string, unknown> = { relationType: isReadStatus ? statusType : 'TAG', label: tagLabel };
+      if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = (customLabel || newMessageContent).trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
+      const backendRel = await createRel(topicId, {
+        relationType: isReadStatus ? statusType : 'TAG',
         sourceMessageId: null,
         targetRefs: [backendTargetRef],
-        payload: buildRelationPayload({ relationType: 'TAG', label: tagLabel }),
+        payload: buildRelationPayload(payload as unknown as Parameters<typeof buildRelationPayload>[0]),
       });
       const relId = backendRel.id;
-      appendCreatedRelation(backendRel);
-      addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+      await registerCreatedRelationInCurrentClassify(backendRel);
       const anonSrcId = `anon:${relId}`;
-      return { id: nextId("edge"), relationMessageId: relId, relationType: "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: tagLabel } as DemoEdge;
+      return { id: nextId("edge"), relationMessageId: relId, relationType: isReadStatus ? secondaryRelationType : "tag", from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: targetMid, selection: { kind: "whole" } }, relationLabel: isReadStatus ? secondaryRelationType : tagLabel } as DemoEdge;
     } catch (e: any) {
-      alert(`建立标注关系失败: ${e?.message ?? e}`);
+      showAlert(`建立标注关系失败: ${e?.message ?? e}`);
       return null;
     }
   }
@@ -1486,6 +3511,7 @@ export default function TopicDetailPage() {
   async function handleCreateRelationWithSourcesAndTargets(params: {
     sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }) {
+    if (!requireAuth()) return;
     if (!topicId) return;
     if (!relationType) return;
     const { sources, label } = params;
@@ -1497,7 +3523,7 @@ export default function TopicDetailPage() {
         .filter(t => msgMap.get(t.messageId)?.kind === "relation" && t.selection.kind === 'whole')
         .map(t => t.messageId)
     );
-    let targets = params.targets.filter(t =>
+    const targets = params.targets.filter(t =>
       !(msgMap.get(t.messageId)?.kind === "relation" && t.selection.kind === 'edge' && wholeRelIds.has(t.messageId))
     );
     const newEdgesList: DemoEdge[] = [];
@@ -1513,81 +3539,91 @@ export default function TopicDetailPage() {
       } as DemoEdge;
     };
 
-    if (relationType === "reply") {
-      const fromReply = foldUpToWhole(sources);
-      const toReply = foldUpToWhole(targets);
-      // Relation messages are also messages — include relation-message sources
-      const uniqueSources = Array.from(new Set(fromReply.map(s => s.messageId)));
+    if (relationType === "notify") {
+      const notifyPayload = buildRelationPayload({
+        relationType: "NOTIFY",
+        content: newMessageContent.trim() || "回复通知",
+      });
+      for (const src of sources) {
+        for (const t of targets) {
+          try {
+            const backendRel = await createRel(topicId, {
+              relationType: "NOTIFY",
+              sourceMessageId: src.messageId,
+              targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+              payload: notifyPayload,
+            });
+            await registerCreatedRelationInCurrentClassify(backendRel);
+            newEdgesList.push(buildEdges({ ...src }, { ...t }, "notify", "notify", backendRel.id));
+          } catch (e: any) { showAlert(`建立通知关系失败: ${e?.message ?? e}`); }
+        }
+      }
+    } else if (relationType === "reply") {
+      // REPLY: 每条边一个关系消息（source→target 一一对应）
       const replyAdditional = secondaryRelationType === "question" || secondaryRelationType === "answer"
         ? secondaryRelationType
         : "none";
       const replyEdgeLabel = replyAdditional === "none" ? "reply" : replyAdditional;
+      const replyPayload = buildRelationPayload({
+        relationType: "REPLY",
+        label: replyAdditional === "none" ? undefined : replyAdditional,
+      });
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
-        const targetRefs = toReply.map(t => unitSelectionToTargetRef(t, msgMap));
-        try {
-          const backendRel = await api.createRelation(topicId, {
-            relationType: relationType.toUpperCase(),
-            sourceMessageId: srcId,
-            targetRefs,
-            payload: buildRelationPayload({
-              relationType: relationType.toUpperCase(),
-              label: replyAdditional === "none" ? undefined : replyAdditional,
-            }),
-          });
-          const relId = backendRel.id;
-          appendCreatedRelation(backendRel);
-          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-          for (const s of fromReply) {
-            for (const t of toReply) {
-              newEdgesList.push(buildEdges({ ...s }, { ...t }, "reply", replyEdgeLabel, relId));
-            }
+        const srcs = sources.filter(s => s.messageId === srcId);
+        for (const srcUnit of srcs) {
+          for (const t of targets) {
+            try {
+              const backendRel = await createRel(topicId, {
+                relationType: "REPLY",
+                sourceMessageId: srcId,
+                targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+                payload: replyPayload,
+              });
+              const relId = backendRel.id;
+              await registerCreatedRelationInCurrentClassify(backendRel);
+              newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "reply", replyEdgeLabel, relId));
+            } catch (e: any) { showAlert(`建立回复关系失败: ${e?.message ?? e}`); }
           }
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        }
       }
     } else if (relationType === "agree" || relationType === "disagree") {
       // Relation messages are also messages — include relation-message sources
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
-      // Deduplicate targets by messageId — agree/disagree always creates one edge per unique target
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       if (uniqueSources.length > 0) {
         for (const srcId of uniqueSources) {
-          try {
-            const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
-            const relId = backendRel.id;
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            for (const targetMid of uniqueTargetMids) {
-              newEdgesList.push(buildEdges({ messageId: srcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
-            }
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          for (const t of targets) {
+            try {
+              const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs: [unitSelectionToTargetRef(t, msgMap)] });
+              await registerCreatedRelationInCurrentClassify(backendRel);
+            } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
+          }
         }
       } else {
         // Pure-stance: no source — persist to backend (relation messages are first-class messages)
-        for (const targetMid of uniqueTargetMids) {
+        const recoveryTargetIds = new Set([...uniqueTargetMids, ...additionalAgreeTargetIds]);
+        for (const targetMid of recoveryTargetIds) {
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
-            const relId = backendRel.id;
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            const anonSrcId = `anon:${backendRel.id}`;
-            newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
+            await registerCreatedRelationInCurrentClassify(backendRel);
+          } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
-    } else if (relationType === "recommend" || relationType === "archive") {
-      // RECOMMEND/ARCHIVE: user-to-message relations with no source message, one per target.
+    } else if (relationType === "recommend" || relationType === "archive" || relationType === "attention" || relationType === "block") {
+      // Annotation relations: user-to-message relations with no source message, one per target.
       // Source units are intentionally ignored — these relations never carry a source message.
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       for (const targetMid of uniqueTargetMids) {
         try {
-          const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)] });
+          const payload: Record<string, unknown> = {};
+          if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = newMessageContent.trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
+          const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef({ messageId: targetMid, selection: { kind: "whole" } }, msgMap)], payload: Object.keys(payload).length > 0 ? payload : undefined });
           const relId = backendRel.id;
-          appendCreatedRelation(backendRel);
-          addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+          await registerCreatedRelationInCurrentClassify(backendRel);
           const anonSrcId = `anon:${backendRel.id}`;
           newEdgesList.push(buildEdges({ messageId: anonSrcId, selection: { kind: "whole" } }, { messageId: targetMid, selection: { kind: "whole" } }, relationType, label, relId));
-        } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+        } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
       }
     } else if (relationType === "tag") {
       // TAG: user-to-message relation with no source message; label stored as tagLabel.
@@ -1595,21 +3631,79 @@ export default function TopicDetailPage() {
       const uniqueTargetMids = Array.from(new Set(targets.map(t => t.messageId)));
       const tagLabel = label;
       for (const targetMid of uniqueTargetMids) {
-        const edge = await sendTagRelation(targetMid, tagLabel);
+        const edge = await sendTagRelation(targetMid, tagLabel, subType, subTypeCustomLabel);
         if (edge) newEdgesList.push(edge);
       }
+    } else if (relationType === "reference") {
+      // REFERENCE: 每条边一个关系消息（source→target 一一对应）
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
+      const uniqueTargets = targets; // 不去重——每条边独立
+      const refPayload = secondaryRelationType !== "none"
+        ? buildRelationPayload({
+            relationType: "reference",
+            label: secondaryRelationType === "custom"
+              ? (label || "自定义")
+              : secondaryRelationType === "delegation" ? "完成委托" : secondaryRelationType,
+          })
+        : undefined;
+      const refEdgeLabel = secondaryRelationType !== "none"
+        ? (secondaryRelationType === "custom" ? (label || "自定义") : secondaryRelationLabel(secondaryRelationType))
+        : "ref"; // none → default type label
+      for (const srcId of uniqueSources) {
+        const srcs = sources.filter(s => s.messageId === srcId);
+        for (const srcUnit of srcs) {
+          for (const t of uniqueTargets) {
+            try {
+              const backendRel = await createRel(topicId, {
+                relationType: "REFERENCE",
+                sourceMessageId: srcId,
+                targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+                payload: refPayload,
+              });
+              const relId = backendRel.id;
+              const newEdge = buildEdges({ ...srcUnit }, { ...t }, "reference", refEdgeLabel, relId);
+              await registerCreatedRelationInCurrentClassify(backendRel);
+              setEdges(prev => [...prev, newEdge]);
+            } catch (e: any) { showAlert(`建立引用关系失败: ${e?.message ?? e}`); }
+          }
+        }
+      }
+    } else if (relationType === "annotation") {
+      // ANNOTATION: 每条边一个关系消息（source→target 一一对应）
+      const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
+      for (const srcId of uniqueSources) {
+        const srcs = sources.filter(s => s.messageId === srcId);
+        for (const srcUnit of srcs) {
+          for (const t of targets) {
+            try {
+              const backendRel = await createRel(topicId, {
+                relationType: "ANNOTATION",
+                sourceMessageId: srcId,
+                targetRefs: [unitSelectionToTargetRef(t, msgMap)],
+              });
+              const relId = backendRel.id;
+              await registerCreatedRelationInCurrentClassify(backendRel);
+              newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, "annotation", label, relId));
+            } catch (e: any) { showAlert(`建立注释关系失败: ${e?.message ?? e}`); }
+          }
+        }
+      }
     } else {
-      // Relation messages are also messages — include relation-message sources
+      // Generic types (ARRANGE/CLASSIFY/MERGE/SUMMARY/PROPOSAL/CODE_CHANGE/OPERATIONS etc.) with source message.
+      // CORRECT: single target only.
+      if (relationType === "correct" && targets.length > 1) {
+        showAlert("更正关系只能有一个目标");
+        return;
+      }
       const uniqueSources = Array.from(new Set(sources.map(s => s.messageId)));
       for (const srcId of uniqueSources) {
         const srcs = sources.filter(s => s.messageId === srcId);
         for (const srcUnit of srcs) {
           const targetRefs = targets.map(t => unitSelectionToTargetRef(t, msgMap));
           try {
-            const backendRel = await api.createRelation(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs });
+            const backendRel = await createRel(topicId, { relationType: relationType.toUpperCase(), sourceMessageId: srcId, targetRefs, payload: undefined });
             const relId = backendRel.id;
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+            await registerCreatedRelationInCurrentClassify(backendRel);
             for (const t of targets) {
               newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, relationType, label, relId));
             }
@@ -1619,64 +3713,313 @@ export default function TopicDetailPage() {
                 newEdgesList.push(buildEdges({ ...srcUnit }, { ...t }, secType, label, relId));
               }
             }
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+          } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
         }
       }
     }
+    operationLog('创建关系', `type=${relationType} sources=${sources.length} targets=${targets.length} created=${newEdgesList.length} label=${label.slice(0, 80)}`);
     setEdges(prev => [...prev, ...newEdgesList]);
   }
 
-  async function handleQuickSendAndRelateFromDraftTargets() {
-    const text = newMessageContent.trim();
+  /**
+   * Create "join" relations for each target of a container.
+   * A join relation is: sourceMessageId=container, targetRefs=[target].
+   * This enables resolveMessageCanvas / getActiveJoinRelationsForMessage
+   * to find which container a message belongs to (bottom-up lookup).
+   */
+  async function createJoinRelationsForContainer(
+    containerId: string,
+    _containerType: string,
+    targetMids: Array<string | TargetRef>,
+  ) {
+    const invalidTarget = targetMids
+      .map(target => typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId)
+      .map(messageId => getDependentDisplayTarget(messageId))
+      .find(Boolean);
+    if (invalidTarget) {
+      setSendError(`消息 ${invalidTarget.messageId} 依赖消息 ${invalidTarget.dependencyId} 显示，不能创建加入消息`);
+      return false;
+    }
+    if (targetMids.some(target => typeof target !== 'string' && target.kind === 'text-fragment')) {
+      setSendError('加入消息不能以文本片段作为目标，必须选择独立消息');
+      return false;
+    }
+    const joinStake = Math.max(relationStakeMap.current.JOIN ?? 1, 1);
+    for (const target of targetMids) {
+      try {
+        const tgtMid = typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId;
+        const targetMessage = msgMap.get(tgtMid);
+        const targetRelationType = targetMessage?.kind === 'relation'
+          ? targetMessage.relationType?.toUpperCase()
+          : undefined;
+        const targetRef: TargetRef = typeof target === 'string'
+          ? targetRelationType && containerRelationTypes.has(targetRelationType)
+            ? { kind: 'relation', relationId: tgtMid }
+            : { kind: 'message', messageId: tgtMid }
+          : target;
+        const existingJoin = relationsRef.current.find(relation =>
+          relation.relationType?.toUpperCase() === 'JOIN' &&
+          relation.sourceMessageId === containerId &&
+          relation.targetRefs.some(ref =>
+            targetRef.kind === 'relation'
+              ? ref.kind === 'relation' && ref.relationId === tgtMid && (ref.part ?? 'whole') === (targetRef.part ?? 'whole')
+              : targetRef.kind === 'text-fragment'
+                ? ref.kind === 'text-fragment' && ref.messageId === tgtMid && ref.hash === targetRef.hash
+                : ref.kind === 'message' && ref.messageId === tgtMid
+          )
+        );
+        const relation = existingJoin
+          ? await api.createRelation(topicId!, {
+              relationType: 'AGREE',
+              targetRefs: [{ kind: 'relation', relationId: existingJoin.id }],
+              payload: {},
+              stakeAmount: joinStake,
+            })
+          : await api.createRelation(topicId!, {
+              relationType: 'JOIN',
+              sourceMessageId: containerId,
+              targetRefs: [targetRef],
+              payload: {},
+              stakeAmount: joinStake,
+            });
+        await appendCreatedRelation(relation);
+      } catch (e) {
+        operationLog('加入分类失败', `containerId=${containerId.slice(-6)} target=${typeof target === 'string' ? target.slice(-6) : (target.kind === 'relation' ? target.relationId : target.messageId).slice(-6)} error=${String(e)}`);
+        throw e;
+      }
+    }
+    return true;
+  }
 
-    // No relation type selected: just send a plain message
-    if (relationType === null) {
-      if (text.length === 0) return;
-      await handleSendMessageOnly(text);
-      setNewMessageContent("");
+  async function rejectJoinRelationsForContainer(containerId: string, targetRefs: TargetRef[], stakeAmount: number) {
+    const targetKeys = new Set(targetRefs.map(ref =>
+      ref.kind === 'relation' ? `relation:${ref.relationId}` : `message:${ref.messageId}`
+    ));
+    const joins = relationsRef.current.filter(relation =>
+      relation.relationType?.toUpperCase() === 'JOIN' &&
+      relation.sourceMessageId === containerId &&
+      relation.targetRefs.some(ref => {
+        const key = ref.kind === 'relation' ? `relation:${ref.relationId}` : `message:${ref.messageId}`;
+        return targetKeys.has(key);
+      })
+    );
+    for (const join of joins) {
+      const rejection = await createRel(topicId!, {
+        relationType: 'DISAGREE',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: join.id }],
+        stakeAmount,
+      });
+      await appendCreatedRelation(rejection);
+    }
+  }
+
+  async function handleQuickSendAndRelateFromDraftTargets() {
+    if (!requireAuth()) return;
+    if (!singleButtonEnabled) return;
+    const text = newMessageContent.trim();
+    // Clear saved text on type switch since user is sending/committing
+    savedTextOnTypeSwitchRef.current = "";
+
+    if (draftUnits.length > 0 && targetUnits.length > 0) {
+      setSendError('候选区和目标集合不能同时有内容，请先将候选区移入目标集合或清空其中一方');
+      return;
+    }
+    const sourceMessageIds = new Set(sourceUnits.map(unit => unit.messageId));
+    if (draftUnits.some(unit => sourceMessageIds.has(unit.messageId)) || targetUnits.some(unit => sourceMessageIds.has(unit.messageId))) {
+      setSendError('同一消息不能同时出现在来源集合和候选暂存区或目标集合中');
       return;
     }
 
     // Effective targets: candidates (draftUnits) if non-empty, else explicit target collection.
-    // This lets users either click on the canvas to pick draft candidates (quick path) or
-    // explicitly commit messages to the target collection via "加入目标集合".
-    const effectiveTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+    const effectiveTargets = resolveEffectiveTargetUnits(draftUnits, targetUnits, relationType);
+    // Validate both stakes — collect all errors
+    const errors: string[] = [];
+    if (hasTextContent) {
+      if (typeof stakeAmount !== 'number') {
+        errors.push('请输入文本消息贡献点');
+      } else if (stakeAmount < 10) {
+        errors.push(`文本消息最低押注 10 点（当前 ${stakeAmount}）`);
+      }
+    }
+    if (relationType) {
+      const isContainerRelation = containerRelationTypes.has(relationType.toUpperCase());
+      const hasSelectedSource = sourceUnits.length > 0;
+      if (isContainerRelation && hasSelectedSource && !appendContainerType) {
+        setSendError('加入消息的来源必须是当前关系类型对应的容器消息，目标消息来自当前选择');
+        return;
+      }
+      if (typeof relStakeAmount !== 'number') {
+        errors.push('请输入关系消息贡献点');
+      }
+      if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
+        const subTypeNote = (subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0))
+          ? `（「${subTypeLabel(subType)}」理由要求最低 ${effectiveMinStake} 点）` : '';
+        errors.push(`关系消息最低押注 ${effectiveMinStake} 点（当前 ${relStakeAmount}）${subTypeNote}`);
+      }
+      // Check total consumption (text stake + relation stakes × count + all burn fees) against available balance
+      if (totalConsumption && totalConsumption.total > availablePoints) {
+        const parts: string[] = [];
+        if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
+        if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
+        if ((totalConsumption as any).refCount > 0) parts.push(`引用 ${(totalConsumption as any).refStakeTotal}`);
+        if ((totalConsumption as any).joinCount > 0) {
+          const newCount = (totalConsumption as any).newJoinCount ?? (totalConsumption as any).joinCount;
+          const agreeCount = (totalConsumption as any).existingJoinAgreeCount ?? 0;
+          parts.push(`加入 ${((totalConsumption as any).joinStakeTotal ?? 0) + ((totalConsumption as any).joinFeeTotal ?? 0)}（新建 ${newCount}，赞同已有 ${agreeCount}）`);
+        }
+        if (totalConsumption.protocolFeeTotal > 0) parts.push(`协议费 ${totalConsumption.protocolFeeTotal}`);
+        errors.push(`贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`);
+      }
+    }
+    if (errors.length > 0) {
+      setSendError(errors.join('；'));
+      return;
+    }
+    setSendError(null);
 
-    // Scenario: source collection + target collection explicitly committed (no draft candidates).
-    // Build the relation directly without creating a new text message.
-    if (relationType !== "classify" && relationType !== "merge" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) {
-      const labelDefault = relationTypeName(relationType);
-      const label = relationLabel.trim() || labelDefault;
-      await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
-      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+    // With no relation selected, the composer sends a standalone text message.
+    // CORRECT uses its own branch below and never creates a replacement text message.
+    if (relationType === null) {
+      if (text.length === 0) return;
+      const sentMessage = await handleSendMessageOnly(text);
+      if (sentMessage) {
+        guideTargetIdRef.current = sentMessage.id;
+        window.dispatchEvent(new CustomEvent('guide-text-message-sent', {
+          detail: { messageId: sentMessage.id, title: sentMessage.content.slice(0, 40) },
+        }));
+      }
       setNewMessageContent("");
+      return;
+    }
+
+    const isContainerRelation = ['classify', 'summary', 'merge', 'arrange'].includes(relationType);
+    const membershipTargetError = isContainerRelation
+      ? getContainerMembershipTargetError(effectiveTargets)
+      : null;
+      const containerCycleError = isContainerRelation && !joinOnlyAction
+      ? getContainerCycleError(effectiveTargets)
+      : null;
+    if (containerCycleError) {
+      showAlert(containerCycleError);
+      return;
+    }
+    if (membershipTargetError) {
+      showAlert(membershipTargetError);
+      return;
+    }
+
+    // Adding targets to an existing container uses one JOIN per target.
+    if (joinOnlyAction) {
+      const containerSource = sourceUnits
+        .map(unit => relationsRef.current.find(relation => relation.id === unit.messageId))
+        .find((relation): relation is Relation => relation?.relationType?.toUpperCase() === appendContainerType);
+      if (!containerSource) {
+        setSendError('追加容器内容时只能选择一个同类型容器作为来源');
+        return;
+      }
+      const targetIds = Array.from(new Set(effectiveTargets.map(unit => unit.messageId)));
+      const joinCycleError = getJoinContainerCycleError(containerSource.id, targetIds);
+      if (joinCycleError) {
+        showAlert(joinCycleError);
+        return;
+      }
+      const joinCreated = await createJoinRelationsForContainer(containerSource.id, appendContainerType!, targetIds);
+      if (!joinCreated) return;
+      if (appendContainerType === 'ARRANGE' || appendContainerType === 'MERGE' || appendContainerType === 'SUMMARY') {
+        const isArrangeAppend = appendContainerType === 'ARRANGE';
+        const isMergeAppend = appendContainerType === 'MERGE';
+        const layout = (containerSource.payload as any)?.targetLayout;
+        const edgeLabel = isArrangeAppend
+          ? layout === 'single-row' ? 'arrange-h' : 'arrange-v'
+          : relationTypeName(isMergeAppend ? 'merge' : 'summary');
+        const newEdges = targetIds.map(targetId => ({
+          id: nextId('edge'),
+          relationMessageId: containerSource.id,
+          relationType: (isArrangeAppend ? 'arrange' : isMergeAppend ? 'merge' : 'summary') as RelationType,
+          from: { messageId: `anon:${containerSource.id}`, selection: { kind: 'whole' as const } },
+          to: { messageId: targetId, selection: { kind: 'whole' as const } },
+          relationLabel: edgeLabel,
+        }));
+        setEdges(prev => {
+          const existingKeys = new Set(prev.map(edge => `${edge.relationMessageId}::${edge.to.messageId}`));
+          return [...prev, ...newEdges.filter(edge => !existingKeys.has(`${edge.relationMessageId}::${edge.to.messageId}`))];
+        });
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent(""); setSubType("");
       setRelationType(null); setSecondaryRelationType("none");
       return;
     }
 
-    if (effectiveTargets.length === 0 && relationType !== "classify") return;
+    // Scenario: source collection + target collection explicitly committed (no draft candidates).
+    // Build the relation directly without creating a new text message.
+    if (relationType !== "merge" && relationType !== "arrange" && draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0 && (relationType !== 'classify' || joinOnlyAction)) {
+      const labelDefault = relationTypeName(relationType);
+      const label = relationLabel.trim() || labelDefault;
+      await handleCreateRelationWithSourcesAndTargets({ sources: sourceUnits, targets: targetUnits, label });
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent(""); setSubType("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
+    if (effectiveTargets.length === 0 && relationType !== "classify" && relationType !== "proposal" && relationType !== "code_change" && relationType !== "operations" && !(relationType === 'delegation' && secondaryRelationType === 'create')) return;
     const isAgreeDisagree = relationType === "agree" || relationType === "disagree";
     const isArrange = relationType === "arrange";
     // isInlineBadge kept for backwards-compat but recommend/archive are no longer top-level types
     const isInlineBadge = false;
+
+    if (relationType === "notify") {
+      let notifySources = sourceUnits;
+      if (notifySources.length === 0 && text.length > 0) {
+        const sourceMessage = await handleSendMessageOnly(text);
+        if (!sourceMessage) return;
+        notifySources = [{ messageId: sourceMessage.id, selection: { kind: "whole" } }];
+      }
+      if (notifySources.length === 0) {
+        setSendError('通知需要来源消息，请输入通知内容或选择来源消息');
+        return;
+      }
+      await handleCreateRelationWithSourcesAndTargets({
+        sources: notifySources,
+        targets: effectiveTargets,
+        label: '通知',
+      });
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent(''); setSubType(''); setRelationType(null); setSecondaryRelationType('none');
+      return;
+    }
 
     // TAG + secondary relation: create RECOMMEND/ARCHIVE or quick-annotate TAG with label from secondary
     if (relationType === "tag" && secondaryRelationType !== "none") {
       const secType = secondaryRelationType;
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       const newEdgesList: DemoEdge[] = [];
-      if (secType === "recommend" || secType === "archive") {
+      if (secType === "recommend" || secType === "archive" || secType === "attention" || secType === "block") {
         // Create inline badge relation (no source message), one per target
         for (const tgtMid of uniqueTargetMids) {
           const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
           try {
-            const backendRel = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+            const relPayload: any = {};
+            if (subType) {
+              relPayload.subType = subType;
+              if (subType === 'CUSTOM') {
+                const customText = newMessageContent.trim();
+                if (customText) relPayload.customLabel = customText.slice(0, 20);
+              }
+            }
+            const backendRel = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef], payload: relPayload });
             const relId = backendRel.id;
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            const anonSrcId = `anon:${backendRel.id}`;
-            newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+            await registerCreatedRelationInCurrentClassify(backendRel);
+            // Only add edge if not already present for this relation-target pair
+            const alreadyHasEdge = edgesRef.current.some(e =>
+              e.relationMessageId === relId && e.to.messageId === tgtMid);
+            if (!alreadyHasEdge) {
+              const anonSrcId = `anon:${backendRel.id}`;
+              newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType as RelationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId: tgtMid, selection: { kind: "whole" } }, relationLabel: relationTypeName(secType) } as DemoEdge);
+            }
+          } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
         }
         setEdges(prev => [...prev, ...newEdgesList]);
       } else {
@@ -1691,13 +4034,54 @@ export default function TopicDetailPage() {
         setEdges(prev => [...prev, ...newTagEdges]);
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setRelationType(null); setSecondaryRelationType("none");
+      setNewMessageContent(""); setSubType(""); setRelationType(null); setSecondaryRelationType("none");
+      subTypeCustomBufferRef.current = ""; setSubTypeCustomLabel("");
       return;
     }
 
     // Relation target with CORRECT: no text, no source — create null-source relation
-    const hasDraftRelTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
-    const hasSecSelector = relationType === "correct" && hasDraftRelTarget;
+    const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === 'relation');
+    if (relationType === 'correct' && hasRelationTarget) {
+      setSendError('关系消息不能更正，请选择普通文本消息');
+      return;
+    }
+    const hasSecSelector = relationType === "correct" && hasRelationTarget;
+    if (relationType === 'correct' && !hasRelationTarget && effectiveTargets.length === 1) {
+      const correctionTarget = effectiveTargets[0];
+      if (correctionTarget.selection.kind !== 'text') {
+        setSendError('更正只能选择原始内容中的一个文本字段');
+        return;
+      }
+      const originalContent = msgMap.get(correctionTarget.messageId)?.content ?? '';
+      if (hasActiveCorrectionForSelection(correctionTarget.messageId, correctionTarget.selection, correctionVersions)) {
+        setSendError('该字段已有未被反对的更正，不能重复发送');
+        return;
+      }
+      const correctedContent = generateCorrectionContent(
+        effectiveTargets,
+        text,
+        msgMap,
+        originalContent,
+      );
+      if (correctedContent == null) {
+        setSendError('更正只能针对一条文本消息或其片段');
+        return;
+      }
+      if (correctionSelectionIsStale(
+        originalContent,
+        correctionTarget.selection,
+      )) {
+        setSendError('当前选择已不再匹配原始内容');
+        return;
+      }
+      if (await blockCorrectionForSecondBettor(correctionTarget.messageId)) return;
+      const beforeContent = originalContent;
+      setComparisonPopup({
+        relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
+        reversePreview: { before: beforeContent, after: correctedContent, target: effectiveTargets[0], mode: 'direct' },
+      });
+      return;
+    }
     if (hasSecSelector) {
       if (text.length > 0 || sourceUnits.length > 0) return; // validation: state must be clean
 
@@ -1711,9 +4095,10 @@ export default function TopicDetailPage() {
       ));
       if (relationType === "correct" && secondaryRelationType !== "none" && relDraftMsgIds.length === 1) {
         const targetRelMsgId = relDraftMsgIds[0];
+        if (await blockCorrectionForSecondBettor(targetRelMsgId)) return;
         const oldRelEdges = edges.filter(e => e.relationMessageId === targetRelMsgId);
         if (oldRelEdges.length === 0) {
-          alert(`无法找到目标关系消息的边（ID：${targetRelMsgId}），无法创建更正关系`);
+          showAlert(`无法找到目标关系消息的边（ID：${targetRelMsgId}），无法创建更正关系`);
           return;
         }
         const secType = secondaryRelationType as RelationType;
@@ -1735,7 +4120,7 @@ export default function TopicDetailPage() {
           ? oldRelEdges
           : oldRelEdges.filter(e => selectedEdgeIds.has(e.id));
         if (edgesToCorrect.length === 0) {
-          alert(`没有选中的片段，无法创建更正关系`);
+          showAlert(`没有选中的片段，无法创建更正关系`);
           return;
         }
 
@@ -1745,58 +4130,60 @@ export default function TopicDetailPage() {
             // Whole selected: one combined correction covering all edges (original behavior)
             const newTargetRefs = uniqueTargetRefsFromEdges(edgesToCorrect, msgMap);
             // Step 1: Create the new relation of secondary type with the same endpoints
-            const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
+            const newRelBackend = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
             const newRelId = newRelBackend.id;
-            appendCreatedRelation(newRelBackend);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
+            await registerCreatedRelationInCurrentClassify(newRelBackend);
             const newFromId = newSourceId ?? `anon:${newRelId}`;
             for (const e of edgesToCorrect) {
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...e.to }, relationLabel: secTypeName } as DemoEdge);
             }
             // Step 2: Create the CORRECT relation with the new relation as source, old relation as target
-            const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
+            const corrBackendRel = await createRel(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
             const corrRelId = corrBackendRel.id;
-            appendCreatedRelation(corrBackendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
+            await registerCreatedRelationInCurrentClassify(corrBackendRel);
             newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
           } else {
             // Specific fragments selected: one separate correction per selected edge fragment
             for (const edge of edgesToCorrect) {
               const newTargetRefs = uniqueTargetRefsFromEdges([edge], msgMap);
               // Step 1: Create a new relation of secondary type for this fragment only
-              const newRelBackend = await api.createRelation(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
+              const newRelBackend = await createRel(topicId!, { relationType: secType.toUpperCase(), sourceMessageId: newSourceId, targetRefs: newTargetRefs });
               const newRelId = newRelBackend.id;
-              appendCreatedRelation(newRelBackend);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: newRelBackend.id });
+              await registerCreatedRelationInCurrentClassify(newRelBackend);
               const newFromId = newSourceId ?? `anon:${newRelId}`;
               newEdgesList.push({ id: nextId("edge"), relationMessageId: newRelId, relationType: secType, from: { messageId: newFromId, selection: { kind: "whole" } }, to: { ...edge.to }, relationLabel: secTypeName } as DemoEdge);
               // Step 2: Create the CORRECT relation for this fragment
-              const corrBackendRel = await api.createRelation(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
+              const corrBackendRel = await createRel(topicId!, { relationType: 'CORRECT', sourceMessageId: newRelId, targetRefs: [{ kind: 'relation', relationId: targetRelMsgId }] });
               const corrRelId = corrBackendRel.id;
-              appendCreatedRelation(corrBackendRel);
-              addTargetToClassifyTopic({ kind: 'relation', relationId: corrBackendRel.id });
+              await registerCreatedRelationInCurrentClassify(corrBackendRel);
               newEdgesList.push({ id: nextId("edge"), relationMessageId: corrRelId, relationType: "correct", from: { messageId: newRelId, selection: { kind: "whole" } }, to: { messageId: targetRelMsgId, selection: { kind: "whole" } }, relationLabel: corrTypeName } as DemoEdge);
             }
           }
-        } catch (e: any) { alert(`建立更正关系失败: ${e?.message ?? e}`); }
+        } catch (e: any) { showAlert(`建立更正关系失败: ${e?.message ?? e}`); }
         setEdges(prev => [...prev, ...newEdgesList]);
         setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
         setRelationType(null); setSecondaryRelationType("none");
         return;
       }
 
-      // CORRECT (no secondary) targeting a relation message: create null-source relation
+      // CORRECT (no secondary) targeting a relation message: create null-source relation, single target only.
+      // Generic path also covers REFERENCE/ANNOTATION with secondary labels
+      if (relationType === "correct" && draftUnits.length > 1) {
+        showAlert("更正关系只能有一个目标");
+        return;
+      }
       const targetRefs = draftUnits.map(u => unitSelectionToTargetRef(u, msgMap));
       const typeName = relationTypeName(relationType);
       const newEdgesList: DemoEdge[] = [];
       try {
-        const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs });
+        const refPayload = undefined;
+        const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs, payload: refPayload });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        await registerCreatedRelationInCurrentClassify(backendRel);
         const anonSrcId = `anon:${backendRel.id}`;
+        const edgeLabel = typeName;
         for (const t of draftUnits) {
-          newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: typeName } as DemoEdge);
+          newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: relationType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: edgeLabel } as DemoEdge);
         }
         if (secondaryRelationType !== "none") {
           const secType = secondaryRelationType as RelationType;
@@ -1804,49 +4191,112 @@ export default function TopicDetailPage() {
             newEdgesList.push({ id: nextId("edge"), relationMessageId: relId, relationType: secType, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { ...t }, relationLabel: relationTypeName(secType) } as DemoEdge);
           }
         }
-      } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+      } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setRelationType(null); setSecondaryRelationType("none");
+      setNewMessageContent(""); setSubType(""); setRelationType(null); setSecondaryRelationType("none");
+      subTypeCustomBufferRef.current = ""; setSubTypeCustomLabel("");
       return;
     }
 
     if ((isAgreeDisagree || isInlineBadge) && text.length === 0) {
-      // Agree/disagree/inline-badge: one relation message per target (separate decoration badges).
-      // Relation messages are first-class messages — persist all of them to the backend.
-      const newEdgesList: DemoEdge[] = [];
+      // Agree/disagree: one relation per target. Edge created inside appendCreatedRelation
+      // for AGREE/DISAGREE; for transformed RECOMMEND/ARCHIVE, create edge here.
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
-      {
-        // Agree/disagree/inline-badge (recommend/archive): one relation per target — persist to backend
-        for (const tgtMid of uniqueTargetMids) {
-          const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
-          try {
-            const backendRel = await api.createRelation(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
-            const relId = backendRel.id;
-            appendCreatedRelation(backendRel);
-            addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-            const anonSrcId = `anon:${backendRel.id}`;
-            newEdgesList.push({
-              id: nextId("edge"), relationMessageId: relId, relationType,
-              from: { messageId: anonSrcId, selection: { kind: "whole" } },
-              to: { messageId: tgtMid, selection: { kind: "whole" } },
-              relationLabel: relationTypeName(relationType),
-            } as DemoEdge);
-          } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
-        }
+      const newEdgesList2: DemoEdge[] = [];
+      for (const tgtMid of uniqueTargetMids) {
+        const backendTargetRef = unitSelectionToTargetRef({ messageId: tgtMid, selection: { kind: "whole" } }, msgMap);
+        try {
+          const backendRel = await createRel(topicId!, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [backendTargetRef] });
+          await registerCreatedRelationInCurrentClassify(backendRel);
+          // If backend transformed to RECOMMEND/ARCHIVE, create inline-badge edge
+          const effectiveRelType = backendRel.relationType?.toUpperCase();
+          if (effectiveRelType === 'RECOMMEND' || effectiveRelType === 'ARCHIVE') {
+            const textTargets = (backendRel.targetRefs as Array<{ messageId?: string }>)
+              .filter(ref => ref.messageId).map(ref => ref.messageId!);
+            for (const textMid of textTargets) {
+              const already = edgesRef.current.some(ee => ee.relationMessageId === backendRel.id && ee.to.messageId === textMid)
+                || newEdgesList2.some(ee => ee.relationMessageId === backendRel.id && ee.to.messageId === textMid);
+              if (!already) {
+                newEdgesList2.push({
+                  id: nextId("edge"),
+                  relationMessageId: backendRel.id,
+                  relationType: effectiveRelType.toLowerCase() as RelationType,
+                  from: { messageId: `anon:${backendRel.id}`, selection: { kind: "whole" } },
+                  to: { messageId: textMid, selection: { kind: "whole" } },
+                  relationLabel: relationTypeName(effectiveRelType.toLowerCase()),
+                } as DemoEdge);
+              }
+            }
+          }
+        } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
       }
-      setEdges(prev => [...prev, ...newEdgesList]);
+      if (newEdgesList2.length > 0) setEdges(prev => [...prev, ...newEdgesList2]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setRelationType(null); setSecondaryRelationType("none");
       return;
     }
 
-    // ARRANGE relation: user-to-message relation (like CLASSIFY/MERGE/SUMMARY), no source message.
-    // If text is present, create a text message first and include it as a target of the frame.
-    // This avoids creating normal→normal edges that could falsely trigger cross-link checks.
-    // Targets are collected as-is; the layout engine handles nested ARRANGE frames via
-    // buildFrameBlocks subset detection (treating arrange messages as whole units).
+    // ARRANGE relation: create new, or append targets to an existing ARRANGE.
+    // When sourceUnits contains an existing ARRANGE relation, append targets
+    // to its frame instead of creating a new ARRANGE.
     if (isArrange) {
+      // Check if sourceUnits has an existing ARRANGE relation (append mode)
+      const existingArrangeSource = sourceUnits.find(u => {
+        const rel = relationById.get(u.messageId);
+        return rel && rel.relationType === 'ARRANGE';
+      });
+      if (existingArrangeSource && targetUnits.length > 0) {
+        // Append targets to existing ARRANGE
+        const existingRel = relationById.get(existingArrangeSource.messageId)!;
+        const existingTargetRefs = (existingRel.targetRefs ?? []) as TargetRef[];
+        const existingTargetKeys = new Set(existingTargetRefs.map(r => `${r.kind}:${r.kind === 'relation' ? r.relationId : r.messageId}`));
+        const newTargetRefs: TargetRef[] = [];
+        const newTargetMids: string[] = [];
+        for (const u of targetUnits) {
+          const tr = unitSelectionToTargetRef(u, msgMap);
+          const key = `${tr.kind}:${tr.kind === 'relation' ? tr.relationId : tr.messageId}`;
+          if (!existingTargetKeys.has(key)) {
+            newTargetRefs.push(tr);
+            // For edges: use the message/relation ID for the to endpoint
+            const mid = tr.kind === 'relation' ? tr.relationId : tr.messageId;
+            newTargetMids.push(mid);
+            existingTargetKeys.add(key);
+          }
+        }
+        if (newTargetRefs.length > 0) {
+          try {
+            await createJoinRelationsForContainer(existingRel.id, 'ARRANGE', newTargetRefs);
+            // Add edges from the existing ARRANGE to new targets
+            const layout = (existingRel.payload as any)?.targetLayout;
+            const edgeLabel = layout === 'single-row' ? 'arrange-h' : 'arrange-v';
+            const anonSrcId = `anon:${existingRel.id}`;
+            const newEdges: DemoEdge[] = newTargetMids.map(tgtMid => ({
+              id: nextId("edge"),
+              relationMessageId: existingRel.id,
+              relationType: "arrange" as RelationType,
+              from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+              to: { messageId: tgtMid, selection: { kind: "whole" as const } },
+              relationLabel: edgeLabel,
+            }));
+            setEdges(prev => {
+              const existingKeys = new Set(prev.map(e => `${e.relationMessageId}::${e.to.messageId}`));
+              const filtered = newEdges.filter(e => !existingKeys.has(`${e.relationMessageId}::${e.to.messageId}`));
+              return [...prev, ...filtered];
+            });
+            // Create join relations for each new target
+            await createJoinRelationsForContainer(existingRel.id, 'ARRANGE', newTargetMids);
+          } catch (e: any) {
+            showAlert(`追加到排列框架失败: ${e?.message ?? e}`);
+          }
+        }
+        setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+        setNewMessageContent("");
+        setRelationType(null); setSecondaryRelationType("none");
+        return;
+      }
+
+      // Create new ARRANGE (no existing arrange source)
       const newEdgesList: DemoEdge[] = [];
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       let extraTargetMid: string | null = null;
@@ -1860,7 +4310,7 @@ export default function TopicDetailPage() {
       // Determine targetLayout from secondaryRelationType: 'single-column' (纵) or 'single-row' (横)
       const targetLayout = secondaryRelationType === 'horizontal' ? 'single-row' as const : 'single-column' as const;
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'ARRANGE',
           sourceMessageId: null,
           targetRefs,
@@ -1869,8 +4319,7 @@ export default function TopicDetailPage() {
         const relId = backendRel.id;
         // Encode layout direction in relationLabel so layout engine can read it directly
         const edgeLabel = secondaryRelationType === 'horizontal' ? 'arrange-h' : 'arrange-v';
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        await registerCreatedRelationInCurrentClassify(backendRel);
         const anonSrcId = `anon:${backendRel.id}`;
         for (const tgtMid of allTargetMids) {
           newEdgesList.push({
@@ -1880,7 +4329,9 @@ export default function TopicDetailPage() {
             relationLabel: edgeLabel,
           } as DemoEdge);
         }
-      } catch (e: any) { alert(`建立排列关系失败: ${e?.message ?? e}`); }
+        // Create join relations for each target
+        await createJoinRelationsForContainer(backendRel.id, 'ARRANGE', allTargetMids);
+      } catch (e: any) { showAlert(`建立排列关系失败: ${e?.message ?? e}`); }
       setEdges(prev => [...prev, ...newEdgesList]);
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
       setNewMessageContent("");
@@ -1892,8 +4343,34 @@ export default function TopicDetailPage() {
     // Targets can be text messages and/or classify relation messages, and can be empty.
     if (relationType === "classify") {
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
-      if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        alert("分类目标与已分类消息存在非引用关联，无法建立分类关系");
+      // Warn if non-grouping relation labels (TAG/RECOMMEND/ARCHIVE etc.) are selected
+      // but their target text message is not among the messages being classified.
+      const orphanLabels: string[] = [];
+      for (const u of effectiveTargets) {
+        const targetMsg = msgMap.get(u.messageId);
+        const isContentRelation = targetMsg?.kind === 'relation'
+          && ['delegation', 'proposal', 'code_change', 'operations'].includes(targetMsg.relationType ?? '');
+        if (targetMsg && (isContentKind(targetMsg.kind) || isContentRelation)) continue;
+        const rt = relationTypeByRelMsgId.get(u.messageId);
+        if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
+        const rel = relationById.get(u.messageId);
+        if (!rel) continue;
+        const relTargets = (rel.targetRefs ?? []) as TargetRef[];
+        const hasTargetInSelection = relTargets.some(t =>
+          (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && targetTextIds.includes(t.messageId)
+        );
+        if (!hasTargetInSelection) {
+          const spec = getPresentationSpec(rt);
+          orphanLabels.push(`「${spec.label}」`);
+        }
+      }
+      if (orphanLabels.length > 0) {
+        showAlert(`选中的${orphanLabels.join('、')}标签对应的消息不在分类目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        return;
+      }
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds, effectiveTargets);
+      if (crossLinkError) {
+        showAlert(crossLinkError);
         return;
       }
       const selectedSet = new Set(targetTextIds);
@@ -1910,41 +4387,112 @@ export default function TopicDetailPage() {
         if (uniqueMids.length <= 1) continue;
         const selectedCount = uniqueMids.filter(mid => selectedSet.has(mid)).length;
         if (selectedCount > 0 && selectedCount < uniqueMids.length) {
-          alert(`同一条排列关系关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
+          showAlert(`同一条排列关系关联了 ${uniqueMids.length} 条文本消息，分类前需全部选中`);
           return;
         }
       }
       const classifyTitle = newMessageContent.trim();
       if (!classifyTitle) {
-        alert("分类名称不能为空");
+        showAlert("分类名称不能为空");
         return;
       }
       const targetRefs = getClassifyTargetRefs(effectiveTargets);
+
+      // Prevent circular nesting: a classify created from within the
+      // classify hierarchy must not target any ancestor (including the
+      // current classify and all its parents).
+      if (isInsideClassify) {
+        const ancestorIds = new Set<string>();
+        if (currentClassifyRelMsgId) ancestorIds.add(currentClassifyRelMsgId);
+        for (const entry of classifyStackRef.current) {
+          ancestorIds.add(entry.relMsgId);
+        }
+        const targetsAncestor = targetRefs.some(ref =>
+          ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+        );
+        if (targetsAncestor) {
+          showAlert('不能将当前分类或其上级分类作为新分类的目标');
+          return;
+        }
+      }
+
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'CLASSIFY',
           sourceMessageId: null,
           targetRefs,
           payload: buildRelationPayload({ relationType: 'CLASSIFY', title: classifyTitle }),
         });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        const classifyRoundId = await appendCreatedRelation(backendRel);
+
+        // Remove reclassified targets by appending DISAGREE events to their
+        // existing JOIN records. The original JOIN messages stay immutable.
+        const reclassifiedTargetKeys = new Set(targetRefs.map(ref =>
+          ref.kind === 'relation' ? `relation:${ref.relationId}` : `message:${ref.messageId}`
+        ));
+        const reclassifiedTextIds = new Set(targetTextIds);
+        const isReclassified = (ref: TargetRef) => {
+          if (ref.kind === 'relation') {
+            return reclassifiedTargetKeys.has(`relation:${ref.relationId}`)
+              || reclassifiedTextIds.has(ref.relationId);
+          }
+          return reclassifiedTargetKeys.has(`message:${ref.messageId}`)
+            || reclassifiedTextIds.has(ref.messageId)
+            || reclassifiedTargetKeys.has(`relation:${ref.messageId}`);
+        };
+        if (isInsideClassify && currentClassifyRelMsgId) {
+          const curRel = relationsRef.current.find(r => r.id === currentClassifyRelMsgId);
+          if (curRel) {
+            const removedRefs = (curRel.targetRefs as TargetRef[]).filter(isReclassified);
+            if (removedRefs.length > 0) {
+              try {
+                await rejectJoinRelationsForContainer(
+                  currentClassifyRelMsgId,
+                  removedRefs,
+                  (relationStakeMap.current.JOIN ?? 1) + (relationStakeMap.current.DISAGREE ?? 10),
+                );
+              } catch { /* removal is retried by the next sync */ }
+            }
+          }
+        }
+        for (const rel of relations) {
+          if (rel.relationType !== 'CLASSIFY' && rel.relationType !== 'SUMMARY') continue;
+          if (isInsideClassify && rel.id === currentClassifyRelMsgId) continue; // handled above
+          const remainingRefs = (rel.targetRefs as TargetRef[]).filter(ref => !isReclassified(ref));
+          if (remainingRefs.length === (rel.targetRefs as TargetRef[]).length) continue;
+          const removedRefs = (rel.targetRefs as TargetRef[]).filter(isReclassified);
+          rejectJoinRelationsForContainer(
+            rel.id,
+            removedRefs,
+            (relationStakeMap.current.JOIN ?? 1) + (relationStakeMap.current.DISAGREE ?? 10),
+          ).catch(() => {});
+        }
+
+        // Now add CLASSIFY and its ROUND to the current classify.
+        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        if (classifyRoundId) await addTargetToClassifyTopic({ kind: 'message', messageId: classifyRoundId });
+
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
           targetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
         ));
-        const newEdges = edgeTargetIds.map(targetMid => ({
-          id: nextId("edge"),
-          relationMessageId: relId,
-          relationType: "classify" as RelationType,
-          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
-          to: { messageId: targetMid, selection: { kind: "whole" as const } },
-          relationLabel: relationTypeName("classify"),
-        }));
-        setEdges(prev => [...prev, ...newEdges]);
+        // Only add classify edges on the main canvas, not inside another classify
+        if (!isInsideClassify) {
+          const newEdges = edgeTargetIds.map(targetMid => ({
+            id: nextId("edge"),
+            relationMessageId: relId,
+            relationType: "classify" as RelationType,
+            from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+            to: { messageId: targetMid, selection: { kind: "whole" as const } },
+            relationLabel: relationTypeName("classify"),
+          }));
+          setEdges(prev => [...prev, ...newEdges]);
+        }
+        // Create join relations for each target
+        await createJoinRelationsForContainer(backendRel.id, 'CLASSIFY', targetRefs);
       } catch (e: any) {
-        alert(`建立关系失败: ${e?.message ?? e}`);
+        showAlert(`建立关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -1952,7 +4500,7 @@ export default function TopicDetailPage() {
       setRelationType(null); setSecondaryRelationType("none");
       // Bump key to force GraphView clean remount after adding classify edges,
       // avoiding React 18 concurrent reconciliation removeChild errors.
-      setFocusExitKey(k => k + 1);
+      setTraceKey(k => k + 1);
       return;
     }
 
@@ -1961,44 +4509,83 @@ export default function TopicDetailPage() {
     if (relationType === "summary") {
       const summaryTitle = newMessageContent.trim();
       if (!summaryTitle) {
-        alert("总结内容不能为空");
+        showAlert("总结内容不能为空");
         return;
       }
       const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
-      if (hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds)) {
-        alert("总结目标与已分类消息存在非引用关联，无法建立总结关系");
+      // Warn if unrelated relation labels are selected
+      const orphanSummaryLabels: string[] = [];
+      for (const u of effectiveTargets) {
+        const targetMsg = msgMap.get(u.messageId);
+        if (targetMsg && isContentKind(targetMsg.kind)) continue;
+        const rt = relationTypeByRelMsgId.get(u.messageId);
+        if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
+        const rel = relationById.get(u.messageId);
+        if (!rel) continue;
+        const relTargets = (rel.targetRefs ?? []) as TargetRef[];
+        if (!relTargets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && targetTextIds.includes(t.messageId))) {
+          orphanSummaryLabels.push(`「${getPresentationSpec(rt).label}」`);
+        }
+      }
+      if (orphanSummaryLabels.length > 0) {
+        showAlert(`选中的${orphanSummaryLabels.join('、')}标签对应的消息不在总结目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        return;
+      }
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIds, effectiveTargets);
+      if (crossLinkError) {
+        showAlert(crossLinkError);
         return;
       }
       const summaryTargetRefs = getClassifyTargetRefs(effectiveTargets);
       if (summaryTargetRefs.length === 0) {
-        alert("总结关系至少需要一个目标消息");
+        showAlert("总结关系至少需要一个目标消息");
         return;
       }
+      // Prevent circular nesting (same as CLASSIFY above)
+      if (isInsideClassify) {
+        const ancestorIds = new Set<string>();
+        if (currentClassifyRelMsgId) ancestorIds.add(currentClassifyRelMsgId);
+        for (const entry of classifyStackRef.current) {
+          ancestorIds.add(entry.relMsgId);
+        }
+        if (summaryTargetRefs.some(ref =>
+          ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+        )) {
+          showAlert('不能将当前分类或其上级分类作为新总结的目标');
+          return;
+        }
+      }
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'SUMMARY',
           sourceMessageId: null,
           targetRefs: summaryTargetRefs,
           payload: buildRelationPayload({ relationType: 'SUMMARY', title: summaryTitle, targetLayout: 'multi-column' }),
         });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        const roundId = await appendCreatedRelation(backendRel);
+        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        if (roundId) await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
         const anonSrcId = `anon:${backendRel.id}`;
         const edgeTargetIds = Array.from(new Set(
           summaryTargetRefs.map(ref => ref.kind === "relation" ? ref.relationId : ref.messageId)
         ));
-        const newEdges = edgeTargetIds.map(targetMid => ({
-          id: nextId("edge"),
-          relationMessageId: relId,
-          relationType: "summary" as RelationType,
-          from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
-          to: { messageId: targetMid, selection: { kind: "whole" as const } },
-          relationLabel: relationTypeName("summary"),
-        }));
-        setEdges(prev => [...prev, ...newEdges]);
+        // Only add summary edges on the main canvas, not inside another classify
+        if (!isInsideClassify) {
+          const newEdges = edgeTargetIds.map(targetMid => ({
+            id: nextId("edge"),
+            relationMessageId: relId,
+            relationType: "summary" as RelationType,
+            from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
+            to: { messageId: targetMid, selection: { kind: "whole" as const } },
+            relationLabel: relationTypeName("summary"),
+          }));
+          setEdges(prev => [...prev, ...newEdges]);
+        }
+        // Create join relations for each target
+        await createJoinRelationsForContainer(backendRel.id, 'SUMMARY', edgeTargetIds);
       } catch (e: any) {
-        alert(`建立总结关系失败: ${e?.message ?? e}`);
+        showAlert(`建立总结关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2019,8 +4606,27 @@ export default function TopicDetailPage() {
       }
 
       const mergeTargetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
-      if (hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds)) {
-        alert("归并目标与已分类消息存在非引用关联，无法建立归并关系");
+      // Warn if unrelated relation labels are selected
+      const orphanMergeLabels: string[] = [];
+      for (const u of effectiveTargets) {
+        const targetMsg = msgMap.get(u.messageId);
+        if (targetMsg && isContentKind(targetMsg.kind)) continue;
+        const rt = relationTypeByRelMsgId.get(u.messageId);
+        if (!rt || rt === 'classify' || rt === 'merge' || rt === 'arrange' || rt === 'summary') continue;
+        const rel = relationById.get(u.messageId);
+        if (!rel) continue;
+        const relTargets = (rel.targetRefs ?? []) as TargetRef[];
+        if (!relTargets.some(t => (t.kind === 'message' || t.kind === 'text-fragment') && t.messageId && mergeTargetTextIds.includes(t.messageId))) {
+          orphanMergeLabels.push(`「${getPresentationSpec(rt).label}」`);
+        }
+      }
+      if (orphanMergeLabels.length > 0) {
+        showAlert(`选中的${orphanMergeLabels.join('、')}标签对应的消息不在归并目标中，请先选择目标消息再选择其标签，或取消选择无关标签`);
+        return;
+      }
+      const crossLinkError = hasCrossNonReferenceTextLinkForClassifyTargets(mergeTargetTextIds, effectiveTargets);
+      if (crossLinkError) {
+        showAlert(crossLinkError);
         return;
       }
       const mergeTargetRefs = Array.from(new Map(
@@ -2030,19 +4636,20 @@ export default function TopicDetailPage() {
         })
       ).values());
       if (mergeTargetRefs.length === 0) {
-        alert("归并关系至少需要一个文本消息或关系消息作为目标");
+        showAlert("归并关系至少需要一个文本消息或关系消息作为目标");
         return;
       }
       try {
-        const backendRel = await api.createRelation(topicId!, {
+        const backendRel = await createRel(topicId!, {
           relationType: 'MERGE',
           sourceMessageId: null,
           targetRefs: mergeTargetRefs,
           payload: buildRelationPayload({ relationType: 'MERGE', targetLayout: 'multi-column' }),
         });
         const relId = backendRel.id;
-        appendCreatedRelation(backendRel);
-        addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        const roundId = await appendCreatedRelation(backendRel);
+        await addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
+        if (roundId) await addTargetToClassifyTopic({ kind: 'message', messageId: roundId });
         const virtualFrameNodeId = `anon:${backendRel.id}`;
         const newEdges = mergeTargetRefs.map(targetRef => ({
           id: nextId("edge"),
@@ -2055,8 +4662,11 @@ export default function TopicDetailPage() {
           relationLabel: relationTypeName("merge"),
         }));
         setEdges(prev => [...prev, ...newEdges]);
+        // Create join relations for each target
+        const mergeTargetMids = mergeTargetRefs.map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId);
+        await createJoinRelationsForContainer(backendRel.id, 'MERGE', mergeTargetMids);
       } catch (e: any) {
-        alert(`建立归并关系失败: ${e?.message ?? e}`);
+        showAlert(`建立归并关系失败: ${e?.message ?? e}`);
         return;
       }
       setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -2065,7 +4675,8 @@ export default function TopicDetailPage() {
       return;
     }
 
-    if (text.length === 0) return;
+    // For most types below, text is required. Governance/ops types allow empty text when targets exist.
+    if (text.length === 0 && !isGovernanceOrOpsType && relationType !== "correct") return;
     const labelDefault = relationTypeName(relationType);
     const label = relationLabel.trim() || labelDefault;
 
@@ -2074,7 +4685,7 @@ export default function TopicDetailPage() {
     if (relationType === "correct") {
       const uniqueTargetMids = Array.from(new Set(effectiveTargets.map(u => u.messageId)));
       if (uniqueTargetMids.length !== 1) {
-        alert("更正关系目前仅支持单个目标消息");
+        showAlert("更正关系目前仅支持单个目标消息");
         return;
       }
       const rawTargetMid = uniqueTargetMids[0];
@@ -2092,7 +4703,7 @@ export default function TopicDetailPage() {
           e.relationType === 'correct' &&
           e.from.messageId === ancestorTargetMid &&
           !e.from.messageId.startsWith('anon:') &&
-          msgMap.get(e.to.messageId)?.kind === 'normal'
+          (() => { const m = msgMap.get(e.to.messageId); return m && isContentKind(m.kind); })()
         );
         if (!parentEdge) break;
         ancestorTargetMid = parentEdge.to.messageId;
@@ -2103,18 +4714,30 @@ export default function TopicDetailPage() {
         ? effectiveTargets
         : effectiveTargets.map(u => ({ ...u, messageId: ancestorTargetMid }));
 
-      const generated = generateCorrectionContent(resolvedTargets, text, msgMap);
+      const generated = generateCorrectionContent(
+        resolvedTargets,
+        text,
+        msgMap,
+        correctionVersions.get(ancestorTargetMid)?.current?.content,
+      );
       if (generated === null) {
-        alert("更正关系目标必须是普通文本消息");
+        showAlert("更正关系目标必须是普通文本消息");
         return;
       }
-      const msg = await handleSendMessageOnly(generated);
-      if (!msg) return;
-      const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
-      await handleCreateRelationWithSourcesAndTargets({ sources, targets: resolvedTargets, label });
-      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
-      setNewMessageContent("");
-      setRelationType(null); setSecondaryRelationType("none");
+      if (correctionSelectionIsStale(
+        correctionVersions.get(ancestorTargetMid)?.current?.content
+          ?? msgMap.get(ancestorTargetMid)?.content
+          ?? '',
+        resolvedTargets[0].selection,
+      )) {
+        setSendError('当前片段已被其他更正修改，请基于最新内容新建更正');
+        return;
+      }
+      const beforeContent = msgMap.get(ancestorTargetMid)?.content ?? generated;
+      setComparisonPopup({
+        relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
+        reversePreview: { before: beforeContent, after: generated, target: resolvedTargets[0], mode: 'direct', label },
+      });
       return;
     }
 
@@ -2135,6 +4758,233 @@ export default function TopicDetailPage() {
       return;
     }
 
+    // DELEGATION: create a commission or claim completion of one.
+    if (relationType === 'delegation') {
+      const content = newMessageContent.trim();
+      const readField = (labels: string[]): string | null => {
+        for (const field of labels) {
+          const match = content.match(new RegExp(`${field}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'));
+          if (match?.[1]?.trim()) return match[1].trim();
+        }
+        return null;
+      };
+      const isFulfill = secondaryRelationType === 'fulfill';
+      const targetRelation = isFulfill && effectiveTargets.length === 1 && msgMap.get(effectiveTargets[0].messageId)?.kind === 'relation'
+        ? relations.find(rel => rel.id === effectiveTargets[0].messageId)
+        : undefined;
+      const isCreateDelegation = targetRelation?.payload?.delegationKind === 'CREATE';
+      const amountText = readField(['报酬数量', '数量']);
+      const ratioText = readField(['报酬比例', '比例']);
+      const description = readField([isFulfill ? '完成说明' : '委托内容']);
+      const amount = amountText ? Number(amountText) : undefined;
+      const ratio = ratioText ? Number(ratioText.replace(/%$/, '')) : undefined;
+      const validReward = isFulfill
+        ? amount === undefined && ratio === undefined
+        : amount !== undefined && Number.isInteger(amount) && amount > 0 && ratio === undefined;
+      if (!content || !description || !validReward || (isFulfill && (effectiveTargets.length !== 1 || !targetRelation || targetRelation.relationType.toUpperCase() !== 'DELEGATION' || !isCreateDelegation))) {
+        setSendError(isFulfill
+          ? '完成委托格式：完成说明=...，并且必须选中一条创建委托消息'
+          : '创建委托格式：报酬数量=100；委托内容=...（报酬数量必须放在第一行）');
+        return;
+      }
+      try {
+        const backendRel = await createRel(topicId!, {
+          relationType: 'DELEGATION',
+          sourceMessageId: null,
+          targetRefs: isFulfill && targetRelation
+            ? [unitSelectionToTargetRef({ messageId: targetRelation!.id, selection: { kind: 'whole' } }, msgMap)]
+            : [],
+          payload: buildRelationPayload({
+            relationType: 'DELEGATION', content,
+            delegationKind: isFulfill ? 'FULFILL' : 'CREATE',
+            rewardAmount: isFulfill ? undefined : amount, rewardRatio: isFulfill ? undefined : ratio,
+          }),
+        });
+        await registerCreatedRelationInCurrentClassify(backendRel);
+        setRelations(prev => [...prev, backendRel]);
+        if (isFulfill && targetRelation) {
+          const refStake = Math.max(relationStakeMap.current['REFERENCE'] ?? 10, 1);
+          const refRel = await api.createRelation(topicId!, {
+            relationType: 'REFERENCE',
+            sourceMessageId: backendRel.id,
+            targetRefs: [{ kind: 'relation', relationId: targetRelation.id, part: 'whole' }],
+            payload: { label: '完成委托' },
+            stakeAmount: refStake,
+          });
+          await registerCreatedRelationInCurrentClassify(refRel);
+          setRelations(prev => [...prev, refRel]);
+          setEdges(prev => [...prev, {
+            id: nextId('edge'),
+            relationMessageId: refRel.id,
+            relationType: 'reference',
+            from: { messageId: backendRel.id, selection: { kind: 'whole' } },
+            to: { messageId: targetRelation.id, selection: { kind: 'whole' } },
+            relationLabel: '完成委托',
+          } as DemoEdge]);
+        }
+        setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
+      } catch (e: any) { setSendError(`${isFulfill ? '建立完成委托' : '建立委托'}失败：${e?.message ?? e}`); }
+      return;
+    }
+
+    // PROPOSAL / CODE_CHANGE / OPERATIONS: governance & operational messages.
+    if (relationType === "proposal" || relationType === "code_change" || relationType === "operations") {
+      let proposalContent = newMessageContent.trim();
+      let payloadExtraForOperation: Record<string, unknown> = {};
+
+      // 分配收入：内置文案
+      if (relationType === 'proposal' && secondaryRelationType === '分配收入') {
+        proposalContent = '提案：将当前收入池余额按规则分配给社区成员';
+      }
+      const readProposalField = (labels: string[]): string | null => {
+        for (const label of labels) {
+          const match = proposalContent.match(new RegExp(`${label}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'));
+          if (match?.[1]?.trim()) return match[1].trim();
+        }
+        return null;
+      };
+      if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
+        const amount = Number(readProposalField(['充值总额', '总额', 'amount']));
+        const revenuePoolShare = Number(readProposalField(['收入池分成', '分成', 'revenuePoolShare']));
+        const recipientUserId = readProposalField(['指定与会者', 'recipientUserId']);
+        if (!Number.isInteger(amount) || amount <= 0 || !Number.isInteger(revenuePoolShare) || revenuePoolShare < 0 || revenuePoolShare > amount || !recipientUserId) {
+          setSendError('充值分账提案格式：充值总额=1000；收入池分成=100；指定与会者=user-id');
+          return;
+        }
+        proposalContent = `充值分账提案\n充值总额：${amount}\n收入池分成：${revenuePoolShare}\n指定与会者：${recipientUserId}`;
+        payloadExtraForOperation = { operationType: 'RECHARGE', amount, revenuePoolShare, recipientUserId };
+      }
+      if (relationType === 'proposal' && secondaryRelationType === '运营收入注入') {
+        const amount = Number(readProposalField(['收入金额', '金额', 'amount']));
+        const source = readProposalField(['来源', 'source']);
+        if (!Number.isInteger(amount) || amount <= 0 || !source) {
+          setSendError('运营收入提案格式：收入金额=1000；来源=服务收入');
+          return;
+        }
+        proposalContent = `运营收入注入提案\n收入金额：${amount}\n来源：${source}`;
+        payloadExtraForOperation = { operationType: 'REVENUE_INJECTION', amount, source };
+      }
+      // 终止结算：内置文案带目标信息
+      else if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
+        const targetInfos: string[] = [];
+        for (const t of effectiveTargets) {
+          const m = msgMap.get(t.messageId);
+          if (m?.kind === 'governance') {
+            const preview = m.content ? m.content.slice(0, 80) : '(无内容)';
+            targetInfos.push(`「${preview}」— ${m.author}`);
+          }
+        }
+        proposalContent = `终止结算提案\n目标提案：${targetInfos.join('; ')}`;
+      }
+      else if (!proposalContent && !hasTargetsAvailable) {
+        showAlert("请输入内容或选择目标消息");
+        return;
+      }
+      // Auto-fill content from target text messages when input is empty
+      if (!proposalContent && hasTargetsAvailable) {
+        const targetContents: string[] = [];
+        for (const t of effectiveTargets) {
+          const m = msgMap.get(t.messageId);
+          if (m && isContentKind(m.kind) && m.content) {
+            targetContents.push(m.content);
+          }
+        }
+        proposalContent = targetContents.join('\n\n---\n\n');
+      }
+      try {
+        const payloadExtra: Record<string, unknown> = {};
+        if (relationType === 'proposal' && secondaryRelationType !== 'none') {
+          const opMap: Record<string, string> = { '分配收入': 'DISTRIBUTE_REVENUE', '充值分账': 'RECHARGE', '运营收入注入': 'REVENUE_INJECTION', '终止结算': 'TERMINATE_SETTLEMENT' };
+          payloadExtra.operationType = opMap[secondaryRelationType] ?? secondaryRelationType.toUpperCase();
+        }
+        Object.assign(payloadExtra, payloadExtraForOperation);
+        // 终止结算：传递目标消息 ID 给后端
+        if (secondaryRelationType === '终止结算') {
+          const targetMsgIds: string[] = [];
+          for (const t of effectiveTargets) {
+            const m = msgMap.get(t.messageId);
+            if (m?.kind === 'governance') targetMsgIds.push(t.messageId);
+          }
+          if (targetMsgIds.length > 0) payloadExtra.targetMessageIds = targetMsgIds;
+        }
+        const backendRel = await createRel(topicId!, {
+          relationType: relationType.toUpperCase(),
+          sourceMessageId: null,
+          targetRefs: [],
+          payload: buildRelationPayload({
+            relationType: relationType.toUpperCase(),
+            content: proposalContent || '',
+            title: (proposalContent || '').slice(0, 200) || undefined,
+            ...payloadExtra,
+          }),
+        });
+        // Add as governance/code/operations content message (not relation), so it renders as a card
+        const govKind: MessageKind = relationType === "proposal" ? "governance" : relationType === "code_change" ? "code" : "operations";
+        const govMsg: DemoMessage = {
+          id: backendRel.id,
+          author: backendRel.createdBy?.username ?? user?.username ?? '?',
+          createdAt: backendRel.createdAt,
+          content: proposalContent,
+          kind: govKind,
+          backendKind: relationType === "proposal" ? "GOVERNANCE" : relationType === "code_change" ? "CODE" : "OPERATIONS",
+          sourceMessageId: backendRel.sourceMessageId,
+          relationType: backendRel.relationType.toLowerCase() as RelationType,
+          relationPayload: backendRel.payload,
+          targetRefs: backendRel.targetRefs,
+        };
+        setMessages(prev => [...prev, govMsg]);
+        // Governance/ops messages are content-kind — add as message target
+        await addTargetToClassifyTopic({ kind: 'message', messageId: backendRel.id });
+        const govRoundId = await createSettlementRoundForMessage(
+          backendRel.id,
+          backendRel.createdBy?.username ?? user?.username ?? '?',
+          'TRUTH',
+        );
+        if (govRoundId) await addTargetToClassifyTopic({ kind: 'message', messageId: govRoundId });
+        // Create REFERENCE relations from governance message to each target.
+        if (hasTargetsAvailable) {
+          const refMinStake = relationStakeMap.current['REFERENCE'] ?? 10;
+          const refStake = Math.max(refMinStake, 1);
+          for (const t of effectiveTargets) {
+            try {
+              const targetRef = unitSelectionToTargetRef(t, msgMap);
+              const refRel = await createRel(topicId!, {
+                relationType: 'REFERENCE',
+                sourceMessageId: backendRel.id,
+                targetRefs: [targetRef],
+                stakeAmount: refStake,
+              });
+              await registerCreatedRelationInCurrentClassify(refRel);
+              setEdges(prev => [...prev, {
+                id: nextId("edge"),
+                relationMessageId: refRel.id,
+                relationType: "reference",
+                from: { messageId: backendRel.id, selection: { kind: "whole" } },
+                to: { ...t },
+                relationLabel: "reference",
+              } as DemoEdge]);
+            } catch (e: any) {
+              console.error(`创建引用关系失败: ${e?.message ?? e}`);
+            }
+          }
+        }
+        // Auto-self-stake
+        const selfStake = relStakeRef.current;
+        setAuthorStakes(prev => ({ ...prev, [backendRel.id]: selfStake }));
+        api.getMessageStakes(backendRel.id).then(s => {
+          mergeStakeSnapshot(backendRel.id, s);
+        }).catch(() => {});
+        window.dispatchEvent(new Event('points-refresh'));
+      } catch (e: any) {
+        showAlert(`建立${relationTypeName(relationType)}关系失败: ${e?.message ?? e}`);
+        return;
+      }
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent("");
+      setRelationType(null); setSecondaryRelationType("none");
+      return;
+    }
+
     const msg = await handleSendMessageOnly(text);
     if (!msg) return;
     const sources: UnitSelection[] = [{ messageId: msg.id, selection: { kind: "whole" } }];
@@ -2143,6 +4993,18 @@ export default function TopicDetailPage() {
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
     setNewMessageContent("");
     setRelationType(null); setSecondaryRelationType("none");
+  }
+
+  async function handleSendClick() {
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
+    setSendInFlight(true);
+    try {
+      await handleQuickSendAndRelateFromDraftTargets();
+    } finally {
+      sendInFlightRef.current = false;
+      setSendInFlight(false);
+    }
   }
 
   type DraftGroup = { messageId: string; wholeSelected: boolean; fragments: UnitSelection[] };
@@ -2163,15 +5025,15 @@ export default function TopicDetailPage() {
     prevDraftCountRef.current = cur;
   }, [draftUnits, activeTextSelectId]);
 
-  // Bug 3: scroll to center focused message when entering focus mode
+  // Scroll to center the traced message when entering trace mode.
   useEffect(() => {
-    const newLen = focusEntries.length;
-    if (newLen <= prevFocusLenRef.current) { prevFocusLenRef.current = newLen; return; }
-    prevFocusLenRef.current = newLen;
+    const newLen = traceEntries.length;
+    if (newLen <= prevTraceLenRef.current) { prevTraceLenRef.current = newLen; return; }
+    prevTraceLenRef.current = newLen;
     if (viewMode !== "graph") return;
-    const entry = focusEntries[newLen - 1];
+    const entry = traceEntries[newLen - 1];
     if (!entry || entry.ids.length === 0) return;
-    const focusId = entry.ids[0];
+    const traceId = entry.ids[0];
     cancelScrollRafs();
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRaf2Ref.current = requestAnimationFrame(() => {
@@ -2179,7 +5041,7 @@ export default function TopicDetailPage() {
         scrollRaf2Ref.current = null;
         const container = leftPanelRef.current;
         if (!container) return;
-        const el = container.querySelector(`[data-msgid="${focusId}"]`) as HTMLElement | null;
+        const el = container.querySelector(`[data-msgid="${traceId}"]`) as HTMLElement | null;
         if (!el) return;
         const elRect = el.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
@@ -2189,7 +5051,7 @@ export default function TopicDetailPage() {
         container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
       });
     });
-  }, [focusEntries, viewMode]);
+  }, [traceEntries, viewMode]);
 
   // Restore saved scroll position after view mode switch so switching does not auto-scroll to top.
   useEffect(() => {
@@ -2213,32 +5075,151 @@ export default function TopicDetailPage() {
   }
 
   const recentRelations = useMemo(() => messages.filter(m => m.kind === "relation").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5), [messages]);
-  const recentNormals = useMemo(() => messages.filter(m => m.kind === "normal").sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
+  const recentNormals = useMemo(() => messages.filter(m => isContentKind(m.kind)).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8), [messages]);
 
   const isAgreeDisagreeType = relationType === "agree" || relationType === "disagree";
   const isArrangeType = relationType === "arrange";
+  const isNotifyType = relationType === "notify";
+
   const isClassifyType = relationType === "classify";
   const isMergeType = relationType === "merge";
   const isSummaryType = relationType === "summary";
+  const isGovernanceOrOpsType = relationType === "proposal" || relationType === "code_change" || relationType === "operations";
   // TAG + secondary = recommend/archive acts as an inline badge (no text needed)
   const isTagWithQuickAnnotate = relationType === "tag" && secondaryRelationType !== "none";
-  const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive");
+  const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive" || secondaryRelationType === "attention" || secondaryRelationType === "block");
+  const notifyTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
+  const attentionTargetMessageIds = useMemo(() => {
+    const targetIds = new Set(Object.keys(attentionUsersByTarget).filter(id => attentionUsersByTarget[id].length > 0));
+    for (const relation of relations) {
+      if (relation.relationType.toUpperCase() !== 'ATTENTION') continue;
+      for (const targetRef of relation.targetRefs) {
+        if (targetRef.kind === 'message' || targetRef.kind === 'text-fragment') {
+          targetIds.add(targetRef.messageId);
+        }
+      }
+    }
+    return targetIds;
+  }, [attentionUsersByTarget, relations]);
+  const hasAttentionNotifyTarget = notifyTargets.length > 0 && notifyTargets.every(target =>
+    attentionTargetMessageIds.has(target.messageId)
+  );
 
   // Whether any draft unit points to a relation message (vs. text message or fragment)
   const draftHasRelationTarget = draftUnits.some(u => msgMap.get(u.messageId)?.kind === 'relation');
   const hasTargetsAvailable = draftUnits.length > 0 || targetUnits.length > 0;
+  const effectiveTargetUnits = useMemo(
+    () => resolveEffectiveTargetUnits(draftUnits, targetUnits, relationType),
+    [draftUnits, targetUnits, relationType, relations],
+  );
+  const processedTargetUnits = effectiveTargetUnits;
+  const hasCorrectionRelationTarget = relationType === 'correct'
+    && effectiveTargetUnits.some(unit => msgMap.get(unit.messageId)?.kind === 'relation');
+  const hasInvalidCorrectTarget = relationType === 'correct' && !hasCorrectionRelationTarget && (
+    sourceUnits.length > 0
+    || effectiveTargetUnits.length !== 1
+    || effectiveTargetUnits[0].selection.kind !== 'text'
+    || !isCorrectableCorrectionTarget(msgMap.get(effectiveTargetUnits[0].messageId))
+  );
+  const hasInvalidContainerSource = relationType !== null
+    && containerRelationTypes.has(relationType.toUpperCase())
+    && sourceUnits.length > 0
+    && !appendContainerType;
+  const dependentDisplayTargets = (containerRelationTypes.has(relationType?.toUpperCase() ?? '') || joinOnlyAction)
+    ? getDependentDisplayTargets(effectiveTargetUnits)
+    : [];
+  const hasInvalidJoinTarget = dependentDisplayTargets.length > 0;
+  const invalidJoinTargetMessage = dependentDisplayTargets.length > 0
+    ? `消息 ${dependentDisplayTargets[0].messageId} 依赖消息 ${dependentDisplayTargets[0].dependencyId} 显示，不能作为容器目标`
+    : null;
+  const targetTextIdsForValidation = joinOnlyAction
+    ? processedTargetUnits
+        .filter(unit => isContentKind(msgMap.get(unit.messageId)?.kind ?? 'normal'))
+        .map(unit => unit.messageId)
+    : getGroupedTargetTextMessageIds(processedTargetUnits);
+  const crossLinkValidationMessage = (isClassifyType || isSummaryType || isMergeType || joinOnlyAction)
+    && hasTargetsAvailable
+    && hasCrossNonReferenceTextLinkForClassifyTargets(targetTextIdsForValidation, processedTargetUnits);
+  const hasCrossLinkValidationError = Boolean(crossLinkValidationMessage);
+  const hasOrphanContainerLabel = (isSummaryType || isMergeType)
+    && effectiveTargetUnits.some(unit => {
+      const targetMessage = msgMap.get(unit.messageId);
+      const isContentRelation = targetMessage?.kind === 'relation'
+        && ['delegation', 'proposal', 'code_change', 'operations'].includes(targetMessage.relationType ?? '');
+      if (targetMessage && (isContentKind(targetMessage.kind) || isContentRelation)) return false;
+      const targetType = relationTypeByRelMsgId.get(unit.messageId);
+      if (!targetType || ['classify', 'merge', 'arrange', 'summary'].includes(targetType)) return false;
+      const targetRelation = relationById.get(unit.messageId);
+      const targetRefs = (targetRelation?.targetRefs ?? []) as TargetRef[];
+      return !targetRefs.some(ref =>
+        (ref.kind === 'message' || ref.kind === 'text-fragment')
+        && ref.messageId
+        && targetTextIdsForValidation.includes(ref.messageId)
+      );
+    });
+  const hasClassifyCycle = relationType === 'classify' && isInsideClassify && (() => {
+    const ancestorIds = new Set<string>();
+    if (currentClassifyRelMsgId) ancestorIds.add(currentClassifyRelMsgId);
+    for (const entry of classifyStackRef.current) ancestorIds.add(entry.relMsgId);
+    return getClassifyTargetRefs(effectiveTargetUnits).some(ref =>
+      ancestorIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId)
+    );
+  })();
+  const hasInvalidDelegationFormat = relationType === 'delegation' && (() => {
+    const content = newMessageContent.trim();
+    const isFulfill = secondaryRelationType === 'fulfill';
+    const readField = (labels: string[]): string | null => {
+      for (const field of labels) {
+        const match = content.match(new RegExp(`${field}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'));
+        if (match?.[1]?.trim()) return match[1].trim();
+      }
+      return null;
+    };
+    const amountText = readField(['报酬数量', '数量']);
+    const ratioText = readField(['报酬比例', '比例']);
+    const description = readField([isFulfill ? '完成说明' : '委托内容']);
+    const amount = amountText ? Number(amountText) : undefined;
+    const ratio = ratioText ? Number(ratioText.replace(/%$/, '')) : undefined;
+    const validReward = isFulfill
+      ? amount === undefined && ratio === undefined
+      : amount !== undefined && Number.isInteger(amount) && amount > 0 && ratio === undefined;
+    const selectedTargets = effectiveTargetUnits.filter(target => msgMap.get(target.messageId)?.kind === 'relation');
+    const targetRelation = selectedTargets.length === 1
+      ? relations.find(rel => rel.id === selectedTargets[0].messageId)
+      : undefined;
+    const isCreateDelegation = targetRelation?.payload?.delegationKind === 'CREATE';
+    return !content || !description || !validReward || (isFulfill
+      && (effectiveTargetUnits.length !== 1 || !targetRelation || targetRelation.relationType.toUpperCase() !== 'DELEGATION' || !isCreateDelegation));
+  })();
+  const hasInvalidProposalFormat = relationType === 'proposal' && (() => {
+    const content = newMessageContent.trim();
+    const read = (labels: string[]): string | undefined => labels
+      .map(label => content.match(new RegExp(`${label}\\s*[=:：]\\s*([^\\n;；]+)`, 'i'))?.[1]?.trim())
+      .find(Boolean);
+    if (secondaryRelationType === '充值分账') {
+      const amount = Number(read(['充值总额', '总额', 'amount']));
+      const share = Number(read(['收入池分成', '分成', 'revenuePoolShare']));
+      return !Number.isInteger(amount) || amount <= 0 || !Number.isInteger(share) || share < 0 || share > amount || !read(['指定与会者', 'recipientUserId']);
+    }
+    if (secondaryRelationType === '运营收入注入') {
+      const amount = Number(read(['收入金额', '金额', 'amount']));
+      return !Number.isInteger(amount) || amount <= 0 || !read(['来源', 'source']);
+    }
+    return false;
+  })();
   const composerRefreshKey = `${relationType ?? "plain"}::${secondaryRelationType}::${draftUnits.length === 0 ? "draft-empty" : "draft-has"}::${targetUnits.length === 0 ? "target-empty" : "target-has"}::${sourceUnits.length === 0 ? "source-empty" : "source-has"}::${draftHasRelationTarget ? "draft-rel" : "draft-text"}`;
 
   // Additional relation selector:
   // - REPLY: always available (none/question/answer)
-  // - CORRECT: only when targeting relation messages
   // - TAG: always available (none/recommend/archive/existing-tag shortcuts)
   // - ARRANGE: always available (vertical/horizontal)
   const hasSecondaryRelationSelector =
     relationType === "reply"
-    || (relationType === "correct" && draftHasRelationTarget)
     || relationType === "tag"
-    || relationType === "arrange";
+    || relationType === "arrange"
+    || relationType === "reference"
+    || relationType === "proposal"
+    || relationType === "delegation";
 
   // Send button enabled logic (single button):
   //   - No relation type: just send message → need text
@@ -2248,17 +5229,74 @@ export default function TopicDetailPage() {
   //   - Other types: (draft or target collection) not empty AND text not empty
   // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
+  const hasTextContent = newMessageContent.trim().length > 0;
   const singleButtonEnabled = (() => {
     if (relationType === null) return newMessageContent.trim().length > 0;
-    // CORRECT targeting a relation message: special mode (no text, no source, use secondary selector)
-    if (draftHasRelationTarget && relationType === "correct") {
-      return draftUnits.length > 0 && newMessageContent.trim().length === 0 && sourceUnits.length === 0;
+    // Check that relation stake meets the effective minimum (type + subType combined)
+    if (hasTextContent && typeof stakeAmount !== 'number') return false;
+    if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) return false;
+    if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return false;
+    if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return false;
+    if (totalConsumption && totalConsumption.total > availablePoints) return false;
+    // Ambiguous: both draft and target non-empty — force user to clear one
+    if (draftUnits.length > 0 && targetUnits.length > 0) return false;
+    if (hasInvalidCorrectTarget || hasInvalidContainerSource || hasInvalidJoinTarget || hasCrossLinkValidationError || hasOrphanContainerLabel || hasClassifyCycle || hasInvalidDelegationFormat || hasInvalidProposalFormat) return false;
+    if (hasCorrectionRelationTarget) return false;
+    if (isClassifyType) {
+      const hasExistingClassifySource = sourceUnits.some(unit =>
+        relations.find(relation => relation.id === unit.messageId)?.relationType?.toUpperCase() === 'CLASSIFY'
+      );
+      return hasExistingClassifySource && joinOnlyAction
+        ? hasTargetsAvailable
+        : newMessageContent.trim().length > 0;
     }
-    if (isClassifyType) return newMessageContent.trim().length > 0;
-    if (isSummaryType) return hasTargetsAvailable && newMessageContent.trim().length > 0;
-    if (isMergeType) return hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
-    // TAG with any non-none secondary (recommend/archive/existing-tag) needs only targets, no text
-    if (isAgreeDisagreeType || isArrangeType || isTagWithQuickAnnotate) return hasTargetsAvailable;
+    if (isSummaryType) {
+      return joinOnlyAction
+        ? hasTargetsAvailable
+        : hasTargetsAvailable && newMessageContent.trim().length > 0;
+    }
+    if (isMergeType) {
+      return joinOnlyAction
+        ? hasTargetsAvailable
+        : hasTargetsAvailable && sourceUnits.length === 0 && newMessageContent.trim().length === 0;
+    }
+    if (relationType === 'delegation') {
+      if (secondaryRelationType === 'fulfill') {
+        return newMessageContent.trim().length > 0 && sourceUnits.length === 0 && effectiveTargetUnits.length === 1;
+      }
+      return sourceUnits.length === 0 && newMessageContent.trim().length > 0;
+    }
+    if (isGovernanceOrOpsType) {
+      if (sourceUnits.length > 0) return false;
+      // 分配收入：必须完全清空
+      if (relationType === 'proposal' && secondaryRelationType === '分配收入') {
+        return !hasTargetsAvailable && newMessageContent.trim().length === 0;
+      }
+      if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
+        return newMessageContent.trim().length > 0;
+      }
+      // 终止结算：目标必须是 governance 消息
+      if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
+        return targetUnits.some(t => msgMap.get(t.messageId)?.kind === 'governance');
+      }
+      return newMessageContent.trim().length > 0 || hasTargetsAvailable;
+    }
+    // TAG with recommend/archive (inline badge): needs targets; if CUSTOM subType, also needs text
+    if (isTagWithInlineBadge) {
+      if (!hasTargetsAvailable) return false;
+      if (subType === 'CUSTOM') return newMessageContent.trim().length > 0;
+      return true;
+    }
+    // TAG with existing tag label (non-recommend/archive): needs only targets, no text
+    if (isTagWithQuickAnnotate) return hasTargetsAvailable;
+    // TAG with secondary=none: invalid state, cannot send
+    if (relationType === "tag") return false;
+    if (isAgreeDisagreeType || isArrangeType) return hasTargetsAvailable;
+    if (relationType === 'correct') {
+      if (hasCorrectionRelationTarget) return secondaryRelationType !== 'none' && !hasTextContent && sourceUnits.length === 0;
+      return !hasInvalidCorrectTarget && hasTargetsAvailable && sourceUnits.length === 0;
+    }
+    if (isNotifyType) return (sourceUnits.length > 0 || newMessageContent.trim().length > 0) && hasAttentionNotifyTarget;
     // sourceUnits + targetUnits explicitly committed (no draft): relation can be built without new text
     if (draftUnits.length === 0 && sourceUnits.length > 0 && targetUnits.length > 0) return true;
     return hasTargetsAvailable && newMessageContent.trim().length > 0;
@@ -2271,23 +5309,24 @@ export default function TopicDetailPage() {
       return "仅发送这条消息（未选择关系类型）";
     }
     const typeName = relationTypeName(relationType);
-    if (draftHasRelationTarget && relationType === "correct") {
-      if (newMessageContent.trim().length > 0) return `请清空文本输入框（更正关系目标为关系消息时不应有文本）`;
-      if (sourceUnits.length > 0) return `请清空来源集合（更正关系目标为关系消息时来源必须为空）`;
-      const secLabel = secondaryRelationType === "none" ? "无" : relationTypeName(secondaryRelationType as RelationType);
-      return `建立「${typeName}」关系（目标为关系消息，附加：${secLabel}）`;
-    }
     const usingDraft = draftUnits.length > 0;
     if (isClassifyType) {
+      const existingClassifySource = sourceUnits.some(unit =>
+        relations.find(relation => relation.id === unit.messageId)?.relationType?.toUpperCase() === 'CLASSIFY'
+      );
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
-      if (targetCount === 0) return "建立分类（无目标）";
-      return `建立分类（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
+      if (existingClassifySource && joinOnlyAction) {
+        if (!hasTargetsAvailable) return "请选择要加入已有分类的目标消息";
+        return `将${usingDraft ? "候选区" : "目标集合"}中的 ${targetCount} 个消息加入已有分类`;
+      }
+      if (targetCount === 0) return "文本将作为分类名称，建立分类（无目标）";
+      return `文本将作为分类名称，建立分类（${targetCount} 个${CLASSIFY_TARGET_HINT}目标）`;
     }
     if (isSummaryType) {
       const targetCount = getClassifyTargetRefs(usingDraft ? draftUnits : targetUnits).length;
       if (!hasTargetsAvailable) return "请在画布中选择要总结的目标消息";
       if (newMessageContent.trim().length === 0) return "请输入总结内容（不能为空）";
-      return `建立总结关系（${targetCount} 个目标）`;
+      return `文本将作为总结内容，建立总结关系（${targetCount} 个目标）`;
     }
     if (isMergeType) {
       if (sourceUnits.length > 0) return "归并关系不需要来源消息，请清空来源集合";
@@ -2295,11 +5334,54 @@ export default function TopicDetailPage() {
       if (newMessageContent.trim().length > 0) return "归并关系不需要输入文本消息";
       return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
+    if (relationType === 'correct') {
+      if (!hasTargetsAvailable) return '请选择要更正的原始内容';
+      if (hasCorrectionRelationTarget) return '关系消息不能作为更正目标，请选择普通文本消息';
+      if (hasInvalidCorrectTarget) return '更正只能选择原始内容中的一个文本字段';
+      return hasTextContent
+        ? `将选中的原始内容修改为「${newMessageContent.trim()}」`
+        : '删除选中的原始内容片段';
+    }
+    if (isNotifyType) {
+      if (!hasAttentionNotifyTarget) return '请选择已有关注与会者的目标消息';
+      if (sourceUnits.length === 0 && newMessageContent.trim().length === 0) return '请输入通知内容或选择来源消息';
+      return `发送通知（通知目标消息的关注与会者）`;
+    }
+    if (isGovernanceOrOpsType) {
+      const govTypeLabel = relationType === "proposal" ? "提案" : relationType === "code_change" ? "代码" : "运营";
+      if (sourceUnits.length > 0)
+        return `请清空来源集合（${govTypeLabel}消息不需要来源）`;
+      // 分配收入
+      if (relationType === 'proposal' && secondaryRelationType === '分配收入') {
+        if (hasTargetsAvailable) return '分配收入提案不能选择目标，请清空目标集合';
+        if (newMessageContent.trim().length > 0) return '分配收入提案不需要输入文本，请清空文本框';
+        return '发送分配收入提案（将当前收入池余额按规则分配给社区成员）';
+      }
+      if (relationType === 'proposal' && secondaryRelationType === '充值分账') {
+        return '发送充值分账提案（提交后验证指定与会者）';
+      }
+      // 终止结算
+      if (relationType === 'proposal' && secondaryRelationType === '终止结算') {
+        if (!hasTargetsAvailable) return '请选择目标提案消息';
+        if (!targetUnits.some(t => msgMap.get(t.messageId)?.kind === 'governance'))
+          return '终止结算的目标必须是提案消息';
+        return '发送终止结算提案';
+      }
+      const usingDraft2 = draftUnits.length > 0;
+      const targetCount = (usingDraft2 ? draftUnits : targetUnits).length;
+      if (!hasTargetsAvailable && newMessageContent.trim().length === 0)
+        return `请输入${govTypeLabel}内容或选择目标消息`;
+      if (targetCount > 0 && newMessageContent.trim().length > 0)
+        return `文本将作为${govTypeLabel}正文，发送${govTypeLabel}消息（引用 ${targetCount} 个目标）`;
+      if (targetCount > 0)
+        return `发送${govTypeLabel}消息（引用 ${targetCount} 个目标，无正文）`;
+      return `文本将作为${govTypeLabel}正文，发送${govTypeLabel}消息`;
+    }
     if (isAgreeDisagreeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       return newMessageContent.trim().length > 0
         ? `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`
-        : `建立纯立场「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+        : `建立纯站队「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
     }
     if (isArrangeType) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
@@ -2312,7 +5394,15 @@ export default function TopicDetailPage() {
     if (isTagWithInlineBadge) {
       if (!hasTargetsAvailable) return "请在画布中选择目标消息";
       const secName = relationTypeName(secondaryRelationType as RelationType);
+      if (subType === 'CUSTOM') {
+        if (newMessageContent.trim().length === 0) return "请输入自定义理由";
+        return `建立「${secName}」关系（自定义理由，用${usingDraft ? "候选" : "目标集合"}作目标）`;
+      }
       return `建立「${secName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
+    }
+    // TAG + secondary = none: invalid state prompt
+    if (relationType === "tag" && secondaryRelationType === "none") {
+      return "请先选择推荐或冷藏";
     }
     // TAG + secondary = existing tag label: quick re-annotation shortcut
     if (isTagWithQuickAnnotate) {
@@ -2325,6 +5415,34 @@ export default function TopicDetailPage() {
     if (!hasTargetsAvailable) return "请在画布中选择目标消息";
     if (newMessageContent.trim().length === 0) return "请输入消息内容（将作为来源）";
     return `发送消息并建立「${typeName}」关系（用${usingDraft ? "候选" : "目标集合"}作目标）`;
+  })();
+
+  const sendValidationLabel = (() => {
+    if (singleButtonEnabled) return null;
+    if (relationType === null && !hasTextContent) return "请输入消息内容后发送";
+    if (draftUnits.length > 0 && targetUnits.length > 0) return "候选区和目标集合不能同时有内容，请清空其中一方";
+    if (hasTextContent && typeof stakeAmount !== 'number') return "请输入文本消息贡献点";
+    if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 10) return `文本消息最低押注 10 点`;
+    if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return "请输入关系消息贡献点";
+    if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
+    if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
+    if (hasCorrectionRelationTarget) return "关系消息不能作为更正目标，请选择普通文本消息";
+    if (hasInvalidCorrectTarget) return "更正只能选择原始内容中的一个文本字段";
+    if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
+    if (hasInvalidJoinTarget) return invalidJoinTargetMessage as string;
+    if (hasCrossLinkValidationError) return crossLinkValidationMessage as string;
+    if (hasOrphanContainerLabel) return "选中的关系标签不属于当前目标集合";
+    if (hasClassifyCycle) return "不能将当前分类或其上级分类作为新分类的目标";
+    if (hasInvalidDelegationFormat) return secondaryRelationType === 'fulfill'
+      ? "完成委托格式无效，请填写分配数量或分配比例，并选择一条委托关系"
+      : "创建委托格式无效，请填写报酬数量和委托内容";
+    if (hasInvalidProposalFormat) return secondaryRelationType === '充值分账'
+      ? "充值分账格式无效，请填写充值总额、收入池分成和指定与会者"
+      : "运营收入提案格式无效，请填写收入金额和来源";
+    if (relationType === 'tag' && secondaryRelationType === 'none') return "请先选择推荐、冷藏、已读、未读或已有标签";
+    if (!hasTargetsAvailable && relationType !== null && !isClassifyType && !isGovernanceOrOpsType) return "请先选择目标消息";
+    if (relationType !== null && !hasTextContent && !isAgreeDisagreeType && !isArrangeType && !isMergeType && !isTagWithQuickAnnotate && !isTagWithInlineBadge) return "请输入消息内容";
+    return null;
   })();
 
   // Secondary relation options for CORRECT type: relations of the same PresentationKind as the targeted relation message, plus "none".
@@ -2343,7 +5461,7 @@ export default function TopicDetailPage() {
     return ['none', ...sameKindTypes];
   }, [relationType, draftUnits, targetUnits, edges, msgMap]);
 
-  // Secondary relation options for TAG type: none, recommend, archive, plus existing tags on target messages.
+  // Secondary relation options for TAG type: recommend, archive, attention, block, plus existing tags.
   const tagSecondaryOptions = useMemo((): string[] => {
     if (relationType !== 'tag') return ['none'];
     const allUnits = [...draftUnits, ...targetUnits];
@@ -2357,85 +5475,125 @@ export default function TopicDetailPage() {
         }
       }
     }
-    return ['none', 'recommend', 'archive', ...Array.from(existingTagLabels)];
+    return ['read', 'unread', 'recommend', 'archive', 'attention', 'block', ...Array.from(existingTagLabels)];
   }, [relationType, draftUnits, targetUnits, edges]);
+
+  const proposalSecondaryOptions = useMemo((): string[] => {
+    if (relationType !== 'proposal') return ['none'];
+    return ['none', '分配收入', '充值分账', '运营收入注入', '终止结算'];
+  }, [relationType]);
 
   function renderMessageContentWithAnchorsForList(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
-    if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
+    if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
     const text = message.content;
     const validItems = targets
       .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
       .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
     const tree = buildAnnoTree(validItems);
     const nodes = renderAnnoNodes(text, tree, 0, text.length, 0, message.id, isFragmentSelected, handleFragmentAnchorClick);
-    return <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
+    return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{nodes}</pre>;
   }
 
-  const { messagesToShow, edgesToShow } = useMemo(() => {
-    if (focusEntries.length === 0) return { messagesToShow: messages, edgesToShow: edges };
-    const startIds = focusEntries[focusEntries.length - 1].ids.filter(Boolean);
-    if (startIds.length === 0) return { messagesToShow: messages, edgesToShow: edges };
+  function renderRelationContentWithTargets(message: DemoMessage) {
+    const targetRefs = message.targetRefs ?? [];
+    if (targetRefs.length === 0) {
+      return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+          {message.content.split(/目标：/u)[0]}
+          <span>目标：</span>
+          {targetRefs.map((target, index) => {
+            const targetId = target.kind === 'relation' ? target.relationId : target.messageId;
+            return (
+              <React.Fragment key={`${target.kind}:${targetId}:${index}`}>
+                {index > 0 && ', '}
+                <button
+                  type="button"
+                  onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
+                  style={{ padding: 0, border: 0, background: 'transparent', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace', fontSize: 12, textDecoration: 'underline', textUnderlineOffset: 2 }}
+                  title={`跳转到目标消息 ${targetId}`}
+                >
+                  {targetId}
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const { messagesToShow, edgesToShow, traceExpandableContainerIds } = useMemo(() => {
+    if (traceEntries.length === 0) {
+      return {
+        messagesToShow: messages,
+        edgesToShow: edges,
+        traceExpandableContainerIds: new Set<string>(),
+      };
+    }
+    const startIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
+    if (startIds.length === 0) {
+      return {
+        messagesToShow: messages,
+        edgesToShow: edges,
+        traceExpandableContainerIds: new Set<string>(),
+      };
+    }
+    const traceProjection = buildTraceProjection({
+      messages,
+      edges,
+      containerMemberships: traceContainerMemberships,
+      excludedRelationIds: effectiveSuppressedRelIdsForLayout,
+      startIds,
+      distance: traceDistance,
+    });
+    const projection = applyTraceFrameVisibility(traceProjection, traceExpandedFrameIds);
+    if (traceEntries.length >= 0) {
+      return {
+        messagesToShow: projection.messages,
+        edgesToShow: projection.edges,
+        traceExpandableContainerIds: projection.expandableContainerIds,
+      };
+    }
+
+    /* Legacy trace projection retained temporarily below while the page-level
+       consumers are migrated; the return above is the single active path. */
     const adj = new Map<string, Set<string>>();
     function addEdgeAdj(a: string, b: string) {
       if (!adj.has(a)) adj.set(a, new Set()); if (!adj.has(b)) adj.set(b, new Set());
       adj.get(a)!.add(b); adj.get(b)!.add(a);
     }
     for (const e of edges) {
-      // Only add a direct from↔to hop if at least one endpoint is a normal text message.
-      // Relation-to-relation connections (e.g. a CORRECT relation linking two relation messages)
-      // should not count as focus-distance hops.
-      const fromIsNormal = msgMap.get(e.from.messageId)?.kind === "normal";
-      const toIsNormal = msgMap.get(e.to.messageId)?.kind === "normal";
-      if (fromIsNormal || toIsNormal) addEdgeAdj(e.from.messageId, e.to.messageId);
-      // Connect the relation message to both endpoints so BFS can traverse through
-      // relation messages (including those with anon: sources).  Skip anon: IDs
-      // since they are not real messages and should not appear as BFS nodes.
+      // SUMMARY/CLASSIFY relations use a two-level visibility model:
+      //   - Container card is shown when its nearest connected message is within range.
+      //   - Container children are expanded when range has 1+ hop of budget remaining.
+      // This prevents the entire cluster from appearing at distance 1.
+      // MERGE/ARRANGE are ordinary trace relations and must remain in the
+      // adjacency graph; their visual frame handling is independent of trace expansion.
+      if (isTraceExpandableFrameType(e.relationType)) continue;
+      // Only text-like endpoints participate as direct trace nodes. A textual
+      // relation message is also a node; ordinary relation labels are not.
+      const fromIsTextLike = isTraceTextLikeMessage(msgMap.get(e.from.messageId));
+      const toIsTextLike = isTraceTextLikeMessage(msgMap.get(e.to.messageId));
+      if (fromIsTextLike || toIsTextLike) addEdgeAdj(e.from.messageId, e.to.messageId);
+      const relationIsTextLike = isTraceTextLikeMessage(msgMap.get(e.relationMessageId));
+      if (!relationIsTextLike) continue;
       const fromId = e.from.messageId;
       const toId = e.to.messageId;
       if (!fromId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, fromId);
       if (!toId.startsWith('anon:')) addEdgeAdj(e.relationMessageId, toId);
     }
-    // When a relation message is the focus, resolve it to its connected normal (text)
-    // messages and use those as BFS roots.  This preserves the original hop semantics:
-    //   1 hop = one relation message connecting two text messages.
-    // Distance is measured TEXT-MESSAGE to TEXT-MESSAGE through relation messages.
-    // The relation message itself does NOT act as a BFS node — it is the connector.
-    //
-    // The relation edges are always shown when their text-message endpoints are visible
-    // (ensured by the edge filter below with relationFocusIds / focusRelationMsgIds guards).
-    //
-    // This way:
-    //   hop=0 → text messages directly connected to the focused relation
-    //   hop=1 → those text messages + their 1-hop neighbours through other relations
+    // A traced relation is itself distance 0; its nearest related text message
+    // is distance 1, just like a traced text message's nearest related text.
     const effectiveStartIds = new Set<string>();
-    const relationFocusIds = new Set<string>();
-    function collectNormalMessagesForRelation(relId: string, seen: Set<string>): void {
-      if (seen.has(relId)) return;
-      seen.add(relId);
-      for (const e of edges) {
-        if (e.relationMessageId !== relId) continue;
-        const mf = msgMap.get(e.from.messageId);
-        if (mf?.kind === "normal") effectiveStartIds.add(e.from.messageId);
-        else if (mf?.kind === "relation") collectNormalMessagesForRelation(e.from.messageId, seen);
-        const mt = msgMap.get(e.to.messageId);
-        if (mt?.kind === "normal") effectiveStartIds.add(e.to.messageId);
-        else if (mt?.kind === "relation") collectNormalMessagesForRelation(e.to.messageId, seen);
-      }
-    }
+    const relationTraceIds = new Set<string>();
     for (const id of startIds) {
       const m = msgMap.get(id);
       if (m && m.kind === "relation") {
-        relationFocusIds.add(id);
-        const sizeBefore = effectiveStartIds.size;
-        collectNormalMessagesForRelation(id, new Set<string>());
-        // Fallback: relation has no connected normal messages (e.g. pure-stance
-        // with anon source).  Keep the relation message itself as BFS root so
-        // focus mode still shows something.
-        if (effectiveStartIds.size === sizeBefore) effectiveStartIds.add(id);
-        // Also include the relation message itself as a BFS root so that
-        // external messages connected directly to the relation (not via its
-        // resolved normal messages) are reachable at hop=1.
+        relationTraceIds.add(id);
         effectiveStartIds.add(id);
       } else {
         effectiveStartIds.add(id);
@@ -2455,8 +5613,8 @@ export default function TopicDetailPage() {
       if (!spec.groupsTargets) continue;
       let members = frameMembers.get(e.relationMessageId);
       if (!members) { members = new Set<string>(); frameMembers.set(e.relationMessageId, members); }
-      if (msgMap.get(e.from.messageId)?.kind === 'normal') members.add(e.from.messageId);
-      if (msgMap.get(e.to.messageId)?.kind === 'normal') members.add(e.to.messageId);
+      if (isTraceTextLikeMessage(msgMap.get(e.from.messageId))) members.add(e.from.messageId);
+      if (isTraceTextLikeMessage(msgMap.get(e.to.messageId))) members.add(e.to.messageId);
     }
     // Reverse index: for each normal message, which frame IDs contain it.
     const msgFrameMap = new Map<string, Set<string>>();
@@ -2467,19 +5625,22 @@ export default function TopicDetailPage() {
         frames.add(frameId);
       }
     }
+    // Expansion is explicit: expanding an outer frame only exposes nested
+    // container messages in its embedded canvas. A nested frame is expanded
+    // only after the user double-clicks that nested frame.
+    const expandedTraceFrameIds = new Set(traceExpandedFrameIds);
     while (q.length > 0) {
       const cur = q.shift()!; const d = dist.get(cur)!;
-      if (d >= focusHop) {
+      if (d >= traceDistance) {
         // Frame-type relations (ARRANGE, MERGE, etc.) at the boundary: expand to
         // contained normal messages at the same distance so the entire frame group
         // appears at hop=1 when a contained message or an external reference is
-        // the focus.  Only include messages that are actual members of this frame
+        // the trace.  Only include messages that are actual members of this frame
         // (endpoints of edges with relationMessageId === cur), not external messages
         // that merely reference the frame via other relations.
         const curMsg = msgMap.get(cur);
-        if (d === focusHop && curMsg?.kind === 'relation' && curMsg.relationType) {
-          const spec = getPresentationSpec(curMsg.relationType);
-          if (spec.groupsTargets) {
+        if (d === traceDistance && curMsg?.kind === 'relation' && curMsg.relationType) {
+          if (isTraceExpandableFrameType(curMsg.relationType)) {
             const members = frameMembers.get(cur);
             if (members) {
               for (const m of members) {
@@ -2492,25 +5653,25 @@ export default function TopicDetailPage() {
       }
       const neighbors = adj.get(cur); if (!neighbors) continue;
       const curMsg = msgMap.get(cur);
-      // When the frame itself is the focus (relationFocusIds contains a frame that
+      // When the frame itself is traced (relationTraceIds contains a frame that
       // contains cur), external connections should NOT be deferred — hop=1 should
       // expand one hop beyond the frame group.
-      const frameIsFocus = curMsg?.kind === 'normal' &&
-        (msgFrameMap.get(cur) ? Array.from(msgFrameMap.get(cur)!).some(f => relationFocusIds.has(f)) : false);
+      const frameIsTraced = curMsg && isContentKind(curMsg.kind) &&
+        (msgFrameMap.get(cur) ? Array.from(msgFrameMap.get(cur)!).some(f => relationTraceIds.has(f)) : false);
       for (const nb of neighbors) {
         if (dist.has(nb)) continue;
         // When the current node is a normal message inside a frame at d=0,
         // defer direct edges to external normal messages to d+2 so they
         // only appear at hop=2.  The frame relation and same-frame messages
         // get d+1 normally (they appear at hop=1 as part of the frame group).
-        // Exception: when the containing frame itself is the focus, external
+        // Exception: when the containing frame itself is traced, external
         // messages should appear at hop=1 (no deferral).
         let hopDelta = 1;
-        if (d === 0 && curMsg?.kind === 'normal' && !frameIsFocus) {
+        if (d === 0 && curMsg && isContentKind(curMsg.kind) && !frameIsTraced) {
           const curFrames = msgFrameMap.get(cur);
           if (curFrames && curFrames.size > 0) {
             const nbMsg = msgMap.get(nb);
-            if (nbMsg?.kind === 'normal') {
+            if (nbMsg && isContentKind(nbMsg.kind)) {
               const nbFrames = msgFrameMap.get(nb);
               if (!nbFrames || !Array.from(curFrames).some(f => nbFrames.has(f))) {
                 hopDelta = 2;
@@ -2522,27 +5683,96 @@ export default function TopicDetailPage() {
         q.push(nb);
       }
     }
+    // ── Container expansion (two-level visibility model) ──
+    // Delegated to applyContainerExpansion (focusContainer.ts) which is
+    // independently unit-tested.  See that module for the full expansion rules.
+    applyContainerExpansion(dist, edges, traceDistance, expandedTraceFrameIds);
+    // A nested container is represented by its parent card until that parent
+    // is explicitly expanded.  Keep directly traced containers visible, but do
+    // not let the fixed-point container pass leak every nested card into the
+    // outer trace canvas.
+    for (const edge of edges) {
+      if (!expandedTraceFrameIds.has(edge.relationMessageId)) continue;
+      if (!isTraceExpandableFrameType(edge.relationType)) continue;
+      const frameDistance = dist.get(edge.relationMessageId);
+      if (frameDistance === undefined || frameDistance + 1 > traceDistance) continue;
+      if (!edge.from.messageId.startsWith('anon:')) dist.set(edge.from.messageId, traceDistance);
+      if (!edge.to.messageId.startsWith('anon:')) dist.set(edge.to.messageId, traceDistance);
+    }
+    for (const edge of edges) {
+      if (edge.relationType.toLowerCase() !== 'correct') continue;
+      if (!dist.has(edge.from.messageId) && !dist.has(edge.to.messageId)) continue;
+      if (!edge.from.messageId.startsWith('anon:')) dist.set(edge.from.messageId, traceDistance);
+      if (!edge.to.messageId.startsWith('anon:')) dist.set(edge.to.messageId, traceDistance);
+    }
+    // An explicitly expanded container is the frame itself. Its direct members
+    // must therefore be available to the embedded canvas, while nested
+    // containers remain collapsed until explicitly expanded.
+    const addExpandedFrameMembers = (frameId: string, visited: Set<string>) => {
+      if (visited.has(frameId)) return;
+      visited.add(frameId);
+      for (const edge of edges) {
+        if (edge.relationMessageId !== frameId) continue;
+        for (const memberId of [edge.from.messageId, edge.to.messageId]) {
+          if (memberId.startsWith('anon:')) continue;
+          dist.set(memberId, Math.min(dist.get(memberId) ?? traceDistance, traceDistance));
+        }
+      }
+    };
+    const expandedFrameMembersVisited = new Set<string>();
+    for (const frameId of expandedTraceFrameIds) {
+      addExpandedFrameMembers(frameId, expandedFrameMembersVisited);
+    }
+
+    // A nested container remains a collapsed message card until it is
+    // explicitly expanded. Its text descendants belong to that card and must
+    // not leak into the surrounding canvas.
+    const collapsedNestedMemberIds = new Set<string>();
+    for (const frameId of expandedTraceFrameIds) {
+      for (const edge of edges) {
+        if (edge.relationMessageId !== frameId) continue;
+        for (const memberId of [edge.from.messageId, edge.to.messageId]) {
+          if (memberId.startsWith('anon:') || expandedTraceFrameIds.has(memberId)) continue;
+          const member = msgMap.get(memberId);
+          if (!member?.relationType || !getPresentationSpec(member.relationType).isContainer) continue;
+          const nestedMembers = collectOwnedByRelation(
+            memberId,
+            relationById,
+            new Set(),
+            rejectedContainerIds,
+            rejectedJoinRelationIds,
+          );
+          for (const textId of nestedMembers.textIds) collapsedNestedMemberIds.add(textId);
+          for (const relationId of nestedMembers.relationIds) collapsedNestedMemberIds.add(relationId);
+        }
+      }
+    }
+    for (const id of collapsedNestedMemberIds) {
+      if (!expandedTraceFrameIds.has(id)) dist.delete(id);
+    }
+
     const messagesToShowArr = messages.filter(m => dist.has(m.id));
     const shownIds = new Set(messagesToShowArr.map(m => m.id));
     const relationMessagesToAdd = new Set<string>();
     for (const e of edges) {
       // Auto-add a relation message when:
-      //   - At least one endpoint is strictly within the hop window (dist < focusHop), OR
-      //   - Both endpoints are "visible" (in dist or an anon: placeholder).  This
-      //     ensures relations whose text-message endpoints are all shown (e.g. a
-      //     pure-stance MERGE/ARRANGE frame or AGREE badge whose targets are visible)
-      //     appear even when every endpoint is at the hop boundary.
+      //   - At least one endpoint is strictly within the distance window (dist < traceDistance), OR
+      //   - Both endpoints are "visible" for a non-container relation. This keeps
+      //     boundary relation labels visible without pulling an outer container
+      //     back into the trace window.
       const fromDist = dist.get(e.from.messageId);
       const toDist = dist.get(e.to.messageId);
-      const fromTriggers = fromDist !== undefined && fromDist < focusHop;
-      const toTriggers = toDist !== undefined && toDist < focusHop;
-      // bothVisible only applies when focusHop > 0 (normal expansion) OR when a
-      // relation message is the focus (relationFocusIds > 0) — in that case all
-      // resolved text messages are intentionally shown, so nested frames whose
-      // endpoints are all visible should also appear at hop=0.
+      const fromTriggers = fromDist !== undefined && fromDist < traceDistance;
+      const toTriggers = toDist !== undefined && toDist < traceDistance;
+      // Container relations use their distance/expansion rules below instead of
+      // this endpoint-only fallback, so an ancestor cannot be reintroduced merely
+      // because its child container is visible.
       const fromOk = fromDist !== undefined || e.from.messageId.startsWith('anon:');
       const toOk = toDist !== undefined || e.to.messageId.startsWith('anon:');
-      const bothVisible = (focusHop > 0 || relationFocusIds.size > 0) && fromOk && toOk;
+      const isContainerRelation = getPresentationSpec(e.relationType).isContainer;
+      const bothVisible = !isContainerRelation
+        && (traceDistance > 0 || relationTraceIds.size > 0)
+        && fromOk && toOk;
       if (fromTriggers || toTriggers || bothVisible) relationMessagesToAdd.add(e.relationMessageId);
     }
     const relationMsgsAdded = new Set<string>();
@@ -2551,12 +5781,20 @@ export default function TopicDetailPage() {
       const m = messages.find(x => x.id === rmId);
       if (m) { messagesToShowArr.push(m); relationMsgsAdded.add(rmId); }
     }
-    // Always ensure the original focus-entry IDs are in messagesToShow.
+    const collapsedTraceMemberIds = new Set<string>();
+    for (const [frameId, members] of frameMembers) {
+      if (!dist.has(frameId) || expandedTraceFrameIds.has(frameId)) continue;
+      for (const memberId of members) {
+        if (!expandedTraceFrameIds.has(memberId)) collapsedTraceMemberIds.add(memberId);
+      }
+    }
+    // Always ensure the original trace-entry IDs are in messagesToShow.
     // When a startId is a classify relation message, collectNormalMessagesForRelation resolves
     // through it to normal message targets; the classify message itself may not appear via
     // BFS dist or the relation-adjacency step above (if its edges point to other relations,
     // not directly to text messages).
     for (const id of startIds) {
+      if (collapsedTraceMemberIds.has(id)) continue;
       if (!shownIds.has(id) && !relationMsgsAdded.has(id)) {
         const m = msgMap.get(id);
         if (m) messagesToShowArr.push(m);
@@ -2565,68 +5803,219 @@ export default function TopicDetailPage() {
     const shownSet = new Set(messagesToShowArr.map(m => m.id));
     // An edge is visible when its relationMessageId is in shownSet AND at least one
     // of its endpoints is either in shownSet or is an anon: placeholder.
-    // Additionally, edges belonging to a directly-focused relation message are always
+    // Additionally, edges belonging to a directly-traced relation message are always
     // shown so that the relation structure is fully visible even at hop=0
-    // (Bug fix: focus mode relation message visibility).
+    // (Bug fix: trace mode relation message visibility).
+    //
+    // Container-type edges (CLASSIFY, MERGE, SUMMARY): always show when the
+    // container is in shownSet.  The frame rendering in GraphView will only
+    // display children that are actually in messagesToShow (with layout boxes).
+    // Children not independently reachable are hidden inside the frame.
     const edgesToShowArr = edges.filter(e => {
       if (!shownSet.has(e.relationMessageId)) return false;
-      // Always show all edges of a directly-focused relation message
-      if (relationFocusIds.has(e.relationMessageId)) return true;
+      // Always show all edges of a directly-traced relation message
+      if (relationTraceIds.has(e.relationMessageId)) return true;
+      // Container edges: always visible when container is in shownSet.
+      // GraphView renders the frame border + header; only children with
+      // layout boxes (in messagesToShow) appear inside the frame.
+      if (getPresentationSpec(e.relationType).isContainer) return true;
       const fromOk = shownSet.has(e.from.messageId) || e.from.messageId.startsWith('anon:');
       const toOk = shownSet.has(e.to.messageId);
       return fromOk || toOk;
     });
-    return { messagesToShow: messagesToShowArr, edgesToShow: edgesToShowArr };
-  }, [messages, edges, focusEntries, focusHop, msgMap]);
+    return {
+      messagesToShow: messagesToShowArr,
+      edgesToShow: edgesToShowArr,
+      traceExpandableContainerIds: new Set(
+        messagesToShowArr
+          .filter(message => message.kind === 'relation' && message.relationType
+            && getPresentationSpec(message.relationType).isContainer)
+          .map(message => message.id),
+      ),
+    };
+  }, [messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
-  const canSetFocus = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
-  const canExitFocus = focusEntries.length > 0;
-  const isTopicFocus = currentFocusEntry?.mode === "topic";
-  const topicFocusRelMsgId = currentFocusEntry?.mode === "topic" ? currentFocusEntry.topicRelMsgId ?? null : null;
+  const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
+  const canExitTrace = traceEntries.length > 0;
 
-  // Set of relation-message IDs that are directly in the current focus set.
-  // Used to ensure that edges of focused relations are always visible regardless
-  // of endpoint checks (fix: REFERENCE edge not showing when relation is focused).
-  const focusRelationMsgIds = useMemo(() => {
-    if (focusEntries.length === 0) return new Set<string>();
+  // Track latest classify ID across async supersede calls so sequential
+  // addTargetToClassifyTopic calls always target the current classify.
+  const latestClassifyRelMsgIdRef = useRef<string | null>(null);
+  useEffect(() => { latestClassifyRelMsgIdRef.current = currentClassifyRelMsgId; }, [currentClassifyRelMsgId]);
+
+  // Set of relation-message IDs directly in the current trace set.
+  // Used to keep their edges visible regardless of endpoint checks.
+  const traceRelationMsgIds = useMemo(() => {
+    if (traceEntries.length === 0) return new Set<string>();
     const ids = new Set<string>();
-    for (const id of focusEntries[focusEntries.length - 1].ids) {
+    for (const id of traceEntries[traceEntries.length - 1].ids) {
       if (msgMap.get(id)?.kind === 'relation') ids.add(id);
     }
     return ids;
-  }, [focusEntries, msgMap]);
-  const topicFocusTargetCount = useMemo(
-    () => topicFocusRelMsgId ? collectOwnedByRelation(topicFocusRelMsgId, relationById).textIds.size : 0,
-    [topicFocusRelMsgId, relationById]
+  }, [traceEntries, msgMap]);
+  const traceFrameIds = useMemo(() => new Set(
+    [
+      ...Array.from(traceRelationMsgIds),
+      ...((traceEntries.length > 0
+        ? edges
+          .filter(edge => {
+            if (!['classify', 'summary'].includes(edge.relationType.toLowerCase())) return false;
+            const traceStartIds = traceEntries[traceEntries.length - 1].ids;
+            return traceStartIds.includes(edge.from.messageId) || traceStartIds.includes(edge.to.messageId);
+          })
+          .map(edge => edge.relationMessageId)
+        : [])),
+      ...((traceEntries.length > 0
+        ? traceContainerMemberships
+          .filter(membership => traceEntries[traceEntries.length - 1].ids.some(id => membership.targetIds.includes(id)))
+          .map(membership => membership.containerId)
+        : [])),
+      ...traceExpandableContainerIds,
+    ].filter(id => {
+      const relationType = msgMap.get(id)?.relationType;
+      return relationType ? getPresentationSpec(relationType).isContainer : false;
+    }),
+  ), [traceRelationMsgIds, traceEntries, edges, msgMap, traceExpandableContainerIds]);
+  const classifyTargetCount = useMemo(
+    () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
+    [currentClassifyRelMsgId, relationById]
   );
-  const topicFocusRelMsg = useMemo(
-    () => topicFocusRelMsgId ? msgMap.get(topicFocusRelMsgId) : null,
-    [topicFocusRelMsgId, msgMap]
+  const currentClassifyRelMsg = useMemo(
+    () => currentClassifyRelMsgId ? msgMap.get(currentClassifyRelMsgId) : null,
+    [currentClassifyRelMsgId, msgMap]
   );
-  const topicFocusRelType = useMemo(
+  const currentClassifyRelType = useMemo(
     () => {
-      if (topicFocusRelMsg?.relationType === "summary") return "summary";
-      if (topicFocusRelMsg?.relationType === "classify") return "classify";
+      if (currentClassifyRelMsg?.relationType === "summary") return "summary";
+      if (currentClassifyRelMsg?.relationType === "classify") return "classify";
       return null;
     },
-    [topicFocusRelMsg]
+    [currentClassifyRelMsg]
   );
-  const topicFocusKindLabel = topicFocusRelType === "summary" ? "总结" : topicFocusRelType === "classify" ? "分类" : "分类";
-  const topicFocusExitLabel = topicFocusRelType === "summary" ? "退出总结" : topicFocusRelType === "classify" ? "退出分类" : "退出分类";
-  const topicFocusTitle = topicFocusRelMsg
-    ? (getRelationTitle(topicFocusRelMsg.relationPayload) || `${topicFocusKindLabel}（${topicFocusTargetCount}）`)
+  const classifyKindLabel = currentClassifyRelType === "summary" ? "总结" : currentClassifyRelType === "classify" ? "分类" : "分类";
+  const classifyExitLabel = currentClassifyRelType === "summary" ? "退出总结" : currentClassifyRelType === "classify" ? "退出分类" : "退出分类";
+  const topicViewTitle = currentClassifyRelMsg
+    ? (getRelationTitle(currentClassifyRelMsg.relationPayload) || `${classifyKindLabel}（${classifyTargetCount}）`)
     : "";
-  const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender } = useMemo(() => {
-    const useFocusWindow = focusEntries.length > 0 && !isTopicFocus;
-    const baseMessages = useFocusWindow ? messagesToShow : messages;
-    const baseEdges = useFocusWindow ? edgesToShow : edges;
-    if (isTopicFocus && topicFocusRelMsgId) {
-      const topicRelation = relationById.get(topicFocusRelMsgId);
-      const topicTextIds = new Set<string>();
-      const topicRelationIds = new Set<string>();
+  const isTemporaryJoinCategory = joinFilterTargetId !== null;
+  const temporaryJoinCount = joinFilterTargetId
+    ? (joinFilterDirection === 'outgoing'
+      ? (joinRelationsBySource.get(joinFilterTargetId)?.length ?? 0)
+      : (joinRelationsByTarget.get(joinFilterTargetId)?.length ?? 0))
+    : 0;
+
+  // 当前视图实际可见的内容消息ID集（考虑追溯/分类上下文）
+  const graphVisibleTextIds = useMemo(() => {
+    // Trace mode always renders from the trace window on the main canvas.
+    // Do not let a stale classify state from the same React transition project
+    // the selected nested message back into an empty parent frame.
+    if (isInsideClassify && currentClassifyRelMsgId && traceEntries.length === 0) {
+      const topicRelation = relationById.get(currentClassifyRelMsgId);
+      if (!topicRelation) return new Set<string>();
+      const ids = new Set<string>(getTextTargetIds(topicRelation.targetRefs));
+      // Also include content-kind relation targets (governance/code/ops)
+      // so REFERENCE edges from them are not treated as cross-classify.
+      for (const relId of getRelationTargetIds(topicRelation.targetRefs)) {
+        const m = msgMap.get(relId);
+        if (m && isContentKind(m.kind)) ids.add(relId);
+      }
+      return ids;
+    }
+    // 主画布：visible = NOT in hiddenTextIds
+    const visible = new Set<string>();
+    for (const m of messages) {
+      if (isContentKind(m.kind) && !graphHiddenTextIds.has(m.id) && !graphOwnedRelationIds.has(m.id)) visible.add(m.id);
+    }
+    return visible;
+  }, [isInsideClassify, currentClassifyRelMsgId, relationById, messages, graphHiddenTextIds, graphOwnedRelationIds]);
+
+  // 跨分类引用标签：按二级标签分组（"证据" / "引用" / 自定义）
+  // 消息 A（可见）引用 B（不可见）→ A 上显示 outgoing 标签
+  // B（不可见）被 A 引用 → 若 B 在某视图中可见，显示 incoming 标签
+  const crossClassifyRefs = useMemo(() => {
+    const raw = new Map<string, { outgoing: Record<string, Set<string>>; incoming: Record<string, Set<string>> }>();
+    const labelOf = (raw: string): string => {
+      const n = raw.trim().toLowerCase();
+      if (n === "evidence" || n === "证据") return "证据";
+      if (n === "ref" || n === "reference" || !n) return "引用";
+      return raw; // custom label
+    };
+    for (const e of edges) {
+      if (e.relationType !== 'reference') continue;
+      const fromKind = msgMap.get(e.from.messageId)?.kind;
+      const toKind = msgMap.get(e.to.messageId)?.kind;
+      if (!isContentKind(fromKind as MessageKind) || !isContentKind(toKind as MessageKind)) continue;
+      const fromVisible = graphVisibleTextIds.has(e.from.messageId);
+      const toVisible = graphVisibleTextIds.has(e.to.messageId);
+      if (fromVisible === toVisible) continue;
+      const lbl = labelOf(e.relationLabel);
+      if (fromVisible && !toVisible) {
+        let entry = raw.get(e.from.messageId);
+        if (!entry) { entry = { outgoing: {}, incoming: {} }; raw.set(e.from.messageId, entry); }
+        (entry.outgoing[lbl] ??= new Set()).add(e.relationMessageId);
+      } else if (!fromVisible && toVisible) {
+        let entry = raw.get(e.to.messageId);
+        if (!entry) { entry = { outgoing: {}, incoming: {} }; raw.set(e.to.messageId, entry); }
+        (entry.incoming[lbl] ??= new Set()).add(e.relationMessageId);
+      }
+    }
+    // 转换 Set → array 用于 props 传递
+    const result = new Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>();
+    for (const [msgId, entry] of raw) {
+      const out: Record<string, string[]> = {};
+      for (const [lbl, ids] of Object.entries(entry.outgoing)) out[lbl] = Array.from(ids);
+      const inc: Record<string, string[]> = {};
+      for (const [lbl, ids] of Object.entries(entry.incoming)) inc[lbl] = Array.from(ids);
+      result.set(msgId, { outgoing: out, incoming: inc });
+    }
+    return result;
+  }, [edges, msgMap, graphVisibleTextIds]);
+
+  const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender, hideMessageIds } = useMemo(() => {
+    // A trace entry owns the canvas projection immediately. The classify state
+    // is cleared asynchronously when entering trace, so checking it here can
+    // render the old sub-canvas together with the new trace window.
+    const useTraceWindow = traceEntries.length > 0;
+    const baseMessages = useTraceWindow ? messagesToShow : messages;
+    const baseEdges = useTraceWindow ? edgesToShow : edges;
+    if (useTraceWindow) {
+      const traceStartIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);
+      const traceProjection = buildTraceProjection({
+        messages,
+        edges,
+        containerMemberships: traceContainerMemberships,
+        excludedRelationIds: effectiveSuppressedRelIdsForLayout,
+        startIds: traceStartIds,
+        distance: traceDistance,
+      });
+      const listProjection = applyTraceFrameVisibility(
+        traceProjection,
+        new Set([...traceExpandedFrameIds, ...traceStartIds]),
+      );
+      return {
+        graphMessagesToRender: baseMessages,
+        graphEdgesToRender: baseEdges,
+        listMessagesToRender: listProjection.messages,
+        listEdgesToRender: listProjection.edges,
+        hideMessageIds: undefined,
+      };
+    }
+    if (isInsideClassify && currentClassifyRelMsgId && !useTraceWindow) {
+      const topicRelation = relationById.get(currentClassifyRelMsgId);
+      const containerVisible = collectContainerVisibleIds(currentClassifyRelMsgId, relations, rejectedContainerIds, rejectedJoinRelationIds);
+      const topicTextIds = new Set<string>(containerVisible.textIds);
+      const topicRelationIds = new Set<string>(containerVisible.relationIds);
+      // Nested CLASSIFY/SUMMARY relations are opaque cards in the parent
+      // canvas. collectContainerVisibleIds recursively includes their text
+      // targets, so remove those descendants before building the projection.
+      for (const nestedRelationId of topicRelationIds) {
+        const nestedRelation = relationById.get(nestedRelationId);
+        const nestedType = nestedRelation?.relationType?.toUpperCase();
+        if (nestedType !== 'CLASSIFY' && nestedType !== 'SUMMARY') continue;
+        const nestedVisible = collectContainerVisibleIds(nestedRelationId, relations, rejectedContainerIds, rejectedJoinRelationIds);
+        for (const textId of nestedVisible.textIds) topicTextIds.delete(textId);
+      }
       if (topicRelation) {
-        getTextTargetIds(topicRelation.targetRefs).forEach(id => topicTextIds.add(id));
-        getRelationTargetIds(topicRelation.targetRefs).forEach(id => topicRelationIds.add(id));
         const queue = Array.from(topicRelationIds);
         const visited = new Set<string>();
         while (queue.length > 0) {
@@ -2644,7 +6033,7 @@ export default function TopicDetailPage() {
             const srcId = rel.sourceMessageId;
             if (!topicTextIds.has(srcId) && !topicRelationIds.has(srcId)) {
               const srcMsg = msgMap.get(srcId);
-              if (srcMsg?.kind === 'normal') {
+              if (srcMsg && isContentKind(srcMsg.kind)) {
                 topicTextIds.add(srcId);
               } else if (srcMsg?.kind === 'relation') {
                 topicRelationIds.add(srcId);
@@ -2671,9 +6060,27 @@ export default function TopicDetailPage() {
             // topicRelationIds (added when first encountered as targets), and GraphView
             // will render them as cards.  Their internal targets are NOT expanded into
             // the current view; the user must double-click to enter them.
-            // (SUMMARY targets are hidden by GraphView's hiddenTargetIds in non-linear
-            // view; in linear view, double-click the summary card to see its targets.)
+            // Exception: rejected classifies release their messages into the parent view.
+            if (rejectedContainerIds.has(relId)) {
+              getTextTargetIds(rel.targetRefs).forEach(id => topicTextIds.add(id));
+              getRelationTargetIds(rel.targetRefs).forEach(id => {
+                topicRelationIds.add(id);
+                const childRelType = relationById.get(id)?.relationType?.toUpperCase();
+                if ((childRelType === 'ARRANGE' || childRelType === 'MERGE') && !visited.has(id)) {
+                  queue.push(id);
+                }
+              });
+            }
           }
+        }
+      }
+      for (const e of baseEdges) {
+        if (!topicRelationIds.has(e.relationMessageId)) continue;
+        const relation = relationById.get(e.relationMessageId);
+        if (relation?.relationType.toUpperCase() !== 'ANNOTATION') continue;
+        for (const endpointId of [e.from.messageId, e.to.messageId]) {
+          const endpoint = msgMap.get(endpointId);
+          if (endpoint && isContentKind(endpoint.kind)) topicTextIds.add(endpointId);
         }
       }
       // Expand topicTextIds with text messages that have CORRECT (更正) relations
@@ -2708,23 +6115,17 @@ export default function TopicDetailPage() {
         edgesByRel.set(e.relationMessageId, arr);
       }
       for (const [relMsgId, relEdges] of edgesByRel) {
-        if (relMsgId === topicFocusRelMsgId || topicRelationIds.has(relMsgId)) continue;
+        if (relMsgId === currentClassifyRelMsgId || topicRelationIds.has(relMsgId)) continue;
         const textEndpoints = relEdges
           .flatMap(e => [e.from.messageId, e.to.messageId])
-          .filter(mid => msgMap.get(mid)?.kind === 'normal');
+          .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
         if (textEndpoints.length > 0) {
-          if (textEndpoints.every(mid => topicTextIds.has(mid))) {
+          // A content-kind endpoint is "in topic" if it's in topicTextIds
+          // OR in topicRelationIds (governance/code/ops are relation targets).
+          const endpointInTopic = (mid: string) =>
+            topicTextIds.has(mid) || topicRelationIds.has(mid);
+          if (textEndpoints.every(mid => endpointInTopic(mid))) {
             topicRelationIds.add(relMsgId);
-          } else if (relEdges[0]?.relationType === 'reference') {
-            // Cross-topic REFERENCE: include the relation message when its source
-            // message (from) is in the current topic, even if the target is in
-            // a different classify topic.
-            const sourceInTopic = relEdges.some(e =>
-              msgMap.get(e.from.messageId)?.kind === 'normal' && topicTextIds.has(e.from.messageId)
-            );
-            if (sourceInTopic) {
-              topicRelationIds.add(relMsgId);
-            }
           }
           continue;
         }
@@ -2738,25 +6139,43 @@ export default function TopicDetailPage() {
       }
       const visibleIds = new Set<string>([...topicTextIds, ...topicRelationIds]);
       const topicMessages = baseMessages.filter(m => visibleIds.has(m.id));
+      // The graph keeps nested SUMMARY targets inside the summary frame, but
+      // the message table should list the dependent target messages alongside
+      // the summary card in the current classify topic.
+      const nestedSummaryTargetIds = new Set<string>();
+      for (const nestedRelationId of topicRelationIds) {
+        const nestedRelation = relationById.get(nestedRelationId);
+        if (nestedRelation?.relationType.toUpperCase() !== 'SUMMARY') continue;
+        const nestedVisible = collectContainerVisibleIds(
+          nestedRelationId,
+          relations,
+          rejectedContainerIds,
+          rejectedJoinRelationIds,
+        );
+        nestedVisible.textIds.forEach(id => nestedSummaryTargetIds.add(id));
+      }
+      const topicListMessages = [
+        ...topicMessages,
+        ...baseMessages.filter(message => nestedSummaryTargetIds.has(message.id) && !visibleIds.has(message.id)),
+      ];
       // Include edges whose relation message is visible.  For CLASSIFY and SUMMARY
       // edges, keep them even when the target text messages are not in visibleIds —
       // this lets topic cards display correct target counts and lets SUMMARY compute
       // its hiddenTargetIds for covered messages.
       const topicEdges = baseEdges.filter(e => {
         if (!visibleIds.has(e.relationMessageId)) return false;
+        // Inside a classify sub-canvas, exclude nested CLASSIFY/SUMMARY edges
+        // to prevent duplicate group frames.  The sub-canvas already renders
+        // nested classify relations as topic cards via topicRelationIds.
+        if (isInsideClassify && (e.relationType === 'classify' || e.relationType === 'summary')) return false;
         if (e.relationType === 'classify' || e.relationType === 'summary') return true;
-        // Cross-topic REFERENCE: include the edge when the source endpoint is
-        // visible, even if the target is in a different classify topic.
-        if (e.relationType === 'reference') {
-          return e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId);
-        }
         return (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
                visibleIds.has(e.to.messageId);
       });
       return {
         graphMessagesToRender: topicMessages,
         graphEdgesToRender: topicEdges,
-        listMessagesToRender: topicMessages,
+        listMessagesToRender: topicListMessages,
         listEdgesToRender: topicEdges,
       };
     }
@@ -2771,26 +6190,34 @@ export default function TopicDetailPage() {
     // classified, and the arrange container itself should not appear in the main view.
     // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are classified (via listExclusiveRelMsgIds).
+    //
+    // In trace mode, baseMessages is filtered by BFS and frame expansion;
+    // ordinary classified-message hiding still applies below.
+    const skipClassifyHiding = isInsideClassify;
     const listHiddenRelationIds = new Set<string>([
-      ...classifyOwnership.relationIds,
+      ...activeClassifyOwnership.relationIds,
       ...classifiedTargetSummaryRelMsgIds,
       ...listExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
-    const listMessages = baseMessages.filter(m => {
-      if (m.kind === "normal" && classifiedTargetTextIds.has(m.id)) return false;
-      if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
-      return true;
-    });
+    const listMessages = skipClassifyHiding
+      ? baseMessages
+      : baseMessages.filter(m => {
+          if (isContentKind(m.kind) && classifiedTargetTextIds.has(m.id)) return false;
+          if (m.kind === "relation" && listHiddenRelationIds.has(m.id)) return false;
+          // Hide content-kind messages owned by a classify (e.g. governance/ops cards)
+          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id) && !directlyTracedFrameMemberIds.has(m.id)) return false;
+          return true;
+        });
     const listVisibleIds = new Set(listMessages.map(m => m.id));
     // Edge is visible in list view when the relation message is visible AND
     // the edge does not connect to a classified (hidden) text endpoint.
-    // Edges of directly-focused relation messages are always included
+    // Edges of directly-traced relation messages are always included
     // so the relation structure is fully visible (fix: REFERENCE edge focus).
     const listEdges = baseEdges.filter(e => {
-      if (!listVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
-      // Edges of focused relations: always visible
-      if (focusRelationMsgIds.has(e.relationMessageId)) return true;
+      if (!listVisibleIds.has(e.relationMessageId) && !traceRelationMsgIds.has(e.relationMessageId)) return false;
+      // Edges of traced relations: always visible
+      if (traceRelationMsgIds.has(e.relationMessageId)) return true;
       const fromOk = e.from.messageId.startsWith('anon:') || listVisibleIds.has(e.from.messageId);
       const toOk = listVisibleIds.has(e.to.messageId);
       return fromOk && toOk;
@@ -2802,66 +6229,510 @@ export default function TopicDetailPage() {
     // classified via collectOwnedByRelation, and the arrange container should not appear.
     // arrange NOT owned by CLASSIFY is only hidden when ALL its text endpoints
     // are in the hidden set (via graphExclusiveRelMsgIds).
+    //
+    // Trace mode uses the same ordinary visibility hiding as the main view.
     const graphHiddenRelationIds = new Set<string>([
+      ...activeClassifyOwnership.relationIds,
       ...classifiedTargetClassifyRelMsgIds,
       ...classifiedTargetMergeRelMsgIds,
       ...classifiedTargetSummaryRelMsgIds,
       ...classifiedTargetARRANGERelMsgIds,
-      ...summaryOwnership.relationIds,
+      ...activeSummaryOwnership.relationIds,
       ...graphExclusiveRelMsgIds,
       ...replacedRelationMsgIds,
     ]);
-    const graphMessages = baseMessages.filter(m => {
-      if (m.kind === "normal" && graphHiddenTextIds.has(m.id)) return false;
-      if (m.kind === "relation" && graphHiddenRelationIds.has(m.id)) return false;
-      return true;
-    });
+    const traceParentClassifyId = useTraceWindow
+      ? traceEntries[traceEntries.length - 1]?.classifyRelMsgId
+        ?? edges.find(edge =>
+          edge.relationMessageId !== traceEntries[traceEntries.length - 1]?.ids[0]
+          && getPresentationSpec(edge.relationType).isContainer
+          && (edge.from.messageId === traceEntries[traceEntries.length - 1]?.ids[0]
+            || edge.to.messageId === traceEntries[traceEntries.length - 1]?.ids[0])
+        )?.relationMessageId
+        ?? null
+      : null;
+    const traceParentFrameExpanded = traceParentClassifyId !== null
+      && traceExpandedFrameIds.has(traceParentClassifyId);
+    const traceNestedOpaqueRelationIds = new Set<string>();
+    const traceOpaqueMemberOwners = new Map<string, Set<string>>();
+    if (traceParentClassifyId) {
+      const parentVisible = collectContainerVisibleIds(
+        traceParentClassifyId,
+        relations,
+        rejectedContainerIds,
+        rejectedJoinRelationIds,
+      );
+      for (const relationId of parentVisible.relationIds) {
+        if (relationId === traceParentClassifyId) continue;
+        const relation = relationById.get(relationId);
+        const relationType = relation?.relationType?.toUpperCase();
+        if (relationType === 'CLASSIFY' || relationType === 'SUMMARY') {
+          traceNestedOpaqueRelationIds.add(relationId);
+          const nestedVisible = collectContainerVisibleIds(
+            relationId,
+            relations,
+            rejectedContainerIds,
+            rejectedJoinRelationIds,
+          );
+          nestedVisible.textIds.forEach(messageId => {
+            const owners = traceOpaqueMemberOwners.get(messageId) ?? new Set<string>();
+            owners.add(relationId);
+            traceOpaqueMemberOwners.set(messageId, owners);
+          });
+        }
+      }
+    }
+    for (const relationId of traceRelationMsgIds) {
+      const relation = relationById.get(relationId);
+      const relationType = relation?.relationType?.toUpperCase();
+      if (relationType !== 'CLASSIFY' && relationType !== 'SUMMARY') continue;
+      const nestedVisible = collectContainerVisibleIds(
+        relationId,
+        relations,
+        rejectedContainerIds,
+        rejectedJoinRelationIds,
+      );
+      nestedVisible.textIds.forEach(messageId => {
+        const owners = traceOpaqueMemberOwners.get(messageId) ?? new Set<string>();
+        owners.add(relationId);
+        traceOpaqueMemberOwners.set(messageId, owners);
+      });
+    }
+    const directlyTracedFrameMemberIds = new Set<string>();
+    if (useTraceWindow) {
+      for (const edge of edges) {
+        if (!traceExpandedFrameIds.has(edge.relationMessageId)) continue;
+        if (!isTraceExpandableFrameType(edge.relationType)) continue;
+        if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
+        if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
+      }
+      for (const edge of edges) {
+        if (edge.relationType.toLowerCase() !== 'correct') continue;
+        if (!directlyTracedFrameMemberIds.has(edge.from.messageId) && !directlyTracedFrameMemberIds.has(edge.to.messageId)) continue;
+        if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
+        if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
+      }
+      for (const frameId of traceExpandedFrameIds) {
+        const expandedMembers = collectContainerVisibleIds(
+          frameId,
+          relations,
+          rejectedContainerIds,
+          rejectedJoinRelationIds,
+        );
+        expandedMembers.textIds.forEach(messageId => directlyTracedFrameMemberIds.add(messageId));
+      }
+      // Expansion exposes only the direct members of an explicitly expanded
+      // SUMMARY/CLASSIFY frame. MERGE and ARRANGE remain ordinary relations in
+      // trace mode and must not recursively expand through this path.
+      for (const frameId of traceExpandedFrameIds) {
+        for (const edge of edges) {
+          if (edge.relationMessageId !== frameId) continue;
+          for (const memberId of [edge.from.messageId, edge.to.messageId]) {
+            if (memberId.startsWith('anon:')) continue;
+            directlyTracedFrameMemberIds.add(memberId);
+          }
+        }
+      }
+    }
+    const graphMessages = skipClassifyHiding && !useTraceWindow
+      ? baseMessages
+      : baseMessages.filter(m => {
+          if (isContentKind(m.kind) && graphHiddenTextIds.has(m.id) && !directlyTracedFrameMemberIds.has(m.id)) return false;
+            if (useTraceWindow && m.id === traceParentClassifyId) return true;
+          if (m.kind === "relation" && graphHiddenRelationIds.has(m.id) && !traceRelationMsgIds.has(m.id)) return false;
+            if (useTraceWindow && traceNestedOpaqueRelationIds.has(m.id)
+              && !traceExpandedFrameIds.has(m.id) && !traceParentFrameExpanded) return false;
+          if (useTraceWindow && isContentKind(m.kind) && traceOpaqueMemberOwners.has(m.id)) {
+            const owners = traceOpaqueMemberOwners.get(m.id)!;
+            if (![...owners].some(relationId => traceExpandedFrameIds.has(relationId))) return false;
+          }
+          // Hide content-kind messages owned by a classify (e.g. governance/ops cards)
+          if (isContentKind(m.kind) && graphOwnedRelationIds.has(m.id) && !directlyTracedFrameMemberIds.has(m.id)) return false;
+          return true;
+        });
+    if (useTraceWindow) {
+      for (const memberId of directlyTracedFrameMemberIds) {
+        const member = messages.find(message => message.id === memberId);
+        if (member && !graphMessages.some(message => message.id === memberId)) graphMessages.push(member);
+      }
+    }
     const graphVisibleIds = new Set(graphMessages.map(m => m.id));
+
     // Edge is visible in graph view when the relation message is visible AND
     // the edge does not connect to a classified (hidden) text endpoint.
-    // Edges of directly-focused relation messages are always included
+    // Edges of directly-traced relation messages are always included
     // so the relation structure is fully visible (fix: REFERENCE edge focus).
     // CLASSIFY / SUMMARY edges are always included so their topic cards can
     // display the correct target count, even when targets are hidden.
     const graphEdges = baseEdges.filter(e => {
-      if (!graphVisibleIds.has(e.relationMessageId) && !focusRelationMsgIds.has(e.relationMessageId)) return false;
-      // Edges of focused relations: always visible
-      if (focusRelationMsgIds.has(e.relationMessageId)) return true;
+      // CORRECT relations are rendered as decorations on their target cards.
+      // Keep them when the target is visible even if the relation message is hidden.
+      if (e.relationType === 'correct' && graphVisibleIds.has(e.to.messageId)) return true;
+      if (!graphVisibleIds.has(e.relationMessageId) && !traceRelationMsgIds.has(e.relationMessageId)) return false;
+      // Edges of traced relations: always visible
+      if (traceRelationMsgIds.has(e.relationMessageId)) return true;
       // CLASSIFY / SUMMARY: keep edges so topic card target count is correct
       if (e.relationType === 'classify' || e.relationType === 'summary') return true;
       const fromOk = e.from.messageId.startsWith('anon:') || graphVisibleIds.has(e.from.messageId);
       const toOk = graphVisibleIds.has(e.to.messageId);
       return fromOk && toOk;
     });
+    // A container relation can be filtered from graphMessages because it belongs
+    // to another container while its frame edges are still retained above. Keep
+    // that relation message available so frame headers can read its payload.
+    const frameRelationIds = new Set(
+      graphEdges
+        .filter(edge => getPresentationSpec(edge.relationType).isContainer)
+        .map(edge => edge.relationMessageId),
+    );
+    const frameMessages = baseMessages.filter(message =>
+      message.kind === 'relation' && frameRelationIds.has(message.id)
+        && !(traceNestedOpaqueRelationIds.has(message.id)
+          && !traceExpandedFrameIds.has(message.id) && !traceParentFrameExpanded),
+    );
+    const graphMessagesToRender = [
+      ...graphMessages,
+      ...frameMessages.filter(message => !graphVisibleIds.has(message.id)),
+    ];
+    // In trace mode, container-type relation messages are rendered as group
+    // frames so their members are shown on the embedded canvas.
+    const hiddenFrameMessageIds = frameMessages
+      .filter(message => !graphVisibleIds.has(message.id) && (
+        !useTraceWindow
+        || !isTraceExpandableFrameType(message.relationType ?? '')
+        || traceExpandedFrameIds.has(message.id)
+        || (traceNestedOpaqueRelationIds.has(message.id) && traceParentFrameExpanded)
+      ))
+      .map(message => message.id);
+    const hideMessageIds = new Set([
+      ...(useTraceWindow
+        ? graphMessages
+            .filter(m => m.kind === 'relation' && m.relationType && getPresentationSpec(m.relationType).isContainer && !isTraceExpandableFrameType(m.relationType))
+            .map(m => m.id)
+        : []),
+      ...hiddenFrameMessageIds,
+    ]);
+
     return {
-      graphMessagesToRender: graphMessages,
+      graphMessagesToRender: graphMessagesToRender,
       graphEdgesToRender: graphEdges,
       listMessagesToRender: listMessages,
       listEdgesToRender: listEdges,
+      hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
     };
-  }, [messages, edges, relationById, messagesToShow, edgesToShow, focusEntries, isTopicFocus, topicFocusRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, focusRelationMsgIds]);
+  }, [messages, edges, traceContainerMemberships, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, activeClassifyOwnership, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds]);
+
+  const normalGraphProjection = useMemo(() => {
+    const scopedCorrectedMessages = graphMessagesToRender.map(message => {
+      const correction = correctionVersions.get(message.id)?.current;
+      return correction ? { ...message, content: correction.content } : message;
+    });
+    const scopedCleanMessages = cleanVisibleIds
+      ? scopedCorrectedMessages.filter(message =>
+          cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
+      : scopedCorrectedMessages;
+    const homeScopedMessages = homeFilterResult
+      ? scopedCleanMessages.filter(message => homeFilterResult.displayIds.has(message.id))
+      : scopedCleanMessages;
+    const scopedMessages = applyMessageFilter(homeScopedMessages, msgFilter);
+    const filteredMessages = applyMessageFilter(homeScopedMessages, msgFilter);
+    const suppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    const rawEdges = filterContainerEdgesByEffectiveJoins(
+      graphEdgesToRender,
+      relations,
+      effectiveJoinRelationIds,
+    );
+    const cleanEdges = cleanVisibleIds
+      ? rawEdges.filter(edge => cleanVisibleIds.visibleRelIds.has(edge.relationMessageId))
+      : rawEdges;
+    const homeEdges = homeFilterResult
+      ? cleanEdges.filter(edge =>
+          homeFilterResult.displayIds.has(edge.relationMessageId)
+          && (edge.from.messageId.startsWith('anon:')
+            || homeFilterResult.displayIds.has(edge.from.messageId)
+            || homeFilterResult.matchIds.has(edge.to.messageId))
+          && homeFilterResult.displayIds.has(edge.to.messageId),
+        )
+      : cleanEdges;
+
+    return {
+      messages: filteredMessages,
+      scopedMessages,
+      edges: homeEdges.filter(edge => !suppressedRelIds.has(edge.relationMessageId)),
+    };
+  }, [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
+
+  const comparisonAgreeSuppressedRelIds = useMemo(() => {
+    const ids = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    if (comparisonTargetId) ids.delete(comparisonTargetId);
+    if (comparisonReviewed) {
+      for (const edge of edges) {
+        if (edge.relationType !== 'annotation') continue;
+        if (ids.has(edge.from.messageId) || ids.has(edge.to.messageId)) ids.add(edge.relationMessageId);
+      }
+    }
+    return ids;
+  }, [comparisonReviewed, comparisonTargetId, edges, messages, displayUser?.username]);
+
+  const comparisonDisagreeSuppressedRelIds = useMemo(() => {
+    const ids = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+    if (comparisonTargetId) ids.add(comparisonTargetId);
+    if (comparisonReviewed) {
+      for (const edge of edges) {
+        if (edge.relationType !== 'annotation') continue;
+        if (ids.has(edge.from.messageId) || ids.has(edge.to.messageId)) ids.add(edge.relationMessageId);
+      }
+    }
+    return ids;
+  }, [comparisonReviewed, comparisonTargetId, edges, messages, displayUser?.username]);
+
+  const comparisonGraphProjections = useMemo(() => {
+    if (!comparisonReviewed || !comparisonTargetId) return null;
+    const traceStartIds = traceEntries.length > 0
+      ? traceEntries[traceEntries.length - 1].ids.filter(Boolean)
+      : [];
+    const traceStartIdSet = new Set(traceStartIds);
+
+    const buildProjection = (side: 'agree' | 'disagree') => {
+      const sideRejectedContainerIds = new Set(rejectedContainerIds);
+      if (side === 'agree') sideRejectedContainerIds.delete(comparisonTargetId);
+      else sideRejectedContainerIds.add(comparisonTargetId);
+
+      const sideClassifyOwnership = { textIds: new Set<string>(), relationIds: new Set<string>() };
+      for (const relation of relations) {
+        if (relation.relationType !== 'CLASSIFY' || sideRejectedContainerIds.has(relation.id)) continue;
+        const owned = collectOwnedByRelation(relation.id, relationById, new Set(), sideRejectedContainerIds, rejectedJoinRelationIds);
+        owned.textIds.forEach(id => sideClassifyOwnership.textIds.add(id));
+        owned.relationIds.forEach(id => sideClassifyOwnership.relationIds.add(id));
+      }
+      const sideSummaryOwnership = { textIds: new Set<string>(), relationIds: new Set<string>() };
+      for (const relation of relations) {
+        if (relation.relationType !== 'SUMMARY' || sideRejectedContainerIds.has(relation.id)) continue;
+        const owned = collectOwnedByRelation(relation.id, relationById, new Set(), sideRejectedContainerIds, rejectedJoinRelationIds);
+        owned.textIds.forEach(id => sideSummaryOwnership.textIds.add(id));
+        owned.relationIds.forEach(id => sideSummaryOwnership.relationIds.add(id));
+      }
+      const sideClassifyTextIds = expandTextIdsWithSettlementResults(
+        expandTextIdsWithCorrections(sideClassifyOwnership.textIds, edges, msgMap),
+        messages,
+      );
+      const sideSummaryTextIds = expandTextIdsWithCorrections(sideSummaryOwnership.textIds, edges, msgMap);
+      const sideHiddenTextIds = new Set(sideClassifyTextIds);
+      sideSummaryTextIds.forEach(id => sideHiddenTextIds.add(id));
+      const sideOwnedRelationIds = new Set(sideClassifyOwnership.relationIds);
+      mergeOwnership.relationIds.forEach(id => sideOwnedRelationIds.add(id));
+      sideSummaryOwnership.relationIds.forEach(id => sideOwnedRelationIds.add(id));
+      const sideExclusiveRelMsgIds = collectExclusiveRelationMsgIds(sideHiddenTextIds, sideOwnedRelationIds);
+      const sideClassifyRelationIdsByType = (type: string) => new Set(
+        [...sideClassifyOwnership.relationIds].filter(id => relationById.get(id)?.relationType.toUpperCase() === type),
+      );
+      const sideHiddenRelationIds = new Set<string>([
+        ...sideClassifyRelationIdsByType('CLASSIFY'),
+        ...sideClassifyRelationIdsByType('MERGE'),
+        ...sideClassifyRelationIdsByType('ARRANGE'),
+        ...sideClassifyRelationIdsByType('SUMMARY'),
+        ...sideSummaryOwnership.relationIds,
+        ...sideExclusiveRelMsgIds,
+        ...replacedRelationMsgIds,
+      ]);
+      const projectionBaseMessages = comparisonReviewBaseMessages
+        ?? (isInsideClassify ? normalGraphProjection.scopedMessages : normalGraphProjection.messages);
+      const projectionBaseEdges = comparisonReviewBaseEdges ?? normalGraphProjection.edges;
+      const targetMessageIds = new Set([comparisonTargetId]);
+      const comparisonTargetEdges = edges.filter(edge => edge.relationMessageId === comparisonTargetId);
+      const targetRelationType = relationById.get(comparisonTargetId)?.relationType.toUpperCase();
+      const targetIsContainer = targetRelationType && ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(targetRelationType);
+      if (!targetIsContainer) {
+        for (const edge of comparisonTargetEdges) {
+          if (!edge.from.messageId.startsWith('anon:')) targetMessageIds.add(edge.from.messageId);
+          if (!edge.to.messageId.startsWith('anon:')) targetMessageIds.add(edge.to.messageId);
+        }
+      }
+      const releasedTarget = side === 'disagree' && targetIsContainer
+        ? collectOwnedByRelation(
+            comparisonTargetId,
+            relationById,
+            new Set(),
+            new Set(),
+            rejectedJoinRelationIds,
+          )
+        : null;
+      if (releasedTarget) {
+        const targetRelation = relationById.get(comparisonTargetId);
+        for (const ref of targetRelation?.targetRefs ?? []) {
+          if (ref.kind === 'relation') releasedTarget.relationIds.add(ref.relationId);
+          else releasedTarget.textIds.add(ref.messageId);
+        }
+      }
+      releasedTarget?.textIds.forEach(id => targetMessageIds.add(id));
+      releasedTarget?.relationIds.forEach(id => targetMessageIds.add(id));
+      const baseMessagesWithTarget = [...projectionBaseMessages];
+      const baseMessageIds = new Set(baseMessagesWithTarget.map(message => message.id));
+      for (const targetId of targetMessageIds) {
+        if (baseMessageIds.has(targetId)) continue;
+        const targetMessage = msgMap.get(targetId);
+        if (targetMessage) {
+          baseMessagesWithTarget.push(targetMessage);
+          baseMessageIds.add(targetId);
+        }
+      }
+      const baseEdgesWithTarget = [
+        ...projectionBaseEdges,
+        ...(side === 'agree' || traceStartIdSet.has(comparisonTargetId)
+          ? comparisonTargetEdges.filter(edge => !projectionBaseEdges.some(existing => existing.id === edge.id))
+          : []),
+      ];
+      const sideSuppressedRelIds = side === 'agree'
+        ? comparisonAgreeSuppressedRelIds
+        : comparisonDisagreeSuppressedRelIds;
+      const forcedVisibleIds = side === 'agree' ? targetMessageIds : new Set<string>();
+      releasedTarget?.textIds.forEach(id => forcedVisibleIds.add(id));
+      releasedTarget?.relationIds.forEach(id => forcedVisibleIds.add(id));
+      const scopedBaseMessageIds = new Set(projectionBaseMessages.map(message => message.id));
+      const graphMessages = (side === 'agree' || releasedTarget || traceStartIdSet.has(comparisonTargetId) ? baseMessagesWithTarget : projectionBaseMessages).filter(message => {
+        if (forcedVisibleIds.has(message.id)) return true;
+        if (sideSuppressedRelIds.has(message.id)) return false;
+        if (isInsideClassify && scopedBaseMessageIds.has(message.id)) return true;
+        if (isContentKind(message.kind) && sideHiddenTextIds.has(message.id)) return false;
+        if (message.kind === 'relation' && sideHiddenRelationIds.has(message.id)) return false;
+        if (isContentKind(message.kind) && sideOwnedRelationIds.has(message.id)) return false;
+        return true;
+      });
+      const graphVisibleIds = new Set(graphMessages.map(message => message.id));
+      const graphEdges = baseEdgesWithTarget.filter(edge => {
+        if (sideSuppressedRelIds.has(edge.relationMessageId) && !traceStartIdSet.has(edge.relationMessageId)) return false;
+        if (!graphVisibleIds.has(edge.relationMessageId)
+          && !traceRelationMsgIds.has(edge.relationMessageId)
+          && !traceStartIdSet.has(edge.relationMessageId)) return false;
+        if (traceRelationMsgIds.has(edge.relationMessageId)) return true;
+        if (edge.relationType === 'classify' || edge.relationType === 'summary') return true;
+        const fromOk = edge.from.messageId.startsWith('anon:') || graphVisibleIds.has(edge.from.messageId);
+        const toOk = graphVisibleIds.has(edge.to.messageId);
+        return fromOk && toOk;
+      });
+      if (traceEntries.length === 0) {
+        return { messages: graphMessages, edges: graphEdges, hideMessageIds: undefined };
+      }
+      const traceProjection = applyTraceFrameVisibility(buildTraceProjection({
+        messages: [
+          ...graphMessages,
+          ...traceStartIds
+            .filter(id => !graphVisibleIds.has(id))
+            .map(id => msgMap.get(id))
+            .filter((message): message is DemoMessage => Boolean(message)),
+        ],
+        edges: graphEdges,
+        containerMemberships: traceContainerMemberships,
+        excludedRelationIds: sideSuppressedRelIds,
+        startIds: traceStartIds,
+        distance: traceDistance,
+      }), traceExpandedFrameIds);
+      const visibleMessages = traceProjection.messages.filter(message => graphVisibleIds.has(message.id));
+      const visibleIds = new Set(visibleMessages.map(message => message.id));
+      const visibleEdges = traceProjection.edges.filter(edge => {
+        if (!visibleIds.has(edge.relationMessageId)) return false;
+        return (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId))
+          && visibleIds.has(edge.to.messageId);
+      });
+      return { messages: visibleMessages, edges: visibleEdges, hideMessageIds: undefined };
+    };
+
+    return { agree: buildProjection('agree'), disagree: buildProjection('disagree') };
+  }, [comparisonReviewed, comparisonTargetId, relations, relationById, rejectedContainerIds, rejectedJoinRelationIds, edges, msgMap, messages, mergeOwnership, replacedRelationMsgIds, traceRelationMsgIds, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, traceContainerMemberships, traceExpandedFrameIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds]);
 
   function handleCanvasBlankClick() {
-    setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
-    setRelationType(null); setSecondaryRelationType("none");
+    setDraftUnits([]); setSourceUnits([]); setTargetUnits([]);
+    setActiveTextSelectId(null); clearBrowserSelection(); setLastClickedMessageId(null);
+  }
+
+  async function confirmReverseCorrection() {
+    if (sendInFlightRef.current) return;
+    const preview = comparisonPopup?.reversePreview;
+    if (!preview || !topicId) return;
+    sendInFlightRef.current = true;
+    setSendInFlight(true);
+    try {
+      const backendRel = await createRel(topicId, {
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [unitSelectionToTargetRef(preview.target, msgMap)],
+        payload: { correctionContent: preview.after },
+      });
+      await registerCreatedRelationInCurrentClassify(backendRel);
+      setEdges(prev => [...prev, {
+        id: nextId('edge'),
+        relationMessageId: backendRel.id,
+        relationType: 'correct',
+        from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
+        to: preview.target,
+        relationLabel: relationTypeName('correct'),
+      }]);
+      setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+      setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
+      setComparisonPopup(null);
+    } catch (e: any) {
+      showAlert(`建立反向更正失败: ${e?.message ?? e}`);
+    } finally {
+      sendInFlightRef.current = false;
+      setSendInFlight(false);
+    }
   }
 
   async function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree") {
     // Quick send: pure-stance agree/disagree — relation messages are first-class, persist to backend
+    if (comparisonReviewed) return;
     if (!topicId) return;
+    if (kind === 'agree' && msgMap.get(messageId)?.relationType === 'correct') {
+      const correctionVersion = Array.from(correctionVersions.values())
+        .flatMap(entry => entry.versions)
+        .find(version => version.correctionId === messageId);
+      if (correctionVersion && hasActiveCorrectionForSelection(
+        correctionVersion.targetId,
+        correctionVersion.selection,
+        correctionVersions,
+        correctionVersion.correctionId,
+      )) {
+        showAlert('该字段已有其他有效更正，不能赞同这条更正');
+        return;
+      }
+    }
     try {
-      const backendRel = await api.createRelation(topicId, {
+      const backendRel = await createRel(topicId, {
         relationType: kind.toUpperCase(),
         sourceMessageId: null,
-        targetRefs: [{ kind: 'message', messageId }],
+        targetRefs: [unitSelectionToTargetRef({ messageId, selection: { kind: "whole" } }, msgMap)],
       });
-      const relId = backendRel.id;
-      const anonSrcId = `anon:${backendRel.id}`;
-      const edge: DemoEdge = { id: nextId("edge"), relationMessageId: relId, relationType: kind, from: { messageId: anonSrcId, selection: { kind: "whole" } }, to: { messageId, selection: { kind: "whole" } }, relationLabel: relationTypeName(kind) };
-      appendCreatedRelation(backendRel);
-      addTargetToClassifyTopic({ kind: 'relation', relationId: backendRel.id });
-      setEdges(prev => [...prev, edge]);
-    } catch (e: any) { alert(`建立关系失败: ${e?.message ?? e}`); }
+      await registerCreatedRelationInCurrentClassify(backendRel);
+    } catch (e: any) { showAlert(`建立关系失败: ${e?.message ?? e}`); }
+  }
+
+  async function handleComparisonVote(side: 'agree' | 'disagree' = 'agree') {
+    if (isPreloaded || !comparisonReviewed) return;
+    if (!requireAuth()) return;
+    const targetId = comparisonTargetId ?? (draftUnits.length === 1 ? draftUnits[0].messageId : null);
+    if (!topicId || !targetId) return;
+    const amount = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
+    const minimum = effectiveMinStake;
+    if (amount < minimum) {
+      setSendError(`关系消息最低押注 ${minimum} 点（当前 ${amount}）`);
+      return;
+    }
+    if (amount > availablePoints) {
+      setSendError(`贡献点余额不足：需要 ${amount} 点，可用 ${availablePoints} 点`);
+      return;
+    }
+    setSendError(null);
+    try {
+      const relation = await createRel(topicId, {
+        relationType: side.toUpperCase(),
+        sourceMessageId: null,
+        targetRefs: [unitSelectionToTargetRef({ messageId: targetId, selection: { kind: 'whole' } }, msgMap)],
+        stakeAmount: amount,
+      });
+      await registerCreatedRelationInCurrentClassify(relation);
+    } catch (e: any) {
+      showAlert(`建立对比表态失败: ${e?.message ?? e}`);
+    }
   }
 
   function handleDecorationBodyClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {
@@ -2870,10 +6741,15 @@ export default function TopicDetailPage() {
     const matchingRelMsgs = edges.filter(edge =>
       edge.relationType === kind &&
       edge.to.messageId === messageId &&
-      edge.to.selection.kind === "whole"
+      edge.to.selection.kind === "whole" &&
+      (!homeFilterResult || (
+        homeFilterResult.displayIds.has(edge.relationMessageId) &&
+        (edge.from.messageId.startsWith('anon:') || homeFilterResult.displayIds.has(edge.from.messageId)) &&
+        homeFilterResult.displayIds.has(edge.to.messageId)
+      ))
     ).map(edge => edge.relationMessageId);
     const uniqueRelMsgIds = Array.from(new Set(matchingRelMsgs));
-    setLastClickedMessageId(messageId);
+    setLastClickedMessageId(uniqueRelMsgIds[0] ?? messageId);
     for (const relMsgId of uniqueRelMsgIds) {
       const wholeUnit: UnitSelection = { messageId: relMsgId, selection: { kind: "whole" } };
       setDraftUnits(prev => {
@@ -2885,6 +6761,49 @@ export default function TopicDetailPage() {
 
   function handleDecorationDoubleClick(e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") {
     e.stopPropagation();
+
+    // Phase 5: Stance path highlight — trace the argumentation chain
+    // 1. Find all AGREE/DISAGREE edges pointing to this message
+    const stanceEdges = edges.filter(
+      edge => edge.relationType === kind &&
+        edge.to.messageId === messageId &&
+        edge.to.selection.kind === 'whole'
+    );
+
+    // 2. Collect source TEXT messages (non-anonymous origins) from those edges
+    const sourceMsgIds = new Set<string>();
+    for (const edge of stanceEdges) {
+      if (!edge.from.messageId.startsWith('anon:')) {
+        sourceMsgIds.add(edge.from.messageId);
+      }
+    }
+
+    // 3. For each source TEXT message, find outgoing REFERENCE(证据) edges
+    const evidenceMsgIds: string[] = [];
+    const seenEvidence = new Set<string>();
+    for (const srcId of sourceMsgIds) {
+      const evidenceEdges = edges.filter(
+        edge => edge.relationType === 'reference' &&
+          edge.from.messageId === srcId &&
+          (edge.relationLabel === '证据' || edge.relationLabel === 'evidence')
+      );
+      for (const evEdge of evidenceEdges) {
+        if (!seenEvidence.has(evEdge.to.messageId)) {
+          seenEvidence.add(evEdge.to.messageId);
+          evidenceMsgIds.push(evEdge.to.messageId);
+        }
+      }
+    }
+
+    // 4. Highlight: stance target (this message) + all source text messages + evidence targets
+    const allHighlightIds = [messageId, ...sourceMsgIds, ...evidenceMsgIds];
+    setStanceHighlight({ stanceMsgId: messageId, evidenceMsgIds: allHighlightIds });
+    if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
+    stanceHighlightTimerRef.current = setTimeout(() => {
+      setStanceHighlight(null);
+    }, 3000);
+
+    // Also show the popup for reference
     setDecorationPopup({ messageId, kind, x: e.clientX, y: e.clientY });
   }
 
@@ -2919,6 +6838,16 @@ export default function TopicDetailPage() {
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType ?? relationTypeByRelMsgId.get(relMsgId) ?? "";
     if (relType === "classify" || relType === "summary") {
+      if (traceFrameIds.has(relMsgId)) {
+        setTraceExpandedFrameIds(prev => {
+          const next = new Set(prev);
+          if (next.has(relMsgId)) next.delete(relMsgId);
+          else next.add(relMsgId);
+          return next;
+        });
+        setTraceKey(key => key + 1);
+        return;
+      }
       enterClassifyTopic(relMsgId);
       return;
     }
@@ -2926,7 +6855,7 @@ export default function TopicDetailPage() {
       setMergeInfoPopup({ relMsgId, x: e.clientX, y: e.clientY });
       return;
     }
-    enterFocus(relMsgId);
+    enterTrace(relMsgId);
   }
 
   function handleInlineBadgeClick(e: React.MouseEvent, relMsgId: string) {
@@ -2935,20 +6864,129 @@ export default function TopicDetailPage() {
     toggleWholeUnit(relMsgId);
   }
 
-  function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string) {
+  // 跨分类引用标签点击：选中关系消息
+  function handleCrossRefTagClick(e: React.MouseEvent, relMsgIds: string[]) {
     e.stopPropagation();
-    // Recommend/archive: show who recommended/archived (tag-style popup, same as annotation double-click)
+    if (relMsgIds.length === 0) return;
+    setLastClickedMessageId(relMsgIds[0]);
+    setDraftUnits(prev => {
+      const anySelected = relMsgIds.some(id => prev.some(u => u.messageId === id && u.selection.kind === "whole"));
+      if (anySelected) {
+        return prev.filter(u => !(relMsgIds.includes(u.messageId) && u.selection.kind === "whole"));
+      } else {
+        const toAdd = relMsgIds.filter(id => !prev.some(u => u.messageId === id && u.selection.kind === "whole"));
+        return [...prev, ...toAdd.map(id => ({ messageId: id, selection: { kind: "whole" as const } }))];
+      }
+    });
+  }
+
+  /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
+  const handleNavigateToMessage = useCallback((messageId: string) => {
+    scrollRequestIdRef.current++;
+    const wasTemporaryCategoryActive = temporaryCategoryStackRef.current.length > 0
+      || joinFilterTargetId !== null;
+    const targetMessage = messagesRef.current.find(message => message.id === messageId);
+    const navigationFilterState = navigationVisibilityRef.current;
+    const targetCleanFiltered = navigationFilterState.cleanMode
+      && navigationFilterState.cleanVisibleIds
+      && (targetMessage?.kind === 'relation'
+        ? !navigationFilterState.cleanVisibleIds.visibleRelIds.has(messageId)
+        : !navigationFilterState.cleanVisibleIds.visibleTextIds.has(messageId));
+    const targetTypeFiltered = (navigationFilterState.msgFilter.hideJoin && targetMessage?.kind === 'join')
+      || (navigationFilterState.msgFilter.hideSettlement
+        && (targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result'));
+    const canAutoClearTargetFilters = Boolean(targetCleanFiltered || targetTypeFiltered);
+    if (canAutoClearTargetFilters) {
+      if (targetCleanFiltered) {
+        clearCleanView();
+      }
+      if (targetTypeFiltered) {
+        setMsgFilter(previous => ({
+          ...previous,
+          hideJoin: targetMessage?.kind === 'join' ? false : previous.hideJoin,
+          hideSettlement: targetMessage?.kind === 'round' || targetMessage?.kind === 'round_result'
+            ? false
+            : previous.hideSettlement,
+        }));
+      }
+    }
+    if (wasTemporaryCategoryActive) {
+      exitAllTemporaryCategories({ restoreMessageFilter: false });
+      if (targetMessage?.kind === 'join') {
+        setClassifyRelMsgId(null);
+        setClassifyKey(k => k + 1);
+      }
+    } else {
+      setJoinFilterTargetId(null);
+    }
+    setMessagePulse(null);
+    setTraceEntries([]);
+    setTraceKey(k => k + 1);
+    // Navigation from an alert must not remain inside the previous summary/classify.
+    // Let the ownership effect choose the target's containing container afterwards.
+    classifyStackRef.current = [];
+    setClassifyRelMsgId(null);
+    setClassifyKey(k => k + 1);
+    setPreviewClassifyId(null);
+    setAutoClassifyMsgId(messageId);
+    // Clear candidates and select the target message as whole
+    setDraftUnits([{ messageId, selection: { kind: 'whole' as const } }]);
+    setSourceUnits([]);
+    setTargetUnits([]);
+    setLastClickedMessageId(messageId);
+    // Scroll after canvas switch; bump scrollKey so the scroll effect re-triggers even
+    // when the target is already on the current canvas (no classifyKey change).
+    pendingScrollDependencyIdsRef.current = [];
+    pendingScrollMsgRef.current = messageId;
+    setScrollKey(k => k + 1);
+  }, [cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert]);
+
+  function confirmMessageIdNavigation() {
+    const messageId = messageIdInput.trim();
+    if (!messageId) {
+      showAlert('请输入消息 ID');
+      return;
+    }
+    if (!messagesRef.current.some(message => message.id === messageId)) {
+      showAlert(`未找到消息 ${messageId}`);
+      return;
+    }
+    handleNavigateToMessage(messageId);
+    setAutoClassifyMsgId(messageId);
+  }
+
+  const handleNavigateFromCorrectionTemporaryCategory = useCallback((messageId: string, switchToList: boolean) => {
+    if (correctionFilterTargetId === null) {
+      handleNavigateToMessage(messageId);
+      return;
+    }
+    pendingCorrectionNavigationRef.current = { messageId };
+    exitTemporaryCategory();
+    setCorrectionFilterTargetId(null);
+    if (switchToList) setViewMode('list');
+  }, [correctionFilterTargetId, handleNavigateToMessage, viewMode]);
+
+  function handleInlineBadgeDoubleClick(e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) {
+    e.stopPropagation();
+    // Recommend/archive: show aggregated badge detail with subType breakdown
     const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
     const relType = relEdges[0]?.relationType;
     if (relType === 'recommend' || relType === 'archive') {
       const targetMid = relEdges[0]?.to.messageId;
       if (!targetMid) return;
       const typeName = relationTypeName(relType);
-      const allRelMsgIds = Array.from(new Set(
+      const allRelMsgIds = detail?.relMsgIds ?? Array.from(new Set(
         edges.filter(ed => ed.relationType === relType && ed.to.messageId === targetMid && ed.to.selection.kind === 'whole')
           .map(ed => ed.relationMessageId)
       ));
-      setTagPopup({ messageId: targetMid, tagLabel: typeName, relMsgIds: allRelMsgIds, x: e.clientX, y: e.clientY });
+      setTagPopup({ messageId: targetMid, tagLabel: typeName, relMsgIds: allRelMsgIds, x: e.clientX, y: e.clientY, subDetails: detail?.subDetails });
+    } else if (relType === 'correct') {
+      const targetId = relEdges[0]?.to.messageId;
+      if (!targetId) return;
+      enterTemporaryCategory(true);
+      setJoinFilterTargetId(null);
+      setCorrectionFilterTargetId(targetId);
+      setViewMode("list");
     } else {
       // Correction badge and other inline badges: show comparison popup
       setComparisonPopup({ relMsgId, x: e.clientX, y: e.clientY });
@@ -2968,31 +7006,104 @@ export default function TopicDetailPage() {
     try {
       const updated = await api.updateTopic(topicId, { status: topic.status === 'ARCHIVED' ? 'OPEN' : 'ARCHIVED' });
       setTopic(updated);
-    } catch (e: any) { alert(`操作失败: ${e?.message ?? e}`); }
+    } catch (e: any) { showAlert(`操作失败: ${e?.message ?? e}`); }
   }
 
-  function handleSplitterMouseDown(e: React.MouseEvent) {
+  function handleSplitterPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault();
-    splitterDragRef.current = { startX: e.clientX, startFlex: leftFlex };
-    function onMouseMove(ev: MouseEvent) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setSplitterActive(true);
+    const panelContainer = panelContainerRef.current;
+    const containerRect = panelContainer?.getBoundingClientRect();
+    const splitterRect = e.currentTarget.getBoundingClientRect();
+    const containerW = containerRect?.width ?? 0;
+    const startLeftPx = containerRect
+      ? splitterRect.left - containerRect.left
+      : 0;
+    splitterDragRef.current = { startX: e.clientX, startLeftPx, containerW };
+    function onPointerMove(ev: PointerEvent) {
       if (!splitterDragRef.current || !panelContainerRef.current) return;
       const dx = ev.clientX - splitterDragRef.current.startX;
-      const containerW = panelContainerRef.current.clientWidth;
-      const flexChange = containerW > 0 ? (dx / containerW) * TOTAL_FLEX : 0;
-      const newLeft = Math.max(MIN_LEFT_FLEX, Math.min(MAX_LEFT_FLEX, splitterDragRef.current.startFlex + flexChange));
-      setLeftFlex(newLeft);
+      const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
+      const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
+      const nextWidth = naturalRightPx < MIN_RIGHT_PX
+        ? Math.max(splitterDragRef.current.containerW, desiredLeftPx + MIN_RIGHT_PX + 12)
+        : naturalRightPx > MAX_RIGHT_PX
+          ? Math.max(BASE_WIDTH, Math.min(splitterDragRef.current.containerW, desiredLeftPx + MAX_RIGHT_PX + 12))
+          : splitterDragRef.current.containerW;
+      const effectiveNextWidth = Math.max(nextWidth, getMinimumContainerWidth());
+      setContainerWidth(nextWidth);
+      setLeftFlex(TOTAL_FLEX * desiredLeftPx / (effectiveNextWidth - 12));
     }
-    function onMouseUp() {
+    function onPointerUp() {
+      setSplitterActive(false);
       splitterDragRef.current = null;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup', onPointerUp);
+      document.removeEventListener('pointercancel', onPointerUp);
     }
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerUp);
   }
 
+  function handleLeftPanelTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    leftPanelTouchRef.current = e.touches.length === 1 ? { x: e.touches[0].clientX } : null;
+  }
+
+  function handleLeftPanelTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+    if (e.touches.length !== 1 || !leftPanelTouchRef.current) {
+      leftPanelTouchRef.current = null;
+      return;
+    }
+    const panel = leftPanelRef.current;
+    const documentScroller = document.scrollingElement;
+    if (!panel || !documentScroller) return;
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - leftPanelTouchRef.current.x;
+    const panelMax = Math.max(0, panel.scrollWidth - panel.clientWidth);
+    const documentMax = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
+    const panelAtEdge = (panel.scrollLeft <= 0 && deltaX > 0) || (panel.scrollLeft >= panelMax - 1 && deltaX < 0);
+    if (panelAtEdge && documentMax > 0) {
+      const next = Math.max(0, Math.min(documentMax, documentScroller.scrollLeft - deltaX));
+      if (next !== documentScroller.scrollLeft) {
+        e.preventDefault();
+        documentScroller.scrollLeft = next;
+      }
+    }
+    leftPanelTouchRef.current = { x: touch.clientX };
+  }
+
+  function handleLeftPanelTouchEnd() {
+    leftPanelTouchRef.current = null;
+  }
+
+  function handleLeftPanelWheel(event: React.WheelEvent<HTMLDivElement>) {
+    const panel = event.currentTarget;
+    if (event.deltaY === 0) return;
+    const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+    const previousScrollTop = panel.scrollTop;
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, previousScrollTop + event.deltaY));
+    const consumedDelta = nextScrollTop - previousScrollTop;
+    const remainingDelta = event.deltaY - consumedDelta;
+    const rightPanel = rightPanelRef.current;
+    event.preventDefault();
+    if (consumedDelta !== 0) panel.scrollTop = nextScrollTop;
+    if (rightPanel && remainingDelta !== 0) {
+      const rightMaxScrollTop = Math.max(0, rightPanel.scrollHeight - rightPanel.clientHeight);
+      rightPanel.scrollTop = Math.max(0, Math.min(rightMaxScrollTop, rightPanel.scrollTop + remainingDelta));
+    }
+  }
+
+  if (!authLoading && !preloadedData && !user) return null;
   if (loading) {
-    return <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>加载中…</div>;
+    return <PromptModal
+      open
+      title="正在加载"
+      message="正在加载消息数据，请稍候…"
+      hideActions
+      onConfirm={() => undefined}
+    />;
   }
   if (loadError) {
     return (
@@ -3004,114 +7115,461 @@ export default function TopicDetailPage() {
   }
 
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
-  const rawEdgesToRender = viewMode === "list" ? listEdgesToRender : graphEdgesToRender;
+  const messagesWithCorrections = messagesToRender.map(message => {
+    const correction = correctionVersions.get(message.id)?.current;
+    return correction ? { ...message, content: correction.content } : message;
+  });
+  // Phase 6: Apply clean mode filter (multi-dimensional rules via useCleanView)
+  const messagesToRenderClean = cleanVisibleIds
+    ? messagesWithCorrections.filter(m =>
+        cleanVisibleIds.visibleTextIds.has(m.id) || cleanVisibleIds.visibleRelIds.has(m.id))
+    : messagesWithCorrections;
+  const homeFilteredMessages = homeFilterResult
+    ? messagesToRenderClean.filter(message => homeFilterResult.displayIds.has(message.id))
+    : messagesToRenderClean;
+  // Message type filter: hide settlement/join messages
+  const typeFilteredMessages = applyMessageFilter(homeFilteredMessages, msgFilter);
+  const temporaryJoinViewIds = joinFilterTargetId
+    ? new Set((joinFilterDirection === 'outgoing'
+      ? (joinRelationsBySource.get(joinFilterTargetId) ?? [])
+      : (joinRelationsByTarget.get(joinFilterTargetId) ?? [])
+    ).map(join => join.id))
+    : null;
+  const comparisonScopeMessageIds = new Set(listMessagesToRender.map(message => message.id));
+  for (const edge of edges) {
+    if (comparisonScopeMessageIds.has(edge.from.messageId) || comparisonScopeMessageIds.has(edge.to.messageId)) {
+      comparisonScopeMessageIds.add(edge.relationMessageId);
+    }
+  }
+  const comparisonViewIds = comparisonMode
+    ? new Set(comparisonTargets
+        .filter(item => comparisonScopeMessageIds.has(item.message.id))
+        .map(item => item.message.id))
+    : null;
+  const correctionTemporaryViewIds = correctionFilterTargetId
+    ? new Set(
+        edges
+          .filter(edge => edge.relationType === 'correct' && edge.to.messageId === correctionFilterTargetId)
+          .map(edge => edge.relationMessageId),
+      )
+    : null;
+  // JOIN records can belong to different containers and therefore be absent
+  // from the current canvas. Build this temporary category from the full
+  // message map and show JOIN records only, not the target message itself.
+  const messagesToRenderFiltered = comparisonViewIds
+    ? Array.from(comparisonViewIds)
+        .map(id => msgMap.get(id))
+        .filter((message): message is DemoMessage => Boolean(message))
+    : correctionTemporaryViewIds
+    ? Array.from(correctionTemporaryViewIds)
+        .map(id => msgMap.get(id))
+        .filter((message): message is DemoMessage => Boolean(message))
+    : temporaryJoinViewIds
+    ? Array.from(temporaryJoinViewIds)
+        .map(id => msgMap.get(id))
+        .filter((message): message is DemoMessage => Boolean(message))
+        .filter(message => !msgFilter.hideJoin || message.kind !== 'join')
+    : typeFilteredMessages;
+  renderedMessageIdsRef.current = new Set(messagesToRenderFiltered.map(message => message.id));
+
+  const projectionEdgesToRender = [
+    ...(viewMode === "list" ? listEdgesToRender : graphEdgesToRender),
+    ...(viewMode !== "list"
+      ? (traceEntries.length > 0 ? graphEdgesToRender : edges).filter(edge =>
+          getPresentationSpec(edge.relationType).isContainer &&
+          (traceRelationMsgIds.has(edge.relationMessageId) ||
+            graphMessagesToRender.some(message => message.id === edge.relationMessageId))
+        )
+      : []),
+  ];
+  const rawEdgesToRender = filterContainerEdgesByEffectiveJoins(
+    projectionEdgesToRender,
+    relations,
+    effectiveJoinRelationIds,
+  ).filter((edge, index, all) => all.findIndex(candidate => candidate.id === edge.id) === index);
+  // Phase 6: Also filter edges through clean view
+  const rawEdgesToRenderClean = cleanVisibleIds
+    ? rawEdgesToRender.filter(e => cleanVisibleIds.visibleRelIds.has(e.relationMessageId))
+    : rawEdgesToRender;
+  const homeEdgesToRender = homeFilterResult
+    ? rawEdgesToRenderClean.filter(edge =>
+        homeFilterResult.displayIds.has(edge.relationMessageId)
+        && (edge.from.messageId.startsWith('anon:')
+          || homeFilterResult.displayIds.has(edge.from.messageId)
+          || homeFilterResult.matchIds.has(edge.to.messageId))
+        && homeFilterResult.displayIds.has(edge.to.messageId),
+      )
+    : rawEdgesToRenderClean;
   // Filter edges based on current user's DISAGREE stances on relation messages.
   // When the user disagrees with a relation message, all edges produced by that
   // relation are suppressed from this user's view (per-user branch semantics).
-  const edgesToRender = computeUserFilteredEdges(rawEdgesToRender, messages, user?.username ?? null);
-  // Also compute which relation messages are suppressed, for visual indicators in the list view.
-  const suppressedRelIds = computeUserSuppressedRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  const temporaryEdgesToRender = comparisonViewIds
+    ? homeEdgesToRender
+    : correctionTemporaryViewIds
+    ? homeEdgesToRender.filter(edge => correctionTemporaryViewIds.has(edge.relationMessageId))
+    : temporaryJoinViewIds
+    ? homeEdgesToRender.filter(edge => temporaryJoinViewIds.has(edge.relationMessageId))
+    : homeEdgesToRender;
+  // A user's DISAGREE relation may be outside the current classify scope.
+  // Use all topic edges to determine suppression, then filter only the edges
+  // currently being rendered.
+  const effectiveSuppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+  const globallySuppressedRelIds = computeGloballySuppressedRelIds(edges, messages);
+  const comparisonSuppressedRelIds = comparisonReviewed && comparisonTargetId
+    ? comparisonSide === 'agree' ? comparisonAgreeSuppressedRelIds : comparisonDisagreeSuppressedRelIds
+    : effectiveSuppressedRelIds;
+  const filteredEdgesToRender = temporaryEdgesToRender.filter(edge =>
+    edge.relationType === 'correct' || !comparisonSuppressedRelIds.has(edge.relationMessageId),
+  );
+  // The linear list keeps the annotation and its DISAGREE relation so the
+  // user's stance can be shown on the source message. The non-linear graph
+  // uses the suppressed relation set as a visual projection only.
+  const edgesToRender = viewMode === "list" ? temporaryEdgesToRender : filteredEdgesToRender;
+  renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
+  const suppressedRelIds = comparisonSuppressedRelIds;
+  const graphMessagesFinal = messagesToRenderFiltered
+    .filter(message => correctionTemporaryViewIds?.has(message.id) || !suppressedRelIds.has(message.id))
+    .map(message => {
+    const correction = correctionVersions.get(message.id)?.current;
+    return correction ? { ...message, content: correction.content } : message;
+    });
+  const comparisonAgreeGraph = comparisonGraphProjections?.agree;
+  const comparisonDisagreeGraph = comparisonGraphProjections?.disagree;
+  const comparisonGraphMessages = comparisonAgreeGraph?.messages ?? messagesToRenderFiltered;
+  const invalidCorrectionIds = (() => {
+    const ids = new Set<string>();
+    for (const entry of correctionVersions.values()) {
+      for (const version of entry.versions) if (!version.valid || version.conflicted) ids.add(version.correctionId);
+    }
+    return ids;
+  })();
+
+  // Which agree/disagree decoration badges are currently selected (via draftUnits)
+  const selectedDecorations = (() => {
+    const sel = new Set<string>();
+    const draftRelIds = new Set(draftUnits.map(u => u.messageId));
+    for (const e of edgesToRender) {
+      if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
+      if (draftRelIds.has(e.relationMessageId)) {
+        sel.add(`${e.to.messageId}::${e.relationType}`);
+      }
+    }
+    return sel;
+  })();
+
   // And the active stance messages: which of the user's own agree/disagree messages
   // are the "current" stance on each target, for bidirectional visual linking.
-  const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRender, messages, user?.username ?? null);
-  // Precomputed set of relation message IDs that are active stances.
-  const activeStanceRelIds = new Set([...activeStanceMap.values()].map(v => v.relMsgId));
+  const activeStanceMap = computeUserActiveStanceRelIds(rawEdgesToRenderClean, messages, displayUser?.username ?? null);
   // Reverse map: stance relation message ID → { target, type } for quick lookup.
   const activeStanceByRelMsgId = (() => {
     const m = new Map<string, { targetRelId: string; type: 'agree' | 'disagree' }>();
     for (const [targetId, v] of activeStanceMap) m.set(v.relMsgId, { targetRelId: targetId, type: v.type });
     return m;
   })();
+  const stanceEffectByRelMsgId = (() => {
+    const result = new Map<string, { local: boolean; global: boolean }>();
+    for (const edge of rawEdgesToRenderClean) {
+      if (edge.relationType !== 'agree' && edge.relationType !== 'disagree') continue;
+      if (!msgMap.get(edge.to.messageId) || msgMap.get(edge.to.messageId)?.kind !== 'relation') continue;
+      const localSuppressed = effectiveSuppressedRelIds.has(edge.to.messageId);
+      const globalSuppressed = globallySuppressedRelIds.has(edge.to.messageId);
+      result.set(edge.relationMessageId, {
+        local: edge.relationType === 'disagree' ? localSuppressed : !localSuppressed,
+        global: edge.relationType === 'disagree' ? globalSuppressed : !globalSuppressed,
+      });
+    }
+    return result;
+  })();
   // Overridden stances: the user's previous stance messages that are no longer active.
-  const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, user?.username ?? null);
+  const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null);
   const isOwner = user && topic && (topic as any).author?.id === user.id;
+  const relationSpringWidth = Math.max(0, effectiveContainerWidth - relationBarMinWidth);
 
   return (
     <>
     <ErrorBoundary>
-    <div style={{ height: "100%", overflow: "hidden", margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif" }}>
-      <div style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "none", minWidth: Math.max(effectiveContainerWidth, relationBarMinWidth, MIN_LEFT_PX + MIN_RIGHT_PX + 12), margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
+      <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top: topControlsFrozen ? topControlsOffset : 0, zIndex: Z_INDEX.popover }}>
+        <div ref={relationLeftControlsRef} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid #334155", borderRadius: 6, background: "#111827", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" }}>
+            <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转消息</span>
+            <input
+              aria-label="消息 ID"
+              value={messageIdInput}
+              onChange={event => setMessageIdInput(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') confirmMessageIdNavigation();
+              }}
+              placeholder="输入消息 ID"
+              style={{ width: 170, padding: "5px 7px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", outline: "none", fontSize: 12 }}
+            />
+            <button
+              type="button"
+              onClick={confirmMessageIdNavigation}
+              style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #3b82f6", background: "#1d4ed8", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}
+            >
+              确认
+            </button>
+          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {isOwner && <>
             <button onClick={handleArchiveTopic} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 11, cursor: "pointer" }}>
               {topic?.status === 'ARCHIVED' ? '重新开放' : '归档'}
             </button>
           </>}
         </div>
-        <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+        </div>
+        <div aria-hidden="true" style={{ flex: "0 0 auto", width: relationSpringWidth, minWidth: 0 }} />
+        {!isPreloaded && (
+        <div ref={relationRightControlsRef} style={{ display: "flex", gap: 12, fontSize: 12, flexShrink: 0, paddingLeft: 8, paddingRight: 16, background: "#181818", position: "sticky", right: `${relationControlsRightOffset}px`, zIndex: Z_INDEX.header }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
-            <button key={rt} onClick={() => { setRelationType(prev => prev === rt ? null : rt); setSecondaryRelationType(rt === "arrange" ? "vertical" : "none"); }}
+            <button key={rt} onClick={() => {
+              if (relationType === "tag") { lastTagSecondaryRef.current = secondaryRelationType !== "none" ? secondaryRelationType : "recommend"; }
+              const isDeselecting = relationType === rt;
+              const newType = isDeselecting ? null : rt;
+              // Types that generally don't use the text input (user-to-message relations)
+              const isTextLessType = (t: string | null) => t === "tag" || t === "merge";
+              const wasTextLess = isTextLessType(relationType);
+              const willBeTextLess = isTextLessType(newType);
+              // Save and clear when switching TO a text-less type
+              if (!wasTextLess && willBeTextLess && newMessageContent.trim()) {
+                savedTextOnTypeSwitchRef.current = newMessageContent;
+                // Also seed the subType buffer so that selecting CUSTOM
+                // after entering TAG will restore this text.
+                if (!subTypeCustomBufferRef.current) {
+                  subTypeCustomBufferRef.current = newMessageContent;
+                }
+                setNewMessageContent("");
+              }
+              // When switching FROM a text-less type (e.g. TAG), save CUSTOM
+              // reason text to subType buffer so it can be restored when the
+              // user switches back to TAG and selects CUSTOM again.
+              if (wasTextLess && !willBeTextLess && subType === 'CUSTOM' && newMessageContent.trim()) {
+                subTypeCustomBufferRef.current = newMessageContent;
+              }
+              // Restore when switching FROM a text-less type
+              if (wasTextLess && !willBeTextLess && savedTextOnTypeSwitchRef.current) {
+                setNewMessageContent(savedTextOnTypeSwitchRef.current);
+              }
+              setRelationType(prev => prev === rt ? null : rt);
+              if (newType === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); }
+              else if (newType === "delegation") { setSecondaryRelationType(lastDelegationSecondaryRef.current); }
+              else { setSecondaryRelationType(newType === "arrange" ? "vertical" : "none"); }
+              if (guideTargetIdRef.current && (rt === 'agree' || rt === 'disagree')) {
+                window.dispatchEvent(new Event('guide-stance-selected'));
+              }
+            }}
+              data-guide-stance-type={rt === 'agree' || rt === 'disagree' ? 'true' : undefined}
               style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: relationType === rt ? "#0b84ff" : "#222", color: relationType === rt ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
               {relationTypeName(rt)}
             </button>
           ))}
         </div>
+        )}
       </div>
 
-      <div ref={panelContainerRef} style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
-        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden", paddingBottom: 8 }}>
-          <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414" }}>
+      <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", minWidth: effectiveContainerWidth }}>
+        <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
+          <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414", position: "sticky", top: topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight, zIndex: Z_INDEX.header - 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表（线性）" : "结构图（非线性）"}</div>
-              <button onClick={() => {
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表" : "消息图"}</div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  {viewMode === "list" ? "按线性结构查看消息。" : "按非线性结构查看消息。"}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button onClick={async () => {
+                try {
+                  const data = await api.exportTopic(topicId!);
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${topic?.title ?? 'export'}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                } catch (e: any) {
+                  showAlert(`导出失败: ${e?.message ?? e}`);
+                }
+              }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
+                导出
+              </button>
+                <HomeFilterPanel mode={homeFilterMode} onChange={setHomeFilterMode} />
+                <CleanFilterPanel
+                  active={cleanMode}
+                  filters={cleanFilters}
+                  matchCount={cleanVisibleIds?.visibleTextIds.size ?? 0}
+                  totalCount={contentMsgCount}
+                  onAdd={addCleanFilter}
+                  onRemove={removeCleanFilter}
+                  onUpdate={updateCleanFilter}
+                  onClear={clearCleanView}
+                />
+                <MessageFilterPanel
+                  settings={msgFilter}
+                  onChange={setMsgFilter}
+                />
+                {!comparisonMode && !comparisonReviewed && <button
+                  onClick={() => {
+                    setComparisonMode(current => {
+                      const next = !current;
+                      if (next) enterTemporaryCategory(true);
+                      setComparisonTargetId(null);
+                      setComparisonReviewed(false);
+                      setComparisonReviewBaseMessages(null);
+                      setComparisonReviewBaseEdges(null);
+                      if (next) setDraftUnits([]);
+                      return next;
+                    });
+                    setViewMode('list');
+                  }}
+                  style={{ padding: "2px 8px", borderRadius: 4, border: comparisonMode ? "1px solid #22c55e" : "1px solid #666", background: comparisonMode ? "#12351f" : "#333", color: comparisonMode ? "#86efac" : "#fff", fontSize: 12, cursor: "pointer" }}
+                  title="查看赞同/反对生效后的不同显示效果"
+                >
+                  {comparisonMode ? '退出对比' : '对比'}
+                </button>}
+                <button
+                  onClick={() => {
+                    setShowLeaderboard(true);
+                  }}
+                  style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#3f2a06", color: "#fbbf24", fontSize: 12, cursor: "pointer" }}
+                  title="查看人榜与消息榜"
+                >
+                  排行榜
+                </button>
+                {!comparisonMode && !comparisonReviewed && correctionFilterTargetId === null && <button onClick={() => {
                 if (leftPanelRef.current) {
                   viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
                 }
-                setViewMode(prev => prev === "list" ? "graph" : "list");
-              }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
-                {viewMode === "list" ? "切换为结构图" : "切换为列表"}
-              </button>
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
-              {viewMode === "list" ? "线性视图：支持自由换行内容；双击 normal 进入文本选择模式；可点击高亮片段切换选中。" : "结构图：注释/引用 source 自动推到 target 右侧列（规则1）；label避让文字；高亮片段可点击。"}
+                const nextViewMode = viewMode === "list" ? "graph" : "list";
+                const navigationUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
+                const comparisonId = navigationUnits.length === 1 ? navigationUnits[0].messageId : comparisonTargetId;
+                if (comparisonMode && nextViewMode === 'list') {
+                  setComparisonTargetId(null);
+                }
+                setViewMode(nextViewMode);
+                const selectedMessageIds = new Set(navigationUnits.map(unit => unit.messageId));
+                const selectedMessageId = selectedMessageIds.size === 1
+                  ? selectedMessageIds.values().next().value ?? null
+                  : null;
+                if (nextViewMode === 'graph' && selectedMessageId && traceEntries.length === 0) {
+                  const containingClassifyId = findContainingClassifyTopic(selectedMessageId);
+                  if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
+                    if (currentClassifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+                    enterClassifyTopic(containingClassifyId);
+                  }
+                }
+                const scrollTargetId = comparisonMode
+                  ? comparisonId
+                  : selectedMessageId;
+                if (scrollTargetId) {
+                  const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
+                  const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
+                  const isCorrectionTarget = scrollTargetMessage?.relationType?.toUpperCase() === 'CORRECT'
+                    || scrollTargetRelation?.relationType?.toUpperCase() === 'CORRECT';
+                  const navigationTargetId = isCorrectionTarget
+                    ? scrollTargetId
+                    : resolveNavigationTargetId(scrollTargetId, messages, relations);
+                  scheduleViewNavigation(navigationTargetId);
+                }
+              }} data-shortcut-view-toggle="true" style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
+                {viewMode === "list" ? "切换为消息图" : "切换为消息表"}
+              </button>}
+              </div>
             </div>
           </div>
-          {isTopicFocus && (
+          {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null || comparisonMode) && (
             <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
               <div style={{ border: "1px solid #334155", borderRadius: 10, padding: "8px 10px", background: "linear-gradient(180deg, #162036 0%, #0f172a 100%)", color: "#e2e8f0", boxShadow: "0 6px 16px rgba(0,0,0,0.25)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {topicFocusTitle || topicFocusKindLabel}
+                      {comparisonMode
+                        ? `对比临时分类（${comparisonTargets.length}）`
+                        : correctionFilterTargetId !== null
+                        ? `更正记录临时分类（${correctionTemporaryViewIds?.size ?? 0}）`
+                        : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (topicViewTitle || classifyKindLabel)}
                     </div>
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
-                      进行中
-                    </span>
+                    {(comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory) && (
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
+                        临时
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{topicFocusRelMsg?.author ?? "系统"}</span> 发起</span>
-                    <span>💬 {topicFocusTargetCount} 条观点</span>
-                    <span>{topicFocusRelMsg ? new Date(topicFocusRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                    {comparisonMode ? (
+                      <span>{comparisonTargetId ? `正在审阅目标消息 ${comparisonTargetId}` : '显示所有影响显示效果的赞同/反对目标消息'}</span>
+                    ) : correctionFilterTargetId !== null ? (
+                      <span>目标消息 {correctionFilterTargetId} 的全部更正消息</span>
+                    ) : isTemporaryJoinCategory ? (
+                      <span>目标消息 {joinFilterTargetId} 的全部加入记录</span>
+                    ) : (
+                      <>
+                        <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{currentClassifyRelMsg?.author ?? "系统"}</span> 发起</span>
+                        <span>💬 {classifyTargetCount} 条观点</span>
+                        <span>{currentClassifyRelMsg ? new Date(currentClassifyRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                      </>
+                    )}
                   </div>
                 </div>
-                <button onClick={exitFocus} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
-                  {topicFocusExitLabel}
+                <button onClick={() => {
+                  if (comparisonMode) {
+                    exitTemporaryCategory();
+                    return;
+                  }
+                  if (correctionFilterTargetId !== null || isTemporaryJoinCategory) {
+                    exitTemporaryCategory();
+                    return;
+                  }
+                  handleExitClassifyTopic();
+                }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
+                  {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory
+                    ? "退出临时分类"
+                    : classifyExitLabel}
                 </button>
               </div>
             </div>
           )}
 
-          <div ref={leftPanelRef} style={{ flex: "1 1 auto", overflow: "auto", padding: 8, minHeight: 0 }}
+          <div ref={leftPanelRef}
+            data-topic-left-panel="true"
+            className={`topic-left-panel ${isPreviewMode ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
+            style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, maxHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+            onTouchStart={handleLeftPanelTouchStart}
+            onTouchMove={handleLeftPanelTouchMove}
+            onTouchEnd={handleLeftPanelTouchEnd}
+            onTouchCancel={handleLeftPanelTouchEnd}
+            onWheel={handleLeftPanelWheel}
             onDoubleClick={e => {
               const t = e.target as HTMLElement;
               // Skip if clicked on a message card, SVG edge, or relation overlay
               if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
               handleCanvasBlankClick();
             }}>
-            {messagesToRender.length === 0 ? (
+            {messagePulse && <MessageJumpOverlay targetElement={messagePulse.element} visualRoot={messagePulse.visualRoot} targetRect={messagePulse.rect} visualRect={messagePulse.visualRect} />}
+            {messagesToRenderFiltered.length === 0 ? (
               <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
-                <div>{isTopicFocus ? `当前${topicFocusKindLabel}中暂无消息` : focusEntries.length > 0 ? "焦点范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
-                {canExitFocus && (
-                  <button onClick={exitFocus} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
-                    {isTopicFocus ? topicFocusExitLabel : "退出焦点"}
+                <div>{isInsideClassify ? `当前${classifyKindLabel}中暂无消息` : traceEntries.length > 0 ? "追溯范围内没有可见消息" : "暂无消息，请先发送一条消息或创建关系"}</div>
+                <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 360, lineHeight: 1.6 }}>
+                  {isInsideClassify ? "该分类下还没有消息。你可以退出分类视图，在完整画布中发送消息。" : traceEntries.length > 0 ? "当前追溯范围内没有匹配的消息。尝试退出追溯或调整追溯距离。" : "发送消息会按规则自动自押一定贡献点（赞同自己），其他与会者可通过赞同/反对表态并押注。押注会自动创建结算轮次，任何人都可以关闭结算来判定胜负并分配押注池，也可以重新发起结算推翻之前的结果。"}
+                </div>
+                {isInsideClassify && (
+                  <button onClick={handleExitClassifyTopic} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
+                    {classifyExitLabel}
+                  </button>
+                )}
+                {!isInsideClassify && canExitTrace && (
+                  <button onClick={exitTrace} style={{ marginTop: 8, padding: "4px 16px", borderRadius: 6, border: "1px solid #555", background: "#333", color: "#ccc", cursor: "pointer", fontSize: 13 }}>
+                    退出追溯
                   </button>
                 )}
               </div>
             ) : viewMode === "list" ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {messagesToRender
+                {messagesToRenderFiltered
                   .filter(msg => !tagSourceIdsForList.has(msg.id))
                   .map(msg => {
                   const isWholeSelected = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
@@ -3121,101 +7579,331 @@ export default function TopicDetailPage() {
                   const isSummaryTopicMsg = relType === "summary";
                   const isMergeTopicMsg = relType === "merge";
                   const isTopicMsg = isClassifyTopicMsg || isSummaryTopicMsg || isMergeTopicMsg;
+                  const govKind = (msg as any).backendKind as string | undefined;
+                  const isGovernanceMsg = !isTopicMsg && msg.kind !== "relation" && (govKind === "GOVERNANCE" || govKind === "CODE" || govKind === "OPERATIONS");
+                  const governanceColor = govKind === "GOVERNANCE" ? "#f59e0b" : govKind === "CODE" ? "#3b82f6" : "#10b981";
                   const topicMsgTargetCount = isTopicMsg
                     ? collectOwnedByRelation(msg.id, relationById).textIds.size
                     : 0;
                   const topicMsgTitle = isTopicMsg ? (getRelationTitle(msg.relationPayload) || (isClassifyTopicMsg ? `分类（${topicMsgTargetCount}）` : isMergeTopicMsg ? `归并（${topicMsgTargetCount}）` : `总结（${topicMsgTargetCount}）`)) : "";
+                  const summaryCoverages = summaryCoverageByMessageId.get(msg.id) ?? [];
+                  const settleTargetId = (msg as any).settlementTargetId as string | undefined;
+                  const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
+                  const relatedJoinRelations = joinRelationsByTarget.get(msg.id) ?? [];
+                  const outgoingJoinRelations = joinRelationsBySource.get(msg.id) ?? [];
+                  const joinRelation = msg.kind === 'join' ? relationById.get(msg.id) : undefined;
+                  const joinIsEffective = !!joinRelation && effectiveJoinRelationIds.has(joinRelation.id);
+                  const effectiveJoinCount = relatedJoinRelations.filter(join => effectiveJoinRelationIds.has(join.id)).length;
+                  const ctx: MessageCardContext = {
+                    isWholeSelected, isActiveText, isTopicMsg,
+                    isClassifyTopic: isClassifyTopicMsg,
+                    isSummaryTopic: isSummaryTopicMsg,
+                    isMergeTopic: isMergeTopicMsg,
+                    isGovernanceMsg,
+                    governanceColor,
+                    topicMsgTitle,
+                    topicMsgTargetCount,
+                    relType,
+                    settlementTargetId: settleTargetId,
+                    settlementTargetContent: targetMsg?.content ?? '',
+                    isValueSettlement: (msg as any).roundPayload?.settlementType === 'VALUE',
+                    lastClickedMsgId: lastClickedMessageId,
+                    readStatus: readStatusByMessageId.get(msg.id),
+                    homeMatch: homeFilterResult?.matchIds.has(msg.id),
+                    homeContextRole: homeDisplayRoleByMessageId.get(msg.id),
+                  };
+                  const sc = stakeCounts[msg.id];
+                  const truthPro = sc?.truth.pro ?? 0;
+                  const truthCon = sc?.truth.con ?? 0;
+                  const valuePro = sc?.value.pro ?? 0;
+                  const valueCon = sc?.value.con ?? 0;
+                  const showTruthProCon = truthPro > 0 || truthCon > 0;
+                  const showValueProCon = valuePro > 0 || valueCon > 0;
+                  const isTruthOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'TRUTH';
+                  const isValueOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'VALUE';
+                  const hasCustomContent = isContentKind(msg.kind) && msg.kind !== 'round' && msg.kind !== 'round_result';
+                  const correctionTargetEdge = msg.relationType === 'correct'
+                    ? edges.find(edge => edge.relationMessageId === msg.id)
+                    : undefined;
+                  const correctionTarget = correctionTargetEdge ? msgMap.get(correctionTargetEdge.to.messageId) : undefined;
+                  const correctionTargetOriginal = correctionTarget
+                    ? messages.find(message => message.id === correctionTarget.id) ?? correctionTarget
+                    : undefined;
+                  const correctionSourceEdge = correctionTargetEdge && !correctionTargetEdge.from.messageId.startsWith('anon:')
+                    ? correctionTargetEdge
+                    : undefined;
+                  const correctionSource = correctionSourceEdge ? msgMap.get(correctionSourceEdge.from.messageId) : undefined;
+                  const correctionContent = msg.relationPayload?.correctionContent ?? correctionSource?.content ?? msg.content;
+                  const correctionTargetText = correctionTargetEdge?.to.selection.kind === 'text'
+                    ? correctionTargetEdge.to.selection.text
+                    : correctionTargetOriginal?.content ?? '';
+                  const correctionTargetLabel = correctionTargetEdge?.to.selection.kind === 'text'
+                    ? formatCorrectionRange(correctionTargetEdge.to.selection.start, correctionTargetEdge.to.selection.len, correctionTargetText)
+                    : formatCorrectionRange(0, correctionTargetText.length, correctionTargetText);
+                  const correctionReplacement = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetOriginal
+                    ? (() => {
+                      const selection = correctionTargetEdge.to.selection;
+                      const suffixLength = correctionTargetOriginal.content.length - selection.start - selection.len;
+                      const replacementEnd = correctionContent.length - suffixLength;
+                      return selection.start >= 0 && selection.len >= 0 && suffixLength >= 0 &&
+                        replacementEnd >= selection.start && replacementEnd <= correctionContent.length
+                        ? correctionContent.slice(selection.start, replacementEnd)
+                        : correctionContent;
+                    })()
+                    : correctionContent;
+                  const activeStanceInfo = activeStanceByRelMsgId.get(msg.id);
+                  const stanceEffect = stanceEffectByRelMsgId.get(msg.id);
+                  const activeTargetStanceInfo = activeStanceMap.get(msg.id);
+                  const isCurrentComparisonTarget = comparisonReviewed && comparisonTargetId === msg.id;
+                  const recommendationMatchesUser = isCurrentComparisonTarget && activeTargetStanceInfo
+                    ? activeTargetStanceInfo.type === comparisonRecommendedDisplay
+                    : null;
+
+                  const correctionRecords = msg.relationType !== 'correct'
+                    ? edges.filter(edge => edge.relationType === 'correct' && edge.to.messageId === msg.id)
+                    : [];
+                  const correctionVersion = msg.relationType === 'correct'
+                    ? Array.from(correctionVersions.values())
+                      .flatMap(entry => entry.versions)
+                      .find(version => version.correctionId === msg.id)
+                    : undefined;
+
                   return (
-                    <div key={msg.id} data-msgid={msg.id} onClick={e => handleMessageClick(e, msg.id)} onDoubleClick={e => handleMessageDoubleClick(e, msg.id)} onMouseDown={e => handleMessageMouseDown(e, msg.id)} onMouseUp={e => handleMessageMouseUp(e, msg.id)}
-                      style={{
-                        borderRadius: isTopicMsg ? 8 : 6,
-                        border: isWholeSelected
-                          ? "2px solid #0b84ff"
-                          : isTopicMsg
-                            ? "1px solid #334155"
-                            : isActiveText ? "2px dashed #0b84ff" : "1px solid #444",
-                        borderLeft: isWholeSelected
-                          ? "3px solid #0b84ff"
-                          : isTopicMsg ? "3px solid #6366f1" : undefined,
-                        background: isWholeSelected
-                          ? "#1e3a5f"
-                          : isTopicMsg ? "#1e293b" : "#1f1f1f",
-                        color: undefined,
-                        padding: isTopicMsg ? "10px 12px" : "10px 14px",
-                        cursor: "pointer",
-                        fontSize: 13,
-                        boxShadow: isWholeSelected
-                          ? "0 2px 12px rgba(11,132,255,0.2)"
-                          : isTopicMsg ? "0 2px 8px rgba(0,0,0,0.15)" : undefined,
-                        outline: lastClickedMessageId === msg.id ? "1px dashed #0b84ff" : "none",
-                        userSelect: isActiveText ? "text" : "auto"
-                      }}>
-                      <div style={{ fontSize: 11, opacity: isTopicMsg ? 0.65 : 0.8, marginBottom: 4, display: "flex", justifyContent: "space-between", color: isTopicMsg ? "#94a3b8" : undefined }}>
-                        <span>{isClassifyTopicMsg ? `分类 ${msg.id}` : isSummaryTopicMsg ? `总结 ${msg.id}` : isMergeTopicMsg ? `归并 ${msg.id}` : msg.kind === "relation" ? `关系消息 ${msg.id}` : `消息 ${msg.id}`}</span>
-                        <span>{isClassifyTopicMsg ? "双击进入分类" : isTopicMsg ? "双击进入分类" : `作者：${msg.author}`}</span>
-                      </div>
-                      {isTopicMsg && (
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                          <div style={{ fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {topicMsgTitle}
+                    <MessageCard
+                      key={msg.id} msg={msg} ctx={ctx}
+                      onClick={handleMessageClick}
+                      onDoubleClick={handleMessageDoubleClick}
+                      onMouseDown={handleMessageMouseDown}
+                      onMouseUp={handleMessageMouseUp}
+                      onContentMouseUp={handleTextMouseUp}
+                      headerBetweenIdAuthor={stanceEffect || (isCurrentComparisonTarget && activeTargetStanceInfo) ? (
+                        <>
+                          {stanceEffect && (
+                            <>
+                              <span style={{ color: stanceEffect.local ? '#86efac' : '#fca5a5', fontWeight: 600 }}>
+                                {stanceEffect.local ? '本地生效' : '本地未生效'}
+                              </span>
+                              <span style={{ color: stanceEffect.global ? '#86efac' : '#fca5a5', fontWeight: 600 }}>
+                                {stanceEffect.global ? '对其他用户生效' : '对其他用户未生效'}
+                              </span>
+                            </>
+                          )}
+                          {activeStanceInfo && activeStanceInfo.targetRelId === comparisonTargetId && comparisonReviewed && (
+                            <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
+                              当前推荐显示：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
+                            </span>
+                          )}
+                          {!activeStanceInfo && isCurrentComparisonTarget && activeTargetStanceInfo && (
+                            <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
+                              当前推荐显示：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
+                            </span>
+                          )}
+                        </>
+                      ) : undefined}
+                      headerLabel={msg.kind === 'join' ? (
+                        <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>{msg.id}</span>
+                      ) : correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
+                        <span style={{ color: '#fbbf24', fontWeight: 600 }}>
+                          <span
+                            role="link"
+                            tabIndex={0}
+                            onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(msg.id, true); }}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                handleNavigateFromCorrectionTemporaryCategory(msg.id, true);
+                              }
+                            }}
+                            style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                            title={`跳转到更正消息 ${msg.id}`}
+                          >
+                            {msg.id}
+                          </span>
+                          <span style={{
+                            marginLeft: 5,
+                            color: correctionVersion?.valid && !correctionVersion.conflicted ? '#4ade80' : '#f87171',
+                            textDecoration: 'none',
+                          }}>
+                            {correctionVersion?.valid && !correctionVersion.conflicted ? '（生效）' : '（未生效）'}
+                          </span>
+                        </span>
+                      ) : undefined}
+                      headerAfterAuthor={viewMode === 'list' && correctionRecords.length > 0 && correctionVersions.get(msg.id)?.current ? (
+                        <span style={{ color: '#fbbf24', fontWeight: 600 }} title="此消息已被更正">已被更正</span>
+                      ) : undefined}
+                      onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
+                      headerExtra={
+                        <>
+                          <div style={{ fontSize: 10, color: "#6b7280", textAlign: "right", width: "100%" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 1, minWidth: 0, width: "100%", gap: 8, flexWrap: "nowrap", whiteSpace: "nowrap", overflow: "hidden" }}>
+                            <div style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0, overflow: "hidden" }}>
+                            {outgoingJoinRelations.length > 0 && (
+                              <button
+                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'outgoing'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('outgoing'); setJoinFilterTargetId(msg.id); }}
+                                title="筛选显示该容器发出的全部加入消息"
+                                style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(16,185,129,0.14)", color: "#a7f3d0", border: "1px solid rgba(16,185,129,0.4)", cursor: "pointer" }}
+                              >加入消息：{outgoingJoinRelations.length} 条</button>
+                            )}
+                            {relatedJoinRelations.length > 0 && (
+                              <button
+                                onClick={(event) => { event.stopPropagation(); const isExiting = joinFilterTargetId === msg.id && joinFilterDirection === 'incoming'; if (isExiting) { exitTemporaryCategory(); return; } enterTemporaryCategory(); setMsgFilter(prev => ({ ...prev, hideJoin: false })); setJoinFilterDirection('incoming'); setJoinFilterTargetId(msg.id); }}
+                                title="筛选显示把此消息加入容器的全部加入消息"
+                                style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinFilterTargetId === msg.id ? "rgba(59,130,246,0.28)" : "rgba(59,130,246,0.14)", color: "#bfdbfe", border: "1px solid rgba(59,130,246,0.4)", cursor: "pointer" }}
+                              >被加入消息：{effectiveJoinCount} 条生效</button>
+                            )}
+                            </div>
+                            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                            <button data-settlement-toggle-truth onClick={(event) => { event.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }} style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }} title="真假仲裁">⚖️</button>
+                            <button data-settlement-toggle-value onClick={(event) => { event.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }} style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }} title="价值仲裁">💎</button>
+                            {showTruthProCon && (
+                              <span style={{ color: "#a5b4fc" }} title="真假仲裁">
+                                ⚖️{truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
+                                {truthPro > 0 && truthCon > 0 && ' '}
+                                {truthCon > 0 && <span style={{ color: "#f87171" }}>👎{truthCon}</span>}
+                              </span>
+                            )}
+                            {showValueProCon && (
+                              <span style={{ color: "#fcd34d" }} title="价值仲裁">
+                                💎{valuePro > 0 && <span style={{ color: "#4ade80" }}>👍{valuePro}</span>}
+                                {valuePro > 0 && valueCon > 0 && ' '}
+                                {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
+                              </span>
+                            )}
+                            </div>
                           </div>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: isMergeTopicMsg ? "rgba(148,163,184,0.18)" : "rgba(34,197,94,0.15)", color: isMergeTopicMsg ? "#94a3b8" : "#4ade80" }}>
-                            {isMergeTopicMsg ? "归并" : "进行中"}
-                          </span>
-                        </div>
-                      )}
-                      {!isTopicMsg && msg.kind === "relation" && (
-                        <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#9ca3af" }}>
-                            {relType ? String(relType) : "关系"}
-                          </span>
-                          {suppressedRelIds.has(msg.id) && (
-                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>
-                              你已反对 · 点赞同恢复
-                            </span>
-                          )}
-                          {activeStanceRelIds.has(msg.id) && (() => {
-                            const info = activeStanceByRelMsgId.get(msg.id);
-                            if (!info) return null;
-                            return info.type === 'disagree' ? (
-                              <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.15)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.3)" }}>
-                                你的反对生效中
-                              </span>
-                            ) : (
+                        </>
+                      }
+                      badges={
+                        <>
+                          {msg.kind === "join" && joinRelation && joinIsEffective && (
+                            <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                               <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>
-                                你的赞同生效中
+                                生效
                               </span>
-                            );
-                          })()}
-                          {overriddenStanceRelIds.has(msg.id) && (
-                            <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#6b7280", border: "1px solid rgba(255,255,255,0.1)" }}>
-                              已失效
-                            </span>
+                            </div>
                           )}
+                          {!isTopicMsg && msg.kind === "relation" && (relType === 'notify' || suppressedRelIds.has(msg.id) || rejectedContainerIds.has(msg.id) || overriddenStanceRelIds.has(msg.id)) && (
+                            <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                              {relType === 'notify' && (() => {
+                                const payload = msg.relationPayload;
+                                const notifyUsers = Array.isArray(payload?.notifyUsers) && payload.notifyUsers.length > 0
+                                  ? payload.notifyUsers
+                                  : (payload?.notifyUserIds ?? []).map(id => ({ id, username: id }));
+                                return notifyUsers.length > 0 ? (
+                                  <span
+                                    title="通知关系标签"
+                                    style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(59,130,246,0.18)", color: "#93c5fd", border: "1px solid rgba(59,130,246,0.45)", display: "inline-flex", alignItems: "center", gap: 3 }}
+                                  >
+                                    {notifyUsers.map((notifyUser, index) => (
+                                      <React.Fragment key={notifyUser.id}>
+                                        {index > 0 && '、'}
+                                        <span
+                                          role="link"
+                                          tabIndex={0}
+                                          onClick={(event) => { event.stopPropagation(); navigate(`/topics/${topicId}?sender=${encodeURIComponent(notifyUser.username)}`); }}
+                                          onKeyDown={(event) => {
+                                            if (event.key === 'Enter' || event.key === ' ') {
+                                              event.preventDefault();
+                                              event.stopPropagation();
+                                              navigate(`/topics/${topicId}?sender=${encodeURIComponent(notifyUser.username)}`);
+                                            }
+                                          }}
+                                          style={{ color: "#bfdbfe", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontFamily: "monospace" }}
+                                          title={`在清爽视图中查看 ${notifyUser.username} 的消息`}
+                                        >
+                                          {notifyUser.id}
+                                        </span>
+                                      </React.Fragment>
+                                    ))}
+                                    <span>：通知</span>
+                                  </span>
+                                ) : null;
+                              })()}
+                              {suppressedRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.2)", color: "#fca5a5", border: "1px solid rgba(239,68,68,0.35)" }}>你已反对 · 点赞同恢复</span>}
+                              {rejectedContainerIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }} title="社区反对多于赞同，该分类已暂时解散">社区已反对 · 双击预览</span>}
+                              {overriddenStanceRelIds.has(msg.id) && <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#6b7280", border: "1px solid rgba(255,255,255,0.1)" }}>已失效</span>}
+                            </div>
+                          )}
+                          {summaryCoverages.length > 0 && (
+                            <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              {summaryCoverages.map(item => <span key={item.summaryId} style={{ minWidth: 0, maxWidth: "100%", fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)", overflowWrap: 'anywhere' }}>非线性视图由总结「{item.title}」覆盖</span>)}
+                            </div>
+                          )}
+                        </>
+                      }
+                      overlays={settlementOpenMsgId === msg.id ? (
+                        <div data-settlement-panel style={{ position: "absolute", right: 0, top: "100%", zIndex: 100, width: 360, marginTop: 4 }}>
+                          <SettlementPanel messageId={msg.id} topicId={topicId!} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={(nm:any) => (window as any).__addSettlementMessage?.({...nm, kind: nm.kind})} filterSettlementType={settlementOpenType ?? undefined} />
+                          <div style={{ marginTop: 4 }}><RoundHistory messageId={msg.id} compact /></div>
                         </div>
-                      )}
-                      {isActiveText && msg.kind === "normal" && <div style={{ fontSize: 11, color: "#0b84ff", marginBottom: 4 }}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
-                      <div style={{ fontSize: 13, color: "#f5f5f5" }} onMouseUp={e => msg.kind === "normal" && handleTextMouseUp(e, msg.id)}>
-                        {msg.kind === "normal"
-                          ? renderMessageContentWithAnchorsForList(msg)
-                          : isTopicMsg
-                            ? (
-                              <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
-                                <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{msg.author}</span> 发起</span>
-                                <span>💬 {topicMsgTargetCount} 条观点</span>
-                                <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
-                              </div>
-                            )
-                            : <div style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#d1d5db" }}>{msg.content}</div>}
-                      </div>
-                    </div>
+                      ) : undefined}
+                    >
+                      {msg.kind === 'join' ? (
+                        <div style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <span>目标 ID：</span>
+                          {(msg.joinInfo?.targetIds ?? []).length > 0 ? msg.joinInfo!.targetIds.map(targetId => (
+                            <button
+                              key={targetId}
+                              type="button"
+                              onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
+                              style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace' }}
+                              title={`跳转到目标消息 ${targetId}`}
+                            >{targetId}</button>
+                          )) : <span>无</span>}
+                          <span>容器 ID：</span>
+                          {msg.joinInfo?.containerId ? (
+                            <button
+                              type="button"
+                              onClick={event => { event.stopPropagation(); handleNavigateToMessage(msg.joinInfo!.containerId); }}
+                              style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(16,185,129,0.45)', background: 'rgba(16,185,129,0.16)', color: '#a7f3d0', cursor: 'pointer', fontFamily: 'monospace' }}
+                              title={`跳转到容器消息 ${msg.joinInfo.containerId}`}
+                            >{msg.joinInfo.containerId}</button>
+                          ) : <span>无</span>}
+                        </div>
+                      ) : msg.relationType === 'correct' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div style={{ fontSize: 12, color: '#fbbf24' }}>
+                            ✏ {msg.author} 更正了消息
+                            {correctionTarget && (
+                              <button
+                                type="button"
+                                onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(correctionTarget.id, false); }}
+                                style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 11 }}
+                                title={`跳转到目标消息 ${correctionTarget.id}`}
+                              >
+                                目标消息 · {correctionTarget.id}
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px' }}>
+                            <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>具体更改</div>
+                            <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
+                              {correctionContent.length === 0
+                                ? `删除${correctionTargetLabel}`
+                                : `将${correctionTargetLabel}修改为「${correctionReplacement}」`}
+                            </div>
+                          </div>
+                        </div>
+                      ) : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
+                      : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
+                    </MessageCard>
                   );
                 })}
               </div>
             ) : (
               <GraphView
-                  key={`gv-${focusExitKey}`}
-                  messages={messagesToRender} edges={edgesToRender} draftUnits={draftUnits}
+                  key={`gv-${classifyKey}-${traceKey}-${comparisonReviewed ? `comparison-${comparisonTargetId ?? 'none'}` : 'normal'}`}
+                  messages={comparisonReviewed ? comparisonGraphMessages : graphMessagesFinal} edges={comparisonReviewed ? (comparisonAgreeGraph?.edges ?? temporaryEdgesToRender) : edgesToRender} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
+                  comparisonPair={comparisonReviewed} comparisonTargetId={comparisonTargetId} comparisonRecommendedDisplay={comparisonRecommendedDisplay}
+                  comparisonAgreeMessages={comparisonAgreeGraph?.messages} comparisonAgreeEdges={comparisonAgreeGraph?.edges}
+                  comparisonAgreeHideMessageIds={comparisonAgreeGraph?.hideMessageIds}
+                  comparisonDisagreeMessages={comparisonDisagreeGraph?.messages} comparisonDisagreeEdges={comparisonDisagreeGraph?.edges}
+                  comparisonDisagreeHideMessageIds={comparisonDisagreeGraph?.hideMessageIds}
+                  comparisonAgreeSuppressedRelIds={comparisonAgreeSuppressedRelIds} comparisonDisagreeSuppressedRelIds={comparisonDisagreeSuppressedRelIds}
+                  autoCenterMessageId={comparisonReviewed ? comparisonTargetId : null}
+                  homeMatchIds={homeFilterResult?.matchIds}
+                  homeContextRoleByMessageId={homeDisplayRoleByMessageId}
                   activeTextSelectId={activeTextSelectId} lastClickedMessageId={lastClickedMessageId}
                   onMessageClick={handleMessageClick} onMessageDoubleClick={handleMessageDoubleClick}
                   onTextMouseUp={handleTextMouseUp} onEdgeLabelSingleClick={handleEdgeLabelSingleClick}
@@ -3226,214 +7914,262 @@ export default function TopicDetailPage() {
                   onDecorationIconClick={handleDecorationIconClick}
                   onDecorationBodyClick={handleDecorationBodyClick}
                   onDecorationDoubleClick={handleDecorationDoubleClick}
+                  selectedDecorations={selectedDecorations}
                   onTagBodyClick={handleTagBodyClick}
                   onTagDoubleClick={handleTagDoubleClick}
                   onGroupFrameClick={handleGroupFrameClick}
                   onGroupFrameDoubleClick={handleGroupFrameDoubleClick}
                   onInlineBadgeClick={handleInlineBadgeClick}
                   onInlineBadgeDoubleClick={handleInlineBadgeDoubleClick}
-                  onDebugRects={setDebugRects}
+                  hideMessageIds={hideMessageIds}
+                  traceExpandedFrameIds={traceExpandedFrameIds}
+                  traceFrameIds={traceFrameIds}
+                  stakeCounts={stakeCounts}
+                  onSettlementToggleTruth={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'TRUTH') { closeSettlement(); } else { openSettlement(msgId, 'TRUTH'); } }}
+                  onSettlementToggleValue={(msgId) => { if (settlementOpenMsgId === msgId && settlementOpenType === 'VALUE') { closeSettlement(); } else { openSettlement(msgId, 'VALUE'); } }}
+                  topicId={topicId ?? undefined}
+                  settlementOpenMsgId={settlementOpenMsgId}
+                  settlementOpenType={settlementOpenType}
+                  onSettlementMessageCreated={handleSettlementMessageCreated}
+                  stanceHighlight={stanceHighlight}
+                  settlementEntryHighlight={settlementEntryHighlight}
+                  crossClassifyRefs={crossClassifyRefs}
+                  onCrossRefTagClick={handleCrossRefTagClick}
+                  onNavigateToMessage={handleNavigateToMessage}
+                  joinRelationsByTarget={joinRelationsByTarget}
+                  joinRelationsBySource={joinRelationsBySource}
+                  joinStatusByMessage={joinStatusByMessage}
+                  onJoinFilterClick={(messageId, direction) => {
+                    setMsgFilter(prev => ({ ...prev, hideJoin: false }));
+                    setJoinFilterDirection(direction);
+                    const isExiting = joinFilterTargetId === messageId && joinFilterDirection === direction;
+                    if (isExiting) { exitTemporaryCategory(); return; }
+                    enterTemporaryCategory();
+                    setJoinFilterTargetId(messageId);
+                  }}
                 />
             )}
+            <div aria-hidden="true" style={{ height: 96, flexShrink: 0 }} />
           </div>
         </div>
 
-        {/* Draggable splitter */}
+        {/* Draggable splitter — 12px wide with visible grip handle */}
         <div
-          onMouseDown={handleSplitterMouseDown}
-          style={{ width: 6, flexShrink: 0, background: "#2a2a2a", cursor: "col-resize", borderLeft: "1px solid #383838", borderRight: "1px solid #383838", transition: "background 0.15s" }}
-          onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#3a3a3a"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
-        />
-
-        <div ref={rightPanelRef} style={{ flex: TOTAL_FLEX - leftFlex, padding: 8, display: "flex", flexDirection: "column", gap: 8, overflow: "auto", minWidth: 0 }}>
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "center" }}>
-              <div style={{ fontWeight: 600 }}>候选区（Draft）</div>
-              <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
-                <button onClick={clearDraftAll} disabled={draftUnits.length === 0 && !activeTextSelectId}
-                  style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: draftUnits.length === 0 && !activeTextSelectId ? "#333" : "#444", color: draftUnits.length === 0 && !activeTextSelectId ? "#777" : "#fff", cursor: draftUnits.length === 0 && !activeTextSelectId ? "default" : "pointer" }}>
-                  清空
-                </button>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button onClick={() => { const selWhole = getSelectedWholeMessageIds(); if (selWhole.length > 0) enterFocusMultiple(selWhole, { replace: false }); else if (lastClickedMessageId) enterFocus(lastClickedMessageId, { replace: false }); }} disabled={!canSetFocus}
-                    style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canSetFocus ? "#444" : "#333", color: canSetFocus ? "#fff" : "#777", cursor: canSetFocus ? "pointer" : "default" }}>
-                    设为焦点消息
-                  </button>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={exitFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#444" : "#333", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title={isTopicFocus ? `退出当前${topicFocusKindLabel}并恢复进入前现场` : "退出最近一次进入的焦点并恢复进入该焦点前的现场"}>{isTopicFocus ? topicFocusExitLabel : "退出焦点"}</button>
-                    <button onClick={exitAllFocus} disabled={!canExitFocus} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: canExitFocus ? "#333" : "#222", color: canExitFocus ? "#fff" : "#777", cursor: canExitFocus ? "pointer" : "default" }} title="退出所有焦点并恢复进入第一个焦点前的现场">退出全部</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div style={{ fontSize: 12, opacity: 0.8 }}>焦点距离（hop）：{focusHop}</div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => setFocusHop(h => Math.max(0, h - 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>-</button>
-                <button onClick={() => setFocusHop(h => Math.min(8, h + 1))} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#222", color: "#fff", cursor: "pointer" }}>+</button>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>（可设置 hop，默认 1，最大 8）</div>
-              </div>
-            </div>
-
-            {draftGroups.length === 0 ? (
-              <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>当前未选择任何候选。</div>
-            ) : (
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 220, overflow: "auto", fontSize: 12, marginTop: 8 }}>
-                {draftGroups.map(g => (
-                  <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid #333", paddingBottom: 6, marginBottom: 6 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                      <span>{g.messageId} · 整条：{g.wholeSelected ? "是" : "否"} · 片段数：{g.fragments.length}</span>
-                      {g.wholeSelected && <button onClick={() => removeUnitFromDraft({ messageId: g.messageId, selection: { kind: "whole" } })} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除整条</button>}
-                    </div>
-                    {g.fragments.length > 0 && (
-                      <ul style={{ listStyle: "disc", marginLeft: 18, marginTop: 2, marginBottom: 0 }}>
-                        {g.fragments.map(u => {
-                          const s = u.selection;
-                          const label = s.kind === "edge" ? `@edge:${s.edgeId}` : s.kind === "text" ? `start=${s.start} len=${s.len} "${s.text}"` : "(whole)";
-                          return (
-                            <li key={selKey(u)} style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
-                              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
-                              <button onClick={() => removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button onClick={() => commitDraftTo("source")} disabled={draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: draftUnits.length === 0 ? "#333" : "#444", color: draftUnits.length === 0 ? "#777" : "#fff", cursor: draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入来源集合</button>
-              <button onClick={() => commitDraftTo("target")} disabled={draftUnits.length === 0} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: draftUnits.length === 0 ? "#333" : "#444", color: draftUnits.length === 0 ? "#777" : "#fff", cursor: draftUnits.length === 0 ? "default" : "pointer", fontSize: 12 }}>加入目标集合</button>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Sources</div>
-              {sourceUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
-                <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
-                  {sourceUnits.map(u => (
-                    <li key={selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                      <span>{describeUnit(u)}</span>
-                      <button onClick={() => removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Targets</div>
-              {targetUnits.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>暂无。</div> : (
-                <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
-                  {targetUnits.map(u => (
-                    <li key={selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                      <span>{describeUnit(u)}</span>
-                      <button onClick={() => removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          {user && (
-            <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontWeight: 600 }}>关系标签与消息文本</div>
-              {hasSecondaryRelationSelector && (() => {
-                const opts = relationType === "reply"
-                  ? ["none", "question", "answer"]
-                  : relationType === "tag"
-                    ? tagSecondaryOptions
-                    : relationType === "arrange"
-                      ? ["vertical", "horizontal"]
-                      : correctSecondaryOptions;
-                return (
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
-                    <span style={{ opacity: 0.85 }}>附加关系：</span>
-                    {opts.map(t => (
-                      <button key={t} onClick={() => setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t)}
-                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: secondaryRelationType === t ? "#0b84ff" : "#222", color: secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
-                        {secondaryRelationLabel(t)}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })()}
-              <input
-                style={{ width: "100%", padding: 4, borderRadius: 4, border: "1px solid #555", background: relationType === "reply" ? "#1a1a1a" : "#222", color: relationType === "reply" ? "#999" : "#eee", fontSize: 12 }}
-                placeholder={relationType === "annotation" ? "注释标签" : relationType === "reference" ? "引用标签" : relationType === "reply" ? "回复标签由附加关系决定" : "关系标签"}
-                value={relationType === "reply" ? replyAdditionalLabel(secondaryRelationType) : relationLabel}
-                readOnly={relationType === "reply"}
-                onChange={e => relationType !== "reply" && setRelationLabel(e.target.value)}
-              />
-              <div key={composerRefreshKey}>
-              {(() => {
-                const textAreaDisabled =
-                  (draftHasRelationTarget && relationType === "correct")
-                  || (isTagWithQuickAnnotate && hasTargetsAvailable)
-                  || (isMergeType && hasTargetsAvailable);
-                return (
-                  <textarea
-                    style={{ width: "100%", minHeight: 80, maxHeight: 220, padding: 4, borderRadius: 4, border: "1px solid #555", background: textAreaDisabled ? "#1a1a1a" : "#222", color: textAreaDisabled ? "#666" : "#eee", fontSize: 13, resize: "vertical" }}
-                    placeholder={textAreaDisabled ? (isTagWithQuickAnnotate ? "已选择附加关系，此处不可输入" : isMergeType ? "归并关系为用户-消息关系，此处不应输入内容" : "更正关系目标为关系消息时，此处不应有内容") : isClassifyType ? "输入分类名称（不能为空）" : isSummaryType ? "输入总结内容（不能为空）" : "输入一条新普通消息（支持自由换行）"}
-                    value={newMessageContent}
-                    readOnly={textAreaDisabled}
-                    onChange={e => !textAreaDisabled && setNewMessageContent(e.target.value)}
-                  />
-                );
-              })()}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button
-                  onClick={handleQuickSendAndRelateFromDraftTargets}
-                  disabled={!singleButtonEnabled}
-                  style={{ padding: "4px 14px", borderRadius: 4, border: "1px solid #666", background: singleButtonEnabled ? "#0b84ff" : "#333", color: singleButtonEnabled ? "#fff" : "#777", cursor: singleButtonEnabled ? "pointer" : "default", fontSize: 13, fontWeight: 600, flexShrink: 0 }}
-                >
-                  发送
-                </button>
-                <span style={{ fontSize: 11, opacity: singleButtonEnabled ? 0.9 : 0.5, color: singleButtonEnabled ? "#cce4ff" : "#999" }}>
-                  {singleButtonLabel}
-                </span>
-              </div>
-              </div>
-            </div>
-          )}
-
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
-            <div style={{ fontWeight: 600 }}>焦点</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>{isTopicFocus ? "当前模式：分类" : "当前模式：焦点"}</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>当前焦点：{currentFocusIds ? currentFocusIds.join(", ") : "（无）"}</div>
-          </div>
-
-          <StructureView key={`sv-${focusExitKey}`} focusIds={currentFocusIds ?? []} messages={messages} edges={edges} />
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>最近普通消息</div>
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 100, overflow: "auto" }}>
-                {recentNormals.map(m => <li key={m.id}>{m.id}：{m.content.slice(0, 40)}{m.content.length > 40 ? "…" : ""}</li>)}
-              </ul>
-            </div>
-            <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
-              <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 100, overflow: "auto" }}>
-                {recentRelations.map(m => <li key={m.id}>{m.id}：{m.content.slice(0, 60)}{m.content.length > 60 ? "…" : ""}</li>)}
-              </ul>
-            </div>
-          </div>
-          {/* DEBUG: rectangle info */}
-          <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, marginTop: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 4, color: "#0f0" }}>Debug Rects</div>
-            <pre style={{ fontSize: 10, fontFamily: "monospace", color: "#0f0", margin: 0, maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap" }}>{debugRects || "等待数据..."}</pre>
+          onPointerDown={handleSplitterPointerDown}
+          style={{
+            width: 12, flexShrink: 0,
+            background: splitterActive ? "#0b84ff" : "#2a2a2a",
+            cursor: "col-resize",
+            transition: "background 0.15s",
+            touchAction: "none",
+            alignItems: "center", justifyContent: "center",
+            userSelect: "none",
+          }}
+          onMouseEnter={e => { if (!splitterActive) (e.currentTarget as HTMLDivElement).style.background = "#4a4a4a"; }}
+          onMouseLeave={e => { if (!splitterActive) (e.currentTarget as HTMLDivElement).style.background = "#2a2a2a"; }}
+        >
+          {/* Grip dots indicator */}
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 3, alignItems: "center",
+            opacity: splitterActive ? 1 : 0.5, transition: "opacity 0.15s",
+          }}>
+            <div style={{ width: 3, height: 3, borderRadius: "50%", background: splitterActive ? "#fff" : "#888" }} />
+            <div style={{ width: 3, height: 3, borderRadius: "50%", background: splitterActive ? "#fff" : "#888" }} />
+            <div style={{ width: 3, height: 3, borderRadius: "50%", background: splitterActive ? "#fff" : "#888" }} />
           </div>
         </div>
+
+
+        <TopicRightPanel
+          rightPanelRef={rightPanelRef}
+          leftPanelRef={leftPanelRef}
+          TOTAL_FLEX={TOTAL_FLEX}
+          leftFlex={leftFlex}
+          minWidth={MIN_RIGHT_PX}
+          maxWidth={MAX_RIGHT_PX}
+          stickyTop={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
+          isPreviewMode={isPreviewMode}
+          isViewerMode={isPreloaded}
+          viewerUsers={viewerUsers}
+          viewerUsername={viewerUser?.username}
+          onViewerUsernameChange={username => {
+            const normalized = username.trim();
+            if (normalized) {
+              localStorage.setItem(VIEWER_USERNAME_KEY, normalized);
+              setViewerUser({ id: `viewer:${normalized}`, username: normalized, createdAt: '' });
+            } else {
+              localStorage.removeItem(VIEWER_USERNAME_KEY);
+              setViewerUser(null);
+            }
+          }}
+          onExitViewer={() => navigate('/')}
+          draftUnits={draftUnits}
+          draftGroups={draftGroups}
+          activeTextSelectId={activeTextSelectId}
+          clearDraftAll={clearDraftAll}
+          removeUnitFromDraft={removeUnitFromDraft}
+          commitDraftTo={commitDraftTo}
+          selKey={selKey}
+          sourceUnits={sourceUnits}
+          targetUnits={targetUnits}
+          removeUnitFrom={removeUnitFrom}
+          describeUnit={describeUnit}
+          traceDistance={traceDistance}
+          setTraceDistance={changeTraceDistance}
+          canSetTrace={canSetTrace}
+          canExitTrace={canExitTrace}
+          getSelectedWholeMessageIds={getSelectedWholeMessageIds}
+          lastClickedMessageId={lastClickedMessageId}
+          enterTraceMultiple={enterTraceMultiple}
+          enterTrace={enterTrace}
+          exitTrace={exitTrace}
+          exitAllTrace={exitAllTrace}
+          onNavigateToMessage={handleNavigateToMessage}
+          isInsideClassify={isInsideClassify}
+          currentTraceIds={currentTraceIds}
+          classifyKey={classifyKey}
+          traceKey={traceKey}
+          messages={messages}
+          edges={edges}
+          user={user}
+          relationType={relationType}
+          secondaryRelationType={secondaryRelationType}
+          setSecondaryRelationType={setSecondaryRelationType}
+          hasSecondaryRelationSelector={hasSecondaryRelationSelector}
+          tagSecondaryOptions={tagSecondaryOptions}
+          correctSecondaryOptions={correctSecondaryOptions}
+          proposalSecondaryOptions={proposalSecondaryOptions}
+          isArrangeType={isArrangeType}
+          isClassifyType={isClassifyType}
+          isSummaryType={isSummaryType}
+          isMergeType={isMergeType}
+          isGovernanceOrOpsType={isGovernanceOrOpsType}
+          isTagWithQuickAnnotate={isTagWithQuickAnnotate}
+          hasTargetsAvailable={hasTargetsAvailable}
+          draftHasRelationTarget={draftHasRelationTarget}
+          hasTextContent={hasTextContent}
+          secondaryRelationLabel={secondaryRelationLabel}
+          replyAdditionalLabel={replyAdditionalLabel}
+          subType={subType}
+          setSubType={setSubType}
+          subTypeCustomLabel={subTypeCustomLabel}
+          setSubTypeCustomLabel={setSubTypeCustomLabel}
+          subTypeCustomBufferRef={subTypeCustomBufferRef}
+          SUB_TYPE_OPTIONS={SUB_TYPE_OPTIONS}
+          subTypeLabel={subTypeLabel}
+          relationLabel={relationLabel}
+          setRelationLabel={setRelationLabel}
+          newMessageContent={newMessageContent}
+          setNewMessageContent={setNewMessageContent}
+          composerRefreshKey={composerRefreshKey}
+          stakeAmount={stakeAmount}
+          setStakeAmount={setStakeAmount}
+          relStakeAmount={relStakeAmount}
+          setRelStakeAmount={setRelStakeAmount}
+          availablePoints={availablePoints}
+          effectiveMinStake={effectiveMinStake}
+          singleButtonEnabled={singleButtonEnabled && !sendInFlight && !comparisonReviewed && !isPreloaded}
+          singleButtonLabel={singleButtonLabel}
+          sendValidationLabel={sendValidationLabel}
+          totalConsumption={totalConsumption}
+          stakeFeeAmountRef={stakeFeeAmountRef}
+          subTypeStakeMap={subTypeStakeMap}
+          relationStakeMap={relationStakeMap}
+          handleQuickSendAndRelateFromDraftTargets={handleSendClick}
+          sendError={sendError}
+          sendWarning={sendWarning}
+          recentNormals={recentNormals}
+          recentRelations={recentRelations}
+          showStanceHistory={showStanceHistory}
+          setShowStanceHistory={setShowStanceHistory}
+          showAuditLog={showAuditLog}
+          setShowAuditLog={setShowAuditLog}
+          showRevenue={showRevenue}
+          setShowRevenue={setShowRevenue}
+          topicId={topicId!}
+          comparisonMode={comparisonMode}
+          comparisonReviewed={comparisonReviewed}
+          comparisonTargetId={comparisonTargetId}
+          comparisonSide={comparisonSide}
+          onComparisonSideChange={setComparisonSide}
+          onComparisonReview={() => {
+            const targetId = draftUnits.length === 1 ? draftUnits[0].messageId : comparisonTargetId;
+            if (!targetId) return;
+            const containingClassifyId = findContainingClassifyTopic(targetId);
+            if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
+              if (currentClassifyRelMsgId) exitClassifyTopic({ restoreSnapshot: false });
+              enterClassifyTopic(containingClassifyId);
+            }
+            closeSettlement();
+            setComparisonTargetId(targetId);
+            setComparisonSide('agree');
+            setComparisonReviewBaseMessages(containingClassifyId
+              ? null
+              : (isInsideClassify ? normalGraphProjection.scopedMessages : normalGraphProjection.messages));
+            setComparisonReviewBaseEdges(containingClassifyId ? null : normalGraphProjection.edges);
+            setComparisonReviewed(true);
+            setComparisonMode(false);
+            setLastClickedMessageId(targetId);
+            setViewMode('graph');
+            setTimeout(() => scrollMsgToCenter(targetId), 150);
+          }}
+          onComparisonVote={handleComparisonVote}
+          onReturnToComparisonCategory={() => { setComparisonReviewed(false); setComparisonMode(true); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); setViewMode('list'); }}
+          onExitComparison={() => { exitTemporaryCategory(); }}
+        />
       </div>
     </div>
     </ErrorBoundary>
+    <PromptModal
+      open={showUnauthenticatedNotice}
+      title="当前未登录"
+      message={'当前未登录，只能查看消息，无法发送消息。\n登录、注册按钮在右上角。\n登录后可参与讨论。'}
+      confirmText="已阅"
+      onConfirm={() => setShowUnauthenticatedNotice(false)}
+    />
+    <RegistrationGuideHint
+      open={showRegistrationGuide}
+      onClose={() => setShowRegistrationGuide(false)}
+    />
+    {fixedHorizontalScroll && createPortal(
+      <div
+        ref={fixedHorizontalScrollRef}
+        data-fixed-left-horizontal-scroll="true"
+        aria-label="左侧视图水平滚动条"
+        style={{ position: "fixed", left: fixedHorizontalScroll.left, bottom: fixedHorizontalScroll.bottom, width: fixedHorizontalScroll.width, height: 14, overflowX: "scroll", overflowY: "hidden", scrollbarGutter: "stable", zIndex: 2147483647, background: "#101010" }}
+      >
+        <div style={{ width: fixedHorizontalScroll.contentWidth, height: 1 }} />
+      </div>,
+      document.body,
+    )}
+
+    <PromptModal
+      open={sendInFlight}
+      title="正在发送"
+      message="正在发送消息并更新关联结构，请稍候…"
+      hideActions
+      onConfirm={() => undefined}
+    />
+
+    <LeaderboardModal
+      open={showLeaderboard}
+      onClose={() => setShowLeaderboard(false)}
+      onRefresh={() => setLeaderboardRefreshVersion(version => version + 1)}
+      messages={messages}
+      edges={edges}
+      relations={relations}
+      users={registeredUsers}
+      stakeCounts={stakeCounts}
+      messageBettorCounts={messageBettorCounts}
+    />
+
+    <PromptModal
+      open={alertMessage !== null}
+      title="提示"
+      message={renderAlertMessage(alertMessage ?? '')}
+      confirmText="已阅"
+      onConfirm={() => setAlertMessage(null)}
+    />
 
     {/* Decoration double-click popup: shows sender info for agree/disagree relations */}
     {decorationPopup && (() => {
@@ -3475,7 +8211,7 @@ export default function TopicDetailPage() {
 
     {/* Tag double-click popup: shows who tagged with the given label */}
     {tagPopup && (() => {
-      const { messageId, tagLabel, relMsgIds, x, y } = tagPopup;
+      const { messageId, tagLabel, relMsgIds, x, y, subDetails } = tagPopup;
       const taggers = relMsgIds.map(id => {
         const relMsg = messages.find(m => m.id === id);
         return relMsg ? { id: relMsg.id, author: relMsg.author, createdAt: relMsg.createdAt } : null;
@@ -3484,11 +8220,26 @@ export default function TopicDetailPage() {
         <div key="tag-popup" onClick={() => setTagPopup(null)}
           style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 200), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
+            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 300), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
             <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
-              🏷 标注「{tagLabel}」（共 {taggers.length} 人）<br />
+              🏷 「{tagLabel}」（共 {taggers.length} 人）<br />
               <span style={{ fontSize: 11, opacity: 0.7 }}>消息：{messageId}</span>
             </div>
+            {/* SubType breakdown */}
+            {subDetails && subDetails.length > 0 && (
+              <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 4, background: "#2a2a2a", fontSize: 11 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4, opacity: 0.8 }}>理由明细：</div>
+                {subDetails.map(d => {
+                  const stLabels: Record<string,string> = { SPAM:'垃圾', OFFTOPIC:'跑题', LOWVALUE:'低质', IMPORTANT:'重要', CUSTOM:'自定义' };
+                  return (
+                    <div key={d.subType} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                      <span>{d.customLabel || stLabels[d.subType] || d.subType}</span>
+                      <span style={{ fontWeight: 600 }}>{d.count}人</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {taggers.length === 0 ? (
               <div style={{ fontSize: 12, opacity: 0.6 }}>暂无记录</div>
             ) : (
@@ -3533,233 +8284,26 @@ export default function TopicDetailPage() {
         </div>
       );
     })()}
-    {comparisonPopup && (()=>{
-      const relEdges = edges.filter(e => e.relationMessageId === comparisonPopup.relMsgId);
-      const sourceMsg = relEdges[0] && !relEdges[0].from.messageId.startsWith('anon:')
-        ? msgMap.get(relEdges[0].from.messageId) : null;
-      const targetMids = Array.from(new Set(relEdges.map(e => e.to.messageId)));
-      const targetMsgs = targetMids.map(id => msgMap.get(id)).filter((m): m is DemoMessage => m != null);
-      const relType = relEdges[0]?.relationType ?? "";
-
-      // CORRECT relation: side-by-side comparison with highlighting
-      if (relType === "correct" && targetMsgs.length > 0) {
-        const origMsg = targetMsgs[0];
-
-        // Relation-message correction: show structured relation summary instead of text diff.
-        // sourceMsg may be null when secondary relation is "none" (no replacement relation).
-        if (origMsg.kind === "relation") {
-          // Edges belonging to the old relation (not the CORRECT edge itself)
-          const oldRelEdges = edges.filter(e => e.relationMessageId === origMsg.id);
-          // Edges belonging to the new relation, excluding the CORRECT edge (empty when no replacement)
-          const newRelEdges = sourceMsg
-            ? edges.filter(e => e.relationMessageId === sourceMsg.id && e.relationType !== 'correct')
-            : [];
-          const oldType = oldRelEdges[0]?.relationType ?? "";
-          const newType = newRelEdges[0]?.relationType ?? "";
-          const oldTypeName = relationTypeName(oldType as RelationType);
-          const newTypeName = newType ? relationTypeName(newType as RelationType) : "";
-          const oldSrcRaw = oldRelEdges[0]?.from.messageId ?? "";
-          const newSrcRaw = newRelEdges[0]?.from.messageId ?? "";
-          const oldSrc = oldSrcRaw.startsWith('anon:') ? null : oldSrcRaw;
-          const newSrc = newSrcRaw.startsWith('anon:') ? null : newSrcRaw;
-          const oldTargets = Array.from(new Set(oldRelEdges.map(e => e.to.messageId)));
-          const newTargets = Array.from(new Set(newRelEdges.map(e => e.to.messageId)));
-          const oldTargetStr = oldTargets.join(",");
-          const newTargetStr = newTargets.join(",");
-          const popupW = Math.min(700, window.innerWidth - 32);
-          const left = Math.min(Math.max(comparisonPopup.x - popupW / 2, 8), window.innerWidth - popupW - 8);
-          const top = Math.min(comparisonPopup.y + 8, window.innerHeight - 400);
-          return (
-            <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
-              onClick={()=>setComparisonPopup(null)}>
-              <div style={{position:"fixed",left:left,top:top,zIndex:201,background:"#1e1e1e",
-                border:"1px solid #555",borderRadius:8,padding:16,width:popupW,maxHeight:"80vh",
-                overflow:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.8)",color:"#eee"}}
-                onClick={e=>e.stopPropagation()}>
-                <div style={{fontWeight:700,marginBottom:12,fontSize:14}}>✏ 更正对比（关系消息）</div>
-                <div style={{display:"flex",gap:10}}>
-                  {/* Left: old relation */}
-                  <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #554",background:"#211e14",padding:10}}>
-                    <div style={{fontSize:11,marginBottom:6}}>
-                      <span style={{fontWeight:600}}>原关系</span>
-                      <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{origMsg.id}</span>
-                    </div>
-                    <div style={{fontSize:13,fontFamily:"monospace",lineHeight:1.8}}>
-                      <span style={{color:"#ff9944",fontWeight:700}}>{oldTypeName}</span>
-                      <span style={{color:"#ddd"}}>
-                        {oldSrc ? `: ${oldSrc} → ${oldTargetStr}` : `: ${oldTargetStr}`}
-                      </span>
-                    </div>
-                  </div>
-                  {/* Right: new relation — blank when secondary is "none" (no replacement relation) */}
-                  <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #255",background:"#14201e",padding:10}}>
-                    <div style={{fontSize:11,marginBottom:6}}>
-                      <span style={{fontWeight:600}}>更正后</span>
-                      {sourceMsg && <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>}
-                    </div>
-                    {sourceMsg && (
-                      <div style={{fontSize:13,fontFamily:"monospace",lineHeight:1.8}}>
-                        <span style={{color:"#44ddaa",fontWeight:700}}>{newTypeName}</span>
-                        <span style={{color:"#ddd"}}>
-                          {newSrc ? `: ${newSrc} → ${newTargetStr}` : `: ${newTargetStr}`}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div style={{marginTop:12,textAlign:"right"}}>
-                  <button onClick={()=>setComparisonPopup(null)}
-                    style={{padding:"4px 12px",borderRadius:4,border:"1px solid #555",background:"#333",color:"#eee",cursor:"pointer",fontSize:12}}>
-                    关闭
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        }
-
-        // Text correction requires a real source message
-        if (sourceMsg) {
-        // Prefer precise position-based highlighting for single-fragment corrections:
-        // The correction edge carries the exact text selection (start + len) in the
-        // original message, so we can pinpoint the changed region without the LCS
-        // algorithm incorrectly matching repeated substrings elsewhere in the text.
-        // Fall back to LCS for whole-message corrections or edge cases.
-        //
-        // For whole-message corrections where the content is completely replaced,
-        // show the full original and new content side by side without diff highlights,
-        // since there's no shared structure to align (Bug 4 fix).
-        let origParts: DiffPart[];
-        let nextParts: DiffPart[];
-        const textEdge = relEdges.find(e => e.to.selection.kind === 'text');
-        const textEdges = relEdges.filter(e => e.to.selection.kind === 'text');
-        const hasWholeEdge = relEdges.some(e => e.to.selection.kind === 'whole');
-        if (textEdge && textEdges.length === 1) {
-          const sel = textEdge.to.selection as { kind: 'text'; start: number; len: number; text: string };
-          const s = sel.start, l = sel.len;
-          const origLen = origMsg.content.length, nextLen = sourceMsg.content.length;
-          // For a single-fragment correction: prefix [0,s) is identical in both messages,
-          // deleted region is orig[s,s+l), inserted region is next[s,s+insertedLen), and
-          // suffix next[s+insertedLen,) equals orig[s+l,). Verify this before using it.
-          const insertedLen = nextLen - origLen + l;
-          const prefixOk = s >= 0 && l >= 0 && insertedLen >= 0 && s + l <= origLen && s + insertedLen <= nextLen;
-          const contentOk = prefixOk &&
-            origMsg.content.slice(0, s) === sourceMsg.content.slice(0, s) &&
-            origMsg.content.slice(s + l) === sourceMsg.content.slice(s + insertedLen);
-          if (contentOk) {
-            origParts = [];
-            if (s > 0) origParts.push({ type: 'keep', text: origMsg.content.slice(0, s) });
-            if (l > 0) origParts.push({ type: 'del', text: origMsg.content.slice(s, s + l) });
-            if (s + l < origLen) origParts.push({ type: 'keep', text: origMsg.content.slice(s + l) });
-            nextParts = [];
-            if (s > 0) nextParts.push({ type: 'keep', text: sourceMsg.content.slice(0, s) });
-            if (insertedLen > 0) nextParts.push({ type: 'ins', text: sourceMsg.content.slice(s, s + insertedLen) });
-            if (s + insertedLen < nextLen) nextParts.push({ type: 'keep', text: sourceMsg.content.slice(s + insertedLen) });
-          } else {
-            ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
-          }
-        } else if (hasWholeEdge && origMsg.content !== sourceMsg.content) {
-          // Whole-message correction: if the content is completely different
-          // (no common prefix/suffix), show as full replacement without diff.
-          // Otherwise use LCS diff for partial similarity (Bug 4 fix).
-          ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
-        } else {
-          ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
-        }
-        // Clamp popup so it stays within viewport
-        const popupW = Math.min(700, window.innerWidth - 32);
-        const left = Math.min(Math.max(comparisonPopup.x - popupW / 2, 8), window.innerWidth - popupW - 8);
-        const top = Math.min(comparisonPopup.y + 8, window.innerHeight - 400);
-        return (
-          <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
-            onClick={()=>setComparisonPopup(null)}>
-            <div style={{position:"fixed",left:left,top:top,zIndex:201,background:"#1e1e1e",
-              border:"1px solid #555",borderRadius:8,padding:16,width:popupW,maxHeight:"80vh",
-              overflow:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.8)",color:"#eee"}}
-              onClick={e=>e.stopPropagation()}>
-              <div style={{fontWeight:700,marginBottom:12,fontSize:14}}>✏ 更正对比</div>
-              <div style={{display:"flex",gap:10}}>
-                {/* Left: original message */}
-                <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #554",background:"#211e14",padding:10}}>
-                  <div style={{fontSize:11,marginBottom:6}}>
-                    <span style={{fontWeight:600}}>原文</span>
-                    <span style={{marginLeft:6}}>{origMsg.author}</span>
-                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(origMsg.createdAt).toLocaleString()}</span>
-                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{origMsg.id}</span>
-                  </div>
-                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace",lineHeight:1.6}}>
-                    {renderDiffParts(origParts, 'orig')}
-                  </pre>
-                </div>
-                {/* Right: new (corrected) message */}
-                <div style={{flex:1,minWidth:0,borderRadius:6,border:"1px solid #255",background:"#14201e",padding:10}}>
-                  <div style={{fontSize:11,marginBottom:6}}>
-                    <span style={{fontWeight:600}}>更正后</span>
-                    <span style={{marginLeft:6}}>{sourceMsg.author}</span>
-                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(sourceMsg.createdAt).toLocaleString()}</span>
-                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>
-                  </div>
-                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace",lineHeight:1.6}}>
-                    {renderDiffParts(nextParts, 'next')}
-                  </pre>
-                </div>
-              </div>
-              <div style={{marginTop:12,textAlign:"right"}}>
-                <button onClick={()=>setComparisonPopup(null)}
-                  style={{padding:"4px 12px",borderRadius:4,border:"1px solid #555",background:"#333",color:"#eee",cursor:"pointer",fontSize:12}}>
-                  关闭
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-        } // end if (sourceMsg)
-      }
-
-      return (
-        <div style={{position:"fixed",left:0,top:0,right:0,bottom:0,zIndex:200,background:"rgba(0,0,0,0.6)"}}
-          onClick={()=>setComparisonPopup(null)}>
-          <div style={{position:"fixed",left:comparisonPopup.x,top:comparisonPopup.y,zIndex:201,background:"#1e1e1e",
-            border:"1px solid #555",borderRadius:8,padding:16,minWidth:320,maxWidth:600,maxHeight:"80vh",
-            overflow:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.8)",color:"#eee"}}
-            onClick={e=>e.stopPropagation()}>
-            <div style={{fontWeight:700,marginBottom:12,fontSize:14}}>
-              {relationTypeName(relType)}对比：{comparisonPopup.relMsgId}
-            </div>
-            <div style={{display:"flex",gap:12,flexDirection:"column"}}>
-              {targetMsgs.map(tm=>(
-                <div key={tm.id} style={{borderRadius:6,border:"1px solid #554",background:"#232018",padding:8}}>
-                  <div style={{fontSize:11,marginBottom:4}}>
-                    <span style={{fontWeight:600}}>原文</span>
-                    <span style={{marginLeft:6}}>{tm.author}</span>
-                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(tm.createdAt).toLocaleString()}</span>
-                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{tm.id}</span>
-                  </div>
-                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace"}}>{tm.content}</pre>
-                </div>
-              ))}
-              {sourceMsg && (
-                <div style={{borderRadius:6,border:"1px solid #255",background:"#182028",padding:8}}>
-                  <div style={{fontSize:11,marginBottom:4}}>
-                    <span style={{fontWeight:600}}>更新</span>
-                    <span style={{marginLeft:6}}>{sourceMsg.author}</span>
-                    <span style={{opacity:0.6,marginLeft:6}}>{new Date(sourceMsg.createdAt).toLocaleString()}</span>
-                    <span style={{opacity:0.45,marginLeft:6,fontSize:10}}>{sourceMsg.id}</span>
-                  </div>
-                  <pre style={{margin:0,whiteSpace:"pre-wrap",fontSize:12,color:"#ddd",fontFamily:"monospace"}}>{sourceMsg.content}</pre>
-                </div>
-              )}
-            </div>
-            <div style={{marginTop:12,textAlign:"right"}}>
-              <button onClick={()=>setComparisonPopup(null)}
-                style={{padding:"4px 12px",borderRadius:4,border:"1px solid #555",background:"#333",color:"#eee",cursor:"pointer",fontSize:12}}>
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    })()}
+    {comparisonPopup && (
+      <CorrectionComparisonPopup
+        popup={comparisonPopup}
+        messages={messages}
+        edges={edges}
+        invalidCorrectionIds={new Set(
+          Array.from(correctionVersions.values()).flatMap(entry =>
+            entry.versions.filter(version => !version.valid).map(version => version.correctionId),
+          ),
+        )}
+        onClose={() => setComparisonPopup(null)}
+        isSending={sendInFlight}
+        reversePreview={comparisonPopup.reversePreview ? {
+          before: comparisonPopup.reversePreview.before,
+          after: comparisonPopup.reversePreview.after,
+          onConfirm: confirmReverseCorrection,
+        } : undefined}
+      />
+    )}
     </>
   );
 }
+

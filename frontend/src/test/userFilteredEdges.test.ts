@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { computeUserFilteredEdges, computeUserSuppressedRelIds, computeTransitiveVoteStats } from '../utils/modelBridge';
+import { computeUserFilteredEdges, computeUserSuppressedRelIds, computeTransitiveVoteStats, computeEffectiveSuppressedRelIds } from '../utils/modelBridge';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
@@ -117,6 +117,30 @@ describe('computeUserFilteredEdges', () => {
     // Bob should no longer see the arrange edges
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('e3'); // only Bob's own DISAGREE edge remains
+  });
+
+  it('uses full stance edges when the displayed edge scope is a classify subset', () => {
+    const msgs: DemoMessage[] = [
+      makeNormalMsg('annotation-source', 'alice'),
+      makeNormalMsg('target', 'alice'),
+      makeRelationMsg('rel-annotation', 'alice', 'annotation'),
+      makeNormalMsg('bob-disagree-source', 'bob'),
+      makeRelationMsg('rel-disagree', 'bob', 'disagree'),
+    ];
+    const allEdges: DemoEdge[] = [
+      makeEdge('annotation-edge', 'rel-annotation', 'annotation', 'annotation-source', 'target'),
+      makeEdge('disagree-edge', 'rel-disagree', 'disagree', 'bob-disagree-source', 'rel-annotation'),
+    ];
+
+    // The current classify view contains the annotation edge but not Bob's
+    // stance edge. Suppression must still be calculated from allEdges.
+    const result = computeUserFilteredEdges(
+      [allEdges[0]],
+      msgs,
+      'bob',
+      allEdges,
+    );
+    expect(result).toEqual([]);
   });
 
   it('does NOT suppress edges for other users (only the disagreeing user)', () => {
@@ -630,5 +654,40 @@ describe('computeTransitiveVoteStats', () => {
   it('handles empty edges', () => {
     const stats = computeTransitiveVoteStats([], []);
     expect(Object.keys(stats).length).toBe(0);
+  });
+});
+
+describe('computeEffectiveSuppressedRelIds', () => {
+  it('uses community majority as default but lets the current user override it', () => {
+    const messages = [
+      makeNormalMsg('m1', 'author'), makeRelationMsg('rel-arr', 'author', 'arrange'),
+      makeRelationMsg('rel-alice-agree', 'alice', 'agree'),
+      makeRelationMsg('rel-alice-dis', 'alice', 'disagree'),
+      makeRelationMsg('rel-bob-dis', 'bob', 'disagree'),
+    ];
+    const edges = [
+      makeEdge('e1', 'rel-arr', 'arrange', 'm1', 'm1'),
+      makeEdge('e2', 'rel-alice-agree', 'agree', 'anon:agree', 'rel-arr'),
+      makeEdge('e3', 'rel-alice-dis', 'disagree', 'anon:dis', 'rel-arr'),
+      makeEdge('e4', 'rel-bob-dis', 'disagree', 'anon:bob', 'rel-arr'),
+    ];
+
+    expect(computeEffectiveSuppressedRelIds(edges, messages, null).has('rel-arr')).toBe(true);
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'alice').has('rel-arr')).toBe(false);
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'bob').has('rel-arr')).toBe(true);
+  });
+
+  it('does not suppress a text message targeted by DISAGREE', () => {
+    const messages = [
+      makeNormalMsg('text-target', 'author'),
+      makeNormalMsg('stance-source', 'bob'),
+      makeRelationMsg('rel-disagree', 'bob', 'disagree'),
+    ];
+    const edges = [
+      makeEdge('e1', 'rel-disagree', 'disagree', 'stance-source', 'text-target'),
+    ];
+
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'bob').has('text-target')).toBe(false);
+    expect(computeEffectiveSuppressedRelIds(edges, messages, 'bob').has('rel-disagree')).toBe(false);
   });
 });

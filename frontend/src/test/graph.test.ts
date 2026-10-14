@@ -19,6 +19,7 @@ function makeMsg(id: string, username = 'user'): Message {
   return {
     id,
     topicId: 'topic1',
+    kind: 'TEXT',
     contentType: 'TEXT',
     content: `Content of message ${id}`,
     createdAt: new Date().toISOString(),
@@ -38,6 +39,23 @@ function makeRelation(
     relationType,
     sourceMessageId,
     targetRefs: [targetRef],
+    createdAt: new Date().toISOString(),
+    createdBy: { id: 'u-user', username: 'user', createdAt: new Date().toISOString() },
+  };
+}
+
+function makeMultiTargetRelation(
+  id: string,
+  relationType: string,
+  sourceMessageId: string | null,
+  targetRefs: Relation['targetRefs'],
+): Relation {
+  return {
+    id,
+    topicId: 'topic1',
+    relationType,
+    sourceMessageId,
+    targetRefs,
     createdAt: new Date().toISOString(),
     createdBy: { id: 'u-user', username: 'user', createdAt: new Date().toISOString() },
   };
@@ -258,5 +276,64 @@ describe('buildFocusSubgraph', () => {
     const { visibleRelations } = buildFocusSubgraph(msgs, rels, new Set(['a']), 1);
     expect(visibleRelations.has('r1')).toBe(true);
     expect(visibleRelations.has('r2')).toBe(true);
+  });
+
+  // ── Container-type relation tests (two-level visibility model) ──
+
+  it('shows container card but does NOT expand children at maxHops=1', () => {
+    // A (focus) is a child of CLASSIFY container C
+    const msgs = [makeMsg('a'), makeMsg('b'), makeMsg('c')]; // a and b are in the classify, c is outside
+    const rels = [
+      makeMultiTargetRelation('classify1', 'CLASSIFY', null, [
+        { kind: 'message', messageId: 'a' },
+        { kind: 'message', messageId: 'b' },
+      ]),
+    ];
+    const { visibleMessages, visibleRelations } = buildFocusSubgraph(
+      msgs, rels, new Set(['a']), 1,
+    );
+    // Focus message itself is visible
+    expect(visibleMessages.has('a')).toBe(true);
+    // Container card is visible (relation is shown)
+    expect(visibleRelations.has('classify1')).toBe(true);
+    // At maxHops=1, sibling 'b' should NOT be expanded
+    expect(visibleMessages.has('b')).toBe(false);
+    // 'c' was never related
+    expect(visibleMessages.has('c')).toBe(false);
+  });
+
+  it('expands container children at maxHops=2', () => {
+    const msgs = [makeMsg('a'), makeMsg('b'), makeMsg('c')];
+    const rels = [
+      makeMultiTargetRelation('classify1', 'CLASSIFY', null, [
+        { kind: 'message', messageId: 'a' },
+        { kind: 'message', messageId: 'b' },
+      ]),
+    ];
+    const { visibleMessages, visibleRelations } = buildFocusSubgraph(
+      msgs, rels, new Set(['a']), 2,
+    );
+    expect(visibleMessages.has('a')).toBe(true);
+    expect(visibleRelations.has('classify1')).toBe(true);
+    // At maxHops=2, container expands → sibling 'b' is now visible
+    expect(visibleMessages.has('b')).toBe(true);
+  });
+
+  it('does NOT show container if no target is in range', () => {
+    // 'a' is focus but NOT a target of the classify
+    const msgs = [makeMsg('a'), makeMsg('b'), makeMsg('c')];
+    const rels = [
+      makeMultiTargetRelation('classify1', 'CLASSIFY', null, [
+        { kind: 'message', messageId: 'b' },
+        { kind: 'message', messageId: 'c' },
+      ]),
+    ];
+    const { visibleMessages, visibleRelations } = buildFocusSubgraph(
+      msgs, rels, new Set(['a']), 2,
+    );
+    expect(visibleMessages.has('a')).toBe(true);
+    // Container not visible because no target of it is reachable from 'a'
+    expect(visibleRelations.has('classify1')).toBe(false);
+    expect(visibleMessages.has('b')).toBe(false);
   });
 });

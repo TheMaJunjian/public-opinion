@@ -79,6 +79,12 @@ components:
         createdAt:
           type: string
           format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        supersededBy:
+          type: string
+          nullable: true
         createdBy:
           $ref: '#/components/schemas/User'
 
@@ -148,7 +154,7 @@ paths:
   /auth/register:
     post:
       tags: [认证]
-      summary: 注册新用户
+      summary: 注册新与会者
       requestBody:
         required: true
         content:
@@ -173,32 +179,36 @@ paths:
         '400':
           description: 参数校验失败
         '409':
-          description: 用户名已存在
+          description: 与会者名已存在
 
   /auth/login:
     post:
       tags: [认证]
-      summary: 用户登录
+      summary: 与会者登录
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [username, password]
+              required: [username, password, deviceId]
               properties:
                 username:
                   type: string
                 password:
                   type: string
+                deviceId:
+                  type: string
+                  maxLength: 200
             example:
               username: "alice"
               password: "password123"
+              deviceId: "browser-device-id"
       responses:
         '200':
           description: 登录成功，返回 JWT
         '401':
-          description: 用户名或密码错误
+          description: 与会者名或密码错误
 
   /auth/logout:
     post:
@@ -211,6 +221,33 @@ paths:
           description: 已登出
         '401':
           description: 未认证
+
+  /auth/signing-key:
+    post:
+      tags: [认证]
+      summary: 更新当前设备签名密钥
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, publicKey, deviceId]
+              properties:
+                password:
+                  type: string
+                publicKey:
+                  type: string
+                deviceId:
+                  type: string
+                  maxLength: 200
+      responses:
+        '200':
+          description: 当前设备签名密钥已更新
+        '401':
+          description: 认证失败或密码错误
 
   /topics:
     get:
@@ -334,6 +371,17 @@ paths:
           schema:
             type: integer
             default: 20
+        - in: query
+          name: sinceUpdatedAt
+          description: 只返回该时间点之后更新的消息；增量响应可包含 supersededBy 非空的删除通知
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: sinceId
+          description: 当 updatedAt 相同时使用的稳定游标 ID
+          schema:
+            type: string
       responses:
         '200':
           description: 消息列表

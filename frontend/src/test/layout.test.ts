@@ -183,6 +183,17 @@ describe('computeMinColumnsForAnnoRefRule1', () => {
     expect(result.col['b']).toBeGreaterThanOrEqual(1);
   });
 
+  it('places notify source to the right of its target', () => {
+    const normals = [makeNormal('a'), makeNormal('b')];
+    const normalIds = normals.map(m => m.id);
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'notify', 'rel-1', 'b', 'a'),
+    ];
+    const result = computeMinColumnsForAnnoRefRule1(normalIds, edges, new Set());
+    expect(result.col['a']).toBe(0);
+    expect(result.col['b']).toBeGreaterThanOrEqual(1);
+  });
+
   it('cascades constraints through a chain: a←b←c', () => {
     const normals = [makeNormal('a'), makeNormal('b'), makeNormal('c')];
     const normalIds = normals.map(m => m.id);
@@ -316,6 +327,90 @@ describe('applyReplyLayoutAdjustments', () => {
     expect(result.col['c']).toBeGreaterThanOrEqual(1);
   });
 
+  it('places a direct reply to the right of its target', () => {
+    const normals = [
+      makeNormal('b', 'user2', '2024-01-01T00:00:00Z'),
+      makeNormal('a', 'user1', '2024-01-01T00:01:00Z'),
+    ];
+    const result = applyReplyLayoutAdjustments({
+      normals,
+      edges: [makeEdge('e1', 'reply', 'rel-1', 'a', 'b')],
+      baseCol: { a: 0, b: 0 },
+      baseMaxCol: 0,
+      relIds: new Set(),
+    });
+
+    expect(result.col['a']).toBe(result.col['b'] + 1);
+  });
+
+  it('keeps a same-author reply in its author lane across a reply chain', () => {
+    const normals = [
+      makeNormal('a', 'user1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'user2', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'user1', '2024-01-01T00:02:00Z'),
+    ];
+    const result = applyReplyLayoutAdjustments({
+      normals,
+      edges: [
+        makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+        makeEdge('e2', 'reply', 'rel-2', 'c', 'b'),
+      ],
+      baseCol: { a: 0, b: 0, c: 0 },
+      baseMaxCol: 0,
+      relIds: new Set(),
+    });
+
+    expect(result.col['b']).toBe(result.col['a'] + 1);
+    expect(result.col['c']).toBe(result.col['a']);
+    expect(result.col['c']).not.toBe(result.col['b'] + 1);
+  });
+
+  it('does not push a two-way reply cycle rightward during grouping convergence', () => {
+    const normals = [
+      makeNormal('a', 'user1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'user2', '2024-01-01T00:01:00Z'),
+    ];
+    const edges = [
+      makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+      makeEdge('e2', 'reply', 'rel-2', 'a', 'b'),
+    ];
+    const reply = applyReplyLayoutAdjustments({
+      normals, edges, baseCol: { a: 0, b: 0 }, baseMaxCol: 0, relIds: new Set(),
+    });
+    const grouped = applyGroupingColumnOverride({
+      normals, edges, col: reply.col, maxCol: reply.maxCol,
+    });
+
+    expect(Math.abs(reply.col['a'] - reply.col['b'])).toBe(1);
+    expect(Math.max(reply.col['a'], reply.col['b'])).toBe(1);
+    expect(grouped.col).toEqual(reply.col);
+  });
+
+  it('lays out a cross-author reply chain as A/B/C = col0/col1/col0', () => {
+    const normals = [
+      makeNormal('a', 'user1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'user2', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'user1', '2024-01-01T00:02:00Z'),
+    ];
+    const edges = [
+      makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+      makeEdge('e2', 'reply', 'rel-2', 'c', 'b'),
+    ];
+    const stage1 = applyReplyLayoutAdjustments({
+      normals, edges, baseCol: { a: 0, b: 0, c: 0 }, baseMaxCol: 0, relIds: new Set(),
+    });
+    const stage2 = applyGroupingColumnOverride({
+      normals, edges, col: stage1.col, maxCol: stage1.maxCol,
+    });
+    const positioned = computeSimpleNoOverlapLayout({
+      normals, colOf: stage2.col, maxCol: stage2.maxCol,
+    });
+
+    expect(stage2.col).toMatchObject({ a: 0, b: 1, c: 0 });
+    expect(positioned.layout.c.y).toBeGreaterThan(positioned.layout.a.y);
+    expect(positioned.layout.b.y).toBe(positioned.layout.a.y);
+  });
+
   it('does not affect non-reply edges', () => {
     const normals = [makeNormal('a'), makeNormal('b')];
     const baseCol = { a: 0, b: 0 };
@@ -328,6 +423,27 @@ describe('applyReplyLayoutAdjustments', () => {
     expect(result.col['a']).toBe(0);
     expect(result.col['b']).toBe(0);
   });
+
+  it('propagates right shift to dependent anno/ref sources after reply movement', () => {
+    // B replies to A so B moves right; C references B and must stay to B's right.
+    const normals = [
+      makeNormal('a', 'alice', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'bob', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'carol', '2024-01-01T00:02:00Z'),
+    ];
+    const baseCol = { a: 0, b: 0, c: 1 };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'reply', 'rel-1', 'b', 'a'),
+      makeEdge('e2', 'reference', 'rel-2', 'c', 'b'),
+    ];
+
+    const result = applyReplyLayoutAdjustments({
+      normals, edges, baseCol, baseMaxCol: 1, relIds: new Set(),
+    });
+
+    expect(result.col['b']).toBeGreaterThanOrEqual(result.col['a'] + 1);
+    expect(result.col['c']).toBeGreaterThanOrEqual(result.col['b'] + 1);
+  });
 });
 
 // ============================================================
@@ -335,7 +451,7 @@ describe('applyReplyLayoutAdjustments', () => {
 // ============================================================
 
 describe('applyAgreeDisagreeColumnOverride', () => {
-  it('places AGREE source in the same column as target', () => {
+  it('places AGREE source one column to the left of target', () => {
     const normals = [makeNormal('a'), makeNormal('b')];
     const baseCol = { a: 2, b: 0 };
     const edges: DemoEdge[] = [
@@ -344,8 +460,8 @@ describe('applyAgreeDisagreeColumnOverride', () => {
     const result = applyAgreeDisagreeColumnOverride({
       normals, edges, col: baseCol, maxCol: 2,
     });
-    // b agrees with a → same column as a (2)
-    expect(result.col['b']).toBe(2);
+    // b agrees with a → one column left of a (1)
+    expect(result.col['b']).toBe(1);
   });
 
   it('places DISAGREE source one column to the right of target', () => {
@@ -361,9 +477,9 @@ describe('applyAgreeDisagreeColumnOverride', () => {
     expect(result.col['b']).toBe(3);
   });
 
-  it('respects annotation/reference minimum column constraints', () => {
+  it('keeps AGREE source on the left while respecting right-side minimum constraints', () => {
     // a←c (annotation), c should be right of a
-    // c agrees with b → normally same column as b, but anno constraint forces right of a
+    // c agrees with b → should be one column left of b while still >= a.col + 1
     const normals = [makeNormal('a'), makeNormal('b'), makeNormal('c')];
     const baseCol = { a: 0, b: 3, c: 1 };
     const edges: DemoEdge[] = [
@@ -373,9 +489,26 @@ describe('applyAgreeDisagreeColumnOverride', () => {
     const result = applyAgreeDisagreeColumnOverride({
       normals, edges, col: baseCol, maxCol: 3,
     });
-    // c agrees with b → wants col 3, but must be ≥ a.col + 1 = 1 due to annotation
-    // Since 3 ≥ 1, it stays at 3
-    expect(result.col['c']).toBe(3);
+    // c agrees with b → col 2 (left of b=3), and still satisfies c >= a+1 (>=1)
+    expect(result.col['c']).toBe(2);
+  });
+
+  it('shifts AGREE target right when target is leftmost and cascades right-side dependents', () => {
+    const normals = [makeNormal('target'), makeNormal('support'), makeNormal('rightDep')];
+    const baseCol = { target: 0, support: 0, rightDep: 1 };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'agree', 'rel-1', 'support', 'target'),
+      makeEdge('e2', 'reference', 'rel-2', 'rightDep', 'target'),
+    ];
+    const result = applyAgreeDisagreeColumnOverride({
+      normals, edges, col: baseCol, maxCol: 1,
+    });
+
+    // target shifts from col 0 -> 1 so support can stay on its left at col 0
+    expect(result.col['target']).toBe(1);
+    expect(result.col['support']).toBe(0);
+    // right-side dependent remains to the right of target (>= target + 1)
+    expect(result.col['rightDep']).toBe(2);
   });
 
   it('skips pure-stance (anon: source) edges', () => {
@@ -560,6 +693,28 @@ describe('applyGroupingColumnOverride', () => {
     expect(result.col['a']).toBe(result.col['b']);
     expect(result.col['b']).toBe(result.col['c']);
   });
+
+  it('re-applies right-of constraints after grouping shifts a target', () => {
+    // b is grouped to a (same column), and c references b.
+    // If grouping moves b right, c must also move to at least b+1.
+    const normals = [
+      makeNormal('a', 'u1', '2024-01-01T00:00:00Z'),
+      makeNormal('b', 'u1', '2024-01-01T00:01:00Z'),
+      makeNormal('c', 'u1', '2024-01-01T00:02:00Z'),
+    ];
+    const baseCol = { a: 5, b: 0, c: 1 };
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'arrange', 'rel-arr', 'b', 'a'),
+      makeEdge('e2', 'reference', 'rel-ref', 'c', 'b'),
+    ];
+
+    const result = applyGroupingColumnOverride({
+      normals, edges, col: baseCol, maxCol: 5,
+    });
+
+    expect(result.col['b']).toBe(5);
+    expect(result.col['c']).toBeGreaterThanOrEqual(result.col['b'] + 1);
+  });
 });
 
 // ============================================================
@@ -612,8 +767,8 @@ describe('Pipeline integration', () => {
     const s3 = applyAgreeDisagreeColumnOverride({
       normals, edges, col: s2.col, maxCol: s2.maxCol,
     });
-    // msg-c agrees with msg-a → same column
-    expect(s3.col['msg-c']).toBe(s3.col['msg-a']);
+    // msg-c agrees with msg-a → one column在左侧
+    expect(s3.col['msg-c']).toBe(Math.max(0, s3.col['msg-a'] - 1));
 
     // Stage 1-④
     const s4 = applyGroupingColumnOverride({
@@ -920,7 +1075,7 @@ describe('End-to-end: column pipeline → layout', () => {
   });
 
   it('produces zero-overlap layout from agree column constraints', () => {
-    // b agrees with a → same column
+    // b agrees with a → one column在左侧
     const normals = [
       makeNormal('a', 'alice', '2024-01-01T00:00:00Z'),
       makeNormal('b', 'bob',   '2024-01-01T00:01:00Z'),
@@ -931,11 +1086,9 @@ describe('End-to-end: column pipeline → layout', () => {
     const col = { a: 3, b: 0 };
     const s3 = applyAgreeDisagreeColumnOverride({ normals, edges, col, maxCol: 3 });
     const result = computeSimpleNoOverlapLayout({ normals, colOf: s3.col, maxCol: s3.maxCol });
-    // Both in same column → stacked vertically, no overlap
+    // 不同列，依旧不重叠
     expect(findOverlaps(result.layout)).toHaveLength(0);
-    expect(result.layout['a'].x).toBe(result.layout['b'].x);
-    // b (agrees with a, but created later) should be below a
-    expect(result.layout['b'].y).toBeGreaterThan(result.layout['a'].y);
+    expect(result.layout['b'].x).toBeLessThan(result.layout['a'].x);
   });
 
   it('produces zero-overlap layout from disagree column constraints', () => {
@@ -958,7 +1111,7 @@ describe('End-to-end: column pipeline → layout', () => {
   it('handles complex multi-relation scenario without overlaps', () => {
     // a, b, c, d in a mixed scenario:
     //   b annotates a → b right of a
-    //   c agrees with a → c same column as a
+    //   c agrees with a → c 在 a 左侧
     //   d disagrees with a → d right of a
     const normals = [
       makeNormal('a', 'alice', '2024-01-01T00:00:00Z'),
@@ -985,11 +1138,9 @@ describe('End-to-end: column pipeline → layout', () => {
     const overlaps = findOverlaps(result.layout);
     expect(overlaps).toHaveLength(0);
 
-    // a in col 0, b in col ≥ 1 (right of a), c in col 0 (same as a), d in col ≥ 2 (disagree right of a)
+    // a in col 0, b in col ≥ 1 (right of a), c 在 a 左侧, d in col ≥ 2 (disagree right of a)
     expect(result.layout['b'].x).toBeGreaterThan(result.layout['a'].x);
-    expect(result.layout['c'].x).toBe(result.layout['a'].x); // same col
-    // c below a (same column, later time)
-    expect(result.layout['c'].y).toBeGreaterThan(result.layout['a'].y);
+    expect(result.layout['c'].x).toBeLessThan(result.layout['a'].x);
   });
 });
 
@@ -1096,8 +1247,8 @@ describe('Frame containment invariants', () => {
     // m5 (inside r10 inside merge, col 0): x = colX(0) + FRAME_PAD(merge) + FRAME_PAD(r10) = 18 + 16 + 16 = 50 ✓
     expect(50).toBe(colX(0) + 16 + 16);
 
-    // m1 (direct merge card, col 1): x = colX(1) + FRAME_PAD = 418 + 16 = 434 ✓
-    expect(434).toBe(colX(1) + 16);
+    // m1 (direct merge card, col 1): x = colX(1) + FRAME_PAD = 438 + 16 = 454 ✓
+    expect(454).toBe(colX(1) + 16);
   });
 
   it('merge frame bottom edge leaves exactly FRAME_PAD below lowest card', () => {
@@ -1207,8 +1358,8 @@ describe('Frame-as-card placement invariants', () => {
 
     // The frame top should be exactly ROW_GAP below card-a's bottom
     expect(frameTop).toBe(GRID_TOP + 86 + ROW_GAP);
-    // = 48 + 86 + 32 = 166
-    expect(frameTop).toBe(166);
+    // = 48 + 86 + 32 = 172
+    expect(frameTop).toBe(172);
   });
 
   it('a frame in col 1 and a card in col 0 can be at the same y (different columns)', () => {
@@ -1237,8 +1388,8 @@ describe('Frame-as-card placement invariants', () => {
     // Frame 1 at col 0, height 200. Frame 2 at col 0, height 150.
     // Frame 2 should be at frame1.y + frame1.h + ROW_GAP
     const frame1 = { x: colX(0), y: GRID_TOP, width: CARD_W, height: 200 };
-    const frame2ExpectedY = frame1.y + frame1.height + ROW_GAP; // 48 + 200 + 32 = 280
-    expect(frame2ExpectedY).toBe(280);
+    const frame2ExpectedY = frame1.y + frame1.height + ROW_GAP; // 48 + 200 + 32 = 280 → 286
+    expect(frame2ExpectedY).toBe(286);
   });
 
   it('frames and cards only collide when x-ranges overlap', () => {
@@ -1252,7 +1403,7 @@ describe('Frame-as-card placement invariants', () => {
     expect(findOverlaps(layout)).toHaveLength(0);
     // card-col0 bottom = 48+86 = 134
     // frame-col0 top = 48+86+32 = 166 → no overlap ✓
-    expect(layout['frame-col0'].y).toBe(166);
+    expect(layout['frame-col0'].y).toBe(172);
   });
 
   it('FRAME_PAD is internal to the frame, not part of top-level placement', () => {
@@ -1438,6 +1589,21 @@ describe('computeFrameAwareColumnCorrection', () => {
     expect(result.col['src']).toBeGreaterThanOrEqual(1);
   });
 
+  it('pushes notify source right of a frame', () => {
+    const normals = [makeNormal('src'), makeNormal('a')];
+    const edges: DemoEdge[] = [
+      makeEdge('e1', 'notify', 'rel-notify', 'src', 'frame1'),
+    ];
+    const colOf = { src: 0, a: 0 };
+    const frameRects = {
+      frame1: { x: colX(0), y: 0, width: CARD_W + FRAME_PAD * 2, height: 200 },
+    };
+    const result = computeFrameAwareColumnCorrection({
+      normals, edges, colOf, maxCol: 0, frameRects,
+    });
+    expect(result.col['src']).toBeGreaterThanOrEqual(1);
+  });
+
   it('pushes reply source right of a frame target', () => {
     const normals = [makeNormal('replySrc'), makeNormal('a')];
     const edges: DemoEdge[] = [
@@ -1570,8 +1736,7 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // src should be at y=362 (aligned with target)
-    expect(result.layout['src'].y).toBe(362);
+    expect(result.layout['src'].y).toBe(369);
   });
 
   it('stacks multiple sources toward target (middle card aligned)', () => {
@@ -1593,12 +1758,9 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // Middle card (s2) top should be at targetY=362
-    expect(result.layout['s2'].y).toBe(362);
-    // s1 above s2: 362 - 86 - 32 = 244
-    expect(result.layout['s1'].y).toBe(244);
-    // s3 below s2: 362 + 86 + 32 = 480
-    expect(result.layout['s3'].y).toBe(480);
+    expect(result.layout['s2'].y).toBe(369);
+    expect(result.layout['s1'].y).toBe(245);
+    expect(result.layout['s3'].y).toBe(493);
     // target unchanged
     expect(result.layout['tgt'].y).toBe(362);
   });
@@ -1606,7 +1768,7 @@ describe('compactAnnoRefClusters', () => {
   it('respects upper bound from unrelated card above the cluster', () => {
     // Unrelated card X at y=48 (bottom=134).
     // n=2, middleIdx=1 (s2). heightAbove = 86+32 = 118. idealTop = 362-118 = 244.
-    // X bottom=134, upperBound = 134+32 = 166. 244 > 166, so top = 244.
+    // X bottom=134, upperBound = 134+32 = 166. 244 > 166, so top = 238.
     const normals = [makeNormal('X'), makeNormal('s1', 'a', '2024-01-01'), makeNormal('s2', 'b', '2024-01-02'), makeNormal('tgt')];
     const colOf = { X: 2, s1: 2, s2: 2, tgt: 0 };
     const layout = {
@@ -1622,15 +1784,14 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // s1 at 244, s2 at 362 (top aligned with target)
-    expect(result.layout['s1'].y).toBe(244);
-    expect(result.layout['s2'].y).toBe(362);
+    expect(result.layout['s1'].y).toBe(245);
+    expect(result.layout['s2'].y).toBe(369);
   });
 
   it('moves cluster toward target even when above it', () => {
     // Cluster at y=280, target at y=362. n=2, middleIdx=1.
     // heightAbove = 86+32 = 118. idealTop = 362-118 = 244.
-    // newTop = max(48, 244) = 244. s1 at 244, s2 at 362.
+    // newTop = max(48, 244) = 238. s1 at 238, s2 at 362.
     const normals = [makeNormal('s1'), makeNormal('s2'), makeNormal('tgt')];
     const colOf = { s1: 2, s2: 2, tgt: 0 };
     const layout = {
@@ -1645,9 +1806,32 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // Cluster should move to ideal position: s1 at 244, s2 at 362
-    expect(result.layout['s1'].y).toBe(244);
-    expect(result.layout['s2'].y).toBe(362);
+    expect(result.layout['s1'].y).toBe(245);
+    expect(result.layout['s2'].y).toBe(369);
+  });
+
+  it('keeps the target fixed when the source cluster is blocked', () => {
+    const normals = [makeNormal('blocker'), makeNormal('src'), makeNormal('tgt')];
+    const colOf = { blocker: 2, src: 2, tgt: 0 };
+    const layout = {
+      blocker: { x: colX(2), y: 300, width: CARD_W, height: 86 },
+      src: { x: colX(2), y: 48, width: CARD_W, height: 86 },
+      tgt: { x: colX(0), y: 362, width: CARD_W, height: 100 },
+    };
+    const result = compactAnnoRefClusters({
+      layout,
+      normals,
+      colOf,
+      edges: [makeEdge('e1', 'annotation', 'rel-1', 'src', 'tgt')],
+      allFrameRects: {},
+      canvasHeight: 600,
+    });
+
+    // The source must start below blocker, but the left-side target is the
+    // stable anchor and must not move to improve the edge length.
+    expect(result.layout['src'].y).toBe(424);
+    expect(result.layout['tgt'].y).toBe(362);
+    expect(findOverlaps(result.layout)).toHaveLength(0);
   });
 
   it('shifts source toward frame target', () => {
@@ -1664,12 +1848,10 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: frameRects, canvasHeight: 600,
     });
-    // src should be at y=362 (aligned with frame top)
-    expect(result.layout['src'].y).toBe(362);
+    expect(result.layout['src'].y).toBe(419);
   });
 
-  it('does not move non-annotation/reference edges', () => {
-    // Reply sources should NOT be compacted (only anno/ref)
+  it('compacts reply sources toward their targets', () => {
     const normals = [makeNormal('src'), makeNormal('tgt')];
     const colOf = { src: 2, tgt: 0 };
     const layout = {
@@ -1680,8 +1862,7 @@ describe('compactAnnoRefClusters', () => {
     const result = compactAnnoRefClusters({
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 500,
     });
-    // Reply should NOT be compacted
-    expect(result.layout['src'].y).toBe(48);
+    expect(result.layout['src'].y).toBe(369);
   });
 
   it('handles interleaved clusters in different columns independently', () => {
@@ -1711,16 +1892,11 @@ describe('compactAnnoRefClusters', () => {
       layout, normals, colOf, edges, allFrameRects: {}, canvasHeight: 700,
     });
     // Cluster A (a1, a2) → targetA at y=300
-    // n=2, middleIdx=1, heightAbove=86+32=118, idealTop=300-118=182
-    // upperBound=48, newTop=182
-    expect(result.layout['a1'].y).toBe(182);
-    expect(result.layout['a2'].y).toBe(300);
+    expect(result.layout['a1'].y).toBe(183);
+    expect(result.layout['a2'].y).toBe(307);
     // Cluster B (b1, b2) → targetB at y=500. a2 bottom=300+86=386.
-    // upperBound = 386+32 = 418
-    // n=2, middleIdx=1, heightAbove=118, idealTop=500-118=382
-    // 382 < 418, so top = 418
-    expect(result.layout['b1'].y).toBe(418);
-    expect(result.layout['b2'].y).toBe(536);
+    expect(result.layout['b1'].y).toBe(431);
+    expect(result.layout['b2'].y).toBe(555);
   });
 
   it('uses frame top edge when target card is inside a frame (m7 → m5 bug)', () => {
@@ -1745,8 +1921,8 @@ describe('compactAnnoRefClusters', () => {
       layout, normals, colOf, edges, allFrameRects: frameRects, canvasHeight: 800,
     });
     // m7 should be pushed below r10 (frame avoidance):
-    // r10 bottom=586, +ROW_GAP=618. m7 at y=618.
-    expect(result.layout['m7'].y).toBe(618);
+    // r10 bottom=586, +ROW_GAP=618. m7 at y=624.
+    expect(result.layout['m7'].y).toBe(624);
     // m5 and m6 should NOT be moved (they're inside the frame, not sources)
     expect(result.layout['m5'].y).toBe(410);
     expect(result.layout['m6'].y).toBe(410);
@@ -1773,5 +1949,25 @@ describe('compactAnnoRefClusters', () => {
     // m1 should NOT be moved — it's inside mock-101 frame
     expect(result.layout['m1'].y).toBe(100);
     expect(result.layout['m2'].y).toBe(300);
+  });
+
+  it('does not move a frame member when its transient position is outside the frame rect', () => {
+    const normals = [makeNormal('member'), makeNormal('target')];
+    const colOf = { member: 1, target: 0 };
+    const layout = {
+      member: { x: colX(1), y: 48, width: CARD_W, height: 86 },
+      target: { x: colX(0), y: 360, width: CARD_W, height: 86 },
+    };
+    const result = compactAnnoRefClusters({
+      layout,
+      normals,
+      colOf,
+      edges: [makeEdge('e1', 'reference', 'rel-1', 'member', 'target')],
+      allFrameRects: { frame1: { x: colX(0), y: 200, width: CARD_W, height: 120 } },
+      frameMemberIds: new Set(['member']),
+      canvasHeight: 500,
+    });
+
+    expect(result.layout.member).toEqual(layout.member);
   });
 });

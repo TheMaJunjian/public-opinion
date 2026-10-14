@@ -2,30 +2,37 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { createHash } from 'crypto';
 import { prisma } from '../lib/prisma';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, verifySignature, AuthRequest } from '../middleware/auth';
 import { applyEvent } from '../lib/events';
 
 const messagesRouter = Router({ mergeParams: true });
 
 const createMessageSchema = z.object({
+  kind: z.enum(['TEXT', 'GOVERNANCE', 'CODE', 'ROUND', 'ROUND_RESULT', 'OPERATIONS']).optional().default('TEXT'),
   contentType: z.enum(['TEXT', 'MARKDOWN']).optional().default('TEXT'),
-  content: z.string().min(1, '内容不能为空').max(20000, '内容最多 20000 个字符'),
+  content: z.string().max(20000, '内容最多 20000 个字符').optional(),
   quoteSourceId: z.string().optional(),
   quotedText: z.string().max(2000, '引用文本最多 2000 个字符').optional(),
   quoteContextBefore: z.string().max(200, '前置上下文最多 200 个字符').optional(),
   quoteContextAfter: z.string().max(200, '后置上下文最多 200 个字符').optional(),
+  stakeAmount: z.number().int().min(1).optional(),
+  targetMessageId: z.string().optional(),  // Phase 6: for ROUND messages
+  note: z.string().optional(),              // Phase 6: round note
+  settlementType: z.enum(['TRUTH', 'VALUE']).optional(),
 });
 
 const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(200).optional().default(20),
+  sinceUpdatedAt: z.string().datetime().optional(),
+  sinceId: z.string().min(1).optional(),
 });
 
 // GET /api/topics/:topicId/messages
 messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
-    const { page, limit } = paginationSchema.parse(req.query);
+    const { page, limit, sinceUpdatedAt, sinceId } = paginationSchema.parse(req.query);
     const skip = (page - 1) * limit;
 
     const topic = await prisma.topic.findUnique({ where: { id: topicId } });
@@ -34,11 +41,27 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
       return;
     }
 
+    const messageWhere = {
+      topicId,
+      ...(sinceUpdatedAt ? {} : { supersededBy: null }),
+      ...(sinceUpdatedAt
+        ? {
+            OR: sinceId
+              ? [
+                  { updatedAt: { gt: new Date(sinceUpdatedAt) } },
+                  { updatedAt: new Date(sinceUpdatedAt), id: { gt: sinceId } },
+                ]
+              : [{ updatedAt: { gt: new Date(sinceUpdatedAt) } }],
+          }
+        : {}),
+    };
     const [total, messages] = await Promise.all([
-      prisma.message.count({ where: { topicId, kind: 'TEXT' } }),
+      prisma.message.count({ where: messageWhere }),
       prisma.message.findMany({
-        where: { topicId, kind: 'TEXT' },
-        orderBy: { createdAt: 'asc' },
+        where: messageWhere,
+        orderBy: sinceUpdatedAt
+          ? [{ updatedAt: 'asc' as const }, { id: 'asc' as const }]
+          : [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
         skip,
         take: limit,
         include: { createdBy: { select: { id: true, username: true } } },
@@ -55,7 +78,7 @@ messagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
 });
 
 // POST /api/topics/:topicId/messages
-messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+messagesRouter.post('/', requireAuth, verifySignature, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const topicId = req.params.topicId as string;
     const data = createMessageSchema.parse(req.body);
@@ -78,8 +101,10 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
     const message = await applyEvent({
       type: 'MESSAGE_CREATED',
       actorId: req.user!.id,
+      signature: (req.headers['x-signature'] as string) ?? null,
       topicId,
       payload: {
+        kind: data.kind,
         contentType: data.contentType,
         content: data.content,
         quoteSourceId: data.quoteSourceId ?? null,
@@ -87,6 +112,10 @@ messagesRouter.post('/', requireAuth, async (req: AuthRequest, res: Response, ne
         quotedTextHash: quotedTextHash ?? null,
         quoteContextBefore: data.quoteContextBefore ?? null,
         quoteContextAfter: data.quoteContextAfter ?? null,
+        stakeAmount: data.stakeAmount,
+        targetMessageId: data.targetMessageId,
+        note: data.note ?? null,
+        settlementType: data.settlementType,
       },
     });
 

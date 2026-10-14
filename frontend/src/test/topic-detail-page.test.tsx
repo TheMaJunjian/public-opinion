@@ -3,20 +3,56 @@ import { describe, beforeEach, expect, it, vi } from 'vitest';
 import TopicDetailPage from '../pages/TopicDetailPage';
 import type { Message, Relation, Topic, User } from '../types';
 
-const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => ({
-  mockApi: {
+const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => {
+  const mockApi = {
     getTopic: vi.fn(),
     getMessages: vi.fn(),
+    getAllMessages: vi.fn(),
     getRelations: vi.fn(),
-  },
-  mockNavigate: vi.fn(),
-  mockGraphView: vi.fn(),
-}));
+    createMessage: vi.fn(),
+    getAttentionUsers: vi.fn().mockResolvedValue({ data: {} }),
+    getPointsBalance: vi.fn().mockResolvedValue({ points: { available: 100, locked: 0 }, balance: { amount: 100, debtFrozen: false } }),
+    getPointsTransactions: vi.fn().mockResolvedValue({ data: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 } }),
+    getMessageStakes: vi.fn().mockResolvedValue({ messageId: '', pool: { lockedPro: 0, lockedCon: 0 }, stakes: [], counts: { pro: 0, con: 0 } }),
+    getMessageRounds: vi.fn().mockResolvedValue({ data: [] }),
+    getRoundDetail: vi.fn().mockResolvedValue(null),
+    getCurrentRules: vi.fn().mockResolvedValue({ parameters: { selfStakeOnCreate: 10, minStake: 1, stakeFeeAmount: 1 } }),
+    createRound: vi.fn(),
+    castVote: vi.fn(),
+    closeAndSettle: vi.fn(),
+    getTopicTagCounts: vi.fn().mockResolvedValue({ topicId: '', counts: {} }),
+  };
+  mockApi.getAllMessages.mockImplementation(async (...args: Parameters<typeof mockApi.getMessages>) => {
+    const messages = await mockApi.getMessages(...args);
+    const relations = await mockApi.getRelations();
+    return {
+      ...messages,
+      data: [
+        ...messages.data,
+        ...relations.data.map((relation: Relation) => ({
+          id: relation.id,
+          topicId: relation.topicId,
+          kind: 'RELATION',
+          contentType: 'TEXT',
+          content: '',
+          relationType: relation.relationType,
+          relSourceId: relation.sourceMessageId,
+          targetRefs: relation.targetRefs,
+          relationPayload: relation.payload ?? null,
+          createdAt: relation.createdAt,
+          createdBy: relation.createdBy,
+        })),
+      ],
+    };
+  });
+  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn() };
+});
 
 vi.mock('../api', () => ({ api: mockApi }));
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
     user: { id: 'user-1', username: 'tester', createdAt: '2024-01-01T00:00:00.000Z' },
+    logout: vi.fn(),
   }),
 }));
 vi.mock('react-router-dom', async () => {
@@ -25,6 +61,8 @@ vi.mock('react-router-dom', async () => {
     ...actual,
     useParams: () => ({ topicId: 'topic-1' }),
     useNavigate: () => mockNavigate,
+    useLocation: () => ({ pathname: '/topics/topic-1', state: null, key: '', search: '', hash: '' }),
+    useSearchParams: () => [new URLSearchParams(), vi.fn()] as const,
   };
 });
 vi.mock('../components/GraphView', async () => {
@@ -46,6 +84,7 @@ function makeMessage(id: string, content: string): Message {
   return {
     id,
     topicId: 'topic-1',
+    kind: 'TEXT',
     contentType: 'TEXT',
     content,
     createdAt: '2024-01-01T00:00:00.000Z',
@@ -65,6 +104,78 @@ function makeRelation(): Relation {
   };
 }
 
+describe('TopicDetailPage home filter container projection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue({
+      id: 'topic-1', title: '测试分类', status: 'OPEN',
+      createdAt: '2024-01-01T00:00:00.000Z', updatedAt: '2024-01-01T00:00:00.000Z',
+      createdBy: makeUser(),
+    });
+    mockApi.getMessages.mockResolvedValue({ data: [makeMessage('hit', '命中消息')] });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      {
+        id: 'inner-arrange', topicId: 'topic-1', relationType: 'ARRANGE', sourceMessageId: null,
+        targetRefs: [],
+        createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'outer-classify', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+        targetRefs: [],
+        payload: { title: '外层容器' },
+        createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'join-hit', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'inner-arrange',
+        targetRefs: [{ kind: 'message', messageId: 'hit' }],
+        createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'join-inner', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'outer-classify',
+        targetRefs: [{ kind: 'relation', relationId: 'inner-arrange' }],
+        createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
+      },
+    ] as Relation[] });
+  });
+
+  it('shows the outer container entry without leaking its matched member', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: '主页' }));
+    fireEvent.click(screen.getByRole('radio', { name: /已读 · 自发/ }));
+
+    await waitFor(() => {
+      const graphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const messageIds = new Set(graphProps.messages.map((message: { id: string }) => message.id));
+      expect(messageIds).toEqual(new Set(['outer-classify']));
+    });
+  });
+
+  it('restores join filtering on ordinary temporary-category exit but not on tag navigation', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /清爽/ }));
+
+    const getLatestGraphProps = () => mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    await act(async () => {
+      getLatestGraphProps().onJoinFilterClick('inner-arrange', 'outgoing');
+    });
+    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
+    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).toBeChecked();
+
+    await act(async () => {
+      getLatestGraphProps().onJoinFilterClick('inner-arrange', 'outgoing');
+    });
+    await act(async () => {
+      getLatestGraphProps().onNavigateToMessage('join-hit');
+    });
+    expect(screen.getByRole('checkbox', { name: '屏蔽加入消息' })).not.toBeChecked();
+  });
+});
+
 describe('TopicDetailPage composer refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -81,15 +192,41 @@ describe('TopicDetailPage composer refresh', () => {
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
   });
 
+  it('disables the send button while a message request is pending', async () => {
+    localStorage.setItem('token', 'test-token');
+    let resolveMessage!: (message: Message) => void;
+    mockApi.createMessage
+      .mockImplementationOnce(() => new Promise<Message>(resolve => { resolveMessage = resolve; }))
+      .mockResolvedValue({
+        id: 'round-pending', topicId: 'topic-1', kind: 'ROUND', contentType: 'TEXT',
+        content: '', createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+      });
+    render(<TopicDetailPage />);
+
+    const textarea = await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    fireEvent.change(textarea, { target: { value: '待发送消息' } });
+    const sendButton = screen.getByRole('button', { name: '发送' });
+    fireEvent.click(sendButton);
+
+    await waitFor(() => expect(sendButton).toBeDisabled());
+    expect(mockApi.createMessage).toHaveBeenCalledTimes(1);
+
+    resolveMessage({
+      id: 'msg-pending', topicId: 'topic-1', kind: 'TEXT', contentType: 'TEXT',
+      content: '待发送消息', createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+    });
+    await waitFor(() => expect(mockApi.createMessage).toHaveBeenCalledTimes(2));
+  });
+
   it('re-enables the textarea after clearing draft targets and switching relation types', async () => {
     render(<TopicDetailPage />);
 
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    // TAG auto-selects "推荐" as secondary — don't click it again or it toggles off
     fireEvent.click(screen.getByRole('button', { name: '标注' }));
-    fireEvent.click(screen.getByText('关系消息 rel-1'));
-    fireEvent.click(screen.getByRole('button', { name: '推荐' }));
+    fireEvent.click(screen.getByText('rel-1'));
 
     await waitFor(() => {
       const textarea = screen.getByPlaceholderText('已选择附加关系，此处不可输入');
@@ -105,6 +242,38 @@ describe('TopicDetailPage composer refresh', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '引用' }));
     expect(screen.getByText('请在画布中选择目标消息')).toBeInTheDocument();
+  });
+
+  it('keeps a locally visible reference message when polling returns a stale snapshot', async () => {
+    vi.useFakeTimers();
+    const source = makeMessage('source-1', '来源消息');
+    const reference = {
+      id: 'ref-1', topicId: 'topic-1', kind: 'REFERENCE' as const, contentType: 'TEXT' as const,
+      content: '引用消息', createdAt: '2024-01-01T00:02:00.000Z',
+      createdBy: makeUser(),
+    };
+    const referenceRelation: Relation = {
+      id: 'ref-1', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'source-1',
+      targetRefs: [{ kind: 'message', messageId: 'source-1' }],
+      createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+    };
+    mockApi.getMessages
+      .mockResolvedValueOnce({ data: [source, reference] })
+      .mockResolvedValue({ data: [source] });
+    mockApi.getRelations
+      .mockResolvedValueOnce({ data: [referenceRelation] })
+      .mockResolvedValue({ data: [] });
+
+    render(<TopicDetailPage />);
+    await act(async () => {});
+    const initialGraphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1]?.[0];
+    expect(initialGraphProps.messages.some((m: { id: string }) => m.id === 'ref-1')).toBe(true);
+
+    await act(async () => { vi.advanceTimersByTime(5000); });
+    await act(async () => {});
+    const refreshedGraphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1]?.[0];
+    expect(refreshedGraphProps.messages.some((m: { id: string }) => m.id === 'ref-1')).toBe(true);
+    vi.useRealTimers();
   });
 });
 
@@ -163,30 +332,30 @@ describe('TopicDetailPage nested-classify merge expansion', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     // Switch to list view
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
 
     // On the main canvas only the outer classify topic card should be visible;
     // msg-a, msg-b, rel-merge, and rel-inner are hidden (classified away).
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('rel-outer')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
 
     // Enter the outer topic by double-clicking its card
-    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('rel-outer'));
 
     // After entering outer-topic focus, only the direct CLASSIFY target (rel-inner)
     // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
     // internal content (rel-merge, msg-a, msg-b) should NOT be expanded into this view.
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-inner')).toBeInTheDocument();
+      expect(screen.getByText('rel-inner')).toBeInTheDocument();
     });
     expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
   });
 });
@@ -254,32 +423,42 @@ describe('TopicDetailPage deeply nested classify → classify → merge', () => 
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     // Switch to list view
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
 
     // On the main canvas only the outer classify topic card should be visible.
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('rel-outer')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-middle')).not.toBeInTheDocument();
 
     // Enter the outer topic by double-clicking its card.
-    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('rel-outer'));
 
     // After entering outer-topic focus, only the direct CLASSIFY target (rel-middle)
     // should be shown as a topic card. Nested CLASSIFY/SUMMARY are opaque — their
     // internal content (rel-inner, rel-merge, msg-a, msg-b) should NOT be expanded.
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-middle')).toBeInTheDocument();
+      expect(screen.getByText('rel-middle')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
     expect(screen.queryByText('归并 rel-merge')).not.toBeInTheDocument();
     expect(screen.queryByText('分类 rel-inner')).not.toBeInTheDocument();
+
+    fireEvent.doubleClick(screen.getByText('rel-middle'));
+
+    const exitButton = await screen.findByRole('button', { name: '退出分类' });
+    fireEvent.click(exitButton);
+    await waitFor(() => {
+      expect(screen.getByText('rel-middle')).toBeInTheDocument();
+    });
+
   });
+
 });
 
 describe('TopicDetailPage summary relation visibility', () => {
@@ -329,18 +508,51 @@ describe('TopicDetailPage summary relation visibility', () => {
     expect(latestGraphProps?.messages?.some((m: { id: string }) => m.id === 'msg-1')).toBe(false);
 
     // In list view, summary target text should remain visible.
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+      expect(screen.getByText('rel-summary')).toBeInTheDocument();
     });
-    expect(screen.getByText('消息 msg-1')).toBeInTheDocument();
+    expect(screen.getByText('msg-1')).toBeInTheDocument();
 
-    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+    fireEvent.doubleClick(screen.getByText('rel-summary'));
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByText('消息 msg-1')).toBeInTheDocument();
+    expect(screen.getByText('msg-1')).toBeInTheDocument();
     expect(screen.queryByText('总结 rel-summary')).not.toBeInTheDocument();
+  });
+
+  it('keeps a reference whose target is a summary message in the graph', async () => {
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-summary',
+          topicId: 'topic-1',
+          relationType: 'SUMMARY',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-1' }],
+          payload: { title: '总结观点', targetLayout: 'multi-column' },
+          createdAt: '2024-01-01T00:01:00.000Z',
+          createdBy: makeUser(),
+        },
+        {
+          id: 'rel-reference',
+          topicId: 'topic-1',
+          relationType: 'REFERENCE',
+          sourceMessageId: 'msg-2',
+          targetRefs: [{ kind: 'relation', relationId: 'rel-summary' }],
+          createdAt: '2024-01-01T00:02:00.000Z',
+          createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    const latestGraphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1]?.[0];
+    expect(latestGraphProps?.messages?.some((m: { id: string }) => m.id === 'rel-reference')).toBe(true);
+    expect(latestGraphProps?.edges?.some((e: { relationMessageId: string }) => e.relationMessageId === 'rel-reference')).toBe(true);
   });
 });
 
@@ -455,11 +667,11 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-outer')).toBeInTheDocument();
+      expect(screen.getByText('rel-outer')).toBeInTheDocument();
     });
-    fireEvent.doubleClick(screen.getByText('分类 rel-outer'));
+    fireEvent.doubleClick(screen.getByText('rel-outer'));
 
     // After entering outer-topic focus:
     // - msg-b is a direct text target, should be visible
@@ -468,11 +680,11 @@ describe('TopicDetailPage classify containing merge with nested classify target'
     // - rel-inner (CLASSIFY) is inside rel-merge, shown as topic card only
     // - msg-c is inside rel-inner, should NOT be visible (CLASSIFY is opaque)
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-inner')).toBeInTheDocument();
+      expect(screen.getByText('rel-inner')).toBeInTheDocument();
     });
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.getAllByText('msg-b').length).toBeGreaterThan(0);
+    expect(screen.queryByText('msg-c')).not.toBeInTheDocument();
   });
 });
 
@@ -573,22 +785,22 @@ describe('TopicDetailPage CLASSIFY topic with arrange source visibility', () => 
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
     // Enter the classify topic
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     await waitFor(() => {
       // The arrange relation message must be visible in the topic view
-      expect(screen.getByText('关系消息 rel-supp')).toBeInTheDocument();
+      expect(screen.getByText('rel-supp')).toBeInTheDocument();
     });
     // The arrange's source text (msg-a) must also be visible so its frame can render
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
     // The arrange's target text (msg-b) must be visible
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.getAllByText('msg-b').length).toBeGreaterThan(0);
   });
 });
 
@@ -640,19 +852,19 @@ describe('TopicDetailPage SUMMARY topic with arrange source visibility', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+      expect(screen.getByText('rel-summary')).toBeInTheDocument();
     });
 
     // Enter the summary topic
-    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+    fireEvent.doubleClick(screen.getByText('rel-summary'));
 
     await waitFor(() => {
-      expect(screen.getByText('关系消息 rel-supp')).toBeInTheDocument();
+      expect(screen.getByText('rel-supp')).toBeInTheDocument();
     });
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.getAllByText('msg-b').length).toBeGreaterThan(0);
   });
 });
 
@@ -768,41 +980,41 @@ describe('TopicDetailPage CLASSIFY topic with CORRECT-related message', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
     // msg-orig is classified, so it should be hidden
-    expect(screen.queryByText('消息 msg-orig')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-orig')).not.toBeInTheDocument();
     // msg-corr is CORRECT-related to msg-orig, so it should also be hidden
-    expect(screen.queryByText('消息 msg-corr')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-corr')).not.toBeInTheDocument();
     // msg-other is unrelated and should still be visible
-    expect(screen.getByText('消息 msg-other')).toBeInTheDocument();
+    expect(screen.getByText('msg-other')).toBeInTheDocument();
   });
 
   it('shows classified message and its CORRECT-related message when entering classify topic', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     });
     // msg-orig (direct target) must be visible
-    expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
+    expect(screen.getByText('msg-orig')).toBeInTheDocument();
     // msg-corr (CORRECT-related to msg-orig) must be automatically included
-    expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
+    expect(screen.getByText('msg-corr')).toBeInTheDocument();
     // rel-correct (CORRECT relation message) must also be visible
-    expect(screen.getByText('关系消息 rel-correct')).toBeInTheDocument();
+    expect(screen.getByText('rel-correct')).toBeInTheDocument();
     // msg-other (unrelated) must NOT appear
-    expect(screen.queryByText('消息 msg-other')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-other')).not.toBeInTheDocument();
   });
 });
 
@@ -856,22 +1068,22 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('总结 rel-summary')).toBeInTheDocument();
+      expect(screen.getByText('rel-summary')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('总结 rel-summary'));
+    fireEvent.doubleClick(screen.getByText('rel-summary'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
     });
     // msg-orig (direct target) must be visible
-    expect(screen.getByText('消息 msg-orig')).toBeInTheDocument();
+    expect(screen.getByText('msg-orig')).toBeInTheDocument();
     // msg-corr (CORRECT-related to msg-orig) must be automatically included
-    expect(screen.getByText('消息 msg-corr')).toBeInTheDocument();
+    expect(screen.getByText('msg-corr')).toBeInTheDocument();
     // rel-correct (CORRECT relation message) must also be visible
-    expect(screen.getByText('关系消息 rel-correct')).toBeInTheDocument();
+    expect(screen.getByText('rel-correct')).toBeInTheDocument();
   });
 
   it('hides CORRECT-related message from graph view when its counterpart is summarized', async () => {
@@ -889,6 +1101,315 @@ describe('TopicDetailPage SUMMARY topic with CORRECT-related message', () => {
     // rel-summary itself is visible (it's the topic card)
     expect(latestProps.messages.some((m: { id: string }) => m.id === 'rel-summary')).toBe(true);
   });
+
+  it('keeps summary targets in the linear trace view without expanding the frame', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    const initialProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    initialProps.onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'rel-summary');
+    const traceButton = screen.getByRole('button', { name: '设为追溯消息' });
+    await waitFor(() => expect(traceButton).not.toBeDisabled());
+    fireEvent.click(traceButton);
+
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('rel-summary')).toBe(true);
+      expect(ids.has('msg-orig')).toBe(false);
+      expect(ids.has('msg-corr')).toBe(false);
+      expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(false);
+      expect(props.hideMessageIds?.has('rel-summary') ?? false).toBe(false);
+    });
+
+    const collapsedProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    collapsedProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary');
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('msg-orig')).toBe(true);
+      expect(ids.has('msg-corr')).toBe(true);
+      expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    await waitFor(() => {
+      expect(screen.getByText('msg-orig')).toBeInTheDocument();
+      expect(screen.getByText('msg-corr')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('TopicDetailPage trace container frame projection', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试分类',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('frame-member-a', '框架内部消息 A'),
+        makeMessage('frame-member-b', '框架内部消息 B'),
+        makeMessage('external-text', '引用分类的外部消息'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [
+            { kind: 'message', messageId: 'frame-member-a' },
+            { kind: 'message', messageId: 'frame-member-b' },
+          ],
+          payload: { title: '分类框架' },
+          createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-reference', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'external-text',
+          targetRefs: [{ kind: 'relation', relationId: 'rel-classify' }],
+          createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('traces the classify relation as a topic card with direct reference text', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    const initialProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    initialProps.onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'rel-classify');
+    const traceButton = screen.getByRole('button', { name: '设为追溯消息' });
+    await waitFor(() => expect(traceButton).not.toBeDisabled());
+    fireEvent.click(traceButton);
+
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('rel-classify')).toBe(true);
+      expect(ids.has('frame-member-a')).toBe(false);
+      expect(ids.has('frame-member-b')).toBe(false);
+      expect(ids.has('external-text')).toBe(true);
+      expect(props.traceFrameIds.has('rel-classify')).toBe(true);
+      expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(false);
+      expect(props.edges.map((edge: { relationMessageId: string }) => edge.relationMessageId)).toContain('rel-classify');
+    });
+  });
+
+  it('expands a summary frame that is nested inside the current classify topic', async () => {
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('summary-member-a', '总结内部消息 A'),
+        makeMessage('summary-member-b', '总结内部消息 B'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-summary' }],
+          payload: { title: '外层分类' },
+          createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-summary', topicId: 'topic-1', relationType: 'SUMMARY', sourceMessageId: null,
+          targetRefs: [
+            { kind: 'message', messageId: 'summary-member-a' },
+            { kind: 'message', messageId: 'summary-member-b' },
+          ],
+          payload: { title: '内层总结' },
+          createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    await waitFor(() => expect(screen.getByText('rel-classify')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitFor(() => expect(screen.getByText('rel-summary')).toBeInTheDocument());
+    expect(screen.getByText('summary-member-a')).toBeInTheDocument();
+    expect(screen.getByText('summary-member-b')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('rel-summary'));
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '退出追溯' })).toBeInTheDocument();
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      expect(props.traceFrameIds.has('rel-summary')).toBe(true);
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('rel-classify')).toBe(true);
+      expect(ids.has('rel-summary')).toBe(false);
+      expect(ids.has('summary-member-a')).toBe(false);
+      expect(ids.has('summary-member-b')).toBe(false);
+      expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-classify')).toBe(true);
+    });
+
+    const traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    traceProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-classify');
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      expect(props.messages.some((message: { id: string }) => message.id === 'rel-summary')).toBe(true);
+    });
+    const expandedParentProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    expandedParentProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary');
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('summary-member-a')).toBe(true);
+      expect(ids.has('summary-member-b')).toBe(true);
+      expect(props.traceExpandedFrameIds.has('rel-summary')).toBe(true);
+    });
+  });
+
+  it('keeps a traced nested classify inside its parent frame', async () => {
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('msg-d', '文本 D'),
+        makeMessage('msg-f', '文本 F'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-a', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-b' }], payload: { title: '分类 A' },
+          createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-b', topicId: 'topic-1', relationType: 'SUMMARY', sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-c' }], payload: { title: '总结 B' },
+          createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-c', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-d' }, { kind: 'relation', relationId: 'rel-e' }],
+          payload: { title: '分类 C' }, createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-e', topicId: 'topic-1', relationType: 'MERGE', sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'msg-f' }], payload: { title: '归并 E' },
+          createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'join-a-b', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-a',
+          targetRefs: [{ kind: 'relation', relationId: 'rel-b' }],
+          createdAt: '2024-01-01T00:05:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'join-b-c', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-b',
+          targetRefs: [{ kind: 'relation', relationId: 'rel-c' }],
+          createdAt: '2024-01-01T00:06:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'join-c-members', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-c',
+          targetRefs: [{ kind: 'message', messageId: 'msg-d' }, { kind: 'relation', relationId: 'rel-e' }],
+          createdAt: '2024-01-01T00:07:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'join-e-f', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-e',
+          targetRefs: [{ kind: 'message', messageId: 'msg-f' }],
+          createdAt: '2024-01-01T00:08:00.000Z', createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    await waitFor(() => expect(screen.getByText('rel-a')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-a'));
+    await waitFor(() => expect(screen.getByText('rel-b')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-b'));
+    await waitFor(() => expect(screen.getByText('rel-c')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('rel-c'));
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('rel-b')).toBe(true);
+      expect(ids.has('rel-a')).toBe(false);
+      expect(ids.has('rel-c')).toBe(false);
+    });
+
+    const traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    traceProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-b');
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('rel-c')).toBe(true);
+      expect(ids.has('rel-b')).toBe(true);
+      expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-b')).toBe(true);
+      expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-c')).toBe(true);
+      expect(props.traceExpandedFrameIds.has('rel-b')).toBe(true);
+      expect(props.traceExpandedFrameIds.has('rel-c')).toBe(false);
+      expect(props.traceExpandedFrameIds.has('rel-e')).toBe(false);
+    });
+    const expandedParentProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    expandedParentProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-c');
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('msg-d')).toBe(true);
+      expect(ids.has('rel-e')).toBe(true);
+      expect(ids.has('msg-f')).toBe(true);
+      expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-e')).toBe(true);
+    });
+  });
+
+  it('keeps a nested classify as a card when its summary parent expands', async () => {
+    mockApi.getMessages.mockResolvedValue({
+      data: [makeMessage('classify-member', '分类内部消息')],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-summary', topicId: 'topic-1', relationType: 'SUMMARY', sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-classify' }],
+          payload: { title: '总结 A' }, createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+          targetRefs: [{ kind: 'message', messageId: 'classify-member' }],
+          payload: { title: '分类 B' }, createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    await waitFor(() => expect(screen.getByText('rel-summary')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('rel-summary'));
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
+
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      expect(props.traceFrameIds.has('rel-summary')).toBe(true);
+      expect(props.messages.some((message: { id: string }) => message.id === 'rel-classify')).toBe(false);
+    });
+    const traceProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    traceProps.onMessageDoubleClick({ stopPropagation: vi.fn() }, 'rel-summary');
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const ids = new Set(props.messages.map((message: { id: string }) => message.id));
+      expect(ids.has('rel-classify')).toBe(true);
+      expect(ids.has('classify-member')).toBe(false);
+    });
+  });
+
 });
 
 describe('TopicDetailPage exit classify topic restores base view', () => {
@@ -934,37 +1455,61 @@ describe('TopicDetailPage exit classify topic restores base view', () => {
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
     // Switch to list view for easier assertions
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
 
     // Base view: topic card visible, classified messages hidden, unclassified visible
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-c')).toBeInTheDocument();
 
     // Enter the classify topic
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     // Topic view: classified messages visible, topic card hidden, unclassified hidden
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByText('消息 msg-a')).toBeInTheDocument();
-    expect(screen.getByText('消息 msg-b')).toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-c')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.getByText('msg-b')).toBeInTheDocument();
+    expect(screen.queryByText('msg-c')).not.toBeInTheDocument();
 
     // Exit the classify topic
     fireEvent.click(screen.getAllByRole('button', { name: '退出分类' })[0]);
 
     // After exit: base view should be restored exactly as before
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
-    expect(screen.queryByText('消息 msg-a')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 msg-b')).not.toBeInTheDocument();
-    expect(screen.getByText('消息 msg-c')).toBeInTheDocument();
+    expect(screen.queryByText('msg-a')).not.toBeInTheDocument();
+    expect(screen.queryByText('msg-b')).not.toBeInTheDocument();
+    expect(screen.getByText('msg-c')).toBeInTheDocument();
+  });
+
+  it('returns to the main view during trace and restores the classify position after exit', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    await waitFor(() => expect(screen.getByText('rel-classify')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0));
+
+    const classifyProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    classifyProps.onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-a');
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+
+    await waitFor(() => {
+      expect(screen.queryAllByRole('button', { name: '退出分类' })).toHaveLength(0);
+      expect(screen.getByRole('button', { name: '退出追溯' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '退出追溯' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0));
+    expect(screen.getByText('msg-a')).toBeInTheDocument();
+    expect(screen.queryByText('msg-c')).not.toBeInTheDocument();
   });
 });
 
@@ -1086,63 +1631,274 @@ describe('TopicDetailPage CLASSIFY targeting arrange with nested CORRECT', () =>
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
     // Directly classified → hidden
-    expect(screen.queryByText('消息 m1')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 m2')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 m4')).not.toBeInTheDocument();
-    expect(screen.queryByText('消息 m7')).not.toBeInTheDocument();
+    expect(screen.queryByText('m1')).not.toBeInTheDocument();
+    expect(screen.queryByText('m2')).not.toBeInTheDocument();
+    expect(screen.queryByText('m4')).not.toBeInTheDocument();
+    expect(screen.queryByText('m7')).not.toBeInTheDocument();
     // m6 (arrange target) → hidden
-    expect(screen.queryByText('消息 m6')).not.toBeInTheDocument();
+    expect(screen.queryByText('m6')).not.toBeInTheDocument();
     // m5 (arrange sourceMessageId) → MUST be hidden (was the bug!)
-    expect(screen.queryByText('消息 m5')).not.toBeInTheDocument();
+    expect(screen.queryByText('m5')).not.toBeInTheDocument();
     // m3 (CORRECT cascade) → hidden
-    expect(screen.queryByText('消息 m3')).not.toBeInTheDocument();
+    expect(screen.queryByText('m3')).not.toBeInTheDocument();
     // Relation messages with all endpoints hidden → hidden
-    expect(screen.queryByText('关系消息 r10')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r4')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r11')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r3')).not.toBeInTheDocument();
-    expect(screen.queryByText('关系消息 r8')).not.toBeInTheDocument();
+    expect(screen.queryByText('r10')).not.toBeInTheDocument();
+    expect(screen.queryByText('r4')).not.toBeInTheDocument();
+    expect(screen.queryByText('r11')).not.toBeInTheDocument();
+    expect(screen.queryByText('r3')).not.toBeInTheDocument();
+    expect(screen.queryByText('r8')).not.toBeInTheDocument();
     // Topic card → visible
-    expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+    expect(screen.getByText('rel-classify')).toBeInTheDocument();
     // Unrelated → visible
-    expect(screen.getByText('消息 m8')).toBeInTheDocument();
+    expect(screen.getByText('m8')).toBeInTheDocument();
   });
 
   it('shows all owned messages when entering classify topic', async () => {
     render(<TopicDetailPage />);
     await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
 
-    fireEvent.click(screen.getByRole('button', { name: '切换为列表' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('分类 rel-classify')).toBeInTheDocument();
+      expect(screen.getByText('rel-classify')).toBeInTheDocument();
     });
 
-    fireEvent.doubleClick(screen.getByText('分类 rel-classify'));
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
 
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     });
 
     // Inside topic: all owned messages visible
-    expect(screen.getByText('消息 m1')).toBeInTheDocument();
-    expect(screen.getByText('消息 m2')).toBeInTheDocument();
-    expect(screen.getByText('消息 m4')).toBeInTheDocument();
-    expect(screen.getByText('消息 m7')).toBeInTheDocument();
+    expect(screen.getAllByText('m1').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('m2').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('m4').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('m7').length).toBeGreaterThan(0);
     // arrange source + target
-    expect(screen.getByText('消息 m5')).toBeInTheDocument();
-    expect(screen.getByText('消息 m6')).toBeInTheDocument();
+    expect(screen.getAllByText('m5').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('m6').length).toBeGreaterThan(0);
     // CORRECT cascade
-    expect(screen.getByText('消息 m3')).toBeInTheDocument();
+    expect(screen.getByText('m3')).toBeInTheDocument();
     // Relation messages
-    expect(screen.getByText('关系消息 r4')).toBeInTheDocument();
-    expect(screen.getByText('关系消息 r11')).toBeInTheDocument();
+    expect(screen.getByText('r4')).toBeInTheDocument();
+    expect(screen.getByText('r11')).toBeInTheDocument();
     // Unrelated → NOT in topic
-    expect(screen.queryByText('消息 m8')).not.toBeInTheDocument();
+    expect(screen.queryByText('m8')).not.toBeInTheDocument();
+  });
+});
+
+describe('TopicDetailPage opposed annotation visibility in classify graph', () => {
+  const topic: Topic = {
+    id: 'topic-1',
+    title: '测试分类',
+    status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({
+      data: [
+        makeMessage('annotation-source', '注释信息'),
+        makeMessage('annotation-target', '被注释正文'),
+      ],
+    });
+    mockApi.getRelations.mockResolvedValue({
+      data: [
+        {
+          id: 'rel-annotation', topicId: 'topic-1', relationType: 'ANNOTATION',
+          sourceMessageId: 'annotation-source',
+          targetRefs: [{ kind: 'message', messageId: 'annotation-target' }],
+          createdAt: '2024-01-01T00:01:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-disagree', topicId: 'topic-1', relationType: 'DISAGREE',
+          sourceMessageId: null,
+          targetRefs: [{ kind: 'relation', relationId: 'rel-annotation' }],
+          createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+        },
+        {
+          id: 'rel-classify', topicId: 'topic-1', relationType: 'CLASSIFY',
+          sourceMessageId: null,
+          targetRefs: [
+            { kind: 'relation', relationId: 'rel-annotation' },
+          ],
+          payload: { title: '分类' },
+          createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+        },
+      ] as Relation[],
+    });
+  });
+
+  it('keeps opposed annotation in list with a badge and hides it from the graph', async () => {
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    await waitFor(() => expect(screen.getByText('rel-classify')).toBeInTheDocument());
+    fireEvent.doubleClick(screen.getByText('rel-classify'));
+    await waitFor(() => expect(screen.getAllByText('rel-annotation').length).toBeGreaterThan(0));
+    expect(screen.getByText('你已反对 · 点赞同恢复')).toBeInTheDocument();
+    expect(screen.queryByText('你已反对此注释')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
+
+    await waitFor(() => {
+      expect(mockGraphView).toHaveBeenCalled();
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      expect(props.messages.some((message: { id: string }) => message.id === 'rel-annotation')).toBe(false);
+      expect(props.messages.some((message: { id: string }) => message.id === 'annotation-source')).toBe(true);
+      expect(props.edges.some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-annotation')).toBe(false);
+    });
+  });
+});
+
+describe('TopicDetailPage comparison classify projection', () => {
+  const topic: Topic = {
+    id: 'topic-1', title: '对比分类', status: 'OPEN',
+    createdAt: '2024-01-01T00:00:00.000Z', updatedAt: '2024-01-01T00:00:00.000Z',
+    createdBy: makeUser(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getTopic.mockResolvedValue(topic);
+    mockApi.getMessages.mockResolvedValue({ data: [
+      makeMessage('inside-a', '分类内部消息 A'),
+      makeMessage('inside-b', '分类内部消息 B'),
+      { ...makeMessage('round-preview', '结算消息'), kind: 'ROUND' },
+    ] });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      {
+        id: 'rel-classify-preview', topicId: 'topic-1', relationType: 'CLASSIFY', sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId: 'inside-a' }, { kind: 'message', messageId: 'inside-b' }],
+        createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-agree-preview', topicId: 'topic-1', relationType: 'AGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'rel-classify-preview' }],
+        createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-disagree-annotation-preview', topicId: 'topic-1', relationType: 'DISAGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'rel-annotation-preview' }],
+        createdAt: '2024-01-01T00:03:30.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-annotation-preview', topicId: 'topic-1', relationType: 'ANNOTATION', sourceMessageId: 'inside-a',
+        targetRefs: [{ kind: 'relation', relationId: 'rel-classify-preview' }],
+        createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-join-preview', topicId: 'topic-1', relationType: 'JOIN', sourceMessageId: 'rel-classify-preview',
+        targetRefs: [{ kind: 'message', messageId: 'inside-b' }],
+        createdAt: '2024-01-01T00:05:00.000Z', createdBy: makeUser(),
+      },
+    ] });
+  });
+
+  it('keeps classify contents hidden on agree and releases them on disagree', async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '对比' }));
+    await waitFor(() => expect(screen.getAllByText('rel-classify-preview').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByText('rel-classify-preview')[0]);
+    fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const agreeIds = new Set((props.comparisonAgreeMessages ?? []).map((message: { id: string }) => message.id));
+      const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
+      expect(props.autoCenterMessageId).toBe('rel-classify-preview');
+      expect(agreeIds.has('rel-classify-preview')).toBe(true);
+      expect(agreeIds.has('inside-a')).toBe(false);
+      expect(agreeIds.has('rel-join-preview')).toBe(false);
+      expect(agreeIds.has('round-preview')).toBe(false);
+      expect(props.comparisonDisagreeSuppressedRelIds.has('rel-classify-preview')).toBe(true);
+      expect(props.comparisonDisagreeSuppressedRelIds.has('rel-annotation-preview')).toBe(true);
+      expect(disagreeIds.has('rel-classify-preview')).toBe(false);
+      expect(disagreeIds.has('rel-annotation-preview')).toBe(false);
+      expect((props.comparisonDisagreeEdges ?? []).some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-classify-preview')).toBe(false);
+      expect((props.comparisonDisagreeEdges ?? []).some((edge: { relationMessageId: string }) => edge.relationMessageId === 'rel-annotation-preview')).toBe(false);
+      expect(disagreeIds.has('inside-a')).toBe(true);
+      expect(disagreeIds.has('inside-b')).toBe(true);
+      expect(disagreeIds.has('rel-join-preview')).toBe(false);
+      expect(disagreeIds.has('round-preview')).toBe(false);
+    });
+  });
+
+  it('enters the containing classify when reviewing an owned relation message', async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '对比' }));
+    await waitFor(() => expect(screen.getByText('rel-annotation-preview')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('rel-annotation-preview'));
+    fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '退出分类' })).toBeInTheDocument();
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const agreeIds = new Set((props.comparisonAgreeMessages ?? []).map((message: { id: string }) => message.id));
+      const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
+      expect(props.autoCenterMessageId).toBe('rel-annotation-preview');
+      expect(agreeIds.has('inside-a')).toBe(true);
+      expect(agreeIds.has('inside-b')).toBe(true);
+      expect(disagreeIds.has('inside-a')).toBe(true);
+      expect(disagreeIds.has('inside-b')).toBe(true);
+    });
+  });
+
+  it('uses a suppressed reference relation as a trace anchor on the disagree side', async () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    mockApi.getMessages.mockResolvedValue({ data: [
+      makeMessage('reference-source', '引用来源'),
+      makeMessage('reference-target', '引用目标'),
+      makeMessage('reference-neighbor', '关联消息'),
+    ] });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      {
+        id: 'rel-reference', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'reference-source',
+        targetRefs: [{ kind: 'message', messageId: 'reference-target' }],
+        createdAt: '2024-01-01T00:02:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-reference-neighbor', topicId: 'topic-1', relationType: 'REFERENCE', sourceMessageId: 'reference-target',
+        targetRefs: [{ kind: 'message', messageId: 'reference-neighbor' }],
+        createdAt: '2024-01-01T00:03:00.000Z', createdBy: makeUser(),
+      },
+      {
+        id: 'rel-disagree-reference', topicId: 'topic-1', relationType: 'DISAGREE', sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'rel-reference' }],
+        createdAt: '2024-01-01T00:04:00.000Z', createdBy: makeUser(),
+      },
+    ] });
+    render(<TopicDetailPage />);
+    await waitFor(() => expect(mockApi.getTopic).toHaveBeenCalledWith('topic-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '对比' }));
+    await waitFor(() => expect(screen.getByText('rel-reference')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('rel-reference'));
+    fireEvent.click(screen.getByRole('button', { name: '审阅' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '设为追溯消息' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+
+    await waitFor(() => {
+      const props = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+      const disagreeIds = new Set((props.comparisonDisagreeMessages ?? []).map((message: { id: string }) => message.id));
+      expect(screen.getByText('追溯距离：1')).toBeInTheDocument();
+      expect(disagreeIds.has('rel-reference')).toBe(false);
+      expect(disagreeIds.has('reference-source')).toBe(true);
+      expect(disagreeIds.has('reference-target')).toBe(true);
+    });
   });
 });

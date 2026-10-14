@@ -31,7 +31,8 @@ jest.mock('../lib/prisma', () => ({
     },
     message: {
       findFirst: jest.fn(),
-      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -40,6 +41,23 @@ jest.mock('../lib/prisma', () => ({
       create: jest.fn(),
       updateMany: jest.fn(),
     },
+    balance: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
+    ruleVersion: {
+      findFirst: jest.fn(),
+    },
+    pointAccount: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(),
+    },
+    pointTransaction: { create: jest.fn() },
+    stake: { create: jest.fn(), findMany: jest.fn(), count: jest.fn(), aggregate: jest.fn() },
+    betPool: { findUnique: jest.fn(), upsert: jest.fn() },
+    ledgerEntry: { create: jest.fn(), updateMany: jest.fn() },
+    settlementRound: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
     $transaction: jest.fn().mockResolvedValue([{}, {}]),
   },
 }));
@@ -73,6 +91,38 @@ const mockRelationMsg = {
 function makeToken(user = mockUser): string {
   return jwt.sign(user, JWT_SECRET, { expiresIn: '1h' });
 }
+
+describe('GET /api/topics/:topicId/messages - unified Message model', () => {
+  it('returns both TEXT and RELATION message records', async () => {
+    const relationMessage = {
+      id: 'rel-1',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'REFERENCE',
+      relSourceId: 'msg-1',
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      relationPayload: null,
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    };
+    (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
+    (prisma.message.count as jest.Mock).mockResolvedValue(2);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage, relationMessage]);
+
+    const res = await request(app).get('/api/topics/topic-1/messages?limit=200');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((message: { kind: string }) => message.kind)).toEqual(['TEXT', 'RELATION']);
+    expect(res.body.data[1]).toMatchObject({
+      id: 'rel-1',
+      relationType: 'REFERENCE',
+      relSourceId: 'msg-1',
+    });
+    expect(prisma.message.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { topicId: 'topic-1', supersededBy: null },
+    }));
+  });
+});
 
 // ─── GET /api/topics/:topicId/relations ───────────────────────────────────
 
@@ -130,9 +180,20 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       ...mockRelationMsg,
       id: 'rel-new',
     });
-    // Event sourcing: audit log write
+    // Event sourcing: audit log write is now outside transaction
     (prisma.auditLog.create as jest.Mock).mockResolvedValue({});
-    (prisma.$transaction as jest.Mock).mockResolvedValue([{}, {}]);
+    const mockCreatedMsg = {
+      id: 'rel-new',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relationType: 'REPLY',
+      relSourceId: 'msg-1',
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      relationPayload: null,
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    };
+    (prisma.$transaction as jest.Mock).mockResolvedValue([mockCreatedMsg]);
   });
 
   it('returns 400 for an invalid relationType', async () => {
@@ -149,6 +210,30 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'REPLY', sourceMessageId: 'msg-1', targetRefs: [] });
     expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when JOIN has no target', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'msg-1', targetRefs: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when JOIN has multiple targets', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'JOIN',
+        sourceMessageId: 'msg-1',
+        targetRefs: [
+          { kind: 'message', messageId: 'msg-2' },
+          { kind: 'message', messageId: 'msg-3' },
+        ],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('每条加入消息必须且只能选择一个目标');
   });
 
   it('returns 400 when required sourceMessageId is missing', async () => {
@@ -204,13 +289,59 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
-  it('rejects CLASSIFY with sourceMessageId', async () => {
+  it('allows CLASSIFY with sourceMessageId (join relations use it)', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('allows JOIN with sourceMessageId and applies normal staking rules', async () => {
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({ balance: 100, debtFrozen: false });
+    (prisma.pointAccount.findUnique as jest.Mock).mockResolvedValue({ available: 100, locked: 0 });
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({ parameters: { relationTypeMinStake: { JOIN: 3 }, selfStakeOnCreate: 1 } });
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'rel-container', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects JOIN when its target has a non-reference link to an outside message', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([{ id: 'msg-2', topicId: 'topic-1', kind: 'TEXT' }])
+      .mockResolvedValueOnce([{
+        id: 'rel-reply', relationType: 'REPLY', relSourceId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      }])
+      .mockResolvedValueOnce([{ id: 'msg-1' }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'rel-container', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain('分类关系');
+    expect(res.body.error).toContain('非引用关联');
+  });
+
+  it('rejects JOIN targeting a decoration relation message', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    (prisma.message.findMany as jest.Mock).mockResolvedValueOnce([{
+      id: 'rel-decoration', topicId: 'topic-1', kind: 'RELATION', relationType: 'CORRECT',
+    }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ relationType: 'JOIN', sourceMessageId: 'rel-container', targetRefs: [{ kind: 'message', messageId: 'rel-decoration' }] });
+    expect(res.status).toBe(400);
   });
 
   it('allows CLASSIFY with relation message targets', async () => {
@@ -238,22 +369,20 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.status).toBe(201);
   });
 
-  it('rejects ARRANGE with sourceMessageId', async () => {
+  it('allows ARRANGE with sourceMessageId (join relations use it)', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'ARRANGE', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('排列关系');
+    expect(res.status).toBe(201);
   });
 
-  it('rejects MERGE with sourceMessageId', async () => {
+  it('allows MERGE with sourceMessageId (join relations use it)', async () => {
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'MERGE', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('归并关系');
+    expect(res.status).toBe(201);
   });
 
   it('allows MERGE with relation targets', async () => {
@@ -315,7 +444,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows MERGE when text targets have non-reference cross links to unclassified messages', async () => {
+  it('rejects MERGE when text targets have non-reference cross links to unclassified messages', async () => {
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])
       .mockResolvedValueOnce([{
@@ -329,7 +458,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'MERGE', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 
   it('allows MERGE with classify relation targets when links stay within the selected topic', async () => {
@@ -375,7 +505,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows CLASSIFY when text targets have non-reference cross links to unclassified messages', async () => {
+  it('rejects CLASSIFY when text targets have non-reference cross links to unclassified messages', async () => {
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])
       .mockResolvedValueOnce([{
@@ -388,7 +518,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'message', messageId: 'msg-2' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 
   it('allows CLASSIFY when non-reference links stay within selected targets', async () => {
@@ -482,7 +613,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows CLASSIFY when MERGE relation target text messages cross-link only to unclassified messages', async () => {
+  it('rejects CLASSIFY when MERGE relation target text messages cross-link to unclassified messages', async () => {
     const mockMergeRel = {
       id: 'rel-merge',
       topicId: 'topic-1',
@@ -504,7 +635,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'CLASSIFY', payload: { title: '测试分类' }, targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 
   it('rejects MERGE when ARRANGE relation target text messages have cross links to already-classified messages', async () => {
@@ -538,7 +670,7 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows MERGE when ARRANGE relation target text messages cross-link only to unclassified messages', async () => {
+  it('rejects MERGE when ARRANGE relation target text messages cross-link to unclassified messages', async () => {
     const mockARRANGERel = {
       id: 'rel-supp',
       topicId: 'topic-1',
@@ -560,7 +692,8 @@ describe('POST /api/topics/:topicId/relations — validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'MERGE', targetRefs: [{ kind: 'relation', relationId: 'rel-supp' }] });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
   });
 });
 
@@ -569,6 +702,13 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
     (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
     (prisma.message.create as jest.Mock).mockResolvedValue({
       ...mockRelationMsg,
       id: 'rel-new',
@@ -600,6 +740,58 @@ describe('POST /api/topics/:topicId/relations — successful creation', () => {
       });
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('rel-new');
+  });
+
+  it('any user repeating a JOIN agrees with the existing JOIN', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    (prisma.message.findMany as jest.Mock)
+      .mockResolvedValueOnce([mockMessage2])
+      .mockResolvedValueOnce([{
+        id: 'join-existing',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      }]);
+    (prisma.$transaction as jest.Mock).mockResolvedValueOnce([{
+      id: 'agree-new',
+      topicId: 'topic-1',
+      relationType: 'AGREE',
+      relSourceId: null,
+      targetRefs: [{ kind: 'relation', relationId: 'join-existing' }],
+      relationPayload: undefined,
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    }]);
+
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'JOIN',
+        sourceMessageId: 'rel-container',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.relationType).toBe('AGREE');
+    expect(res.body.targetRefs).toEqual([{ kind: 'relation', relationId: 'join-existing' }]);
+  });
+
+  it('rejects a text fragment as a JOIN target', async () => {
+    (prisma.message.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 'rel-container', topicId: 'topic-1', kind: 'RELATION', relationType: 'CLASSIFY',
+    });
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'JOIN',
+        sourceMessageId: 'rel-container',
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'second', hash: 'hash-second' }],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('文本片段');
   });
 
   it('creates a relation with a text-fragment target', async () => {
@@ -667,22 +859,38 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
   beforeEach(() => {
     (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
     (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
     (prisma.message.create as jest.Mock).mockResolvedValue({
       ...mockRelationMsg,
       id: 'rel-new',
       relationType: 'SUMMARY',
       createdBy: mockUser,
     });
-    (prisma.$transaction as jest.Mock).mockResolvedValue([{}, {}]);
+    (prisma.$transaction as jest.Mock).mockResolvedValue([{
+      ...mockRelationMsg,
+      id: 'rel-new',
+      relationType: 'SUMMARY',
+      topicId: 'topic-1',
+      kind: 'RELATION',
+      relSourceId: 'msg-1',
+      targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+      createdAt: new Date().toISOString(),
+      createdBy: mockUser,
+    }]);
   });
 
-  it('rejects SUMMARY with sourceMessageId', async () => {
+  it('allows SUMMARY with sourceMessageId (join relations use it)', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
     const res = await request(app)
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'SUMMARY', sourceMessageId: 'msg-1', targetRefs: [{ kind: 'message', messageId: 'msg-2' }], payload: { title: '总结' } });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('总结关系');
+    expect(res.status).toBe(201);
   });
 
   it('rejects SUMMARY without payload.title', async () => {
@@ -775,7 +983,7 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
     expect(res.body.error).toContain('非引用关联');
   });
 
-  it('allows SUMMARY when target text messages cross-link only to unclassified messages', async () => {
+  it('rejects SUMMARY when target text messages cross-link to unclassified messages', async () => {
     (prisma.message.findMany as jest.Mock)
       .mockResolvedValueOnce([mockMessage2])
       .mockResolvedValueOnce([{
@@ -789,6 +997,231 @@ describe('POST /api/topics/:topicId/relations — SUMMARY validation', () => {
       .post('/api/topics/topic-1/relations')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ relationType: 'SUMMARY', targetRefs: [{ kind: 'message', messageId: 'msg-2' }], payload: { title: '总结标题' } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('非引用关联');
+  });
+});
+
+describe('POST /api/topics/:topicId/relations — CORRECT single-target validation', () => {
+  beforeEach(() => {
+    (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
+    (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
+    (prisma.message.create as jest.Mock).mockResolvedValue({
+      ...mockRelationMsg,
+      id: 'rel-correct',
+      createdBy: mockUser,
+    });
+    (prisma.settlementRound.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.settlementRound.create as jest.Mock).mockResolvedValue({ id: 'round-1' });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([
+      {
+        id: 'rel-correct',
+        topicId: 'topic-1',
+        relationType: 'CORRECT',
+        relSourceId: 'msg-1',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        createdAt: new Date().toISOString(),
+        createdBy: mockUser,
+      },
+      {},
+    ]);
+  });
+
+  it('allows CORRECT with a selected text fragment', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+        payload: { correctionContent: 'Corrected world' },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('allows an empty replacement to delete the selected fragment', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+        payload: { correctionContent: '' },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects CORRECT after a second user has staked on the target', async () => {
+    (prisma.stake.findMany as jest.Mock).mockResolvedValue([
+      { userId: 'user-1' },
+      { userId: 'user-2' },
+    ]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+        payload: { correctionContent: 'Corrected world' },
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('第二位与会者押注');
+  });
+
+  it('rejects CORRECT targeting the whole message', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { correctionContent: 'Corrected world' },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.details.some((d: any) => d.message.includes('消息片段'))).toBe(true);
+  });
+
+  it('rejects CORRECT with multiple targets', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [
+          { kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' },
+          { kind: 'text-fragment', messageId: 'msg-1', text: 'Hello', hash: 'hash-hello' },
+        ],
+        payload: { correctionContent: 'Corrected content' },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.details.some((d: any) => d.message.includes('更正'))).toBe(true);
+  });
+
+  it('rejects CORRECT targeting a non-correctable relation message', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockRelationMsg]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'CORRECT',
+        sourceMessageId: null,
+        targetRefs: [{ kind: 'relation', relationId: 'rel-1' }],
+        payload: { correctionContent: 'Corrected relation content' },
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects AGREE targeting an existing CORRECT relation', async () => {
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([{
+      id: 'correction-1',
+      kind: 'RELATION',
+      relationType: 'CORRECT',
+      targetRefs: [{ kind: 'text-fragment', messageId: 'msg-2', text: 'World', hash: 'hash-world' }],
+    }]);
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'AGREE',
+        targetRefs: [{ kind: 'relation', relationId: 'correction-1' }],
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('更正消息');
+  });
+});
+
+describe('POST /api/topics/:topicId/relations — TAG / RECOMMEND / ARCHIVE', () => {
+  beforeEach(() => {
+    (prisma.topic.findUnique as jest.Mock).mockResolvedValue(mockTopic);
+    (prisma.message.findFirst as jest.Mock).mockResolvedValue(mockMessage);
+    (prisma.message.findMany as jest.Mock).mockResolvedValue([mockMessage2]);
+    (prisma.ruleVersion.findFirst as jest.Mock).mockResolvedValue({
+      parameters: { minStake: 1, selfStakeOnCreate: 1 },
+    });
+    (prisma.balance.findUnique as jest.Mock).mockResolvedValue({
+      userId: 'user-1', balance: 100, debtFrozen: false,
+    });
+    (prisma.message.create as jest.Mock).mockResolvedValue({
+      ...mockRelationMsg,
+      id: 'tag-new',
+      createdBy: mockUser,
+    });
+    (prisma.settlementRound.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.settlementRound.create as jest.Mock).mockResolvedValue({ id: 'round-1' });
+    (prisma.$transaction as jest.Mock).mockResolvedValue([
+      {
+        id: 'tag-new',
+        topicId: 'topic-1',
+        relationType: 'TAG',
+        relSourceId: null,
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        relationPayload: { label: '垃圾' },
+        createdAt: new Date().toISOString(),
+        createdBy: mockUser,
+      },
+      {},
+    ]);
+  });
+
+  it('creates TAG with label', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'TAG',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { label: '垃圾' },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects TAG without label', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'TAG',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: {},
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.details.some((d: any) => d.message.includes('标签'))).toBe(true);
+  });
+
+  it('creates RECOMMEND with subType', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'RECOMMEND',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { subType: 'SPAM' },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('creates ARCHIVE with subType', async () => {
+    const res = await request(app)
+      .post('/api/topics/topic-1/relations')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        relationType: 'ARCHIVE',
+        targetRefs: [{ kind: 'message', messageId: 'msg-2' }],
+        payload: { subType: 'OFFTOPIC' },
+      });
     expect(res.status).toBe(201);
   });
 });

@@ -26,10 +26,17 @@ export interface Topic {
 export interface Message {
   id: string;
   topicId: string;
+  kind: string;
   contentType: 'TEXT' | 'MARKDOWN';
   content: string;
   createdAt: string;
+  updatedAt?: string;
+  supersededBy?: string | null;
   createdBy: User;
+  relationType?: RelationType | null;
+  relSourceId?: string | null;
+  targetRefs?: TargetRef[];
+  relationPayload?: RelationPayload | null;
 }
 
 // ============================================================
@@ -60,6 +67,9 @@ export type RelationType =
   | 'AGREE'        // 赞同（有文本时视为支持）
   | 'DISAGREE'     // 反对（有文本时视为反驳）
   | 'TAG'          // 标注（消息旁的装饰标签）
+  | 'READ'         // 已读标注（仅协议费）
+  | 'UNREAD'       // 未读标注（仅协议费）
+  | 'NOTIFY'       // 回复通知
   | 'CORRECT'      // 更正
   | 'ARRANGE'      // 排列（边框包裹目标消息；payload.targetLayout 控制横/纵排列）
   | 'CLASSIFY'     // 分类
@@ -67,6 +77,11 @@ export type RelationType =
   | 'SUMMARY'      // 总结
   | 'RECOMMEND'    // 推荐
   | 'ARCHIVE'      // 冷藏
+  | 'ATTENTION'    // 关注
+  | 'BLOCK'        // 拉黑
+  | 'OPERATIONS'   // 运营（收入、统计等程序运营信息）
+  | 'DELEGATION'   // 委托（押注作为完成委托的报酬）
+  | 'JOIN'         // 加入（内部成员关系记录）
   | string;        // future extensibility
 
 /**
@@ -87,8 +102,6 @@ export type TargetRef =
       messageId: string;
       text: string;
       hash: string;
-      contextBefore?: string;
-      contextAfter?: string;
     }
   | {
       kind: 'relation';
@@ -103,6 +116,23 @@ export interface RelationPayload {
   label?: string;
   title?: string;
   targetLayout?: RelationTargetLayout;
+  content?: string;
+  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'CUSTOM';
+  customLabel?: string;
+  operationType?: string;
+  amount?: number;
+  revenuePoolShare?: number;
+  recipientUserId?: string;
+  source?: string;
+  note?: string;
+  attentionUserIds?: string[];
+  notifyUserIds?: string[];
+  notifyUsers?: Array<{ id: string; username: string }>;
+  delegationKind?: 'CREATE' | 'FULFILL';
+  rewardAmount?: number;
+  rewardRatio?: number;
+  /** CORRECT stores the complete replacement content directly on the correction relation. */
+  correctionContent?: string;
 }
 
 export interface Relation {
@@ -142,7 +172,9 @@ export type PresentationKind =
   | 'frame-group'       // Frames a group of messages
   | 'replace-overlay'   // Overlays / replaces the target message display (e.g. SUMMARY)
   | 'correction-badge'  // Small badge inside source message card; source replaces target (CORRECT)
-  | 'inline-badge';     // Small inline badge on target message
+  | 'inline-badge'      // Small inline badge on target message
+  | 'proposal-card'     // Governance proposal card with vote/settlement lifecycle
+  | 'code-card';        // Code change proposal card with vote/deploy lifecycle
 
 export interface PresentationSpec {
   /** How this relation is rendered */
@@ -176,6 +208,13 @@ export interface PresentationSpec {
    * authoritative content with the original dimmed or accessible via double-click.
    */
   replacesTarget?: boolean;
+  /**
+   * True for container-type relations (CLASSIFY, MERGE, SUMMARY).
+   * Container relations group messages but do NOT count as focus-distance hops.
+   * In focus mode, container cards appear at the hop distance of their nearest
+   * connected message; their children are expanded at that distance + 1.
+   */
+  isContainer?: boolean;
 }
 
 /**
@@ -186,16 +225,26 @@ export const PRESENTATION_SPECS: Record<string, PresentationSpec> = {
   ANNOTATION:  { kind: 'edge-label',        label: '注释', color: 'blue',   formsTrees: false },
   REFERENCE:   { kind: 'edge-label',        label: '引用', color: 'indigo', formsTrees: false },
   REPLY:       { kind: 'edge-label',        label: '回复', color: 'blue',   formsTrees: true  },
+  NOTIFY:      { kind: 'edge-label',        label: '通知', color: 'cyan',   formsTrees: false },
   AGREE:       { kind: 'decoration',        label: '赞同', color: 'green',  stanceEffect: 'support' },
   DISAGREE:    { kind: 'decoration',        label: '反对', color: 'red',    stanceEffect: 'oppose'  },
   TAG:         { kind: 'decoration-label',  label: '标注', color: 'yellow', formsTrees: false },
+  READ:        { kind: 'decoration',        label: '已读', color: 'green', formsTrees: false },
+  UNREAD:      { kind: 'decoration',        label: '未读', color: 'red', formsTrees: false },
   CORRECT:     { kind: 'correction-badge',  label: '更正', color: 'yellow', formsTrees: true,  replacesTarget: true  },
-  ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true   },
-  CLASSIFY:    { kind: 'edge-label',        label: '分类', color: 'gray',   formsTrees: false },
-  MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true   },
-  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true },
+  ARRANGE:     { kind: 'arrange-frame',     label: '排列', color: 'purple', formsTrees: true,  groupsTargets: true,  isContainer: true  },
+  CLASSIFY:    { kind: 'frame-group',       label: '分类', color: 'gray',   formsTrees: false, groupsTargets: true,   isContainer: true  },
+  MERGE:       { kind: 'frame-group',       label: '归并', color: 'gray',   formsTrees: false, groupsTargets: true,   isContainer: true  },
+  SUMMARY:     { kind: 'replace-overlay',   label: '总结', color: 'amber',  formsTrees: false, replacesTarget: true, groupsTargets: true, isContainer: true  },
   RECOMMEND:   { kind: 'inline-badge',      label: '推荐', color: 'orange', formsTrees: false },
   ARCHIVE:     { kind: 'inline-badge',      label: '冷藏', color: 'slate',  formsTrees: false },
+  ATTENTION:   { kind: 'inline-badge',      label: '关注', color: 'cyan',   formsTrees: false },
+  BLOCK:       { kind: 'inline-badge',      label: '拉黑', color: 'red',    formsTrees: false },
+  PROPOSAL:    { kind: 'edge-label',        label: '🏛️ 提案', color: 'amber',  formsTrees: false },
+  DELEGATION:  { kind: 'edge-label',        label: '🤝 委托', color: 'green',   formsTrees: false },
+  CODE_CHANGE: { kind: 'edge-label',        label: '💻 代码', color: 'teal',  formsTrees: false },
+  OPERATIONS:  { kind: 'edge-label',        label: '📊 运营', color: 'cyan',   formsTrees: false },
+  JOIN:        { kind: 'edge-label',        label: '加入', color: 'slate',  formsTrees: false, isContainer: false },
 };
 
 /** Get the presentation spec for a relation type, with a sensible default.
@@ -261,7 +310,7 @@ export function getRelationLabel(payload: RelationPayload | undefined): string |
 }
 
 export function getRelationTitle(payload: RelationPayload | undefined): string | undefined {
-  return payload?.title?.trim() || undefined;
+  return payload?.title?.trim() || payload?.content?.trim() || undefined;
 }
 
 export function getRelationTargetLayout(relation: Pick<Relation, 'relationType' | 'payload'>): RelationTargetLayout {
@@ -317,4 +366,290 @@ export function getConnectorColorClass(relationType: string): string {
     slate:  'border-slate-300',
   };
   return COLOR_BORDER[spec.color] ?? 'border-gray-300';
+}
+
+// ============================================================
+// Points & Ledger Types (Phase 1)
+// ============================================================
+
+export interface PointsBalance {
+  points: {
+    available: number;
+    locked: number;
+  };
+  balance: {
+    amount: number;
+    debtFrozen: boolean;
+  };
+  breakdown: {
+    initialMinted: number;
+    totalEarned: number;   // 收益（结算成功）
+    totalLost: number;     // 损失（结算失败）
+    totalProtocolFees: number; // 进入收入池的协议手续费
+  };
+}
+
+export interface PointTransaction {
+  id: string;
+  type: string; // MINT | UNLOCK | LOCK | SPEND | TRANSFER
+  amount: number;
+  balanceAfter: number;
+  createdAt: string;
+  data?: Record<string, unknown> | null;
+}
+
+export interface CurrentRule {
+  id: string;
+  version: number;
+  status: string;
+  description: string | null;
+  parameters: Record<string, unknown>;
+  createdAt: string;
+}
+
+// ============================================================
+// Stake & BetPool Types (Phase 2)
+// ============================================================
+
+export interface StakeResult {
+  message: string;
+  stakeId: string;
+  side: 'PRO' | 'CON';
+  amount: number;
+  newAvailable: number;
+  newLocked: number;
+  newBalance: number;
+}
+
+export interface StakeItem {
+  id: string;
+  side: 'PRO' | 'CON';
+  amount: number;
+  createdAt: string;
+  roundId?: string | null;
+  settlementType?: 'TRUTH' | 'VALUE';
+  user: User;
+}
+
+export interface MessageStakes {
+  messageId: string;
+  pool: {
+    lockedPro: number;
+    lockedCon: number;
+  };
+  /** Per-settlementType BetPool breakdown (current round, not cumulative) */
+  pools?: Record<string, { lockedPro: number; lockedCon: number }>;
+  stakes: StakeItem[];
+  counts: {
+    pro: number;
+    con: number;
+  };
+  /** Per-settlementType cumulative stake counts */
+  countsByType?: Record<string, { pro: number; con: number }>;
+}
+
+// ============================================================
+// Settlement Types (Phase 3)
+// ============================================================
+
+export interface VoteStakeItem {
+  id: string;
+  vote: 'TRUE' | 'FALSE';
+  amount: number;
+  createdAt: string;
+  user: User;
+}
+
+export interface SettlementRoundItem {
+  id: string;
+  roundMessageId?: string;
+  messageId: string;
+  createdByUserId: string;
+  createdBy: User;
+  status: 'OPEN' | 'VOTING' | 'SETTLED' | 'CANCELLED';
+  settlementType: 'TRUTH' | 'VALUE';
+  result: 'TRUE' | 'FALSE' | 'UNKNOWN' | null;
+  previousRoundId: string | null;
+  openedAt: string;
+  closedAt: string | null;
+  note: string | null;
+  settlementPro?: number | null;
+  settlementCon?: number | null;
+  totalProAtSettlement?: number | null;
+  totalConAtSettlement?: number | null;
+  votes?: VoteStakeItem[];
+  _count?: { votes: number };
+  weights?: { TRUE: number; FALSE: number; UNKNOWN: number };
+  roundWeights?: { TRUE: number; FALSE: number; UNKNOWN: number };
+  personalSettlement?: { principal: number; stakePrincipal: number; protocolFee: number; change: number; after: number; previousAfter?: number };
+}
+
+export interface SettlementResult {
+  message: string;
+  roundId: string;
+  messageId: string;
+  resultContent?: string;
+  settlementType?: 'TRUTH' | 'VALUE';
+  result: 'TRUE' | 'FALSE' | 'UNKNOWN';
+  weights: { TRUE: number; FALSE: number; UNKNOWN: number };
+  totalPro: number;
+  totalCon: number;
+  resultMessage?: {
+    id: string;
+    createdAt: string;
+    createdBy?: { username?: string | null } | null;
+  };
+  affectedUsers: number;
+}
+
+export interface VoteCastResult {
+  message: string;
+  voteId: string;
+  vote: 'TRUE' | 'FALSE';
+  amount: number;
+  newAvailable: number;
+  newLocked: number;
+  newBalance: number;
+}
+
+// ============================================================
+// Stance Types (Phase 5)
+// ============================================================
+
+export interface StanceRelation {
+  kind: 'relation';
+  id: string;
+  relationMessageId: string;
+  topicId: string;
+  topicTitle: string;
+  type: string;      // AGREE | DISAGREE
+  amount: number;
+  stakeId?: string | null;
+  targetMessageId: string | null;
+  messageKind: string;           // kind of the target message
+  targetRelationType: string | null;  // relationType if target is RELATION
+  content: string;               // display text derived from target
+  createdAt: string;
+}
+
+export interface StanceStake {
+  kind: 'stake';
+  id: string;
+  topicId: string;
+  topicTitle: string;
+  messageId: string;
+  messageKind: string;  // TEXT | RELATION | ROUND | ROUND_RESULT | GOVERNANCE | CODE
+  content: string;
+  amount: number;
+  createdAt: string;
+}
+
+export interface StanceTag {
+  kind: 'tag';
+  id: string;
+  relationMessageId: string;
+  topicId: string;
+  topicTitle: string;
+  relationType: string;  // TAG | RECOMMEND | ARCHIVE
+  label: string;
+  subType: string | null;      // SPAM | OFFTOPIC | LOWVALUE | IMPORTANT | CUSTOM
+  customLabel: string | null;
+  targetMessageId: string | null;
+  stakeId?: string | null;
+  amount: number;
+  createdAt: string;
+}
+
+export interface StanceHistoryResponse {
+  user: { id: string };
+  stances: {
+    relations: StanceRelation[];
+    stakes: StanceStake[];
+    tags: StanceTag[];
+  };
+  pagination: {
+    page: number;
+    limit: number;
+    totalRelations: number;
+    totalStakes: number;
+    totalTags: number;
+  };
+}
+
+// ============================================================
+// Phase 6: Clean View Filter Rules
+// ============================================================
+
+/**
+ * 清爽视图过滤器规则 — 可组合的多维过滤条件。
+ * 每条规则是一个独立判断函数，所有规则之间为 AND 关系。
+ * 与会者可以自由组合规则来投影消息图的不同切片。
+ */
+export type CleanFilterRule =
+  | { id: string; kind: 'sender'; username: string }
+  | { id: string; kind: 'tag'; tagType: string; minCount: number }
+  | { id: string; kind: 'stake'; minAmount: number; side?: 'PRO' | 'CON' }
+  | { id: string; kind: 'rounds'; minRounds: number }
+  | { id: string; kind: 'participants'; minCount: number }
+  | { id: string; kind: 'relationType'; relationType: string };
+
+/** 过滤器规则中文标签 */
+export const CLEAN_FILTER_LABELS: Record<CleanFilterRule['kind'], string> = {
+  sender:       '按发送者',
+  tag:          '按标签',
+  stake:        '按押注额度',
+  rounds:       '按结算轮次',
+  participants: '按站队人数',
+  relationType: '按关系类型',
+};
+
+/** 过滤器规则默认值 */
+export function defaultCleanRule(kind: CleanFilterRule['kind']): CleanFilterRule {
+  const id = `cf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  switch (kind) {
+    case 'sender':       return { id, kind: 'sender', username: '' };
+    case 'tag':          return { id, kind: 'tag', tagType: 'ARCHIVE', minCount: 5 };
+    case 'stake':        return { id, kind: 'stake', minAmount: 50 };
+    case 'rounds':       return { id, kind: 'rounds', minRounds: 2 };
+    case 'participants': return { id, kind: 'participants', minCount: 8 };
+    case 'relationType': return { id, kind: 'relationType', relationType: 'OPERATIONS' };
+  }
+}
+
+// ============================================================
+// Phase 6: Audit Log, Revenue & Governance Types
+// ============================================================
+
+export interface AuditLogEntry {
+  id: string;
+  actorId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  topicId: string | null;
+  createdAt: string;
+  data?: AuditLogData | null;
+  actor?: { id: string; username: string } | null;
+}
+
+export interface AuditLogData {
+  summary: string;
+  details: Record<string, unknown>;
+  version: number;
+}
+
+export interface RevenuePoolData {
+  id: string;
+  totalReceived: number;
+  totalDistributed: number;
+  balance: number;
+  updatedAt: string;
+}
+
+export interface RevenueDistributionItem {
+  id: string;
+  userId: string;
+  user: { id: string; username: string };
+  amount: number;
+  createdAt: string;
 }

@@ -1,21 +1,34 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection, Selection, RelationType } from '../utils/modelBridge';
 import { getPresentationSpec, getRelationLabel, getRelationTitle, PRESENTATION_SPECS } from '../types';
-import { computeCorrectedEdgeMap, computeTransitiveVoteStats, computeTransitiveRelDecStats } from '../utils/modelBridge';
-import { computeFrameAwareColumnCorrection, compactAnnoRefClusters } from '../utils/layout';
+import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
+import { computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeTransitiveRelDecStats, isCardMessage, isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
+import { computeFrameAwareColumnCorrection, compactAnnoRefClusters, convergeGroupingAndRightConstraints } from '../utils/layout';
+import SettlementPanel from './SettlementPanel';
+import RoundHistory from './RoundHistory';
 import {
   CARD_W, MIN_CARD_H, GRID_LEFT, GRID_TOP, COL_GAP, ROW_GAP,
   CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H,
 } from '../utils/layout';
-import type { PresentationKind, RelationTargetLayout } from '../types';
+import type { PresentationKind, Relation, RelationTargetLayout } from '../types';
 
 // ========================= Layout types =========================
 
 type LayoutBox = { x: number; y: number; width: number; height: number };
 type Point = { x: number; y: number };
-type Rect = { x: number; y: number; width: number; height: number };
+export type Rect = { x: number; y: number; width: number; height: number };
 type LabelBbox = { x: number; y: number; width: number; height: number };
 type LabelSeed = { drawId: string; text: string; p0: Point; p1: Point; p2: Point };
+
+export function unionLayoutRects(first: Rect | undefined, second: Rect | undefined): Rect | undefined {
+  if (!first) return second;
+  if (!second) return first;
+  const right = Math.max(first.x + first.width, second.x + second.width);
+  const bottom = Math.max(first.y + first.height, second.y + second.height);
+  const x = Math.min(first.x, second.x);
+  const y = Math.min(first.y, second.y);
+  return { x, y, width: right - x, height: bottom - y };
+}
 type PositionedEdge = {
   drawId: string;
   edge: DemoEdge;
@@ -50,7 +63,7 @@ const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tag
 // Frame constants (shared by arrange, classify, merge, summary frames)
 // FRAME_PAD is imported from ../utils/layout
 const FRAME_PAD_X = GRID_LEFT;  // 18 — horizontal padding inside frame
-const FRAME_PAD_Y = GRID_TOP;   // 48 — vertical padding inside frame
+const FRAME_PAD_Y = FRAME_PAD;  // 16 — keep category content close to its frame header
 const FRAME_RADIUS = 8; // border-radius of group frames
 const MAX_RELATION_NESTING_DEPTH = 10; // guard against infinite recursion when resolving nested relation visual boxes
 const LABEL_BBOX_STABILITY_THRESHOLD = 0.5; // px — label bbox changes smaller than this are treated as stable
@@ -60,6 +73,9 @@ const MERGE_HEADER_MAX_W = 320;
 const MERGE_CANVAS_LABEL_LEFT_OFFSET = 10;
 const MERGE_CANVAS_LABEL_TOP_OFFSET = 8;
 const MERGE_CANVAS_STACK_GAP = ROW_GAP;
+const MERGE_CONTENT_TOP_GAP = 8;
+const MERGE_CARD_HEADER_X_OFFSET = 8;
+const MERGE_CARD_HEADER_Y_OFFSET = 8;
 // Approximate per-character width for mixed Chinese/Latin short titles in the current 12px header style.
 const MERGE_LABEL_CHAR_WIDTH_ESTIMATE = 14;
 const MERGE_LABEL_HORIZONTAL_PADDING = 24;
@@ -71,11 +87,13 @@ const GROUP_HEADER_HEIGHT = 56;
 
 // Shared empty set for fallback
 
+
 // Group frame stroke colors by relColor value
 const GROUP_FRAME_STROKE: Record<string,string> = {
   yellow: 'rgba(220,180,0,0.7)', amber: 'rgba(200,140,0,0.7)',
   gray: 'rgba(140,140,150,0.55)', slate: 'rgba(100,110,120,0.55)',
 };
+const SHOW_SELECTED_ACTUAL_RECTS = false;
 
 // Inline badge background colors by relColor value
 const INLINE_BADGE_COLOR: Record<string,string> = {
@@ -140,7 +158,7 @@ export function getSelectionFragment(
 export function extractTextTargetsForMessage(messageId: string, edges: DemoEdge[]) {
   const res: { start: number; len: number; relationType: RelationType; edgeId: string }[] = [];
   for (const e of edges) {
-    if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
+        if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
     if (e.to.messageId !== messageId) continue;
     if (!selectionIsText(e.to.selection)) continue;
     res.push({ start: e.to.selection.start, len: e.to.selection.len, relationType: e.relationType, edgeId: e.id });
@@ -199,7 +217,25 @@ export function renderAnnoNodes(
   messageId: string,
   isFragSel: (id: string, start: number, len: number, text: string) => boolean,
   onFragClick: (id: string, start: number, len: number, text: string) => void,
+  isTargetHintFrag?: (id: string, start: number, len: number, relationType: RelationType) => boolean,
 ): React.ReactNode[] {
+  const selectedStyles = [
+    {
+      bg: "rgba(11,132,255,0.24)",
+      outline: "2px solid rgba(11,132,255,0.95)",
+      ring: "inset 0 0 0 1px rgba(147,197,253,0.7)",
+    },
+    {
+      bg: "rgba(56,189,248,0.28)",
+      outline: "2px dashed rgba(56,189,248,0.95)",
+      ring: "inset 0 0 0 1px rgba(125,211,252,0.78)",
+    },
+    {
+      bg: "rgba(14,165,233,0.32)",
+      outline: "2px dotted rgba(14,165,233,0.98)",
+      ring: "inset 0 0 0 1px rgba(103,232,249,0.86)",
+    },
+  ] as const;
   const result: React.ReactNode[] = [];
   let cursor = from;
   for (const node of nodes) {
@@ -211,27 +247,34 @@ export function renderAnnoNodes(
     const frag = text.slice(node.start, node.end);
     const isAnno = node.relationType === "annotation";
     const selected = isFragSel(messageId, node.start, len, frag);
+    const isTargetHint = !selected && (isTargetHintFrag?.(messageId, node.start, len, node.relationType) ?? false);
     const isInner = depth > 0;
+    const selectedStyle = selectedStyles[Math.min(depth, selectedStyles.length - 1)];
     const bgColor = selected
-      ? "rgba(11,132,255,0.25)"
+      ? selectedStyle.bg
+      : isTargetHint
+        ? (isInner ? "rgba(16,185,129,0.20)" : "rgba(16,185,129,0.12)")
       : isInner
         ? (isAnno ? "rgba(255,220,0,0.30)" : "rgba(80,180,255,0.20)")
         : (isAnno ? "rgba(255,255,0,0.12)" : "rgba(80,180,255,0.08)");
     const outlineStyle = selected
-      ? "2px solid rgba(11,132,255,0.95)"
+      ? selectedStyle.outline
+      : isTargetHint
+        ? "2px dashed rgba(16,185,129,0.95)"
       : isInner
         ? (isAnno ? "2px solid rgba(255,210,0,0.95)" : "2px solid rgba(80,180,255,0.85)")
         : (isAnno ? "1px solid rgba(255,255,0,0.8)" : "1px solid rgba(80,180,255,0.45)");
     const innerContent = node.children.length > 0
-      ? renderAnnoNodes(text, node.children, node.start, node.end, depth + 1, messageId, isFragSel, onFragClick)
+      ? renderAnnoNodes(text, node.children, node.start, node.end, depth + 1, messageId, isFragSel, onFragClick, isTargetHintFrag)
       : text.slice(node.start, node.end);
     result.push(
       <span key={`h-${node.start}-${node.end}`}
         data-rel-anchor={`${node.relationType}::${node.start}:${node.end}`}
         onClick={e => { e.stopPropagation(); onFragClick(messageId, node.start, len, frag); }}
         title="点击：进入文本选择状态并切换选中该片段"
-        style={{whiteSpace:"pre-wrap",cursor:"pointer",position:"relative",zIndex:isInner?1:undefined,
-          backgroundColor:bgColor,outline:outlineStyle,borderRadius:2}}
+        style={{whiteSpace:"pre-wrap",cursor:"pointer",position:"relative",zIndex:isInner?Math.min(9,1+depth):undefined,
+          backgroundColor:bgColor,outline:outlineStyle,borderRadius:2,
+          boxShadow:selected?selectedStyle.ring:(isTargetHint?"inset 0 0 0 1px rgba(110,231,183,0.85)":undefined)}}
       >
         {innerContent}
       </span>
@@ -301,20 +344,24 @@ function getMergeHeaderWidth(text: string): number {
 }
 
 /** Compute the floating header card rect shown above classify/merge/summary group frames. */
-function getGroupHeaderRect(frameRect: Rect): Rect {
+function getGroupHeaderHeight(measuredHeights: Record<string, number>, relMsgId: string): number {
+  return Math.max(GROUP_HEADER_HEIGHT, measuredHeights[relMsgId] ?? GROUP_HEADER_HEIGHT);
+}
+
+function getGroupHeaderRect(frameRect: Rect, height = GROUP_HEADER_HEIGHT): Rect {
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y - FRAME_PAD - Math.max(4, Math.round(FRAME_PAD / 2)),
+    y: frameRect.y - height,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
-    height: GROUP_HEADER_HEIGHT,
+    height,
   };
 }
 
 /** Compute the card-style header rect for MERGE group frames, positioned inside the frame at the top-left. */
 function getMergeCardHeaderRect(frameRect: Rect): Rect {
   return {
-    x: frameRect.x + GROUP_HEADER_X_OFFSET,
-    y: frameRect.y + FRAME_PAD,
+    x: frameRect.x + MERGE_CARD_HEADER_X_OFFSET,
+    y: frameRect.y + MERGE_CARD_HEADER_Y_OFFSET,
     width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
     height: MERGE_CARD_H,
   };
@@ -352,7 +399,7 @@ function getRelationBoundsFromLayout(params: {
         continue;
       }
       const endpointBox = params.boxFn ? (params.boxFn(endpointId) ?? layout[endpointId]) : layout[endpointId];
-      if (endpointBox && (endpointMsg?.kind === "normal" || relationCardMsgIds.has(endpointId))) {
+      if (endpointBox && (endpointMsg && isContentKind(endpointMsg.kind) || relationCardMsgIds.has(endpointId))) {
         boxes.push(endpointBox);
         cardIds.add(endpointId);
       }
@@ -374,19 +421,19 @@ function getRelationBoundsFromLayout(params: {
   if (!rect) return null;
   const relKind = relMsg?.relationType ? getRelKind(relMsg.relationType) : null;
   if (relMsg?.relationType === 'merge') {
-    const headerTopPad = MERGE_CARD_H + FRAME_PAD;
+    const headerTopPad = MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP;
     rect = {
-      x: rect.x - FRAME_PAD,
-      y: rect.y - FRAME_PAD - headerTopPad,
-      width: rect.width + FRAME_PAD * 2,
-      height: rect.height + FRAME_PAD * 2 + headerTopPad,
+      x: rect.x - FRAME_PAD_X,
+      y: rect.y - FRAME_PAD_Y - headerTopPad,
+      width: rect.width + FRAME_PAD_X * 2,
+      height: rect.height + FRAME_PAD_Y * 2 + headerTopPad,
     };
   } else if (relKind === 'arrange-frame' || relKind === 'frame-group' || relKind === 'replace-overlay') {
     rect = {
-      x: rect.x - FRAME_PAD,
-      y: rect.y - FRAME_PAD,
-      width: rect.width + FRAME_PAD * 2,
-      height: rect.height + FRAME_PAD * 2,
+      x: rect.x - FRAME_PAD_X,
+      y: rect.y - FRAME_PAD_Y,
+      width: rect.width + FRAME_PAD_X * 2,
+      height: rect.height + FRAME_PAD_Y * 2,
     };
   }
   return { rect, cardIds };
@@ -422,7 +469,7 @@ export function buildMergeCanvasReservations(params: {
         }
       }
       const targetBox = layout[edge.to.messageId];
-      if (targetBox && (targetMsg?.kind === "normal" || relationCardMsgIds.has(edge.to.messageId))) {
+      if (targetBox && (targetMsg && isContentKind(targetMsg.kind) || relationCardMsgIds.has(edge.to.messageId))) {
         boxes.push(targetBox);
         cardIds.add(edge.to.messageId);
       }
@@ -623,13 +670,14 @@ export function applyMergeCanvasReservations(params: {
   return { layout: nextLayout, canvasHeight: maxBottom + CANVAS_BOTTOM_PAD };
 }
 
-function buildFrameAvoidanceReservations(params: {
+export function buildFrameAvoidanceReservations(params: {
   edges: DemoEdge[];
   layout: Record<string, LayoutBox>;
   msgMap: Map<string, DemoMessage>;
   relationCardMsgIds: Set<string>;
+  frameRects?: Record<string, Rect>;
 }): FrameAvoidanceReservation[] {
-  const { edges, layout, msgMap, relationCardMsgIds } = params;
+  const { edges, layout, msgMap, relationCardMsgIds, frameRects } = params;
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   for (const edge of edges) {
     const arr = edgesByRelMsg.get(edge.relationMessageId) ?? [];
@@ -647,7 +695,7 @@ function buildFrameAvoidanceReservations(params: {
     if (!sourceId.startsWith('anon:')) {
       const sourceMsg = msgMap.get(sourceId);
       const sourceBox = layout[sourceId];
-      if (sourceBox && (sourceMsg?.kind === 'normal' || relationCardMsgIds.has(sourceId))) {
+      if (sourceBox && (sourceMsg && isContentKind(sourceMsg.kind) || relationCardMsgIds.has(sourceId))) {
         boxes.push(sourceBox);
         cardIds.add(sourceId);
       }
@@ -677,7 +725,7 @@ function buildFrameAvoidanceReservations(params: {
         }
       }
       const targetBox = layout[edge.to.messageId];
-      if (targetBox && (targetMsg?.kind === 'normal' || relationCardMsgIds.has(edge.to.messageId))) {
+      if (targetBox && (targetMsg && isContentKind(targetMsg.kind) || relationCardMsgIds.has(edge.to.messageId))) {
         boxes.push(targetBox);
         cardIds.add(edge.to.messageId);
       }
@@ -690,16 +738,19 @@ function buildFrameAvoidanceReservations(params: {
     // Left FRAME_PAD is preserved; card x-shifting in applyFrameAvoidanceReservations
     // ensures the frame left border aligns with text message cards outside the frame.
     const isMergeFrame = relEdges[0].relationType === "merge";
-    const headerTopPad = isMergeFrame ? MERGE_CARD_H + FRAME_PAD : 0;
+    const headerTopPad = isMergeFrame ? MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP : 0;
+    const layoutFrameRect = frameRects?.[relMsgId];
     reservations.push({
       relMsgId,
       cardIds,
       headerTopPad: isMergeFrame ? headerTopPad : undefined,
-      rect: {
-        x: union.x - FRAME_PAD,
-        y: union.y - FRAME_PAD - headerTopPad,
-        width: union.width + FRAME_PAD * 2,
-        height: union.height + FRAME_PAD * 2 + headerTopPad,
+      rect: layoutFrameRect ?? {
+        // Keep avoidance aligned with the rendered frame. Arrange/group frames
+        // use GRID_LEFT/GRID_TOP as their internal horizontal/vertical padding.
+        x: union.x - FRAME_PAD_X,
+        y: union.y - FRAME_PAD_Y - headerTopPad,
+        width: union.width + FRAME_PAD_X * 2,
+        height: union.height + FRAME_PAD_Y * 2 + headerTopPad,
       },
     });
   }
@@ -710,7 +761,7 @@ function buildFrameAvoidanceReservations(params: {
 /** Apply frame-avoidance: push cards that overlap merge frames below them,
  *  and compute final canvas height.  Frame blocks are already placed by
  *  computeNoOverlapLayout; this function acts as a safety net for collisions. */
-function applyFrameAvoidanceReservations(params: {
+export function applyFrameAvoidanceReservations(params: {
   layout: Record<string, LayoutBox>;
   normals: DemoMessage[];
   colOf: Record<string, number>;
@@ -723,28 +774,51 @@ function applyFrameAvoidanceReservations(params: {
   const nextLayout: Record<string, LayoutBox> = {};
   for (const [id, box] of Object.entries(params.layout)) nextLayout[id] = { ...box };
 
-  // Push cards that overlap merge frames below them (safety net for collision avoidance).
-  for (const reservation of params.reservations) {
-    if (!reservation.headerTopPad) continue; // only merge frames
-    const frameBottom = reservation.rect.y + reservation.rect.height;
+  // Rebuild the reservation from the current member positions.  Earlier frame
+  // avoidance may have moved a card that also belongs to a later frame, so the
+  // later frame must be checked against its updated bounds.
+  function currentReservationRect(reservation: FrameAvoidanceReservation): Rect {
+    // Frame rectangles are atomic layout units. Their member cards are
+    // protected from movement, so rebuilding the rect from cards would only
+    // reintroduce coordinate drift for nested frames.
+    return reservation.rect;
+  }
 
-    // Collect overlapping cards not in this merge frame, sorted by original y
+  const protectedCardIds = new Set<string>();
+  for (const reservation of params.reservations) {
+    for (const id of reservation.cardIds) protectedCardIds.add(id);
+  }
+
+  // Treat every frame as an opaque layout unit. Only cards outside the frame
+  // are candidates for movement; members move only with their own frame.
+  for (const reservation of params.reservations) {
+    const rect = currentReservationRect(reservation);
+    const frameBottom = rect.y + rect.height;
+
+    // Collect all horizontally overlapping external cards, sorted by their
+    // current y. Keeping cards below the frame in the sequence makes a moved
+    // card push its own followers instead of creating a second overlap.
     const toPush: { id: string; box: LayoutBox }[] = [];
     for (const [id, box] of Object.entries(nextLayout)) {
-      if (reservation.cardIds.has(id)) continue; // skip cards inside this merge frame
-      if (box.x + box.width <= reservation.rect.x || reservation.rect.x + reservation.rect.width <= box.x) continue;
-      if (box.y + box.height <= reservation.rect.y) continue;
-      if (box.y >= frameBottom + ROW_GAP) continue;
+      if (protectedCardIds.has(id)) continue;
+      if (box.x + box.width <= rect.x || rect.x + rect.width <= box.x) continue;
+      if (box.y + box.height <= rect.y) continue;
       toPush.push({ id, box });
     }
     toPush.sort((a, b) => a.box.y - b.box.y);
 
     let pushY = frameBottom + ROW_GAP;
     for (const { id, box } of toPush) {
-      nextLayout[id] = { ...box, y: pushY };
-      pushY += box.height + ROW_GAP;
+      const nextY = Math.max(box.y, pushY);
+      nextLayout[id] = { ...box, y: nextY };
+      pushY = nextY + box.height + ROW_GAP;
     }
+
   }
+
+  // Frame avoidance may leave intentional whitespace. Do not rebuild columns
+  // or run a global chronological cascade here: both operations destroy the
+  // shorter directed-edge placement computed earlier.
 
   let maxBottom = GRID_TOP;
   for (const box of Object.values(nextLayout)) maxBottom = Math.max(maxBottom, box.y + box.height);
@@ -754,11 +828,11 @@ function applyFrameAvoidanceReservations(params: {
 function computeMinColumnsForAnnoRefRule1(normalIds: string[], edges: DemoEdge[], relIds: Set<string>) {
   const normalSet = new Set(normalIds);
   const relevant = edges.filter(
-    (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
+    (e) => (e.relationType === "annotation" || e.relationType === "reference" || e.relationType === "notify") &&
       normalSet.has(e.from.messageId) && normalSet.has(e.to.messageId)
   );
   const toRelEdges = edges.filter(
-    (e) => (e.relationType === "annotation" || e.relationType === "reference") &&
+    (e) => (e.relationType === "annotation" || e.relationType === "reference" || e.relationType === "notify") &&
       normalSet.has(e.from.messageId) && relIds.has(e.to.messageId)
   );
   const relEdgesByRelMsg = new Map<string, DemoEdge[]>();
@@ -832,7 +906,7 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
     relEdgesByRelMsgForReply.set(e.relationMessageId, arr);
   }
   for (const e of edges) {
-    if (!(e.relationType === "annotation" || e.relationType === "reference")) continue;
+    if (!(e.relationType === "annotation" || e.relationType === "reference" || e.relationType === "notify")) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const need = (col[e.to.messageId] ?? 0) + 1;
     minAllowed[e.from.messageId] = Math.max(minAllowed[e.from.messageId] ?? 0, need);
@@ -922,6 +996,45 @@ function applyReplyLayoutAdjustmentsWithConstraints(params: {
     if (bestC === null) { let c = Math.max(baseMin, maxCol+1); while (forbidden.has(c)) c++; bestC = c; }
     col[fromId] = bestC; maxCol = Math.max(maxCol, bestC); authorPrevLane[fromMsg.author] = bestC;
   }
+
+  // Propagate right-shift constraints after reply placement.
+  // Annotation/reference/notify sources must remain at least target+1;
+  // reply edges do not cascade so same-author reply chains can return to one lane.
+  const sourcesByTarget = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.relationType !== "annotation" && e.relationType !== "reference" && e.relationType !== "notify") continue;
+    if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    const arr = sourcesByTarget.get(e.to.messageId) ?? [];
+    arr.push(e.from.messageId);
+    sourcesByTarget.set(e.to.messageId, arr);
+  }
+  const queue: string[] = [];
+  const queued = new Set<string>();
+  for (const m of normals) {
+    const id = m.id;
+    if ((col[id] ?? 0) > (baseCol[id] ?? 0)) {
+      queue.push(id);
+      queued.add(id);
+    }
+  }
+  let qi = 0;
+  while (qi < queue.length) {
+    const targetId = queue[qi++];
+    const targetCol = col[targetId] ?? 0;
+    const sources = sourcesByTarget.get(targetId) ?? [];
+    for (const fromId of sources) {
+      const need = targetCol + 1;
+      if ((col[fromId] ?? 0) < need) {
+        col[fromId] = need;
+        maxCol = Math.max(maxCol, need);
+        if (!queued.has(fromId)) {
+          queued.add(fromId);
+          queue.push(fromId);
+        }
+      }
+    }
+  }
+
   return { col, maxCol };
 }
 
@@ -989,20 +1102,70 @@ export function applyGroupingColumnOverride(params: {
       if ((col[srcId] ?? 0) !== tgtCol) { col[srcId] = tgtCol; changed = true; }
     }
   }
-  const maxCol = Math.max(0, ...(Object.values(col).length ? Object.values(col) : [0]));
-  return { col, maxCol, groupSourceToTarget };
+
+  const converged = convergeGroupingAndRightConstraints({
+    normals,
+    edges,
+    col,
+    groupSourceToTarget,
+  });
+
+  // Restore reply author lanes after structural convergence. Explicit grouping
+  // and non-reply right-side constraints keep their higher priority.
+  const replySources = new Set<string>();
+  const replyTargetsBySource = new Map<string, number[]>();
+  for (const e of edges) {
+    if (e.relationType !== 'reply' || !normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
+    replySources.add(e.from.messageId);
+    const targets = replyTargetsBySource.get(e.from.messageId) ?? [];
+    targets.push(converged.col[e.to.messageId] ?? 0);
+    replyTargetsBySource.set(e.from.messageId, targets);
+  }
+  const authorColumns = new Map<string, number[]>();
+  for (const message of normals) {
+    const columns = authorColumns.get(message.author) ?? [];
+    columns.push(converged.col[message.id] ?? 0);
+    authorColumns.set(message.author, columns);
+  }
+  const authorLane = (columns: number[]): number => {
+    const counts = new Map<number, number>();
+    for (const column of columns) counts.set(column, (counts.get(column) ?? 0) + 1);
+    let best = columns[0] ?? 0;
+    for (const [column, count] of counts) {
+      if (count > (counts.get(best) ?? 0) || (count === (counts.get(best) ?? 0) && column < best)) best = column;
+    }
+    return best;
+  };
+  for (const message of normals) {
+    if (!replySources.has(message.id) || groupSourceToTarget.has(message.id)) continue;
+    const targetColumns = replyTargetsBySource.get(message.id) ?? [];
+    const forbidden = new Set(targetColumns);
+    const lane = authorLane(authorColumns.get(message.author) ?? [0]);
+    if (forbidden.has(lane)) continue;
+    let preferred = lane;
+    while (forbidden.has(preferred)) preferred++;
+    const minColumn = edges
+      .filter(e => (e.relationType === 'annotation' || e.relationType === 'reference' || e.relationType === 'notify') && e.from.messageId === message.id && normalSet.has(e.to.messageId))
+      .reduce((min, e) => Math.max(min, (converged.col[e.to.messageId] ?? 0) + 1), 0);
+    converged.col[message.id] = Math.max(preferred, minColumn);
+  }
+  const maxCol = Math.max(0, ...Object.values(converged.col));
+  return { col: converged.col, maxCol, groupSourceToTarget };
 }
 
 /**
  * Apply AGREE/DISAGREE layout column rules:
- *   AGREE source → same column as target (visual alignment = "I agree with this")
+ *   AGREE source → one column to the left of target
  *   DISAGREE source → one column to the right of target (visually contrasted)
+ *   If AGREE target is too far left to host a left-side source, move target right
+ *   and propagate right-side constraints (annotation/reference/notify/reply).
  *
  * Only applies when both source and target are normal (text) messages.
  * Pure-stance (anon: source) or relation-message targets are skipped.
  *
- * Annotation/reference column constraints are respected: if a message is also an
- * annotation/reference source it will not be placed to the left of its anno/ref targets.
+ * Right-side constraints are respected: if a message is also a
+ * annotation/reference/notify/reply source it will not be placed to the left
+ * of its constrained targets.
  */
 function applyAgreeDisagreeColumnOverride(params: {
   normals: DemoMessage[];
@@ -1014,26 +1177,85 @@ function applyAgreeDisagreeColumnOverride(params: {
   const col = { ...params.col };
   let maxCol = params.maxCol;
   const normalSet = new Set(normals.map(m => m.id));
-  const annoRefMinCol: Record<string, number> = {};
+
+  const rightMinCol: Record<string, number> = {};
+  const rightSourcesByTarget = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.relationType !== "annotation" && e.relationType !== "reference") continue;
+    if (
+      e.relationType !== "annotation" &&
+      e.relationType !== "reference" &&
+      e.relationType !== "notify" &&
+      e.relationType !== "reply"
+    ) continue;
     if (!normalSet.has(e.from.messageId) || !normalSet.has(e.to.messageId)) continue;
     const need = (col[e.to.messageId] ?? 0) + 1;
-    annoRefMinCol[e.from.messageId] = Math.max(annoRefMinCol[e.from.messageId] ?? 0, need);
+    rightMinCol[e.from.messageId] = Math.max(rightMinCol[e.from.messageId] ?? 0, need);
+    const arr = rightSourcesByTarget.get(e.to.messageId) ?? [];
+    arr.push(e.from.messageId);
+    rightSourcesByTarget.set(e.to.messageId, arr);
   }
+
+  const propagateRightDependents = (startTargetIds: string[]) => {
+    const queue = [...startTargetIds];
+    const queued = new Set(queue);
+    let qi = 0;
+    while (qi < queue.length) {
+      const targetId = queue[qi++];
+      const targetCol = col[targetId] ?? 0;
+      const sources = rightSourcesByTarget.get(targetId) ?? [];
+      for (const fromId of sources) {
+        const need = targetCol + 1;
+        if ((col[fromId] ?? 0) < need) {
+          col[fromId] = need;
+          maxCol = Math.max(maxCol, need);
+          if (!queued.has(fromId)) {
+            queued.add(fromId);
+            queue.push(fromId);
+          }
+        }
+      }
+    }
+  };
+
   const stanceEdges = edges.filter(e => e.relationType === "agree" || e.relationType === "disagree");
   for (const e of stanceEdges) {
     const fromId = e.from.messageId, toId = e.to.messageId;
     if (!normalSet.has(fromId) || !normalSet.has(toId)) continue;
+
+    if (e.relationType === "agree") {
+      const minFrom = rightMinCol[fromId] ?? 0;
+      const requiredTargetCol = minFrom + 1;
+      const currentTargetCol = col[toId] ?? 0;
+      if (currentTargetCol < requiredTargetCol) {
+        col[toId] = requiredTargetCol;
+        maxCol = Math.max(maxCol, requiredTargetCol);
+        propagateRightDependents([toId]);
+      }
+
+      const finalTargetCol = col[toId] ?? 0;
+      const newFromCol = Math.max(0, finalTargetCol - 1);
+      const prevFromCol = col[fromId] ?? 0;
+      col[fromId] = newFromCol;
+      if (newFromCol > prevFromCol) {
+        maxCol = Math.max(maxCol, newFromCol);
+        propagateRightDependents([fromId]);
+      }
+      continue;
+    }
+
     const tgtCol = col[toId] ?? 0;
-    const desired = e.relationType === "agree" ? tgtCol : tgtCol + 1;
-    col[fromId] = Math.max(desired, annoRefMinCol[fromId] ?? 0);
+    const desired = tgtCol + 1;
+    const prevFromCol = col[fromId] ?? 0;
+    col[fromId] = Math.max(desired, rightMinCol[fromId] ?? 0);
     maxCol = Math.max(maxCol, col[fromId]);
+    if (col[fromId] > prevFromCol) {
+      propagateRightDependents([fromId]);
+    }
   }
   return { col, maxCol };
 }
 
-type FrameBlock = {
+export type FrameBlock = {
   relMsgId: string;
   /** All card IDs in this frame (source + targets + nested frame cards). */
   cardIds: Set<string>;
@@ -1043,18 +1265,22 @@ type FrameBlock = {
   childRelMsgIds: string[];
   /** True for merge frames (need extra header space). */
   isMerge: boolean;
+  /** True when CLASSIFY/SUMMARY renders a header card inside the frame. */
+  hasGroupHeader: boolean;
   /** Layout direction for arrange frames: 'single-row' (horizontal) or 'single-column' (vertical, default). */
   targetLayout?: RelationTargetLayout;
 };
 
 /** Identify frame blocks from edges and build parent-child hierarchy.
  *  Frame types: arrange, frame-group (classify/merge), replace-overlay (summary). */
-function buildFrameBlocks(params: {
+export function buildFrameBlocks(params: {
   edges: DemoEdge[];
   visibleCardIds: Set<string>;
   msgMap: Map<string, DemoMessage>;
+  keepEmptyFrameIds?: Set<string>;
+  traceMode?: boolean;
 }): FrameBlock[] {
-  const { edges, visibleCardIds, msgMap } = params;
+  const { edges, visibleCardIds, msgMap, keepEmptyFrameIds = new Set<string>(), traceMode = false } = params;
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   for (const e of edges) {
     const arr = edgesByRelMsg.get(e.relationMessageId) ?? [];
@@ -1077,12 +1303,10 @@ function buildFrameBlocks(params: {
     const cardIds = new Set<string>();
     const sourceId = relEdges[0].from.messageId;
     if (!sourceId.startsWith('anon:') && visibleCardIds.has(sourceId)) cardIds.add(sourceId);
-    // Collect card IDs, recursively expanding through relation-message targets.
-    // When a frame targets another frame (e.g. arrange→arrange), the target
-    // frame's relMsgId won't be in visibleCardIds (it's not a text card).
-    // We need to recurse into the target frame's edges to find the actual
-    // text-message cards, and also include the target frame's relMsgId so the
-    // subset detection later can nest it as a child frame.
+    // Collect direct card IDs. When a frame targets another frame, keep only
+    // that relation message here; the nested frame owns its own contents.
+    // Recursing into the target frame would put its text cards in both the
+    // parent and nested layouts, which breaks collapsed-frame behavior.
     const collectNestedCardIds = (targetMsgId: string, visited: Set<string>) => {
       if (visited.has(targetMsgId)) return;
       visited.add(targetMsgId);
@@ -1099,23 +1323,21 @@ function buildFrameBlocks(params: {
         const nIsFrame = nk === 'arrange-frame' || nk === 'frame-group' || nk === 'replace-overlay'
           || !nIsKnown;
         if (nIsFrame) {
-          // Include the nested frame's relMsgId so subset detection can nest it
+          // The relation message is the parent's direct embedded node.
           cardIds.add(targetMsgId);
-          // Recurse into its edges to find text-message cards
-          for (const ne of nestedEdges) {
-            collectNestedCardIds(ne.to.messageId, visited);
-          }
         }
       }
     };
     for (const edge of relEdges) {
       collectNestedCardIds(edge.to.messageId, new Set());
     }
-    if (cardIds.size > 0) {
+    const relationType = relEdges[0].relationType.toLowerCase();
+    const keepEmpty = keepEmptyFrameIds.has(relMsgId) && getPresentationSpec(relationType).isContainer === true;
+    if (cardIds.size > 0 || keepEmpty) {
       const relMsg = msgMap.get(relMsgId);
       const isArrange = isKnownType ? (relKind === 'arrange-frame') : true;
       const targetLayout = isArrange ? (relMsg?.relationPayload?.targetLayout) : undefined;
-      blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge', targetLayout });
+      blocks.push({ relMsgId, cardIds, directCardIds: new Set(), childRelMsgIds: [], isMerge: relEdges[0].relationType === 'merge', hasGroupHeader: relationType === 'classify' || relationType === 'summary', targetLayout });
     }
   }
   // Build parent-child: a block B is a child of block A if A has an edge
@@ -1130,12 +1352,41 @@ function buildFrameBlocks(params: {
       }
     }
   }
+  if (traceMode) {
+    for (const block of blocks) {
+      for (const childId of block.childRelMsgIds) block.cardIds.add(childId);
+    }
+    for (const block of blocks) {
+      const childCards = new Set<string>();
+      const collectChildCards = (parent: FrameBlock) => {
+        for (const childId of parent.childRelMsgIds) {
+          const child = blocks.find(candidate => candidate.relMsgId === childId);
+          if (child) {
+            child.cardIds.forEach(id => childCards.add(id));
+            collectChildCards(child);
+          }
+        }
+      };
+      collectChildCards(block);
+      block.directCardIds = new Set([...block.cardIds].filter(id =>
+        !childCards.has(id) && !block.childRelMsgIds.includes(id)
+      ));
+    }
+    return blocks;
+  }
+
   // Transitive expansion: when a frame's text-message cards are fully covered
   // by another frame, add the covered frame's relMsgId to the covering frame's cardIds.
   // This allows subset detection to nest arrange-inside-arrange properly.
   for (const block of blocks) {
     for (const other of blocks) {
       if (block.relMsgId === other.relMsgId) continue;
+      // An explicit edge from `other` to `block` already establishes that
+      // `block` is nested inside `other`; shared cards must not infer the
+      // reverse relationship and create a frame hierarchy cycle.
+      const otherTargetsBlock = (edgesByRelMsg.get(other.relMsgId) ?? [])
+        .some(edge => edge.to.messageId === block.relMsgId);
+      if (otherTargetsBlock) continue;
       const otherRelMsgIds = new Set(blocks.filter(b => b.relMsgId !== other.relMsgId).map(b => b.relMsgId));
       const otherTextCards = new Set([...other.cardIds].filter(id => !otherRelMsgIds.has(id)));
       if (otherTextCards.size === 0) continue;
@@ -1224,11 +1475,36 @@ function buildFrameBlocks(params: {
   return blocks;
 }
 
-function computeNoOverlapLayout(params: {
+function buildFrameLayoutUnits(params: {
+  frameBlocks: FrameBlock[];
+  layout: Record<string, LayoutBox>;
+  frameRects: Record<string, Rect>;
+  measuredHeights: Record<string, number>;
+}): FrameAvoidanceReservation[] {
+  const units: FrameAvoidanceReservation[] = [];
+  for (const frame of params.frameBlocks) {
+    const rect = params.frameRects[frame.relMsgId];
+    if (!rect) continue;
+    const headerHeight = frame.hasGroupHeader ? getGroupHeaderHeight(params.measuredHeights, frame.relMsgId) : 0;
+    units.push({
+      relMsgId: frame.relMsgId,
+      rect: headerHeight > 0
+        ? { ...rect, y: rect.y - headerHeight, height: rect.height + headerHeight }
+        : rect,
+      cardIds: new Set([...frame.cardIds].filter(id => id in params.layout)),
+      ...(frame.isMerge ? { headerTopPad: MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP } : {}),
+    });
+  }
+  return units.sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+}
+
+export function computeNoOverlapLayout(params: {
   normals: DemoMessage[]; colOf: Record<string, number>; measuredHeights: Record<string, number>; measuredWidths: Record<string, number>; maxCol: number;
   correctedTargetIds?: Set<string>;
   frameBlocks?: FrameBlock[];
   allMessages: DemoMessage[];
+  activeTextSelectId?: string | null;
+  traceMode?: boolean;
 }) {
   const { normals, colOf, measuredHeights, measuredWidths } = params;
   const correctedTargetIds = params.correctedTargetIds ?? new Set<string>();
@@ -1265,29 +1541,7 @@ function computeNoOverlapLayout(params: {
   // Each frame is its own "sub-canvas": internal cards start from local col 0,
   // the column pipeline runs independently per frame. The frame's rect is
   // computed from its content bounds and placed as an opaque rectangle in the parent.
-  interface FrameLayoutResult { rect: Rect; }
-
-  /** Merge: normalize global colOf (translate from original canvas).
-   *  Arrange: no pipeline needed — items are placed as opaque rectangles.
-   *  extraCols: columns occupied by child frame cards, used to compute the
-   *  true leftmost column across ALL merge content (preserves relative positions). */
-  function computeMergeLocalColumns(frameCards: DemoMessage[], extraCols?: number[]): Record<string, number> {
-    const localCol: Record<string, number> = {};
-    let minCol = Infinity;
-    for (const m of frameCards) {
-      const c = colOf[m.id] ?? 0;
-      localCol[m.id] = c;
-      if (c < minCol) minCol = c;
-    }
-    if (extraCols) {
-      for (const c of extraCols) {
-        if (c < minCol) minCol = c;
-      }
-    }
-    if (isFinite(minCol) && minCol !== 0)
-      for (const m of frameCards) localCol[m.id] -= minCol;
-    return localCol;
-  }
+  interface FrameLayoutResult { rect: Rect; occupiedRect: Rect; }
 
   function layoutFrameBlock(fb: FrameBlock, frameX: number, frameY: number): FrameLayoutResult {
     type FrameItem = { kind: 'card'; msg: DemoMessage } | { kind: 'childFrame'; child: FrameBlock };
@@ -1298,6 +1552,7 @@ function computeNoOverlapLayout(params: {
       if (m) { frameCards.push(m); items.push({ kind: 'card', msg: m }); }
     }
     const isMerge = fb.isMerge;
+    const isHorizontal = !isMerge && fb.targetLayout === 'single-row';
     // Merge: normalize global columns. Collect columns from child frame cards
     // so the normalization accounts for the full column span of the merge content.
     const childFrameCols: number[] = [];
@@ -1310,23 +1565,41 @@ function computeNoOverlapLayout(params: {
         }
       }
     }
-    const localColOf = isMerge ? computeMergeLocalColumns(frameCards, childFrameCols) : {};
+    const occupiedColumns = [...new Set([
+      ...frameCards.map(card => colOf[card.id]).filter((column): column is number => column !== undefined),
+      ...childFrameCols,
+    ])].sort((a, b) => a - b);
+    const localColumnIndex = (globalColumn: number) => {
+      const index = occupiedColumns.indexOf(globalColumn);
+      return index >= 0 ? index : 0;
+    };
+    const localColOf: Record<string, number> = {};
+    if (!isHorizontal) {
+      for (const card of frameCards) localColOf[card.id] = localColumnIndex(colOf[card.id] ?? 0);
+    }
+    const childFrameX = (child: FrameBlock) => {
+      const childCols = [...child.cardIds]
+        .map(id => colOf[id])
+        .filter((column): column is number => column !== undefined);
+      const childMinCol = childCols.length > 0 ? Math.min(...childCols) : occupiedColumns[0] ?? 0;
+      return contentX + colX(localColumnIndex(childMinCol)) - colX(0);
+    };
     for (const childId of fb.childRelMsgIds) {
       const child = frameById.get(childId);
       if (child) items.push({ kind: 'childFrame', child });
     }
     items.sort((a, b) => {
       const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
-        : Math.min(...[...a.child.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+        : Math.min(...[...a.child.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
       const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
-        : Math.min(...[...b.child.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+        : Math.min(...[...b.child.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
       return ta - tb;
     });
 
-    const isHorizontal = !isMerge && fb.targetLayout === 'single-row';
-    const mergeHeaderPad = isMerge ? MERGE_CARD_H : 0; // merge card header height
+    const mergeHeaderPad = isMerge ? MERGE_CARD_H + MERGE_CONTENT_TOP_GAP : 0;
+    const groupHeaderPad = fb.hasGroupHeader ? getGroupHeaderHeight(measuredHeights, fb.relMsgId) : 0;
     const contentX = frameX + FRAME_PAD_X;
-    const contentY = frameY + FRAME_PAD_Y + mergeHeaderPad;
+    const contentY = frameY + groupHeaderPad + FRAME_PAD_Y + mergeHeaderPad;
 
     let yCursor = contentY;
     const colYCursor = new Map<number, number>();
@@ -1347,7 +1620,7 @@ function computeNoOverlapLayout(params: {
         const m = item.msg;
         const h = cardHeight(m.id);
         const w = cardWidth(m.id);
-        if (isMerge) {
+        if (!isHorizontal) {
           const col = localColOf[m.id] ?? 0;
           const curY = colYCursor.get(col) ?? contentY;
           layout[m.id] = { x: contentX + colX(col) - colX(0), y: curY, width: w, height: h };
@@ -1378,7 +1651,8 @@ function computeNoOverlapLayout(params: {
             childStartY = Math.max(childStartY, cy);
           }
           const result = layoutFrameBlock(child, contentX, childStartY);
-          const childBottom = result.rect.y + result.rect.height + ROW_GAP;
+          const occupiedRect = result.occupiedRect;
+          const childBottom = occupiedRect.y + occupiedRect.height + ROW_GAP;
           // Sync all column cursors below the child frame so items in other
           // columns don't end up visually above it.
           for (const [col] of colYCursor) {
@@ -1388,8 +1662,8 @@ function computeNoOverlapLayout(params: {
           // horizontally overlaps. Cards in non-overlapping columns
           // (to the right of the frame) stay at their original Y level.
           const maxLocalCol = Math.max(0, ...Object.values(localColOf));
-          const childLeft = result.rect.x;
-          const childRight = result.rect.x + result.rect.width;
+          const childLeft = occupiedRect.x;
+          const childRight = occupiedRect.x + occupiedRect.width;
           for (let col = 0; col <= maxLocalCol; col++) {
             const cardLeft = contentX + colX(col) - colX(0);
             const cardRight = cardLeft + CARD_W;
@@ -1399,25 +1673,59 @@ function computeNoOverlapLayout(params: {
           }
           // Ensure col 0 is always synced (child frame always starts at contentX)
           colYCursor.set(0, Math.max(colYCursor.get(0) ?? contentY, childBottom));
-          trackChildRect(result.rect);
+          trackChildRect(occupiedRect);
         } else if (isHorizontal) {
           const result = layoutFrameBlock(child, xCursor, yCursor);
-          xCursor += result.rect.width + COL_GAP;
-          rowMaxHeight = Math.max(rowMaxHeight, result.rect.height);
-          trackChildRect(result.rect);
+          const occupiedRect = result.occupiedRect;
+          xCursor += occupiedRect.width + COL_GAP;
+          rowMaxHeight = Math.max(rowMaxHeight, occupiedRect.height);
+          trackChildRect(occupiedRect);
         } else {
-          const result = layoutFrameBlock(child, contentX, yCursor);
-          yCursor = result.rect.y + result.rect.height + ROW_GAP;
-          trackChildRect(result.rect);
+          // Measure the child to know which columns it occupies. A vertical
+          // child must start below only the columns it overlaps; using the
+          // maximum cursor from every column creates unrelated empty space.
+          const measuredChild = layoutFrameBlock(child, childFrameX(child), contentY);
+          const childLeft = measuredChild.occupiedRect.x;
+          const childRight = measuredChild.occupiedRect.x + measuredChild.occupiedRect.width;
+          let childStartY = contentY;
+          for (const [col, columnY] of colYCursor) {
+            const cardLeft = contentX + colX(col) - colX(0);
+            const cardRight = cardLeft + CARD_W;
+            if (cardLeft < childRight && childLeft < cardRight) {
+              childStartY = Math.max(childStartY, columnY);
+            }
+          }
+          const result = layoutFrameBlock(child, childFrameX(child), childStartY);
+          const occupiedRect = result.occupiedRect;
+          const childBottom = occupiedRect.y + occupiedRect.height + ROW_GAP;
+          for (let col = 0; col < Math.max(1, occupiedColumns.length); col++) {
+            const cardLeft = contentX + colX(col) - colX(0);
+            const cardRight = cardLeft + CARD_W;
+            if (cardLeft < occupiedRect.x + occupiedRect.width && occupiedRect.x < cardRight) {
+              colYCursor.set(col, Math.max(colYCursor.get(col) ?? contentY, childBottom));
+            }
+          }
+          trackChildRect(occupiedRect);
         }
       }
     }
 
-    const frameW = Math.max(contentRight - contentLeft, CARD_W) + FRAME_PAD_X * 2;
-    const frameH = Math.max(contentBottom - contentTop, 0) + FRAME_PAD_Y * 2 + mergeHeaderPad;
-    const frameRect: Rect = { x: frameX, y: frameY, width: frameW, height: frameH };
+    const hasContent = isFinite(contentLeft) && isFinite(contentTop) && isFinite(contentRight) && isFinite(contentBottom);
+    const frameW = hasContent
+      ? Math.max(contentRight - contentLeft, CARD_W) + FRAME_PAD_X * 2
+      : CARD_W + FRAME_PAD_X * 2;
+    const frameH = hasContent
+      ? Math.max(contentBottom - contentTop, 0) + FRAME_PAD_Y * 2 + mergeHeaderPad
+      : FRAME_PAD_Y * 2 + mergeHeaderPad;
+    // frameX/frameY are the collision-layout position of this opaque unit.
+    // Content bounds determine its size, not a second position that would
+    // move the frame away from the cards laid out from the same origin.
+    const frameRect: Rect = { x: frameX, y: frameY + groupHeaderPad, width: frameW, height: frameH };
+    const occupiedRect: Rect = groupHeaderPad > 0
+      ? { ...frameRect, y: frameY, height: frameH + groupHeaderPad }
+      : frameRect;
     frameRectMap.set(fb.relMsgId, frameRect);
-    return { rect: frameRect };
+    return { rect: frameRect, occupiedRect };
   }
 
   // --- Second-pass nesting check ---
@@ -1426,7 +1734,7 @@ function computeNoOverlapLayout(params: {
   // for arrange-inside-arrange (horizontal) and merge-containing-arrange layouts.
   // Without this, nested frames are placed as independent root frames, causing
   // vertical stacking when horizontal alignment is expected.
-  for (const fb of frameBlocks) {
+  if (!params.traceMode) for (const fb of frameBlocks) {
     for (const other of frameBlocks) {
       if (fb.relMsgId === other.relMsgId) continue;
       if (fb.childRelMsgIds.includes(other.relMsgId)) continue;
@@ -1481,23 +1789,33 @@ function computeNoOverlapLayout(params: {
   for (const fb of rootFrames2) items2.push({ kind: 'frame', block: fb });
   items2.sort((a, b) => {
     const ta = a.kind === 'card' ? new Date(a.msg.createdAt).getTime()
-      : Math.min(...[...a.block.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+      : Math.min(...[...a.block.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
     const tb = b.kind === 'card' ? new Date(b.msg.createdAt).getTime()
-      : Math.min(...[...b.block.cardIds].map(id => new Date(allMsgMap.get(id)!.createdAt).getTime()));
+      : Math.min(...[...b.block.cardIds].map(id => new Date(allMsgMap.get(id)?.createdAt ?? 0).getTime()));
     return ta - tb;
   });
 
   const placedRects2: Rect[] = [];
 
-  function findY2(x: number, w: number): number {
-    let y = GRID_TOP;
+  function findY2(x: number, w: number, topPad = 0): number {
+    let y = GRID_TOP + topPad;
     for (const r of placedRects2) {
       if (x + w <= r.x || r.x + r.width <= x) continue;
-      y = Math.max(y, r.y + r.height + ROW_GAP);
+      y = Math.max(y, r.y + r.height + ROW_GAP + topPad);
     }
     return y;
   }
 
+  // A frame is one layout unit.  Anchor it to the leftmost column occupied by
+  // its visible members instead of always starting at column zero; otherwise a
+  // frame member constrained to the right of an external card leaves the frame
+  // behind that card while only its contents appear to move right.
+  function frameAnchorCol(block: FrameBlock): number {
+    const memberCols = [...block.cardIds]
+      .map(id => colOf[id])
+      .filter((column): column is number => column !== undefined);
+    return memberCols.length > 0 ? Math.min(...memberCols) : 0;
+  }
   for (const item of items2) {
     if (item.kind === 'card') {
       const m = item.msg;
@@ -1510,10 +1828,14 @@ function computeNoOverlapLayout(params: {
       maxBottom = Math.max(maxBottom, y + h);
     } else {
       const fb = item.block;
-      const frameX = colX(0); // 18
-      const frameY = findY2(frameX, CARD_W + FRAME_PAD_X * 2);
+      const frameX = colX(frameAnchorCol(fb));
+      // Measure the frame before choosing its Y position.  A fixed card-width
+      // estimate lets wide frames overlap cards that were placed earlier in
+      // the same horizontal band.
+      const measuredFrame = layoutFrameBlock(fb, frameX, GRID_TOP);
+      const frameY = findY2(frameX, measuredFrame.occupiedRect.width);
       const result2 = layoutFrameBlock(fb, frameX, frameY);
-      placedRects2.push(result2.rect);
+      placedRects2.push(result2.occupiedRect);
       frameRectMap.set(fb.relMsgId, result2.rect);
       maxBottom = Math.max(maxBottom, result2.rect.y + result2.rect.height);
     }
@@ -1597,7 +1919,7 @@ function computeLabelPlacementsAlongCurve(params: { seeds: LabelSeed[]; forbidde
       if (ok) { chosen={x:p.x,y:p.y}; placed.push(r); break; }
     }
     if (!chosen) {
-      const p=quadAt(s.p0,s.p1,s.p2,0.5); let x=p.x,y=p.y, r=labelRectApprox(x,y,s.text);
+      const p=quadAt(s.p0,s.p1,s.p2,0.5); const x=p.x; let y=p.y, r=labelRectApprox(x,y,s.text);
       for (let iter=0;iter<200;iter++) {
         let collision=false;
         for (const tr of [...forbiddenRects,...placed]) if (rectsIntersect(r,tr)) { collision=true; break; }
@@ -1614,6 +1936,9 @@ function computeLabelPlacementsAlongCurve(params: { seeds: LabelSeed[]; forbidde
 export interface GraphViewProps {
   messages: DemoMessage[];
   edges: DemoEdge[];
+  homeMatchIds?: Set<string>;
+  homeContextRoleByMessageId?: Map<string, 'source' | 'target' | 'source-target'>;
+  invalidCorrectionIds?: Set<string>;
   draftUnits: UnitSelection[];
   activeTextSelectId: string | null;
   lastClickedMessageId: string | null;
@@ -1634,6 +1959,8 @@ export interface GraphViewProps {
   onDecorationBodyClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
   /** Double-click on a decoration badge — shows sender info popup */
   onDecorationDoubleClick?: (e: React.MouseEvent, messageId: string, kind: "agree" | "disagree") => void;
+  /** Which decoration badges are currently selected: keys are `${messageId}::agree` / `${messageId}::disagree` */
+  selectedDecorations?: Set<string>;
   /** Click on an aggregated tag badge — toggles selection of all relation messages in the group */
   onTagBodyClick?: (e: React.MouseEvent, messageId: string, tagLabel: string, relMsgIds: string[]) => void;
   /** Double-click on a tag badge — shows details popup */
@@ -1657,28 +1984,320 @@ export interface GraphViewProps {
    * Double-click on an inline badge (RECOMMEND / ARCHIVE) — shows operation details
    * (who operated, when, etc.).  Falls back to onMessageDoubleClick if not provided.
    */
-  onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string) => void;
+  onInlineBadgeDoubleClick?: (e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{subType:string;customLabel?:string;count:number}> }) => void;
   /** Optional message IDs to hide from card rendering while keeping layout/frame computation. */
   hideMessageIds?: Set<string>;
-  /** DEBUG: callback to report frame/card rectangles */
-  onDebugRects?: (text: string) => void;
+  /** In trace mode, these CLASSIFY/SUMMARY IDs render as frames instead of cards. */
+  traceExpandedFrameIds?: Set<string>;
+  /** Directly traced CLASSIFY/SUMMARY IDs use exclusive card/frame rendering. */
+  traceFrameIds?: Set<string>;
+  /** Render two aligned comparison projections using the same graph layout. */
+  comparisonPair?: boolean;
+  comparisonTargetId?: string | null;
+  comparisonDisplay?: 'agree' | 'disagree';
+  comparisonRecommendedDisplay?: 'agree' | 'disagree';
+  comparisonAgreeMessages?: DemoMessage[];
+  comparisonAgreeEdges?: DemoEdge[];
+  comparisonAgreeHideMessageIds?: Set<string>;
+  comparisonDisagreeMessages?: DemoMessage[];
+  comparisonDisagreeEdges?: DemoEdge[];
+  comparisonDisagreeHideMessageIds?: Set<string>;
+  comparisonAgreeSuppressedRelIds?: Set<string>;
+  comparisonDisagreeSuppressedRelIds?: Set<string>;
+  comparisonSuppressedRelIds?: Set<string>;
+  autoCenterMessageId?: string | null;
+  /** Phase 2: stake counts per message (truth/value split) for display on cards */
+  stakeCounts?: Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>;
+  /** Phase 3: callback when ⚖️ truth settlement toggle is clicked */
+  onSettlementToggleTruth?: (messageId: string) => void;
+  /** Phase 3: callback when 💎 value settlement toggle is clicked */
+  onSettlementToggleValue?: (messageId: string) => void;
+  /** Topic ID for SettlementPanel message creation */
+  topicId?: string;
+  /** Phase 3: currently open settlement message ID (for active state styling) */
+  settlementOpenMsgId?: string | null;
+  /** Phase 3: currently open settlement type (TRUTH or VALUE) */
+  settlementOpenType?: 'TRUTH' | 'VALUE' | null;
+  onSettlementMessageCreated?: (m: { id: string; content: string; createdAt: string; author: string; kind: string }) => void;
+  /** Phase 5: Stance path highlight — { stanceMsgId, evidenceMsgIds } */
+  stanceHighlight?: { stanceMsgId: string; evidenceMsgIds: string[] } | null;
+  /** Phase 5: Settlement entry highlight filter for SettlementPanel */
+  settlementEntryHighlight?: { side?: 'PRO' | 'CON'; vote?: 'TRUE' | 'FALSE'; username?: string } | null;
+  /** 跨分类引用标签：msgId → { outgoing: { "证据": [...], "引用": [...], ... }, incoming: {...} } */
+  crossClassifyRefs?: Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>;
+  /** 点击跨分类引用标签：选中关系消息 */
+  onCrossRefTagClick?: (e: React.MouseEvent, relMsgIds: string[]) => void;
+  /** 点击加入消息标签；incoming 表示“被加入”，outgoing 表示“加入” */
+  onNavigateToMessage?: (messageId: string) => void;
+  /** JOIN records grouped by their target message, used by the target filter badge. */
+  joinRelationsByTarget?: Map<string, Relation[]>;
+  /** JOIN records emitted by each container. */
+  joinRelationsBySource?: Map<string, Relation[]>;
+  onJoinFilterClick?: (messageId: string, direction: 'incoming' | 'outgoing') => void;
+  joinStatusByMessage?: Map<string, 'valid' | 'rejected' | 'superseded' | 'container-rejected'>;
 }
 
-export default function GraphView(props: GraphViewProps) {
+const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
+const COMPARISON_HEADER_HEIGHT = 28;
+const COMPARISON_CANVAS_EXTRA_RIGHT_PAD = 96;
+
+function ComparisonGraphPair(props: GraphViewProps) {
+  const pairRef = useRef<HTMLDivElement | null>(null);
+  const agreeViewportRef = useRef<HTMLDivElement | null>(null);
+  const disagreeViewportRef = useRef<HTMLDivElement | null>(null);
+  const verticalScrollRef = useRef<HTMLDivElement | null>(null);
+  const horizontalScrollRef = useRef<HTMLDivElement | null>(null);
+  const syncingScrollRef = useRef(false);
+  const splitDragRef = useRef<{ startX: number; startAgreeRatio: number } | null>(null);
+  const [agreeRatio, setAgreeRatio] = useState(0.5);
+  const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
+  const [scrollHostSize, setScrollHostSize] = useState({ height: 0, viewportHeight: 0 });
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = splitDragRef.current;
+      const pair = pairRef.current;
+      if (!drag || !pair) return;
+      const pairWidth = pair.getBoundingClientRect().width;
+      const availableWidth = Math.max(1, pairWidth - 14 - 16);
+      const nextRatio = (drag.startAgreeRatio * availableWidth + event.clientX - drag.startX) / availableWidth;
+      setAgreeRatio(Math.max(0.25, Math.min(0.75, nextRatio)));
+    };
+    const handlePointerUp = () => { splitDragRef.current = null; };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, []);
+
+  const handleSplitPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    splitDragRef.current = { startX: event.clientX, startAgreeRatio: agreeRatio };
+  };
+
+  const setSharedScroll = (top: number, left: number) => {
+    const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+    const viewports = [agreeViewportRef.current, disagreeViewportRef.current].filter(Boolean) as HTMLDivElement[];
+    for (const viewport of viewports) {
+      viewport.scrollTop = 0;
+      viewport.scrollLeft = left;
+    }
+    if (scrollHost) scrollHost.scrollTop = top;
+    if (verticalScrollRef.current) verticalScrollRef.current.scrollTop = top;
+    if (horizontalScrollRef.current) horizontalScrollRef.current.scrollLeft = left;
+  };
+
+  useEffect(() => {
+    const targetId = props.autoCenterMessageId;
+    const agreeViewport = agreeViewportRef.current;
+    const verticalScroll = verticalScrollRef.current;
+    if (!targetId || !agreeViewport || !verticalScroll) return;
+    const centerTarget = () => {
+      const target = Array.from(agreeViewport.querySelectorAll<HTMLElement>('[data-msgid]'))
+        .find(element => element.getAttribute('data-msgid') === targetId);
+      if (!target) return;
+      const targetRect = target.getBoundingClientRect();
+      const viewportRect = agreeViewport.getBoundingClientRect();
+      const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+      const scrollRect = scrollHost?.getBoundingClientRect() ?? viewportRect;
+      const scrollTop = scrollHost?.scrollTop ?? agreeViewport.scrollTop;
+      const scrollHeight = scrollHost?.scrollHeight ?? contentSize.height;
+      const clientHeight = scrollHost?.clientHeight ?? agreeViewport.clientHeight;
+      const nextTop = Math.max(0, Math.min(
+        scrollTop + targetRect.top - scrollRect.top + targetRect.height / 2 - clientHeight / 2,
+        Math.max(0, scrollHeight - clientHeight),
+      ));
+      const nextLeft = Math.max(0, Math.min(
+        agreeViewport.scrollLeft + targetRect.left - viewportRect.left + targetRect.width / 2 - agreeViewport.clientWidth / 2,
+        Math.max(0, contentSize.width - agreeViewport.clientWidth),
+      ));
+      setSharedScroll(nextTop, nextLeft);
+    };
+    const timer = window.setTimeout(centerTarget, 100);
+    return () => window.clearTimeout(timer);
+  }, [props.autoCenterMessageId, props.messages, props.edges, contentSize]);
+
+  useEffect(() => {
+    const updateContentSize = () => {
+      const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+      const dimensions = [agreeViewportRef.current, disagreeViewportRef.current].map(viewport => ({
+        width: viewport?.scrollWidth ?? 0,
+        height: viewport?.scrollHeight ?? 0,
+      }));
+      setContentSize({
+        width: Math.max(...dimensions.map(dimension => dimension.width), 0),
+        height: Math.max(...dimensions.map(dimension => dimension.height), agreeViewportRef.current?.clientHeight ?? 0),
+      });
+      setScrollHostSize({ height: scrollHost?.scrollHeight ?? 0, viewportHeight: scrollHost?.clientHeight ?? 0 });
+    };
+    updateContentSize();
+    const observer = new ResizeObserver(updateContentSize);
+    if (agreeViewportRef.current) observer.observe(agreeViewportRef.current);
+    if (disagreeViewportRef.current) observer.observe(disagreeViewportRef.current);
+    const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+    if (scrollHost) observer.observe(scrollHost);
+    for (const canvas of [agreeViewportRef.current, disagreeViewportRef.current]
+      .flatMap(viewport => viewport ? Array.from(viewport.querySelectorAll<HTMLElement>('[data-jump-canvas]')) : [])) {
+      observer.observe(canvas);
+    }
+    window.addEventListener('resize', updateContentSize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateContentSize);
+    };
+  }, [props.messages, props.edges]);
+
+  useEffect(() => {
+    const viewports = [agreeViewportRef.current, disagreeViewportRef.current].filter(Boolean) as HTMLDivElement[];
+    const scrollHost = pairRef.current?.closest('[data-topic-left-panel]') as HTMLDivElement | null;
+    const verticalScroll = verticalScrollRef.current;
+    const horizontalScroll = horizontalScrollRef.current;
+    if (!verticalScroll || !horizontalScroll) return;
+    const getHorizontalMax = (element: HTMLElement) => Math.max(0, element.scrollWidth - element.clientWidth);
+    const getScrollProgress = (element: HTMLElement) => {
+      const max = getHorizontalMax(element);
+      return max > 0 ? element.scrollLeft / max : 0;
+    };
+    const setHorizontalProgress = (progress: number) => {
+      const clampedProgress = Math.max(0, Math.min(1, progress));
+      for (const viewport of viewports) viewport.scrollLeft = getHorizontalMax(viewport) * clampedProgress;
+      horizontalScroll.scrollLeft = getHorizontalMax(horizontalScroll) * clampedProgress;
+    };
+    const syncFromViewport = (source: HTMLDivElement) => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      for (const viewport of viewports) {
+        viewport.scrollTop = 0;
+      }
+      setHorizontalProgress(getScrollProgress(source));
+      if (scrollHost) scrollHost.scrollTop = source.scrollTop;
+      verticalScroll.scrollTop = source.scrollTop;
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    const syncFromVerticalScroll = () => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      if (scrollHost) scrollHost.scrollTop = verticalScroll.scrollTop;
+      for (const viewport of viewports) viewport.scrollTop = 0;
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    const syncFromHorizontalScroll = () => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      setHorizontalProgress(getScrollProgress(horizontalScroll));
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    const handlers = viewports.map(viewport => {
+      const handler = () => syncFromViewport(viewport);
+      viewport.addEventListener('scroll', handler, { passive: true });
+      return [viewport, handler] as const;
+    });
+    const handleScrollHost = () => {
+      if (syncingScrollRef.current) return;
+      syncingScrollRef.current = true;
+      verticalScroll.scrollTop = scrollHost?.scrollTop ?? 0;
+      const source = scrollHost ?? viewports[0];
+      setHorizontalProgress(source ? getScrollProgress(source) : 0);
+      for (const viewport of viewports) viewport.scrollTop = 0;
+      requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    };
+    verticalScroll.addEventListener('scroll', syncFromVerticalScroll, { passive: true });
+    horizontalScroll.addEventListener('scroll', syncFromHorizontalScroll, { passive: true });
+    scrollHost?.addEventListener('scroll', handleScrollHost, { passive: true });
+    return () => {
+      for (const [viewport, handler] of handlers) viewport.removeEventListener('scroll', handler);
+      verticalScroll.removeEventListener('scroll', syncFromVerticalScroll);
+      horizontalScroll.removeEventListener('scroll', syncFromHorizontalScroll);
+      scrollHost?.removeEventListener('scroll', handleScrollHost);
+    };
+  }, []);
+
+  const viewportStyle: React.CSSProperties = {
+    flex: '0 0 auto',
+    minWidth: 0,
+    minHeight: 0,
+    overflowX: 'auto',
+    overflowY: 'hidden',
+  };
+
+  return (
+    <div ref={pairRef} data-comparison-pair="true" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 8, width: '100%', minHeight: '100%' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `${agreeRatio}fr 30px ${1 - agreeRatio}fr`, gap: 8, alignItems: 'stretch' }}>
+      <div data-comparison-view="agree" style={{ minWidth: 0, minHeight: 0, border: '1px solid #365314', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: `0 0 ${COMPARISON_HEADER_HEIGHT}px`, height: COMPARISON_HEADER_HEIGHT, boxSizing: 'border-box', display: 'flex', alignItems: 'center', padding: '6px 8px', color: '#86efac', background: '#17210f', fontSize: 12, fontWeight: 600 }}>赞同后显示{props.comparisonRecommendedDisplay === 'agree' ? ' · 推荐显示' : ''}</div>
+        <div ref={agreeViewportRef} data-comparison-viewport="agree" style={viewportStyle}>
+          <GraphView {...props} messages={props.comparisonAgreeMessages ?? props.messages} edges={props.comparisonAgreeEdges ?? props.edges} hideMessageIds={props.comparisonAgreeHideMessageIds ?? props.hideMessageIds} comparisonPair={false} comparisonDisplay="agree" comparisonSuppressedRelIds={props.comparisonAgreeSuppressedRelIds} autoCenterMessageId={null} />
+        </div>
+      </div>
+      <div data-comparison-divider="true" style={{ minHeight: 0, marginTop: COMPARISON_HEADER_HEIGHT, display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr)', gap: 4, position: 'sticky', top: 0, alignSelf: 'start', height: Math.max(scrollHostSize.viewportHeight, 1), overflow: 'hidden', background: '#2a2a2a', borderRadius: 4 }}>
+        <div ref={verticalScrollRef} data-comparison-scroll-vertical="true" aria-label="对比视图垂直滚动条" style={{ minHeight: 0, minWidth: 0, height: '100%', overflowY: 'scroll', overflowX: 'hidden', scrollbarGutter: 'stable', borderRadius: 4 }}>
+          <div style={{ height: Math.max(scrollHostSize.height, contentSize.height, 1), width: 1 }} />
+        </div>
+        <div onPointerDown={handleSplitPointerDown} role="separator" aria-label="调整对比视图宽度" style={{ minWidth: 0, cursor: 'col-resize', background: '#3a3a3a', borderRadius: 4, touchAction: 'none', userSelect: 'none' }} />
+      </div>
+      <div data-comparison-view="disagree" style={{ minWidth: 0, minHeight: 0, border: '1px solid #7f1d1d', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: `0 0 ${COMPARISON_HEADER_HEIGHT}px`, height: COMPARISON_HEADER_HEIGHT, boxSizing: 'border-box', display: 'flex', alignItems: 'center', padding: '6px 8px', color: '#fca5a5', background: '#2a1212', fontSize: 12, fontWeight: 600 }}>反对后显示{props.comparisonRecommendedDisplay === 'disagree' ? ' · 推荐显示' : ''}</div>
+        <div ref={disagreeViewportRef} data-comparison-viewport="disagree" style={viewportStyle}>
+          <GraphView {...props} messages={props.comparisonDisagreeMessages ?? props.messages} edges={props.comparisonDisagreeEdges ?? props.edges} hideMessageIds={props.comparisonDisagreeHideMessageIds ?? props.hideMessageIds} comparisonPair={false} comparisonDisplay="disagree" comparisonSuppressedRelIds={props.comparisonDisagreeSuppressedRelIds} autoCenterMessageId={null} />
+        </div>
+      </div>
+      </div>
+      <div ref={horizontalScrollRef} data-comparison-scroll-horizontal="true" aria-label="对比视图水平滚动条" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 1, opacity: 0, pointerEvents: 'none', overflowX: 'scroll', overflowY: 'hidden' }}>
+        <div style={{ width: Math.max(contentSize.width, 1), height: 1 }} />
+      </div>
+    </div>
+  );
+}
+
+function GraphViewCanvas(props: GraphViewProps) {
   const {
-    messages, edges, draftUnits, activeTextSelectId, lastClickedMessageId,
+    messages: inputMessages, edges: inputEdges, invalidCorrectionIds, draftUnits, activeTextSelectId, lastClickedMessageId,
     onMessageClick, onMessageDoubleClick, onTextMouseUp,
     onEdgeLabelSingleClick, onEdgeLabelDoubleClick,
     onFragmentAnchorClick, isFragmentSelected, onCanvasBlankClick,
     onMessageMouseDown, onMessageMouseUp,
     onDecorationIconClick, onDecorationBodyClick, onDecorationDoubleClick,
+    selectedDecorations,
     onTagBodyClick, onTagDoubleClick,
     onGroupFrameClick, onGroupFrameDoubleClick,
     onInlineBadgeClick, onInlineBadgeDoubleClick,
-    hideMessageIds,
-    onDebugRects,
+    stakeCounts,
+    onSettlementToggleTruth,
+    onSettlementToggleValue,
+    topicId,
+    settlementOpenMsgId,
+    settlementOpenType,
+    onSettlementMessageCreated,
+    stanceHighlight,
+    settlementEntryHighlight,
+    crossClassifyRefs,
+    onCrossRefTagClick,
+    onNavigateToMessage,
+    joinRelationsByTarget,
+    joinRelationsBySource,
+    onJoinFilterClick,
+    joinStatusByMessage,
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
+
+  const messages = inputMessages;
+  const edges = inputEdges;
+  const traceFrameIds = props.traceFrameIds ?? new Set<string>();
+  // Expanded frame IDs are only meaningful inside an active trace window.
+  // Do not let stale expansion state turn the ordinary graph into a trace view.
+  const isTraceWindow = traceFrameIds.size > 0;
+  // An entering trace can briefly render with the previous expansion state.
+  // Only frames belonging to the current trace may be rendered as expanded.
+  const traceExpandedFrameIds = useMemo(
+    () => new Set(props.traceExpandedFrameIds ?? []),
+    [props.traceExpandedFrameIds],
+  );
+  const comparisonSuppressedRelIds = props.comparisonSuppressedRelIds ?? EMPTY_COMPARISON_SUPPRESSED_REL_IDS;
+  const effectiveHideMessageIds = props.hideMessageIds
+    ? new Set([...props.hideMessageIds, ...comparisonSuppressedRelIds])
+    : comparisonSuppressedRelIds;
 
   const canvasRef = useRef<HTMLDivElement|null>(null);
   const cardRefs = useRef<Record<string,HTMLDivElement|null>>({});
@@ -1697,12 +2316,12 @@ export default function GraphView(props: GraphViewProps) {
     const isTagSource = new Set<string>();
     const shouldKeepVisible = new Set<string>();
     for (const e of edges) {
-      if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+      if (e.relationType === "tag" && msgMap.get(e.from.messageId)?.kind && isContentKind(msgMap.get(e.from.messageId)!.kind)) {
         isTagSource.add(e.from.messageId);
       }
       // Keep visible: any message targeted by a relation, or source of a non-TAG relation
-      if (msgMap.get(e.to.messageId)?.kind === "normal") shouldKeepVisible.add(e.to.messageId);
-      if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind === "normal") {
+      if (msgMap.get(e.to.messageId)?.kind && isContentKind(msgMap.get(e.to.messageId)!.kind)) shouldKeepVisible.add(e.to.messageId);
+      if (e.relationType !== "tag" && msgMap.get(e.from.messageId)?.kind && isContentKind(msgMap.get(e.from.messageId)!.kind)) {
         shouldKeepVisible.add(e.from.messageId);
       }
     }
@@ -1734,12 +2353,17 @@ export default function GraphView(props: GraphViewProps) {
   const relationCardMsgIds = useMemo(() => {
     const ids = new Set(classifyRelMsgIds);
     for (const id of summaryRelMsgIds) ids.add(id);
+    for (const message of messages) {
+      if (message.kind === 'relation' && isTraceTextLikeMessage(message)) ids.add(message.id);
+    }
     return ids;
-  }, [classifyRelMsgIds, summaryRelMsgIds]);
+  }, [classifyRelMsgIds, summaryRelMsgIds, messages]);
   const normals = useMemo(() => messages.filter(m =>
-    (m.kind === "normal" && !tagSourceIds.has(m.id)) ||
-    (m.kind === "relation" && relationCardMsgIds.has(m.id))
-  ), [messages, tagSourceIds, relationCardMsgIds]);
+    !traceExpandedFrameIds.has(m.id) && (
+      (isContentKind(m.kind) && !tagSourceIds.has(m.id)) ||
+      (m.kind === "relation" && relationCardMsgIds.has(m.id))
+    )
+  ), [messages, tagSourceIds, relationCardMsgIds, traceExpandedFrameIds]);
   const normalIds = useMemo(() => normals.map(m => m.id), [normals]);
   // Exclude CLASSIFY/SUMMARY/ARRANGE messages from relIds — they are now in normals and should not be
   // treated as relation-message endpoints for edge-routing constraint algorithms.
@@ -1753,12 +2377,15 @@ export default function GraphView(props: GraphViewProps) {
   // Grouping column override: highest priority — arrange/frame-group/replace-overlay/correction-badge source must
   // be in same column as target, overriding any agree/disagree placement for zero-gap stacking.
   const { col: pipelineCol, maxCol: pipelineMaxCol } = useMemo(() => applyGroupingColumnOverride({ normals, edges, col: agreeDisCol, maxCol: agreeDisMaxCol }), [normals, edges, agreeDisCol, agreeDisMaxCol]);
+  // Phase 6: column spreading handled via edges in modelBridge
+  const layoutCol = useMemo(() => ({ col: pipelineCol, maxCol: pipelineMaxCol }), [pipelineCol, pipelineMaxCol]);
 
   const [measuredHeights, setMeasuredHeights] = useState<Record<string,number>>({});
   // Reserved: populate via ResizeObserver when cards need variable widths (e.g. MERGE headers).
   const [measuredWidths] = useState<Record<string,number>>({});
   const [positionedEdges, setPositionedEdges] = useState<PositionedEdge[]>([]);
   const [labelBboxes, setLabelBboxes] = useState<Record<string,LabelBbox>>({});
+  const [selectedActualRects, setSelectedActualRects] = useState<Record<string, Rect>>({});
   const [decorationRectsState, setDecorationRectsState] = useState<Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}>|null>(null);
   const [decorationsByMsgState, setDecorationsByMsgState] = useState<Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>|null>(null);
   // TAG decorations: aggregated by label text — map from messageId → list of {label, relMsgIds, rect, relAgreeCount, relDisagreeCount, relAgreeMsgIds, relDisagreeMsgIds}
@@ -1772,18 +2399,64 @@ export default function GraphView(props: GraphViewProps) {
   // isBlankCorrected: same semantics as for arrangeFrames above.
   const [groupFrames, setGroupFrames] = useState<{targetId:string;sourceId:string;relMsgId:string;relType:string;isBlankCorrected:boolean;relKind:PresentationKind;relLabel:string;relColor:string;rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]>([]);
   // INLINE BADGES: RECOMMEND / ARCHIVE — small badge anchored to the target message card
-  const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>>(new Map());
+  const [inlineBadgesByMsg, setInlineBadgesByMsg] = useState<Map<string,Array<{relMsgId:string;relMsgIds?:string[];relKind:string;relLabel:string;relColor:string;rect:Rect;subDetails?:Array<{subType:string;customLabel?:string;count:number}>}>>>(new Map());
   // AGREE/DISAGREE decorations targeting relation messages — for edge-label relations (annotation/reference/reply)
   const [relDecByRelMsgState, setRelDecByRelMsgState] = useState<Map<string,{agreeCount:number;disagreeCount:number;agreeRelMsgIds:string[];disagreeRelMsgIds:string[]}>>(new Map());
   // TAG relations targeting relation messages — for rendering next to edge labels / arrange frames
   const [tagsByRelMsgState, setTagsByRelMsgState] = useState<Map<string,Array<{label:string;relMsgId:string}>>>(new Map());
 
-  const canvasWidth = GRID_LEFT + (pipelineMaxCol+1)*CARD_W + pipelineMaxCol*COL_GAP + CANVAS_RIGHT_PAD;
+  const canvasRightPad = props.comparisonDisplay ? CANVAS_RIGHT_PAD + COMPARISON_CANVAS_EXTRA_RIGHT_PAD : CANVAS_RIGHT_PAD;
+  const canvasWidth = GRID_LEFT + (pipelineMaxCol+1)*CARD_W + pipelineMaxCol*COL_GAP + canvasRightPad;
   const edgesByRelMsg = useMemo(() => {
     const map = new Map<string,DemoEdge[]>();
     for (const e of edges) { const arr=map.get(e.relationMessageId)??[]; arr.push(e); map.set(e.relationMessageId,arr); }
     return map;
   }, [edges]);
+
+  const selectedAnnotationRelMsgIds = useMemo(() => {
+    const selected = new Set<string>();
+    if (lastClickedMessageId) selected.add(lastClickedMessageId);
+    for (const u of draftUnits) selected.add(u.messageId);
+    const annotationIds = new Set<string>();
+    for (const relId of selected) {
+      const relType = edgesByRelMsg.get(relId)?.[0]?.relationType
+        ?? (msgMap.get(relId)?.kind === 'relation' ? msgMap.get(relId)?.relationType : undefined);
+      if (relType === 'annotation') annotationIds.add(relId);
+    }
+    return annotationIds;
+  }, [lastClickedMessageId, draftUnits, edgesByRelMsg, msgMap]);
+
+  const annotationTargetFragmentHints = useMemo(() => {
+    const fragmentKeys = new Set<string>();
+    if (selectedAnnotationRelMsgIds.size === 0) return fragmentKeys;
+    for (const e of edges) {
+      if (e.relationType !== 'annotation') continue;
+      if (!selectedAnnotationRelMsgIds.has(e.relationMessageId)) continue;
+      if (selectionIsText(e.to.selection)) {
+        fragmentKeys.add(`${e.to.messageId}::${e.to.selection.start}:${e.to.selection.len}:annotation`);
+      }
+    }
+    return fragmentKeys;
+  }, [edges, selectedAnnotationRelMsgIds]);
+
+  const notifyUsersByRelationMsg = useMemo(() => {
+    const result = new Map<string, Array<{ id: string; username: string }>>();
+    for (const message of messages) {
+      if (message.kind !== 'relation' || message.relationType !== 'notify') continue;
+      const payloadUsers = Array.isArray(message.relationPayload?.notifyUsers)
+        ? message.relationPayload.notifyUsers.filter(user => user && typeof user.id === 'string' && typeof user.username === 'string')
+        : [];
+      if (payloadUsers.length > 0) {
+        result.set(message.id, Array.from(new Map(payloadUsers.map(user => [user.id, user])).values()));
+        continue;
+      }
+      const ids = Array.isArray(message.relationPayload?.notifyUserIds)
+        ? message.relationPayload.notifyUserIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      if (ids.length > 0) result.set(message.id, Array.from(new Set(ids), id => ({ id, username: `与会者 ${id}` })));
+    }
+    return result;
+  }, [messages]);
 
   // IDs of all targets of CORRECT relations that have a real (non-anonymous) replacement source.
   // Their cards are hidden in the non-linear view because the replacement source card/edge
@@ -1791,30 +2464,29 @@ export default function GraphView(props: GraphViewProps) {
   // Only hide when the CORRECT relation has a non-anon source — if there is no replacement
   // (secondary type = "none", anon: source), the original remains visible with a correction badge.
   const correctedTargetMsgIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const e of edges) {
-      if (e.relationType === 'correct' && !e.from.messageId.startsWith('anon:')) {
-        ids.add(e.to.messageId);
-      }
-    }
-    return ids;
+    // CORRECT is a version relation. The original target card remains visible;
+    // its projected content is supplied by the parent view model.
+    return new Set<string>();
   }, [edges]);
 
-  // Map: source normal-message ID → [{relMsgId, targetMsgId}] for CORRECT relations.
-  // Used to render the correction badge inline in the source card header.
-  const correctionsBySourceMsgId = useMemo(() => {
+  // Map: target message ID → CORRECT revision records. The target card remains
+  // the canonical card; each revision is only a version badge on that card.
+  const correctionsByTargetMsgId = useMemo(() => {
     const map = new Map<string, Array<{relMsgId: string; targetMsgId: string}>>();
     for (const e of edges) {
       if (e.relationType !== 'correct') continue;
-      if (e.from.messageId.startsWith('anon:')) continue;
-      const srcId = e.from.messageId;
-      if (msgMap.get(srcId)?.kind !== 'normal') continue;
-      const arr = map.get(srcId) ?? [];
+      const targetId = e.to.messageId;
+      const arr = map.get(targetId) ?? [];
       arr.push({ relMsgId: e.relationMessageId, targetMsgId: e.to.messageId });
-      map.set(srcId, arr);
+      map.set(targetId, arr);
     }
     return map;
   }, [edges, msgMap]);
+
+  const correctionVersionsByTargetMsgId = useMemo(
+    () => computeCorrectionVersions(messages, edges, invalidCorrectionIds),
+    [messages, edges, invalidCorrectionIds],
+  );
 
   // Corrected-target IDs that are NOT themselves correction sources.
   // A message that corrects another while also being corrected (chained correction) must
@@ -1822,10 +2494,10 @@ export default function GraphView(props: GraphViewProps) {
   const hiddenCorrectedTargetIds = useMemo(() => {
     const ids = new Set<string>();
     for (const id of correctedTargetMsgIds) {
-      if (!correctionsBySourceMsgId.has(id)) ids.add(id);
+      if (!correctionsByTargetMsgId.has(id)) ids.add(id);
     }
     return ids;
-  }, [correctedTargetMsgIds, correctionsBySourceMsgId]);
+  }, [correctedTargetMsgIds, correctionsByTargetMsgId]);
 
   // Summary-target IDs: all text-message targets of SUMMARY relations.
   // These are hidden in the non-linear view — the summary card replaces them.
@@ -1852,9 +2524,17 @@ export default function GraphView(props: GraphViewProps) {
   // Combined set of all hidden target message IDs (CORRECT + SUMMARY).
   const hiddenTargetIds = useMemo(() => {
     const ids = new Set(hiddenCorrectedTargetIds);
-    for (const id of hiddenSummaryTargetIds) ids.add(id);
+    const directlyTracedSummaryMemberIds = new Set<string>();
+    for (const edge of edges) {
+      if (edge.relationType !== 'summary' || !traceExpandedFrameIds.has(edge.relationMessageId)) continue;
+      if (!edge.from.messageId.startsWith('anon:')) directlyTracedSummaryMemberIds.add(edge.from.messageId);
+      if (!edge.to.messageId.startsWith('anon:')) directlyTracedSummaryMemberIds.add(edge.to.messageId);
+    }
+    for (const id of hiddenSummaryTargetIds) {
+      if (!directlyTracedSummaryMemberIds.has(id)) ids.add(id);
+    }
     return ids;
-  }, [hiddenCorrectedTargetIds, hiddenSummaryTargetIds]);
+  }, [edges, hiddenCorrectedTargetIds, hiddenSummaryTargetIds, traceExpandedFrameIds, traceFrameIds]);
 
   // Build frame blocks: identify which cards belong to which frames (arrange/merge/classify/summary).
   // This is computed before the layout so frames are placed as atomic units.
@@ -1862,14 +2542,20 @@ export default function GraphView(props: GraphViewProps) {
   const visibleCardIds = useMemo(() => {
     const ids = new Set(normalIds);
     for (const m of messages) {
-      if (m.kind === 'normal' || relationCardMsgIds.has(m.id)) ids.add(m.id);
+      if (!traceExpandedFrameIds.has(m.id) && (isContentKind(m.kind) || relationCardMsgIds.has(m.id))) ids.add(m.id);
     }
     return ids;
-  }, [messages, normalIds, relationCardMsgIds]);
-  const frameBlocks = useMemo(
-    () => buildFrameBlocks({ edges, visibleCardIds, msgMap }),
-    [edges, visibleCardIds, msgMap]
-  );
+  }, [messages, normalIds, relationCardMsgIds, traceExpandedFrameIds]);
+  const traceEmbeddedFrameIds = useMemo(() => {
+    return new Set(traceExpandedFrameIds);
+  }, [traceExpandedFrameIds]);
+  const frameBlocks = useMemo(() => {
+    const blocks = buildFrameBlocks({ edges, visibleCardIds, msgMap, keepEmptyFrameIds: traceEmbeddedFrameIds, traceMode: isTraceWindow });
+    return blocks.filter(block =>
+      !['classify', 'summary'].includes(msgMap.get(block.relMsgId)?.relationType ?? '')
+      || (isTraceWindow && traceEmbeddedFrameIds.has(block.relMsgId)),
+    );
+  }, [edges, visibleCardIds, msgMap, traceExpandedFrameIds, traceEmbeddedFrameIds, isTraceWindow]);
   // Compute nesting depth for each frame: root=0, child=parentDepth+1
   const frameDepthMap = useMemo(() => {
     const depth = new Map<string, number>();
@@ -1890,106 +2576,155 @@ export default function GraphView(props: GraphViewProps) {
   // ── Two-pass layout: pass 1 gets frame rects, correct columns, pass 2 is final ──
   // Pass 1: compute initial layout solely to obtain actual frame rects
   const { frameRects: pass1FrameRects } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf: pipelineCol, measuredHeights, measuredWidths, maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages }),
-    [normals, pipelineCol, measuredHeights, measuredWidths, pipelineMaxCol, hiddenTargetIds, frameBlocks, messages]
+    () => computeNoOverlapLayout({ normals, colOf: pipelineCol, measuredHeights, measuredWidths, maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages, activeTextSelectId, traceMode: isTraceWindow }),
+    [normals, pipelineCol, measuredHeights, measuredWidths, pipelineMaxCol, hiddenTargetIds, frameBlocks, messages, activeTextSelectId, isTraceWindow]
   );
 
   // Column correction: push anno/ref/reply sources targeting frames to the right of the frame's actual visual boundary
   const correctedResult = useMemo(
-    () => computeFrameAwareColumnCorrection({ normals, edges, colOf: pipelineCol, maxCol: pipelineMaxCol, frameRects: pass1FrameRects }),
-    [normals, edges, pipelineCol, pipelineMaxCol, pass1FrameRects]
+    () => computeFrameAwareColumnCorrection({ normals, edges, colOf: layoutCol.col, maxCol: layoutCol.maxCol, frameRects: pass1FrameRects }),
+    [normals, edges, layoutCol.col, layoutCol.maxCol, pass1FrameRects]
   );
   const colOf = correctedResult.col;
   const maxCol = correctedResult.maxCol;
 
   // Pass 2: final layout with corrected columns
   const { layout: pass2Layout, canvasHeight: pass2CanvasHeight, frameRects: baseFrameRects } = useMemo(
-    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, measuredWidths, maxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages }),
-    [normals, colOf, measuredHeights, measuredWidths, maxCol, hiddenTargetIds, frameBlocks, messages]
+    () => computeNoOverlapLayout({ normals, colOf, measuredHeights, measuredWidths, maxCol, correctedTargetIds: hiddenTargetIds, frameBlocks, allMessages: messages, activeTextSelectId, traceMode: isTraceWindow }),
+    [normals, colOf, measuredHeights, measuredWidths, maxCol, hiddenTargetIds, frameBlocks, messages, activeTextSelectId, isTraceWindow]
   );
 
   // Compact: shift anno/ref source clusters toward their targets
   const { layout: compactedLayout, canvasHeight: compactedCanvasHeight } = useMemo(
-    () => compactAnnoRefClusters({ layout: pass2Layout, normals, colOf, edges, allFrameRects: { ...baseFrameRects, ...pass1FrameRects }, canvasHeight: pass2CanvasHeight }),
-    [pass2Layout, normals, colOf, edges, baseFrameRects, pass1FrameRects, pass2CanvasHeight]
+    () => compactAnnoRefClusters({
+      layout: pass2Layout,
+      normals,
+      colOf,
+      edges,
+      allFrameRects: { ...baseFrameRects, ...pass1FrameRects },
+      frameMemberIds: new Set(frameBlocks.flatMap(frame => [...frame.cardIds])),
+      canvasHeight: pass2CanvasHeight,
+    }),
+    [pass2Layout, normals, colOf, edges, baseFrameRects, pass1FrameRects, frameBlocks, pass2CanvasHeight]
   );
 
   // Frame avoidance — safety net ensuring frames don't overlap with cards below
   const frameAvoidanceReservations = useMemo(
-    () => buildFrameAvoidanceReservations({ edges, layout: compactedLayout, msgMap, relationCardMsgIds }),
-    [edges, compactedLayout, msgMap, relationCardMsgIds]
+    () => buildFrameLayoutUnits({ frameBlocks, layout: compactedLayout, frameRects: baseFrameRects, measuredHeights }),
+    [frameBlocks, compactedLayout, baseFrameRects, measuredHeights]
   );
   const { layout, canvasHeight } = useMemo(
-    () => applyFrameAvoidanceReservations({
-      layout: compactedLayout,
-      normals,
-      colOf,
-      reservations: frameAvoidanceReservations,
-      minCanvasHeight: compactedCanvasHeight,
-      msgMap,
-      edgesByRelMsg,
-      relationCardMsgIds,
-    }),
-    [compactedLayout, normals, colOf, frameAvoidanceReservations, compactedCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds]
+    () => {
+      // A member can grow after entering text-selection mode. Re-run the
+      // external layout after the frame rect is expanded from that member;
+      // one pass is insufficient because the expanded frame is itself the
+      // obstacle that determines the next card positions.
+      let currentLayout = compactedLayout;
+      let currentReservations = frameAvoidanceReservations;
+      let currentCanvasHeight = compactedCanvasHeight;
+      for (let pass = 0; pass < 3; pass++) {
+        const result = applyFrameAvoidanceReservations({
+          layout: currentLayout,
+          normals,
+          colOf,
+          reservations: currentReservations,
+          minCanvasHeight: currentCanvasHeight,
+          msgMap,
+          edgesByRelMsg,
+          relationCardMsgIds,
+        });
+        currentLayout = result.layout;
+        currentCanvasHeight = result.canvasHeight;
+        currentReservations = buildFrameLayoutUnits({
+          frameBlocks,
+          layout: currentLayout,
+          frameRects: baseFrameRects,
+          measuredHeights,
+        });
+      }
+      return { layout: currentLayout, canvasHeight: currentCanvasHeight };
+    },
+    [compactedLayout, normals, colOf, frameAvoidanceReservations, compactedCanvasHeight, msgMap, edgesByRelMsg, relationCardMsgIds, baseFrameRects, frameBlocks, measuredHeights]
   );
   
-  const finalFrameRects = useMemo(() => {
-    const result: Record<string, Rect> = {};
-    for (const fb of frameBlocks) {
-      // Recompute frame rect from current card positions so it stays tight
-      // even after upstream compaction / push-down moves cards.
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-      const collectBounds = (cardId: string) => {
-        const box = layout[cardId];
-        if (box) {
-          minX = Math.min(minX, box.x);
-          minY = Math.min(minY, box.y);
-          maxX = Math.max(maxX, box.x + box.width);
-          maxY = Math.max(maxY, box.y + box.height);
-        }
-        // Also encompass child frame rects
-        const childRect = result[cardId];
-        if (childRect) {
-          minX = Math.min(minX, childRect.x);
-          minY = Math.min(minY, childRect.y);
-          maxX = Math.max(maxX, childRect.x + childRect.width);
-          maxY = Math.max(maxY, childRect.y + childRect.height);
-        }
-      };
-
-      for (const cid of fb.cardIds) {
-        collectBounds(cid);
-      }
-
-      if (!isFinite(minX)) {
-        result[fb.relMsgId] = { ...baseFrameRects[fb.relMsgId] };
-        continue;
-      }
-
-      const isMerge = fb.isMerge;
-      const mergeHeaderPad = isMerge ? MERGE_CARD_H : 0;
-      result[fb.relMsgId] = {
-        x: minX - FRAME_PAD_X,
-        y: minY - FRAME_PAD_Y - mergeHeaderPad,
-        width: maxX - minX + FRAME_PAD_X * 2,
-        height: maxY - minY + FRAME_PAD_Y * 2 + mergeHeaderPad,
-      };
-    }
-    return result;
-  }, [baseFrameRects, layout, frameBlocks]);
+  const finalFrameRects = baseFrameRects;
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;
-    for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + CANVAS_RIGHT_PAD);
-    for (const r of Object.values(finalFrameRects)) w = Math.max(w, r.x + r.width + CANVAS_RIGHT_PAD);
+    for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + canvasRightPad);
+    for (const r of Object.values(finalFrameRects)) w = Math.max(w, r.x + r.width + canvasRightPad);
     return w;
-  }, [canvasWidth, layout, finalFrameRects]);
+  }, [canvasWidth, canvasRightPad, layout, finalFrameRects]);
   const actualCanvasHeight = useMemo(() => {
     let h = canvasHeight;
     for (const box of Object.values(layout)) h = Math.max(h, box.y + box.height + CANVAS_BOTTOM_PAD);
     for (const r of Object.values(finalFrameRects)) h = Math.max(h, r.y + r.height + CANVAS_BOTTOM_PAD);
     return h;
   }, [canvasHeight, layout, finalFrameRects]);
+  const visibleArrangeFrames = arrangeFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId));
+  const renderedGroupFrames = groupFrames.map(frame => {
+    const rect = finalFrameRects[frame.relMsgId];
+    return rect ? { ...frame, rect } : frame;
+  });
+  const visibleGroupFrames = renderedGroupFrames.filter(frame =>
+    !effectiveHideMessageIds.has(frame.relMsgId) &&
+    (!isTraceWindow || !['classify', 'summary'].includes(frame.relType)
+      || traceExpandedFrameIds.has(frame.relMsgId)),
+  );
+
+  const selectedMessageIds = useMemo(() => new Set([
+    ...draftUnits
+      .filter(unit => unit.selection.kind === 'whole')
+      .map(unit => unit.messageId),
+    ...(lastClickedMessageId ? [lastClickedMessageId] : []),
+  ]), [draftUnits, lastClickedMessageId]);
+
+  useLayoutEffect(() => {
+    if (!SHOW_SELECTED_ACTUAL_RECTS) {
+      setSelectedActualRects(prev => Object.keys(prev).length === 0 ? prev : {});
+      return;
+    }
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
+    const canvasRect = canvasEl.getBoundingClientRect();
+    const scaleX = canvasEl.offsetWidth > 0 ? canvasRect.width / canvasEl.offsetWidth : 1;
+    const scaleY = canvasEl.offsetHeight > 0 ? canvasRect.height / canvasEl.offsetHeight : 1;
+    const next: Record<string, Rect> = {};
+    const toCanvasRect = (rect: DOMRect): Rect => ({
+      x: (rect.left - canvasRect.left) / scaleX,
+      y: (rect.top - canvasRect.top) / scaleY,
+      width: rect.width / scaleX,
+      height: rect.height / scaleY,
+    });
+    for (const messageId of selectedMessageIds) {
+      const element = cardRefs.current[messageId];
+      const actualRect = element?.getBoundingClientRect();
+      let selectedRect = actualRect && actualRect.width > 1 && actualRect.height > 1
+        ? toCanvasRect(actualRect)
+        : undefined;
+      const selectedFrame = visibleGroupFrames.find(frame => frame.relMsgId === messageId);
+      const frameRect = selectedFrame?.rect ?? (selectedFrame ? finalFrameRects[messageId] : undefined);
+      selectedRect = unionLayoutRects(selectedRect, frameRect);
+      if (selectedRect) next[messageId] = selectedRect;
+    }
+    setSelectedActualRects(prev => {
+      const prevIds = Object.keys(prev);
+      const nextIds = Object.keys(next);
+      if (prevIds.length === nextIds.length && nextIds.every(id => {
+        const before = prev[id];
+        const after = next[id];
+        return before && Math.abs(before.x - after.x) < 0.5 && Math.abs(before.y - after.y) < 0.5
+          && Math.abs(before.width - after.width) < 0.5 && Math.abs(before.height - after.height) < 0.5;
+      })) return prev;
+      return next;
+    });
+  }, [selectedMessageIds, visibleGroupFrames, finalFrameRects, layout, actualCanvasWidth, actualCanvasHeight, measuredHeights]);
+
+  useEffect(() => {
+    if (!props.autoCenterMessageId) return;
+    const target = cardRefs.current[props.autoCenterMessageId];
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
+  }, [props.autoCenterMessageId, layout]);
 
   // Map: target relation-message ID → [{corrRelMsgId, srcMsgId}] for CORRECT relations targeting relation messages.
   // Used to embed correction badge in the target relation's hit area.
@@ -2047,7 +2782,13 @@ export default function GraphView(props: GraphViewProps) {
         const el = ent.target as HTMLElement;
         const id = el.getAttribute("data-msgid");
         if (!id) continue;
-        next[id] = Math.ceil(el.getBoundingClientRect().height);
+        const canvasEl = canvasRef.current;
+        const canvasRect = canvasEl?.getBoundingClientRect();
+        const scaleY = canvasEl && canvasEl.offsetHeight > 0 && canvasRect
+          ? canvasRect.height / canvasEl.offsetHeight
+          : 1;
+        const measuredHeight = Math.ceil(el.getBoundingClientRect().height / scaleY);
+        next[id] = Math.max(MIN_CARD_H, measuredHeight);
       }
       if (!Object.keys(next).length) return;
       setMeasuredHeights(prev => {
@@ -2057,21 +2798,30 @@ export default function GraphView(props: GraphViewProps) {
       });
     });
     for (const m of normals) { const el=cardRefs.current[m.id]; if (el) ro.observe(el); }
+    for (const frame of visibleGroupFrames) {
+      const el = cardRefs.current[frame.relMsgId];
+      if (el) ro.observe(el);
+    }
     return () => ro.disconnect();
-  // layout is added so that when cards first appear in the DOM (after layout is computed),
-  // we re-run and observe them — this fixes the initial-load overlap bug.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normals, layout]);
+  }, [normals, layout, activeTextSelectId, visibleGroupFrames]);
 
   useEffect(() => {
     const canvasEl = canvasRef.current; if (!canvasEl) return;
     const canvasRect = canvasEl.getBoundingClientRect();
+    const scaleX = canvasEl.offsetWidth > 0 ? canvasRect.width / canvasEl.offsetWidth : 1;
+    const scaleY = canvasEl.offsetHeight > 0 ? canvasRect.height / canvasEl.offsetHeight : 1;
+    const toCanvasRect = (rect: DOMRect): Rect => ({
+      x: (rect.left - canvasRect.left) / scaleX,
+      y: (rect.top - canvasRect.top) / scaleY,
+      width: rect.width / scaleX,
+      height: rect.height / scaleY,
+    });
     const normalSet = new Set(normalIds);
 
     function endpointBoxForNormal(id: string): {box:LayoutBox;col:number}|null {
       const m = msgMap.get(id);
       // Accept both normal text messages and relation messages currently rendered as cards.
-      if (!m || (m.kind !== "normal" && !relationCardMsgIds.has(id))) return null;
+      if (!m || (!isContentKind(m.kind) && !relationCardMsgIds.has(id))) return null;
       const cardEl = cardRefs.current[id];
       if (cardEl) {
         const r = cardEl.getBoundingClientRect();
@@ -2079,7 +2829,7 @@ export default function GraphView(props: GraphViewProps) {
         // After a focus-mode transition, stale refs to unmounted cards may return
         // zero-area rects, which would place edges at (0,0) making them invisible.
         if (r.width > 1 && r.height > 1) {
-          return { box:{x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height}, col:colOf[id]??0 };
+          return { box:toCanvasRect(r), col:colOf[id]??0 };
         }
       }
       const box = layout[id]; if (!box) return null;
@@ -2091,20 +2841,20 @@ export default function GraphView(props: GraphViewProps) {
       const header=headerRefs.current[m.id], content=contentRefs.current[m.id];
       if (!header||!content) {
         const el=cardRefs.current[m.id];
-        if (el) for (const r of Array.from(el.getClientRects())) globalForbiddenRects.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+        if (el) for (const r of Array.from(el.getClientRects())) globalForbiddenRects.push(toCanvasRect(r));
         continue;
       }
       for (const ref of [...Array.from(header.getClientRects()),...Array.from(content.getClientRects())])
-        globalForbiddenRects.push({x:ref.left-canvasRect.left,y:ref.top-canvasRect.top,width:ref.width,height:ref.height});
+        globalForbiddenRects.push(toCanvasRect(ref));
     }
 
     function getMessageRects(messageId: string): Rect[] {
       const res: Rect[] = [];
       const header=headerRefs.current[messageId], content=contentRefs.current[messageId];
       for (const el of [header,content].filter(Boolean) as HTMLElement[])
-        for (const r of Array.from(el.getClientRects())) res.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+        for (const r of Array.from(el.getClientRects())) res.push(toCanvasRect(r));
       const cardEl=cardRefs.current[messageId];
-      if (cardEl) for (const r of Array.from(cardEl.getClientRects())) res.push({x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height});
+      if (cardEl) for (const r of Array.from(cardEl.getClientRects())) res.push(toCanvasRect(r));
       else { const l=layout[messageId]; if (l) res.push({x:l.x,y:l.y,width:l.width,height:l.height}); }
       return res;
     }
@@ -2127,7 +2877,7 @@ export default function GraphView(props: GraphViewProps) {
 
     const decorationsByMsg = computeTransitiveVoteStats(edges, messages);
 
-    // Decorations are now placed to the RIGHT of the card, stacked vertically (agree on top, disagree below).
+    // Decorations are placed to the RIGHT of the card, stacked vertically (agree on top, disagree below).
     // Each badge is split into icon area (left DEC_ICON_W px) and body area (rest).
     const decorationRects: Record<string,{kind:"agree"|"disagree";rect:Rect;iconRect:Rect;bodyRect:Rect;key:string;messageId:string}> = {};
     for (const [mid,data] of Object.entries(decorationsByMsg)) {
@@ -2173,7 +2923,6 @@ export default function GraphView(props: GraphViewProps) {
         const hasAgree=!!decorationRects[`${mid}::agree`], hasDisagree=!!decorationRects[`${mid}::disagree`];
         const decBottomY = box.y+DEC_RIGHT_TOP + (hasAgree?DEC_H+DEC_GAP:0) + (hasDisagree?DEC_H+DEC_GAP:0);
         const tagY=decBottomY + newTagDecorationsByMsg[mid].length*(TAG_H+TAG_V_GAP);
-        // Reserve width for count suffix; we'll recalculate at render time
         const tagW=Math.max(TAG_MIN_W, label.length*8+8+28);
         const rect={x:tagX,y:tagY,width:tagW,height:TAG_H};
         newTagDecorationsByMsg[mid].push({label,relMsgIds:[e.relationMessageId],rect,relAgreeCount:0,relDisagreeCount:0,relAgreeMsgIds:[],relDisagreeMsgIds:[]});
@@ -2204,6 +2953,8 @@ export default function GraphView(props: GraphViewProps) {
       }
       for (const [relMsgId, frameEdges] of frameEdgesByRelMsg) {
         if (frameEdges.length === 0) continue;
+        const frameType = frameEdges[0].relationType.toLowerCase();
+        if (!isTraceWindow && (frameType === 'classify' || frameType === 'summary')) continue;
         // Skip frames replaced by a non-blank correction (source is a real new relation).
         // Blank-corrected frames (CORRECT with anon source / secondary="none") are included
         // but marked so their SVG border is hidden while the correction badge remains visible.
@@ -2234,10 +2985,26 @@ export default function GraphView(props: GraphViewProps) {
           minX = Math.min(minX, targetBox.x); minY = Math.min(minY, targetBox.y);
           maxX = Math.max(maxX, targetBox.x + targetBox.width); maxY = Math.max(maxY, targetBox.y + targetBox.height);
         }
-        if (!anyTarget && !sourceBox) continue;
-        if (minX === Infinity) continue;
-        // Prefer the frame rect computed by layoutFrameBlock (union of child rects + cards + FRAME_PAD).
-        // Fall back to per-edge union for frames not yet covered by the layout pipeline.
+        if (!anyTarget && !sourceBox) {
+          const emptyFrameRect = finalFrameRects[relMsgId];
+          const isEmptyExpandedFrame = traceExpandedFrameIds.has(relMsgId) &&
+            (relType === 'classify' || relType === 'summary') && !!emptyFrameRect;
+          if (!isEmptyExpandedFrame) continue;
+        }
+        if (minX === Infinity) {
+          const emptyFrameRect = finalFrameRects[relMsgId];
+          const isEmptyExpandedFrame = traceExpandedFrameIds.has(relMsgId) &&
+            (relType === 'classify' || relType === 'summary') && !!emptyFrameRect;
+          if (!isEmptyExpandedFrame) continue;
+          minX = emptyFrameRect.x;
+          minY = emptyFrameRect.y;
+          maxX = emptyFrameRect.x + emptyFrameRect.width;
+          maxY = emptyFrameRect.y + emptyFrameRect.height;
+        }
+        // The layout pass already computes the complete frame, including
+        // nested frames and padding. Do not rebuild it from DOM members here:
+        // that would apply padding a second time and make rendering disagree
+        // with the layout used for collision avoidance.
         const rect = finalFrameRects[relMsgId] ?? {
           x: minX - FRAME_PAD, y: minY - FRAME_PAD,
           width: maxX - minX + FRAME_PAD * 2, height: maxY - minY + FRAME_PAD * 2,
@@ -2249,13 +3016,18 @@ export default function GraphView(props: GraphViewProps) {
 
     computeFramesForRelType(isArrangeFrameRel, f => newArrangeFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
     computeFramesForRelType(t => !isArrangeFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
+    for (const frame of newGroupFrames) {
+      const layoutRect = finalFrameRects[frame.relMsgId];
+      if (layoutRect) frame.rect = layoutRect;
+    }
 
     // For MERGE group frames: extend upward to include the card-style header inside the frame.
     // Skip when the rect already comes from baseFrameRects (header already applied).
-    const mergeHeaderTopPad = MERGE_CARD_H + FRAME_PAD;
+    const mergeHeaderTopPad = MERGE_CARD_H + FRAME_PAD + MERGE_CONTENT_TOP_GAP;
     for (const gf of newGroupFrames) {
       if (gf.relType === 'merge') {
         const fromBaseRects = !!finalFrameRects[gf.relMsgId];
+        if (fromBaseRects) continue;
         let rightEdge = gf.rect.x + gf.rect.width;
         let bottomEdge = gf.rect.y + gf.rect.height;
         // Extend past nested arrange frames geometrically contained in this merge
@@ -2314,53 +3086,6 @@ export default function GraphView(props: GraphViewProps) {
     setArrangeFrames(newArrangeFrames);
     setGroupFrames(newGroupFrames);
 
-    // DEBUG: send rects + cardIds to parent
-    if (onDebugRects) {
-      const lines: string[] = [];
-      // Compute cardIds per reservation
-      const edgesByRelMsg2 = new Map<string, DemoEdge[]>();
-      for (const e of edges) {
-        const arr = edgesByRelMsg2.get(e.relationMessageId) ?? [];
-        arr.push(e); edgesByRelMsg2.set(e.relationMessageId, arr);
-      }
-      const resInfo: string[] = [];
-      for (const [rid, redges] of edgesByRelMsg2) {
-        const rk = getRelKind(redges[0]?.relationType ?? '');
-        if (rk !== 'arrange-frame' && rk !== 'frame-group' && rk !== 'replace-overlay') continue;
-        const cids = new Set<string>();
-        // Include source
-        const srcId = redges[0].from.messageId;
-        if (!srcId.startsWith('anon:')) cids.add(srcId);
-        for (const e of redges) {
-          const tm = msgMap.get(e.to.messageId);
-          if (tm?.kind === 'relation') {
-            const nb = getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg: edgesByRelMsg2, layout, msgMap, relationCardMsgIds });
-            if (nb) nb.cardIds.forEach(id => cids.add(id));
-          } else if (tm?.kind === 'normal') {
-            cids.add(e.to.messageId);
-          }
-        }
-        resInfo.push(`${rid} cardIds=[${[...cids].join(',')}]`);
-      }
-      lines.push('--- RESERVATIONS ---');
-      lines.push(...resInfo);
-      lines.push('--- FRAMES ---');
-      for (const gf of newGroupFrames) {
-        const rm = msgMap.get(gf.relMsgId);
-        lines.push(`${gf.relMsgId}(${rm?.relationType??'?'}) rect={x:${gf.rect.x},y:${gf.rect.y},w:${gf.rect.width},h:${gf.rect.height}} bottom=${gf.rect.y+gf.rect.height}`);
-      }
-      for (const sf of newArrangeFrames) {
-        lines.push(`${sf.relMsgId}(supp) rect={x:${sf.rect.x},y:${sf.rect.y},w:${sf.rect.width},h:${sf.rect.height}} bottom=${sf.rect.y+sf.rect.height}`);
-      }
-      lines.push('--- CARDS ---');
-      for (const m of normals) {
-        const b = layout[m.id];
-        if (!b) continue;
-        lines.push(`${m.id}(${m.kind}) box={x:${b.x},y:${b.y},w:${b.width},h:${b.height}} bottom=${b.y+b.height}`);
-      }
-      onDebugRects(lines.join('\n'));
-    }
-
     // Collect TAG relations targeting relation messages (for display next to edge labels / frames)
     const newTagsByRelMsg = new Map<string,Array<{label:string;relMsgId:string}>>();
     for (const e of edges) {
@@ -2386,15 +3111,17 @@ export default function GraphView(props: GraphViewProps) {
 
     // Compute INLINE BADGES — RECOMMEND / ARCHIVE: small badge anchored to target message card.
     // Positioned after frameByRelMsgId / groupFrameByRelMsgId so frame targets resolve correctly.
-    const BADGE_W = 46, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
-    const newInlineBadgesByMsg = new Map<string, Array<{relMsgId:string;relKind:string;relLabel:string;relColor:string;rect:Rect}>>();
+    const BADGE_W = 56, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
+    // Aggregate RECOMMEND/ARCHIVE badges by (target message, relationType) —
+    // all subTypes of the same type share one badge with a unified send count.
+    const inlineBadgeGroups = new Map<string, { relMsgIds: string[]; relType: string; subDetails: Array<{subType:string;customLabel?:string;count:number}> }>();
     for (const e of edges) {
       if (getRelKind(e.relationType) !== 'inline-badge') continue;
       if (e.to.selection.kind !== 'whole') continue;
       const mid = e.to.messageId;
       const targetMsg = msgMap.get(mid);
       const isInlineBadgeTargetCard = !!targetMsg && (
-        targetMsg.kind === 'normal' ||
+        isContentKind(targetMsg.kind) ||
         (targetMsg.kind === 'relation' && (
           relationCardMsgIds.has(mid) ||
           frameByRelMsgId.has(mid) ||
@@ -2405,11 +3132,64 @@ export default function GraphView(props: GraphViewProps) {
       const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
       const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
       if (!box) continue;
-      const spec = getPresentationSpec(e.relationType);
+      const rt = e.relationType.toUpperCase();
+      const groupKey = `${mid}|${rt}`;
+      let group = inlineBadgeGroups.get(groupKey);
+      if (!group) {
+        group = { relMsgIds: [], relType: rt, subDetails: [] };
+        inlineBadgeGroups.set(groupKey, group);
+      }
+      const relMsg = msgMap.get(e.relationMessageId);
+      const rp = (relMsg as any)?.relationPayload as Record<string,unknown> | undefined;
+      const sc = (rp?.sendCount as number) ?? 1;
+      const st = rp?.subType as string | undefined;
+      // Aggregate: add relMsgId and subType detail
+      if (!group.relMsgIds.includes(e.relationMessageId)) {
+        group.relMsgIds.push(e.relationMessageId);
+      }
+      if (st) {
+        const existing = group.subDetails.find(d => d.subType === st);
+        if (existing) {
+          existing.count += sc;
+        } else {
+          group.subDetails.push({ subType: st, customLabel: rp?.customLabel as string | undefined, count: sc });
+        }
+      }
+    }
+    // Build badges from aggregated groups
+    const newInlineBadgesByMsg = new Map<string, Array<{relMsgId:string;relMsgIds?:string[];relKind:string;relLabel:string;relColor:string;rect:Rect;subDetails?:Array<{subType:string;customLabel?:string;count:number}>}>>();
+    for (const [groupKey, group] of inlineBadgeGroups) {
+      const [mid, rt] = groupKey.split('|');
+      const spec = getPresentationSpec(rt);
+      // Sum total sendCount from all subDetails + any non-subType sends
+      let totalCount = 0;
+      for (const d of group.subDetails) { totalCount += d.count; }
+      // Non-subType sends: each relation without subType contributes its sendCount
+      for (const rmId of group.relMsgIds) {
+        const rm = msgMap.get(rmId);
+        const rp = (rm as any)?.relationPayload as Record<string,unknown> | undefined;
+        if (!rp?.subType) {
+          totalCount += (rp?.sendCount as number) ?? 1;
+        }
+      }
+      if (totalCount <= 0) continue;
+      let badgeLabel = spec.label;
+      if (totalCount >= 2) badgeLabel = `${badgeLabel} ×${totalCount}`;
+      const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
+      const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
+      if (!box) continue;
       const arr = newInlineBadgesByMsg.get(mid) ?? [];
       const badgeX = box.x + box.width - BADGE_W + BADGE_RIGHT_GAP;
       const badgeY = box.y + BADGE_TOP_OFFSET - arr.length * (BADGE_H + 2);
-      arr.push({ relMsgId: e.relationMessageId, relKind: spec.kind, relLabel: spec.label, relColor: spec.color, rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H } });
+      arr.push({
+        relMsgId: group.relMsgIds[0],
+        relMsgIds: group.relMsgIds,
+        relKind: spec.kind,
+        relLabel: badgeLabel,
+        relColor: spec.color,
+        rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H },
+        subDetails: group.subDetails.length > 0 ? group.subDetails : undefined,
+      });
       newInlineBadgesByMsg.set(mid, arr);
     }
     setInlineBadgesByMsg(newInlineBadgesByMsg);
@@ -2432,6 +3212,13 @@ export default function GraphView(props: GraphViewProps) {
         const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
         return relCard ?? null;
       }
+      // Readable relation messages (for example DELEGATION) are rendered as
+      // cards. An edge targeting such a relation must end at that card rather
+      // than at one of the relation's own target labels.
+      if (relationCardMsgIds.has(relId)) {
+        const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
+        if (relCard) return relCard;
+      }
       const te0 = relEdges[0];
       const relType = te0.relationType;
       if (relType === "arrange") {
@@ -2442,8 +3229,8 @@ export default function GraphView(props: GraphViewProps) {
       const relTypeKind = getPresentationSpec(relType).kind;
       if (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay' || relTypeKind === 'correction-badge') {
         const fr = groupFrameByRelMsgId.get(relId);
-        if (!fr && relTypeKind === 'frame-group') {
-          // CLASSIFY / SUMMARY relation messages are rendered as topic cards rather than SVG frames.
+        if (!fr && (relTypeKind === 'frame-group' || relTypeKind === 'replace-overlay')) {
+          // A relation whose targets are hidden from this projection is rendered as a card.
           const relCard = endpointBoxForNormal(relId)?.box ?? layout[relId];
           if (relCard) return relCard;
         }
@@ -2505,7 +3292,7 @@ export default function GraphView(props: GraphViewProps) {
           fromBox = getRelVisualBox(te0.from.messageId, depth + 1);
         } else {
           const fm = msgMap.get(te0.from.messageId);
-          if (fm?.kind === "normal") fromBox = endpointBoxForNormal(te0.from.messageId)?.box ?? null;
+          if (fm && isContentKind(fm.kind)) fromBox = endpointBoxForNormal(te0.from.messageId)?.box ?? null;
         }
       }
       let toBox: LayoutBox | null = null;
@@ -2513,7 +3300,7 @@ export default function GraphView(props: GraphViewProps) {
         toBox = getRelVisualBox(te0.to.messageId, depth + 1);
       } else {
         const tm = msgMap.get(te0.to.messageId);
-        if (tm?.kind === "normal") toBox = endpointBoxForNormal(te0.to.messageId)?.box ?? null;
+        if (tm && isContentKind(tm.kind)) toBox = endpointBoxForNormal(te0.to.messageId)?.box ?? null;
       }
       if (fromBox && toBox) {
         const midX = (fromBox.x + fromBox.width / 2 + toBox.x + toBox.width / 2) / 2;
@@ -2537,15 +3324,42 @@ export default function GraphView(props: GraphViewProps) {
       if (normalized === "answer" || normalized === "回答") return "回答";
       return "回复";
     }
+    function referenceEdgeLabel(raw: string): string {
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === "evidence" || normalized === "证据") return "证据";
+      return (normalized === "reference" || normalized === "ref") ? "引用" : raw;
+    }
+    function notifyEdgeLabel(edge: DemoEdge): string {
+      const relationMessage = msgMap.get(edge.relationMessageId);
+      const users = relationMessage?.relationPayload?.notifyUsers ?? [];
+      const names = users
+        .filter(user => user && typeof user.username === 'string')
+        .map(user => user.username);
+      const legacyIds = relationMessage?.relationPayload?.notifyUserIds ?? [];
+      return `${names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '与会者'}：通知`;
+    }
     const labelText = (e: DemoEdge, author: string) => {
+      if (e.relationType === "notify") return notifyEdgeLabel(e);
       if (e.relationType === "reply") return `${author} · ${replyEdgeLabel(e.relationLabel)}`;
+      if (e.relationType === "reference") return `${author} · ${referenceEdgeLabel(e.relationLabel)}`;
       return `${author} · ${edgeLabelName(e.relationType)}`;
     };
 
     for (const e of edges) {
+      if (comparisonSuppressedRelIds.has(e.relationMessageId)) continue;
       const fromMsg=msgMap.get(e.from.messageId);
-      if (!fromMsg || (fromMsg.kind !== "normal" && !relationCardMsgIds.has(fromMsg.id))) continue;
-      const fromEp=endpointBoxForNormal(fromMsg.id); if (!fromEp) continue;
+      if (!fromMsg) continue;
+      // Container relations are rendered as frames rather than cards.  They can
+      // still be the source of an edge relation (for example REPLY), so use the
+      // frame bounds as their visual endpoint.
+      const fromFrameRect = fromMsg.kind === "relation"
+        ? (frameByRelMsgId.get(fromMsg.id) ?? groupFrameByRelMsgId.get(fromMsg.id))
+        : undefined;
+      if (!isContentKind(fromMsg.kind) && !relationCardMsgIds.has(fromMsg.id) && !fromFrameRect) continue;
+      const fromEp=endpointBoxForNormal(fromMsg.id);
+      const fromBox = fromEp?.box ?? fromFrameRect;
+      if (!fromBox) continue;
+      const fromCol = fromEp?.col ?? colOf[fromMsg.id] ?? colOf[e.to.messageId] ?? 0;
       const fromAuthor=fromMsg.author;
       const toMsg=msgMap.get(e.to.messageId);
 
@@ -2569,7 +3383,7 @@ export default function GraphView(props: GraphViewProps) {
           const toEpN=endpointBoxForNormal(targetMid); if (!toEpN) continue;
           rawEdges.push({
             drawId:e.id,edge:e,fromAuthor,
-            fromBox:fromEp.box,toBox:toEpN.box,fromCol:fromEp.col,toCol:toEpN.col,
+            fromBox,toBox:toEpN.box,fromCol,toCol:toEpN.col,
             fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
             start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
           });
@@ -2591,8 +3405,8 @@ export default function GraphView(props: GraphViewProps) {
           if (frameRect) {
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:{x:frameRect.x,y:frameRect.y,width:frameRect.width,height:frameRect.height},
-              fromCol:fromEp.col,toCol:fromEp.col,
+              fromBox,toBox:{x:frameRect.x,y:frameRect.y,width:frameRect.width,height:frameRect.height},
+              fromCol,toCol:fromCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2606,8 +3420,8 @@ export default function GraphView(props: GraphViewProps) {
           if (tagInfo) {
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:{x:tagInfo.rect.x,y:tagInfo.rect.y,width:tagInfo.rect.width,height:tagInfo.rect.height},
-              fromCol:fromEp.col,toCol:fromEp.col,
+              fromBox,toBox:{x:tagInfo.rect.x,y:tagInfo.rect.y,width:tagInfo.rect.width,height:tagInfo.rect.height},
+              fromCol,toCol:fromCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2623,11 +3437,11 @@ export default function GraphView(props: GraphViewProps) {
             // Use the column of the decorated message for proper edge routing
             const decoratedMid = targetRelEdges[0]?.to.messageId ?? "";
             const toCol = msgMap.get(decoratedMid)?.kind === "relation"
-              ? fromEp.col  // nested relation target — fall back to source col
-              : (colOf[decoratedMid] ?? fromEp.col);
+              ? fromCol  // nested relation target — fall back to source col
+              : (colOf[decoratedMid] ?? fromCol);
             rawEdges.push({
               drawId:e.id,edge:e,fromAuthor,
-              fromBox:fromEp.box,toBox:visualBox,fromCol:fromEp.col,toCol,
+              fromBox,toBox:visualBox,fromCol,toCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2645,9 +3459,9 @@ export default function GraphView(props: GraphViewProps) {
           if (visualBox) {
             rawEdges.push({
               drawId:`${e.id}__toRel__${relId}`,edge:e,fromAuthor,
-              fromBox:fromEp.box,
+              fromBox,
               toBox:{x:visualBox.x,y:visualBox.y,width:visualBox.width,height:visualBox.height},
-              fromCol:fromEp.col,toCol:fromEp.col,
+              fromCol,toCol:fromCol,
               fragRectCanvas:null,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
               start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
             });
@@ -2664,11 +3478,14 @@ export default function GraphView(props: GraphViewProps) {
         const container=contentRefs.current[toId]!;
         const start=e.to.selection.start, end=start+e.to.selection.len;
         const span=container.querySelector(`[data-rel-anchor="${e.relationType}::${start}:${end}"]`) as HTMLSpanElement|null;
-        if (span) { const r=span.getBoundingClientRect(); fragRectCanvas=new DOMRect(r.left-canvasRect.left,r.top-canvasRect.top,r.width,r.height); }
+        if (span) {
+          const r = toCanvasRect(span.getBoundingClientRect());
+          fragRectCanvas = new DOMRect(r.x, r.y, r.width, r.height);
+        }
       }
 
       rawEdges.push({
-        drawId:e.id,edge:e,fromAuthor,fromBox:fromEp.box,toBox:toEp.box,fromCol:fromEp.col,toCol:toEp.col,
+        drawId:e.id,edge:e,fromAuthor,fromBox,toBox:toEp.box,fromCol,toCol:toEp.col,
         fragRectCanvas,edgeLabelText:labelText(e,fromAuthor),expandedToEdgeId:null,
         start:{x:0,y:0},ctrl:{x:0,y:0},end:{x:0,y:0},
       });
@@ -2771,7 +3588,22 @@ export default function GraphView(props: GraphViewProps) {
         return {x,y};
       }
 
-      pe.start=snapBound(fromBox,chosenCurve.s); pe.ctrl=chosenCurve.c; pe.end=snapBound(toRect,chosenCurve.e);
+      const chosenS=snapBound(fromBox,chosenCurve.s), chosenE=snapBound(toRect,chosenCurve.e);
+      const clampY=(y:number,box:Rect)=>Math.min(Math.max(y,box.y),box.y+box.height);
+      const dirX=toCenter.x-fromCenter.x, dirY=toCenter.y-fromCenter.y;
+      const preferHorizontalSide=pe.fromCol!==pe.toCol||Math.abs(dirX)>=Math.abs(dirY)*0.7;
+      let finalS=chosenS, finalE=chosenE;
+      if (preferHorizontalSide) {
+        const targetOnLeft=dirX<0||pe.fromCol>pe.toCol;
+        if (targetOnLeft) {
+          finalS={x:fromBox.x,y:clampY(chosenS.y,fromBox)};
+          finalE={x:toRect.x+toRect.width,y:clampY(chosenE.y,toRect)};
+        } else {
+          finalS={x:fromBox.x+fromBox.width,y:clampY(chosenS.y,fromBox)};
+          finalE={x:toRect.x,y:clampY(chosenE.y,toRect)};
+        }
+      }
+      pe.start=finalS; pe.ctrl=chosenCurve.c; pe.end=finalE;
       labelSeeds.push({drawId:pe.drawId,text:pe.edgeLabelText,p0:pe.start,p1:pe.ctrl,p2:pe.end});
     }
 
@@ -2779,16 +3611,23 @@ export default function GraphView(props: GraphViewProps) {
     setPositionedEdges(rawEdges.map(pe => ({ ...pe, labelX:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).x, labelY:(placements[pe.drawId]??quadAt(pe.start,pe.ctrl,pe.end,0.5)).y })));
     setDecorationRectsState(decorationRects);
     setDecorationsByMsgState(decorationsByMsg);
-  }, [edges, msgMap, layout, colOf, normalIds, edgesByRelMsg, actualCanvasWidth, actualCanvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds]);
+  }, [edges, comparisonSuppressedRelIds, msgMap, layout, colOf, normalIds, edgesByRelMsg, actualCanvasWidth, actualCanvasHeight, normals, labelBboxes, correctedEdgeIdsByRelMsg, relationCardMsgIds]);
 
   useEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
     const canvasRect=canvasEl.getBoundingClientRect();
+    const scaleX = canvasEl.offsetWidth > 0 ? canvasRect.width / canvasEl.offsetWidth : 1;
+    const scaleY = canvasEl.offsetHeight > 0 ? canvasRect.height / canvasEl.offsetHeight : 1;
     const next: Record<string,LabelBbox>={};
     for (const pe of positionedEdges) {
       const t=textRefs.current[pe.drawId]; if (!t) continue;
       const r=t.getBoundingClientRect();
-      next[pe.drawId]={x:r.left-canvasRect.left,y:r.top-canvasRect.top,width:r.width,height:r.height};
+      next[pe.drawId]={
+        x:(r.left-canvasRect.left)/scaleX,
+        y:(r.top-canvasRect.top)/scaleY,
+        width:r.width/scaleX,
+        height:r.height/scaleY,
+      };
     }
     // Use a functional update with a stability check to avoid infinite re-render cycles:
     // the main useEffect now depends on labelBboxes, so we must not update state when the
@@ -2812,27 +3651,49 @@ export default function GraphView(props: GraphViewProps) {
     return draftUnits.some(x=>unitEquals(x,{messageId:relId,selection:{kind:"whole"}}));
   }
 
+  function isDecorationSelected(relId:string, kind:"agree"|"disagree") {
+    const decoration = relDecByRelMsgState.get(relId);
+    const selectedIds = kind === "agree" ? decoration?.agreeRelMsgIds : decoration?.disagreeRelMsgIds;
+    return selectedIds?.some(isRelWholeSel) ?? false;
+  }
+
   function renderContent(message: DemoMessage) {
     const targets = extractTextTargetsForMessage(message.id, edges);
-    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{message.content}</pre>;
+    if (!targets.length) return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{message.content}</pre>;
     const text = message.content;
     const validItems = targets
       .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
       .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
     const tree = buildAnnoTree(validItems);
-    const nodes = renderAnnoNodes(text, tree, 0, text.length, 0, message.id, isFragmentSelected, onFragmentAnchorClick);
-    return <pre style={{margin:0,whiteSpace:"pre-wrap",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
+    const nodes = renderAnnoNodes(
+      text,
+      tree,
+      0,
+      text.length,
+      0,
+      message.id,
+      isFragmentSelected,
+      onFragmentAnchorClick,
+      (id, start, len, relationType) => annotationTargetFragmentHints.has(`${id}::${start}:${len}:${relationType}`)
+    );
+    return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize:13}}>{nodes}</pre>;
   }
 
 
 
+  const homeRoleLabel = (messageId: string) => {
+    if (props.homeMatchIds?.has(messageId)) return '命中';
+    const role = props.homeContextRoleByMessageId?.get(messageId);
+    return role === 'source' ? '来源' : role === 'target' ? '目标' : role === 'source-target' ? '来源/目标' : null;
+  };
+
   return (
-    <div ref={canvasRef} style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
+    <div ref={canvasRef} data-jump-canvas="true" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
         {normals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
-          if (hideMessageIds?.has(msg.id)) return null;
+          if (effectiveHideMessageIds.has(msg.id) || traceExpandedFrameIds.has(msg.id)) return null;
           // Hidden targets: corrected targets (replaced by correction source) and
           // summarized targets (covered by summary card). Chained sources remain visible.
           if (hiddenTargetIds.has(msg.id)) return null;
@@ -2854,86 +3715,240 @@ export default function GraphView(props: GraphViewProps) {
               return seen.size;
             })();
             const topicTitle = getRelationTitle(msg.relationPayload) || `分类（${targetCount}）`;
+            const relatedJoinRelations = joinRelationsByTarget?.get(msg.id) ?? [];
+            const outgoingJoinRelations = joinRelationsBySource?.get(msg.id) ?? [];
+            const validJoinCount = relatedJoinRelations.filter(join => joinStatusByMessage?.get(join.id) === 'valid').length;
+            const invalidJoinCount = relatedJoinRelations.length - validJoinCount;
             const isWhole = draftUnits.some(u => u.messageId === msg.id && u.selection.kind === "whole");
             const isActive = lastClickedMessageId === msg.id;
+            const isTopicStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
             return (
               <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
                 onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-                style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,
-                  border:isWhole?"2px solid #0b84ff":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
-                  padding:"12px 16px",boxShadow:isWhole?"0 8px 20px rgba(11,132,255,0.22)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
-                  gap:8,cursor:"pointer",outline:isActive?"1px dashed #0b84ff":"none",userSelect:"none",color:"#f5f5f5"}}>
-                <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",justifyContent:"space-between"}}>
-                  <span>{`分类 ${msg.id}`}</span>
-                  <span>双击进入分类</span>
+                style={{position:"absolute",left:box.x,top:box.y,width:box.width,boxSizing:"border-box",background:isTopicStanceTarget?"#2a2410":isWhole?"#4a3510":"#1f1f1f",borderRadius:6,
+                  borderTop:isWhole?"2px solid #fbbf24":isTopicStanceTarget?"2px solid #f59e0b":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  borderRight:isWhole?"2px solid #fbbf24":isTopicStanceTarget?"2px solid #f59e0b":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  borderBottom:isWhole?"2px solid #fbbf24":isTopicStanceTarget?"2px solid #f59e0b":isActive?"1px solid rgba(56,189,248,0.8)":"1px solid #444",
+                  borderLeft:"3px solid #a78bfa",
+                  padding:"12px 16px",boxShadow:isTopicStanceTarget?"0 0 16px rgba(245,158,11,0.35), 0 4px 10px rgba(0,0,0,0.5)":isWhole?"0 8px 20px rgba(251,191,36,0.28)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
+                  gap:8,cursor:"pointer",outline:isWhole?"none":isActive?"1px dashed #0b84ff":"none",userSelect:"none",color:"#f5f5f5"}}>
+                <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <span style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontSize:10,fontWeight:800,padding:"2px 6px",borderRadius:4,background:isWhole?"#fbbf24":"rgba(167,139,250,0.18)",color:isWhole?"#111827":"#a78bfa",lineHeight:"16px",border:isWhole?"1px solid #fbbf24":"1px solid rgba(167,139,250,0.35)"}}>分类</span>
+                    {homeRoleLabel(msg.id) && <span style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:homeRoleLabel(msg.id)==='命中'?"#0e7490":"#374151",color:homeRoleLabel(msg.id)==='命中'?"#cffafe":"#d1d5db"}}>{homeRoleLabel(msg.id)}</span>}
+                    <span>{msg.author}</span>
+                  </span>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+                    <span>{msg.id}</span>
+                    <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    {(() => {
+                      const sc = stakeCounts?.[msg.id];
+                      const truthPro = sc?.truth.pro ?? 0;
+                      const truthCon = sc?.truth.con ?? 0;
+                      const valuePro = sc?.value.pro ?? 0;
+                      const valueCon = sc?.value.con ?? 0;
+                      return (
+                        <>
+                          {(truthPro > 0 || truthCon > 0) && (
+                            <span style={{fontSize:10}}>
+                              <span style={{color:"#a5b4fc"}}>⚖️</span>
+                              {truthPro > 0 && <span style={{color:"#4ade80"}}>👍{truthPro}</span>}
+                              {truthCon > 0 && <span style={{color:"#f87171"}}>👎{truthCon}</span>}
+                            </span>
+                          )}
+                          {(valuePro > 0 || valueCon > 0) && (
+                            <span style={{fontSize:10}}>
+                              <span style={{color:"#fcd34d"}}>💎</span>
+                              {valuePro > 0 && <span style={{color:"#4ade80"}}>👍{valuePro}</span>}
+                              {valueCon > 0 && <span style={{color:"#f87171"}}>👎{valueCon}</span>}
+                            </span>
+                          )}
+                        </>
+                      );
+                    })()}
+                    {onSettlementToggleTruth && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(msg.id); }}
+                        data-guide-settlement-entry="true" data-guide-target-message={msg.id}
+                        style={{fontSize:13,cursor:"pointer",background:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"rgba(99,102,241,0.2)":"none",border:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"1px solid #6366f1":"1px solid transparent",borderRadius:4,padding:"0 3px",color:settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"#a5b4fc":"#6b7280",lineHeight:1}}
+                        title="真假仲裁"
+                      >⚖️</button>
+                    )}
+                    {onSettlementToggleValue && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(msg.id); }}
+                        data-guide-settlement-entry="true" data-guide-target-message={msg.id}
+                        style={{fontSize:13,cursor:"pointer",background:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"rgba(245,158,11,0.2)":"none",border:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"1px solid #f59e0b":"1px solid transparent",borderRadius:4,padding:"0 3px",color:settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"#fcd34d":"#6b7280",lineHeight:1}}
+                        title="价值仲裁"
+                      >💎</button>
+                    )}
+                    </div>
+                  </div>
                 </div>
                 <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
-                    <div style={{fontWeight:600,color:"#f3f4f6",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    <div style={{fontWeight:600,color:"#f3f4f6",flex:1,minWidth:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>
                       {topicTitle}
                     </div>
-                    <span style={{fontSize:11,fontWeight:600,padding:"1px 8px",borderRadius:999,background:"rgba(2,150,80,0.2)",color:"#86efac",flexShrink:0}}>
-                      进行中
-                    </span>
                   </div>
                   <div style={{fontSize:12,color:"#9ca3af",display:"flex",gap:12,flexWrap:"wrap"}}>
-                    <span>由 <span style={{fontWeight:600,color:"#e5e7eb"}}>{msg.author}</span> 发起</span>
                     <span>💬 {targetCount} 条观点</span>
                     <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
                   </div>
                 </div>
+                {(outgoingJoinRelations.length > 0 || relatedJoinRelations.length > 0) && onJoinFilterClick && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                    {outgoingJoinRelations.length > 0 && (
+                      <button
+                        onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'outgoing'); }}
+                        title="筛选显示该容器发出的全部加入消息"
+                        style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(16,185,129,0.14)', color: '#a7f3d0', border: '1px solid rgba(16,185,129,0.4)', cursor: 'pointer' }}
+                      >
+                        加入消息：{outgoingJoinRelations.length} 条
+                      </button>
+                    )}
+                    {relatedJoinRelations.length > 0 && (
+                      <button
+                        onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'incoming'); }}
+                        title="筛选显示把此分类加入容器的全部加入消息"
+                        style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.14)', color: '#bfdbfe', border: '1px solid rgba(59,130,246,0.4)', cursor: 'pointer' }}
+                      >
+                        被加入消息：{validJoinCount} 条有效{invalidJoinCount > 0 ? `，${invalidJoinCount} 条无效` : ''}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           }
 
           const isWhole=draftUnits.some(u=>u.messageId===msg.id&&u.selection.kind==="whole");
-          const isText=activeTextSelectId===msg.id&&msg.kind==="normal";
-          const corrBadges = correctionsBySourceMsgId.get(msg.id) ?? [];
+          const isCorrectableRelation = msg.kind === 'relation'
+            && isCardMessage(msg);
+          const isText=activeTextSelectId===msg.id&&(msg.kind==="normal" || isCorrectableRelation);
+          const corrBadges = correctionsByTargetMsgId.get(msg.id) ?? [];
+          const uniqueCorrBadges = Array.from(new Map(corrBadges.map(b => [b.relMsgId, b])).values());
+          const correctionBadge = uniqueCorrBadges[uniqueCorrBadges.length - 1];
+          const correctionCount = uniqueCorrBadges.length;
+          const correctionBadgeJumpIds = uniqueCorrBadges.map(b => b.relMsgId).join(' ');
+          const versionState = correctionVersionsByTargetMsgId.get(msg.id);
+          const validCorrectionIds = new Set(
+            versionState?.versions
+              .filter(version => version.valid && !version.conflicted)
+              .map(version => version.correctionId) ?? [],
+          );
+          const validCorrectionCount = uniqueCorrBadges.filter(b => validCorrectionIds.has(b.relMsgId)).length;
+          const correctionBadgeOpacity = validCorrectionCount === 0 ? 0.45 : 1;
+          const correctionBadgeLabel = `✏更正 ${validCorrectionCount}/${correctionCount}`;
+
+          // Phase 5: Stance path highlighting
+          const isStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
+          const isStanceEvidence = stanceHighlight?.evidenceMsgIds.includes(msg.id) ?? false;
+          const stanceBorder = isStanceTarget
+            ? '2px solid #f59e0b'
+            : isStanceEvidence
+              ? '1px solid rgba(245,158,11,0.6)'
+              : undefined;
+          const stanceShadow = isStanceTarget
+            ? '0 0 16px rgba(245,158,11,0.35), 0 4px 10px rgba(0,0,0,0.5)'
+            : isStanceEvidence
+              ? '0 0 8px rgba(245,158,11,0.18), 0 4px 10px rgba(0,0,0,0.5)'
+              : undefined;
+          const stanceBg = isStanceTarget
+            ? '#2a2410'
+            : isStanceEvidence
+              ? '#242015'
+              : undefined;
+
+          // Kind-based styling for governance / code / settlement messages
+          const kindMeta = (() => {
+            if (msg.kind === 'governance') return { color: '#f59e0b', label: getRelationMessageLabel(msg) ?? '提案', bg: 'rgba(245,158,11,0.08)' };
+            if (msg.kind === 'code')        return { color: '#14b8a6', label: '代码', bg: 'rgba(20,184,166,0.08)' };
+            if (msg.kind === 'operations')  return { color: '#06b6d4', label: '📊 运营', bg: 'rgba(6,182,212,0.08)' };
+            if (msg.kind === 'relation' && msg.relationType === 'delegation') {
+              const isFulfill = msg.relationPayload?.delegationKind === 'FULFILL';
+              return { color: '#f97316', label: isFulfill ? '完成委托' : '创建委托', bg: 'rgba(249,115,22,0.1)' };
+            }
+            if (msg.kind === 'round') {
+              const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
+              return isValue
+                ? { color: '#fcd34d', label: '💎 结算中', bg: 'rgba(252,211,77,0.08)' }
+                : { color: '#a5b4fc', label: '⚖️ 结算中', bg: 'rgba(165,180,252,0.08)' };
+            }
+            if (msg.kind === 'round_result') {
+              const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
+              return isValue
+                ? { color: '#f59e0b', label: '💎 已结算', bg: 'rgba(245,158,11,0.12)' }
+                : { color: '#818cf8', label: '⚖️ 已结算', bg: 'rgba(129,140,248,0.12)' };
+            }
+            if (msg.kind === 'relation' && msg.relationType === 'summary') return { color: '#34d399', label: '总结', bg: 'rgba(52,211,153,0.08)' };
+            if (msg.kind === 'relation') return { color: '#c4b5fd', label: getRelationMessageLabel(msg) ?? relationTypeName(msg.relationType ?? 'relation'), bg: 'rgba(196,181,253,0.08)' };
+            if (msg.kind === 'normal') return { color: '#94a3b8', label: '文本', bg: 'rgba(148,163,184,0.08)' };
+            return null;
+          })();
+          const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
+          const kindBg = kindMeta ? kindMeta.bg : undefined;
+          const relatedJoinRelations = joinRelationsByTarget?.get(msg.id) ?? [];
+          const outgoingJoinRelations = joinRelationsBySource?.get(msg.id) ?? [];
+          const joinStatus = joinStatusByMessage?.get(msg.id);
+          const joinIsInvalid = joinStatus === 'rejected' || joinStatus === 'superseded' || joinStatus === 'container-rejected';
+          const validJoinCount = relatedJoinRelations.filter(join => joinStatusByMessage?.get(join.id) === 'valid').length;
+          const invalidJoinCount = relatedJoinRelations.length - validJoinCount;
+
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,background:"#1f1f1f",borderRadius:6,border:isText?"2px dashed #0b84ff":isWhole?"2px solid #0b84ff":"1px solid #444",padding:"12px 16px",boxShadow:isText?"0 6px 18px rgba(11,132,255,0.06)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,boxSizing:"border-box",background:isWhole?"#5b4100":stanceBg||kindBg||"#1f1f1f",borderRadius:6,borderTop:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderRight:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderBottom:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderLeft:kindBorder||(stanceBorder?undefined:(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444")),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":isWhole?"0 4px 18px rgba(251,191,36,0.45)":"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:isWhole?"none":lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
               {/* Correction badges: for text messages, shown centered in the same header row as author/msgId */}
               <div ref={el=>{headerRefs.current[msg.id]=el;}} style={{fontSize:11,opacity:0.85,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
                   {/* For non-text (relation) messages, keep badges left-aligned in header */}
-                  {msg.kind!=="normal" && corrBadges.map((b) => (
-                    <div key={`corr-hdr-${b.relMsgId}`}
-                      data-rel-overlay="true"
-                      onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
-                      onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                      title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
-                      style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
-                        color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                  {msg.kind!=="normal" && correctionBadge && (
+                    <div key={`corr-hdr-${correctionBadge.relMsgId}`}
+                      data-msgid={correctionBadge.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
+                      onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,correctionBadge.relMsgId);}}
+                      onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,correctionBadge.relMsgId);}}
+                      title={`更正关系：${correctionBadge.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}
+                      style={{background:isRelWholeSel(correctionBadge.relMsgId)?"#fbbf24":"rgba(170,110,0,0.9)",
+                        color:isRelWholeSel(correctionBadge.relMsgId)?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                         cursor:"pointer",pointerEvents:"auto",
-                        border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                        whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                      ✏更正
+                        border:isRelWholeSel(correctionBadge.relMsgId)?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
+                        boxShadow:isRelWholeSel(correctionBadge.relMsgId)?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                        whiteSpace:"nowrap",userSelect:"none",flexShrink:0,opacity:correctionBadgeOpacity}}>
+                      {correctionBadgeLabel}
                     </div>
-                  ))}
+                  )}
+                  {homeRoleLabel(msg.id) && <span style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:homeRoleLabel(msg.id)==='命中'?"#0e7490":"#374151",color:homeRoleLabel(msg.id)==='命中'?"#cffafe":"#d1d5db"}}>{homeRoleLabel(msg.id)}</span>}
+                  {kindMeta && (
+                    <span style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:isWhole?"#fbbf24":`${kindMeta.color}22`,color:isWhole?"#111827":kindMeta.color,lineHeight:"16px",border:isWhole?"1px solid #fbbf24":`1px solid ${kindMeta.color}44`}}>
+                      {kindMeta.label}
+                    </span>
+                  )}
                   <span>{msg.author}</span>
                 </div>
                 {/* For text messages, correction badges are centered between author and msgId,
                     with AGREE/DISAGREE mini-badges rendered inline to the right of each correction badge. */}
-                {msg.kind==="normal" && corrBadges.length>0 && (
+                {msg.kind==="normal" && correctionBadge && (
                   <div style={{flex:1,display:"flex",justifyContent:"center",gap:4,flexWrap:"wrap"}}>
-                    {corrBadges.map((b) => {
+                    {(() => {
+                      const b = correctionBadge;
                       const corrDec=relDecByRelMsgState?.get(b.relMsgId);
                       return (
                         <React.Fragment key={`corr-hdr-${b.relMsgId}`}>
                           <div
-                            data-rel-overlay="true"
+                            data-msgid={b.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                             onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
                             onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,b.relMsgId);}}
-                            title={`更正关系：${b.relMsgId}；单击选中，双击查看历史`}
-                            style={{background:isRelWholeSel(b.relMsgId)?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
-                              color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                            title={`更正关系：${b.relMsgId}；共${correctionCount}次更正，单击选中，双击查看历史`}
+                            style={{background:isRelWholeSel(b.relMsgId)?"#fbbf24":"rgba(170,110,0,0.9)",
+                              color:isRelWholeSel(b.relMsgId)?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                               cursor:"pointer",pointerEvents:"auto",
-                              border:isRelWholeSel(b.relMsgId)?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                              whiteSpace:"nowrap",userSelect:"none",flexShrink:0}}>
-                            ✏更正
+                              border:isRelWholeSel(b.relMsgId)?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
+                              boxShadow:isRelWholeSel(b.relMsgId)?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                              whiteSpace:"nowrap",userSelect:"none",flexShrink:0,opacity:correctionBadgeOpacity}}>
+                            {correctionBadgeLabel}
                           </div>
                           {corrDec && corrDec.agreeCount>0 && (
                             <div data-rel-overlay="true"
@@ -2959,47 +3974,314 @@ export default function GraphView(props: GraphViewProps) {
                           )}
                         </React.Fragment>
                       );
-                    })}
+                    })()}
                   </div>
                 )}
-                <div style={{flex:1,display:"flex",justifyContent:"flex-end"}}>
-                  <span style={{opacity:0.7}}>{msg.id}</span>
+                <div style={{flex:1,display:"flex",justifyContent:"flex-end",flexDirection:"column",alignItems:"flex-end"}}>
+                  {msg.kind === "join" && onNavigateToMessage ? (
+                    <span
+                      data-rel-overlay="true"
+                      onClick={e => { e.stopPropagation(); onNavigateToMessage(msg.id); }}
+                      style={{opacity:0.95,fontFamily:"monospace",fontSize:10,color:"#93c5fd",cursor:"pointer",padding:"1px 4px",borderRadius:3,background:"rgba(59,130,246,0.15)",textDecoration:"underline",textUnderlineOffset:2}}
+                      title={`跳转到加入消息 ${msg.id} 的当前实际位置`}
+                    >{msg.id}</span>
+                  ) : (
+                    <span style={{opacity:0.7}}>{msg.id}</span>
+                  )}
+                  {(() => {
+                    const sc = stakeCounts?.[msg.id];
+                    const truthPro = sc?.truth.pro ?? 0;
+                    const truthCon = sc?.truth.con ?? 0;
+                    const valuePro = sc?.value.pro ?? 0;
+                    const valueCon = sc?.value.con ?? 0;
+                    const showTruth = truthPro > 0 || truthCon > 0;
+                    const showValue = valuePro > 0 || valueCon > 0;
+                    if (showTruth || showValue || onSettlementToggleTruth) {
+                      return (
+                        <div style={{ display: "flex", gap: 4, fontSize: 10, marginTop: 2, alignItems: "center" }}>
+                          {showTruth && (
+                            <span>
+                              <span style={{ color: "#a5b4fc" }}>⚖️</span>
+                              {truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
+                              {truthCon > 0 && <span style={{ color: "#f87171" }}>👎{truthCon}</span>}
+                            </span>
+                          )}
+                          {showValue && (
+                            <span>
+                              <span style={{ color: "#fcd34d" }}>💎</span>
+                              {valuePro > 0 && <span style={{ color: "#4ade80" }}>👍{valuePro}</span>}
+                              {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
+                            </span>
+                          )}
+                          {onSettlementToggleTruth && (
+                            <button
+                              data-settlement-toggle-truth
+                              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(msg.id); }}
+                              data-guide-settlement-entry="true" data-guide-target-message={msg.id}
+                              style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"rgba(99,102,241,0.2)":"none", border: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"1px solid #6366f1":"1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId===msg.id&&settlementOpenType==='TRUTH'?"#a5b4fc":"#6b7280", lineHeight: 1 }}
+                              title="真假仲裁"
+                            >⚖️</button>
+                          )}
+                          {onSettlementToggleValue && (
+                            <button
+                              data-settlement-toggle-value
+                              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(msg.id); }}
+                              data-guide-settlement-entry="true" data-guide-target-message={msg.id}
+                              style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"rgba(245,158,11,0.2)":"none", border: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"1px solid #f59e0b":"1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId===msg.id&&settlementOpenType==='VALUE'?"#fcd34d":"#6b7280", lineHeight: 1 }}
+                              title="价值仲裁"
+                            >💎</button>
+                          )}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               </div>
+              {joinStatus && (
+                <div style={{ fontSize: 10, fontWeight: 600, color: joinIsInvalid ? '#fca5a5' : '#86efac', alignSelf: 'flex-start', padding: '1px 6px', borderRadius: 4, background: joinIsInvalid ? 'rgba(239,68,68,0.16)' : 'rgba(34,197,94,0.15)', border: `1px solid ${joinIsInvalid ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.3)'}` }}>
+                  {joinStatus === 'rejected' ? '被反对 · 无效' : joinStatus === 'superseded' ? '已重新分类 · 无效' : joinStatus === 'container-rejected' ? '容器被反对 · 无效' : '有效'}
+                </div>
+              )}
               {isText&&<div style={{fontSize:11,color:"#0b84ff",marginBottom:4}}>文本选择模式：拖选记录 start+len；或点击高亮片段</div>}
+              {/* Settlement: content with inline target tag on first line */}
+              {(msg.kind === 'round' || msg.kind === 'round_result') ? (() => {
+                const settleTargetId = (msg as any).settlementTargetId as string | undefined;
+                const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
+                const targetContent = targetMsg?.content ?? '';
+                const targetPreview = targetContent.length > 40
+                  ? targetContent.slice(0, 40) + '…'
+                  : targetContent;
+                const isValue = (msg as any).roundPayload?.settlementType === 'VALUE';
+                const isRound = msg.kind === 'round';
+                const tagColor = isValue
+                  ? (isRound ? '#fcd34d' : '#f59e0b')
+                  : (isRound ? '#a5b4fc' : '#818cf8');
+                const lines = (msg.content ?? '').split('\n');
+                const firstLine = lines[0];
+                const restLines = lines.slice(1).join('\n');
+                return (
+                  <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexWrap: "wrap" }}>
+                      <span style={{ whiteSpace: "pre-wrap", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{firstLine}</span>
+                      {settleTargetId && (
+                        onNavigateToMessage ? (
+                          <span
+                            onClick={(e) => { e.stopPropagation(); onNavigateToMessage(settleTargetId); }}
+                            style={{
+                              fontSize: 10, fontWeight: 500, padding: "1px 6px", borderRadius: 4,
+                              background: `${tagColor}15`, color: tagColor, border: `1px solid ${tagColor}40`,
+                              cursor: "pointer", maxWidth: 240, overflow: "hidden",
+                              textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            }}
+                            title={`点击跳转到目标消息 ${settleTargetId.slice(-6)}${targetContent ? '：' + targetContent : ''}`}
+                          >
+                            → {settleTargetId.slice(-6)}{targetPreview ? `「${targetPreview}」` : ''}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10, color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>
+                            {settleTargetId.slice(-6)}
+                          </span>
+                        )
+                      )}
+                    </div>
+                    {restLines && (
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo,Monaco,Consolas,'Courier New',monospace", fontSize: 13 }}>{restLines}</pre>
+                    )}
+                  </div>
+                );
+              })() : (
               <div ref={el=>{contentRefs.current[msg.id]=el;}} style={{fontSize:13,color:"#f5f5f5"}} onMouseUp={e=>onTextMouseUp(e,msg.id)}>
                 {renderContent(msg)}
               </div>
+              )}
+              {(outgoingJoinRelations.length > 0 || relatedJoinRelations.length > 0) && onJoinFilterClick && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                  {outgoingJoinRelations.length > 0 && (
+                    <button
+                      onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'outgoing'); }}
+                      title="筛选显示该容器发出的全部加入消息"
+                      style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(16,185,129,0.14)', color: '#a7f3d0', border: '1px solid rgba(16,185,129,0.4)', cursor: 'pointer' }}
+                    >
+                      加入消息：{outgoingJoinRelations.length} 条
+                    </button>
+                  )}
+                  {relatedJoinRelations.length > 0 && (
+                    <button
+                      onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'incoming'); }}
+                      title="筛选显示把此消息加入容器的全部加入消息"
+                      style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.14)', color: '#bfdbfe', border: '1px solid rgba(59,130,246,0.4)', cursor: 'pointer' }}
+                    >
+                      被加入消息：{validJoinCount} 条有效{invalidJoinCount > 0 ? `，${invalidJoinCount} 条无效` : ''}
+                    </button>
+                  )}
+                </div>
+              )}
+              {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
+                <div style={{ marginTop: 6, fontSize: 11, color: '#67e8f9' }}>
+                  通知与会者：
+                  {notifyUsersByRelationMsg.get(msg.id)!.map((notifyUser, index) => (
+                    <React.Fragment key={notifyUser.id}>
+                      {index > 0 && '、'}
+                      <span
+                        style={{ color: '#a5f3fc' }}
+                        title={`通知与会者 ${notifyUser.username}`}
+                      >
+                        {notifyUser.username}
+                      </span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              )}
+              {/* 加入容器消息：显示容器和目标消息 ID 标签（可点击跳转） */}
+              {msg.joinInfo && (() => {
+                const { containerId, containerType, targetIds } = msg.joinInfo;
+                const containerTypeLabel = containerType === 'CLASSIFY' ? '分类' : containerType === 'SUMMARY' ? '总结' : containerType === 'ARRANGE' ? '排列' : containerType === 'MERGE' ? '归并' : '容器';
+                return (
+                  <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>容器:</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: "#a78bfa", padding: "1px 4px", borderRadius: 3, background: "rgba(167,139,250,0.15)", flexShrink: 0 }}>{containerTypeLabel}</span>
+                      {onNavigateToMessage ? (
+                        <span
+                            onClick={(e) => { e.stopPropagation(); onNavigateToMessage(containerId); }}
+                          style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
+                          title={`跳转到 ${containerTypeLabel}消息 ${containerId}`}
+                        >{containerId}</span>
+                      ) : (
+                        <span style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{containerId}</span>
+                      )}
+                    </div>
+                    {targetIds.length > 0 && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>目标:</span>
+                        {targetIds.map(tid => (
+                          onNavigateToMessage ? (
+                            <span
+                              key={tid}
+                              onClick={(e) => { e.stopPropagation(); onNavigateToMessage(tid); }}
+                              style={{ fontSize: 10, fontFamily: "monospace", color: "#93c5fd", cursor: "pointer", padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.15)", textDecoration: "underline", textUnderlineOffset: 2 }}
+                              title={`跳转到消息 ${tid}`}
+                            >{tid}</span>
+                          ) : (
+                            <span key={tid} style={{ fontSize: 10, fontFamily: "monospace", color: "#6b7280", padding: "1px 4px", borderRadius: 3, background: "rgba(107,114,128,0.1)" }}>{tid}</span>
+                          )
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {/* 跨分类引用标签（按二级标签分组） */}
+              {isContentKind(msg.kind) && crossClassifyRefs && (() => {
+                const ref = crossClassifyRefs.get(msg.id);
+                if (!ref) return null;
+                const tags: { label: string; relMsgIds: string[]; direction: "out" | "in" }[] = [];
+                for (const [lbl, ids] of Object.entries(ref.outgoing)) {
+                  if (ids.length > 0) tags.push({ label: lbl, relMsgIds: ids, direction: "out" });
+                }
+                for (const [lbl, ids] of Object.entries(ref.incoming)) {
+                  if (ids.length > 0) tags.push({ label: lbl, relMsgIds: ids, direction: "in" });
+                }
+                if (tags.length === 0) return null;
+                return (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                    {tags.map(({ label, relMsgIds, direction }) => {
+                      const anySelected = relMsgIds.some(id =>
+                        draftUnits.some(u => u.messageId === id && u.selection.kind === "whole")
+                      );
+                      return (
+                      <span key={`${direction}-${label}`}
+                        onClick={ev => { ev.stopPropagation(); onCrossRefTagClick?.(ev, relMsgIds); }}
+                        title={`${direction === "out" ? "引用" : "被引用"}：${label}（${relMsgIds.length}条）\n单击${anySelected ? "取消" : ""}选中关系消息`}
+                        style={{
+                          background: anySelected
+                            ? "rgba(99,102,241,0.35)"
+                            : direction === "out" ? "rgba(99,102,241,0.15)" : "rgba(99,102,241,0.08)",
+                          color: anySelected ? "#e0e7ff" : direction === "out" ? "#a5b4fc" : "#c7d2fe",
+                          borderRadius: 4,
+                          fontSize: 10, padding: "1px 6px", cursor: "pointer", userSelect: "none",
+                          border: anySelected
+                            ? "1px solid rgba(99,102,241,0.7)"
+                            : direction === "out" ? "1px solid rgba(99,102,241,0.3)" : "1px solid rgba(99,102,241,0.15)",
+                          fontWeight: 600,
+                          boxShadow: anySelected ? "0 0 6px rgba(99,102,241,0.4)" : undefined,
+                        }}
+                      >{direction === "out" ? "📤→" : "📥←"} {label} {relMsgIds.length}</span>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           );
         })}
       </div>
+      {SHOW_SELECTED_ACTUAL_RECTS && Object.entries(selectedActualRects).map(([messageId, rect]) => (
+        <div
+          key={`actual-rect-${messageId}`}
+          data-actual-message-rect={messageId}
+          title={`实际矩形：${messageId}（${Math.round(rect.width)} × ${Math.round(rect.height)}）`}
+          style={{
+            position: 'absolute',
+            left: rect.x,
+            top: rect.y,
+            width: rect.width,
+            height: rect.height,
+            boxSizing: 'border-box',
+            border: '2px solid #ff3b30',
+            background: 'rgba(255,59,48,0.08)',
+            pointerEvents: 'none',
+            zIndex: 30,
+          }}
+        />
+      ))}
+      {/* Phase 3: Floating settlement panel in graph view */}
+      {settlementOpenMsgId && (() => {
+        const cardBox = layout[settlementOpenMsgId];
+        const gf = groupFrames.find(f => f.relMsgId === settlementOpenMsgId);
+        const sf = arrangeFrames.find(f => f.relMsgId === settlementOpenMsgId);
+        const box = cardBox || (gf ? { x: gf.rect.x, y: gf.rect.y, width: gf.rect.width, height: gf.rect.height } : null) || (sf ? { x: sf.rect.x, y: sf.rect.y, width: sf.rect.width, height: sf.rect.height } : null);
+        if (!box) return null;
+        return (
+        <div data-settlement-panel style={{
+          position: "absolute",
+          left: box.x,
+          top: box.y + box.height + 8,
+          width: 360,
+          zIndex: 100,
+        }}>
+          <SettlementPanel messageId={settlementOpenMsgId} topicId={topicId ?? ''} highlightRoundId={sessionStorage.getItem('settlementHighlightRound')} entryHighlight={settlementEntryHighlight} onMessageCreated={onSettlementMessageCreated} filterSettlementType={settlementOpenType ?? undefined} />
+          <RoundHistory messageId={settlementOpenMsgId} compact />
+        </div>
+        );
+      })()}
       {/* SVG layer: frame visuals (behind cards, zIndex:0) so cards float above frames.
           Wide arrange frames (spanning multiple columns) no longer visually encompass
           unrelated cards that happen to share the same horizontal range. */}
       {(arrangeFrames.length>0||groupFrames.length>0)&&(
         <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:0,pointerEvents:"none"}}>
           {/* arrange frames — stroke and fill reflect selection state; hidden when blank-corrected */}
-          {arrangeFrames.map(sf=>{
+          {visibleArrangeFrames.map(sf=>{
             if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
               <rect key={`supp-frame-${sf.relMsgId}`} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
-                fill={isWhole?"rgba(11,132,255,0.08)":"rgba(130,80,200,0.04)"}
-                stroke={isWhole?"rgba(11,132,255,0.9)":"rgba(130,80,200,0.55)"}
+                fill={isWhole?"rgba(251,191,36,0.22)":"rgba(130,80,200,0.04)"}
+                stroke={isWhole?"rgba(251,191,36,1)":"rgba(130,80,200,0.55)"}
                 strokeWidth={isWhole?3:2} strokeDasharray={isWhole?undefined:"5 3"}/>
             );
           })}
           {/* GROUP frames (CLASSIFY/MERGE) and REPLACE-OVERLAY (SUMMARY); hidden when blank-corrected */}
-          {groupFrames.map(gf=>{
+          {visibleGroupFrames.map(gf=>{
             if (gf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(gf.relMsgId);
             const isReplaceOverlay = gf.relKind === 'replace-overlay';
             const strokeColor = isWhole
-              ? 'rgba(11,132,255,0.9)'
+              ? 'rgba(251,191,36,1)'
               : (isReplaceOverlay ? (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(180,120,0,0.7)') : (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(140,140,150,0.55)'));
-            const fillColor = isWhole ? 'rgba(11,132,255,0.06)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
+            const fillColor = isWhole ? 'rgba(251,191,36,0.22)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
             return (
               <rect key={`gf-${gf.relMsgId}`} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
@@ -3009,26 +4291,49 @@ export default function GraphView(props: GraphViewProps) {
           })}
         </svg>
       )}
-      {/* SVG layer: edge paths (above cards, zIndex:6) */}
+      {/* SVG layer: edge paths and labels (raised above relation overlays to avoid label clipping/occlusion) */}
       {positionedEdges.length>0&&(
-        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:6,pointerEvents:"none"}}>
+        <svg width={actualCanvasWidth} height={actualCanvasHeight} style={{position:"absolute",left:0,top:0,zIndex:12,pointerEvents:"none"}}>
           {positionedEdges.map(pe=>{
             const {edge,start,ctrl,end,edgeLabelText,labelX,labelY}=pe;
             const path=`M ${start.x} ${start.y} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`;
             const angle=Math.atan2(end.y-ctrl.y,end.x-ctrl.x),al=7,aa=Math.PI/7;
             const ax1=end.x-al*Math.cos(angle-aa),ay1=end.y-al*Math.sin(angle-aa),ax2=end.x-al*Math.cos(angle+aa),ay2=end.y-al*Math.sin(angle+aa);
-            const color=edge.relationType==="annotation"?"rgba(255,215,0,0.92)":edge.relationType==="reference"?"rgba(80,180,255,0.92)":edge.relationType==="reply"?"rgba(160,255,140,0.72)":edge.relationType==="agree"?"rgba(2,170,90,0.92)":edge.relationType==="disagree"?"rgba(210,50,50,0.92)":"rgba(120,120,120,0.72)";
+            // Phase 5: Stance highlight edge coloring
+            const isStanceEdge = stanceHighlight && (
+              (edge.relationType === 'agree' || edge.relationType === 'disagree') &&
+              edge.to.messageId === stanceHighlight.stanceMsgId &&
+              stanceHighlight.evidenceMsgIds.includes(edge.from.messageId)
+            );
+            const isEvidenceEdge = stanceHighlight && (
+              edge.relationType === 'reference' &&
+              (edge.relationLabel === '证据' || edge.relationLabel === 'evidence') &&
+              stanceHighlight.evidenceMsgIds.includes(edge.from.messageId) &&
+              stanceHighlight.evidenceMsgIds.includes(edge.to.messageId)
+            );
+            const color = isEvidenceEdge
+              ? 'rgba(245,158,11,0.95)'  // gold for evidence edges
+              : isStanceEdge
+                ? (edge.relationType === 'agree' ? 'rgba(34,197,94,0.95)' : 'rgba(239,68,68,0.95)')  // brighter green/red for stance edges
+                : edge.relationType === 'annotation' ? 'rgba(255,215,0,0.92)'
+                : edge.relationType === 'reference' ? 'rgba(80,180,255,0.92)'
+                : edge.relationType === 'reply' ? 'rgba(160,255,140,0.72)'
+                : edge.relationType === 'agree' ? 'rgba(2,170,90,0.92)'
+                : edge.relationType === 'disagree' ? 'rgba(210,50,50,0.92)'
+                : 'rgba(120,120,120,0.72)';
+            const edgeStrokeWidth = (isStanceEdge || isEvidenceEdge) ? 2.0 : edge.relationType === 'reply' ? 1.0 : 1.2;
             const relId=edge.relationMessageId,isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,edge.id);
             const labelOpacity=isWhole||isFrag?1:edge.relationType==="reply"?0.65:0.9;
-            const labelStroke=isWhole||isFrag?"rgba(11,132,255,0.95)":"rgba(0,0,0,0.85)";
+            const labelStroke="rgba(0,0,0,0.85)";
             // Blank-corrected: anon-source CORRECT targets a relation message → hide arrow/text, keep bbox for badge
             const isBlankCorrected=anonCorrectedRelMsgIds.has(relId);
             return (
               <g key={pe.drawId}>
-                {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edge.relationType==="reply"?1.0:1.2} fill="none"/>}
+                {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edgeStrokeWidth} fill="none" strokeDasharray={isEvidenceEdge?"6 3":undefined}/>}
                 {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
                 {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
-                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:isWhole||isFrag?3:2} as any}>
+                {/* Text with stroke for readability against any background */}
+                <text ref={el=>{textRefs.current[pe.drawId]=el;}} x={labelX} y={labelY} fill={color} opacity={isBlankCorrected?0:labelOpacity} fontSize={10} textAnchor="middle" dominantBaseline="central" style={{paintOrder:"stroke",stroke:labelStroke,strokeWidth:2} as any}>
                   {edgeLabelText}
                 </text>
               </g>
@@ -3061,8 +4366,8 @@ export default function GraphView(props: GraphViewProps) {
           const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft,height:bb.height+padY*2};
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
-            <div key={`hit-${pe.drawId}`} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
-              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(11,132,255,0.85)":"1px solid transparent"}}
+            <div key={`hit-${pe.drawId}`} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+              style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:isWhole||isFrag?"rgba(91,65,0,0.35)":"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(251,191,36,0.95)":"1px solid transparent",boxShadow:isWhole||isFrag?"0 1px 4px rgba(251,191,36,0.35)":"none"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{
                 // Prefer newCorrInfo (this relation IS the replacement) over corrInfo (this relation was corrected)
@@ -3072,15 +4377,16 @@ export default function GraphView(props: GraphViewProps) {
                 if (!corrRelMsgId) return null;
                 const isCorrSel=isRelWholeSel(corrRelMsgId);
                 return (
-                  <div key={`corr-edge-${corrRelMsgId}`}
+                  <div key={`corr-edge-${corrRelMsgId}`} data-msgid={corrRelMsgId} data-jump-msgids={corrRelMsgId} data-rel-overlay="true"
                     onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,corrRelMsgId);}}
                     onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,corrRelMsgId);}}
                     title={`更正关系：${corrRelMsgId}；单击选中，双击查看历史`}
                     style={{position:"absolute",left:2,top:"50%",transform:"translateY(-50%)",
-                      width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
-                      color:"#fff",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,
+                      width:CORR_BADGE_W_EDGE-4,background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
+                      color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 3px",fontWeight:600,
                       cursor:"pointer",pointerEvents:"auto",
-                      border:isCorrSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                      border:isCorrSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
+                      boxShadow:isCorrSel?"0 1px 4px rgba(251,191,36,0.35)":"none",
                       whiteSpace:"nowrap",userSelect:"none",display:"flex",alignItems:"center",
                       justifyContent:"center",boxSizing:"border-box" as const}}>
                     ✏更正
@@ -3108,22 +4414,44 @@ export default function GraphView(props: GraphViewProps) {
           const tagItems=tagsByRelMsgState.get(relId)??[];
           if ((!dec||(dec.agreeCount===0&&dec.disagreeCount===0))&&tagItems.length===0) continue;
           rendered.add(relId);
-          const decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
+          // Default: right side of label, stacked vertically
+          let decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
           let decTop=bb.y+Math.floor((bb.height-DEC_H)/2);
+          let useBelow = false;
+          // Check if right-side decorations would overlap any card; if so, shift below the label
+          const hasAgree=dec&&dec.agreeCount>0, hasDisagree=dec&&dec.disagreeCount>0;
+          const decCount=(hasAgree?1:0)+(hasDisagree?1:0);
+          if (decCount>0) {
+            const rightDecRect = { x: decLeft, y: decTop, width: DEC_W, height: decCount * DEC_H + (decCount-1) * DEC_GAP };
+            useBelow = normals.some(m => {
+              const cardBox = layout[m.id];
+              if (!cardBox) return false;
+              return rightDecRect.x < cardBox.x + cardBox.width &&
+                     rightDecRect.x + rightDecRect.width > cardBox.x &&
+                     rightDecRect.y < cardBox.y + cardBox.height &&
+                     rightDecRect.y + rightDecRect.height > cardBox.y;
+            });
+            if (useBelow) {
+              const totalW = (hasAgree?DEC_W:0) + (hasDisagree?DEC_W:0) + (hasAgree&&hasDisagree?4:0);
+              decLeft = bb.x + Math.floor((bb.width - totalW) / 2);
+              decTop = bb.y + bb.height + 2;
+            }
+          }
           for (const kind of ["agree","disagree"] as const) {
             const count=kind==="agree"?dec?.agreeCount??0:dec?.disagreeCount??0;
             if (count<=0) continue;
+            const isSelected=isDecorationSelected(relId,kind);
             const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
             const icon=kind==="agree"?"👍":"👎";
             const label=kind==="agree"?"赞":"反";
             items.push(
-              <div key={`reldec-${kind}-${relId}`} data-rel-overlay="true"
+              <div key={`reldec-${kind}-${relId}`} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();}}
                 onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,relId,kind);}}
                 title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-                style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:7,
-                  background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                  fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:14,
+                  background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                  fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
                   overflow:"hidden"}}>
                 <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(relId,kind);}}
                   style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
@@ -3136,7 +4464,8 @@ export default function GraphView(props: GraphViewProps) {
                 </div>
               </div>
             );
-            decTop+=DEC_H+DEC_GAP;
+            if (useBelow) { decLeft += DEC_W + 4; }
+            else { decTop += DEC_H + DEC_GAP; }
           }
           // TAG badges on this relation message — aggregated by label text
           const tagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
@@ -3149,22 +4478,21 @@ export default function GraphView(props: GraphViewProps) {
             const count=relMsgIds.length;
             const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
             const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
-            const isTagSel=relMsgIds.some(id=>isRelWholeSel(id));
             items.push(
-              <div key={`reltag-${relMsgIds[0]}`} data-rel-overlay="true"
+              <div key={`reltag-${relMsgIds[0]}`} data-msgid={relId} data-jump-msgids={[relId, ...relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,relMsgIds);}}
                 title={`标注：${displayLabel}；单击选中，双击展开详情`}
                 style={{position:"absolute",left:decLeft-TAG_HIT_PAD,top:decTop-TAG_HIT_PAD,
                   width:tagW+2*TAG_HIT_PAD,height:TAG_H+2*TAG_HIT_PAD,
-                  zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
+                  zIndex:14,cursor:"pointer",pointerEvents:"auto",background:"transparent",
                   display:"flex",alignItems:"center",justifyContent:"center",
                   padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:tagW,height:TAG_H,boxSizing:"border-box",
-                  background:isTagSel?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
+                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
                   fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                  border:isTagSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                  border:"1px solid rgba(255,255,255,0.15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                   🏷{displayLabel}
                 </span>
@@ -3202,17 +4530,18 @@ export default function GraphView(props: GraphViewProps) {
             for (const kind of ["agree","disagree"] as const) {
               const count=kind==="agree"?dec.agreeCount:dec.disagreeCount;
               if (count<=0) continue;
+              const isSelected=isDecorationSelected(ci.corrRelMsgId,kind);
               const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
               const icon=kind==="agree"?"👍":"👎";
               const label=kind==="agree"?"赞":"反";
               items.push(
-                <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-msgid={ci.corrRelMsgId} data-jump-msgids={ci.corrRelMsgId} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();}}
                   onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,ci.corrRelMsgId,kind);}}
                   title={`${kind==="agree"?"赞同":"反对"}更正：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-                  style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:7,
-                    background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                    fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                  style={{position:"absolute",left:decLeft,top:decTop,width:DEC_W,height:DEC_H,zIndex:14,
+                    background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                    fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(251,191,36,0.35)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
                     overflow:"hidden"}}>
                   <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(ci.corrRelMsgId,kind);}}
                     style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
@@ -3239,7 +4568,7 @@ export default function GraphView(props: GraphViewProps) {
           selection (like a normal message card), double-click uses the message double-click handler.
           When isBlankCorrected, the frame border is invisible so border strips are omitted; only the
           correction badge is rendered so users can interact with the correction. */}
-      {arrangeFrames.map(sf=>{
+      {visibleArrangeFrames.map(sf=>{
         const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageClick(e,sf.relMsgId);};
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();onMessageDoubleClick(e,sf.relMsgId);};
         const {x,y,width,height}=sf.rect;
@@ -3254,16 +4583,16 @@ export default function GraphView(props: GraphViewProps) {
             {/* Border strips — omitted when blank-corrected (no visible frame border) */}
             {!sf.isBlankCorrected&&<>
               {/* Top strip — full width including corners */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
               {/* Bottom strip — full width including corners */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
               {/* Left strip — between top and bottom strips */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
               {/* Right strip — between top and bottom strips */}
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             </>}
             {/* Correction badge — embedded in frame top border when this arrange is a CORRECT target */}
@@ -3276,11 +4605,12 @@ export default function GraphView(props: GraphViewProps) {
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
                   title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
                   style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
-                    background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
-                    color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                    background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
+                    color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                     cursor:"pointer",pointerEvents:"auto",
-                    border:isCorrSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                    whiteSpace:"nowrap",userSelect:"none",boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
+                    border:isCorrSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
+                    boxShadow:isCorrSel?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                    whiteSpace:"nowrap",userSelect:"none",
                     height:HH*2-2,display:"flex",alignItems:"center"}}>
                   ✏更正
                 </div>
@@ -3291,12 +4621,15 @@ export default function GraphView(props: GraphViewProps) {
       })}
 
       {/* GROUP frame hit strips (CLASSIFY/MERGE/CORRECT/SUMMARY) */}
-      {groupFrames.map(gf=>{
+      {visibleGroupFrames.map(gf=>{
         const handleClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameClick??onMessageClick)(e,gf.relMsgId);};
         const handleDblClick=(e: React.MouseEvent)=>{e.stopPropagation();(onGroupFrameDoubleClick??onMessageDoubleClick)(e,gf.relMsgId);};
         const {x,y,width,height}=gf.rect;
         const HH=FRAME_PAD;
+        const groupHeaderRect = getGroupHeaderRect(gf.rect, getGroupHeaderHeight(measuredHeights, gf.relMsgId));
         const gfZ = 4 + (frameDepthMap.get(gf.relMsgId) ?? 0);
+        const isSummaryHeader = gf.relType === "summary";
+        const headerKindColor = isSummaryHeader ? "#34d399" : "#a78bfa";
         const stripBase: React.CSSProperties={position:"absolute",zIndex:gfZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=(gf.relType === "classify" || gf.relType === "summary")
           ? `${gf.relType === "summary" ? "总结" : "分类"}：${gf.relMsgId}；单击选中，双击进入${gf.relType === "summary" ? "总结" : "分类"}`
@@ -3306,13 +4639,13 @@ export default function GraphView(props: GraphViewProps) {
           <React.Fragment key={`gf-hit-${gf.relMsgId}`}>
             {/* Border strips — omitted when blank-corrected (no visible frame border) */}
             {!gf.isBlankCorrected&&<>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y-HH,width:width+HH*2,height:HH*2}}/>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+height-HH,width:width+HH*2,height:HH*2}}/>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
-              <div data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             </>}
             {/* Correction badge — embedded in frame top border when this group frame is a CORRECT target */}
@@ -3325,18 +4658,20 @@ export default function GraphView(props: GraphViewProps) {
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
                   title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
                   style={{position:"absolute",left:x+4,top:y-HH+1,zIndex:5,
-                    background:isCorrSel?"rgba(200,130,0,0.95)":"rgba(170,110,0,0.9)",
-                    color:"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
+                    background:isCorrSel?"#fbbf24":"rgba(170,110,0,0.9)",
+                    color:isCorrSel?"#111827":"#fff",borderRadius:3,fontSize:9,padding:"0 4px",fontWeight:600,
                     cursor:"pointer",pointerEvents:"auto",
-                    border:isCorrSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
-                    whiteSpace:"nowrap",userSelect:"none",boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
+                    border:isCorrSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
+                    boxShadow:isCorrSel?"0 1px 4px rgba(251,191,36,0.35)":"none",
+                    whiteSpace:"nowrap",userSelect:"none",
                     height:HH*2-2,display:"flex",alignItems:"center"}}>
                   ✏更正
                 </div>
               );
             })()}
             {(gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
-              <div data-rel-overlay="true"
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true"
+                ref={el => { cardRefs.current[gf.relMsgId] = el; }}
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
                 title={title}
@@ -3349,38 +4684,46 @@ export default function GraphView(props: GraphViewProps) {
                           top: mergeCardHeaderRect.y,
                           width: mergeCardHeaderRect.width,
                           minHeight: mergeCardHeaderRect.height,
-                          background: "#1f1f1f",
                           color: "#f5f5f5",
                           borderRadius: 6,
-                          border: isRelWholeSel(gf.relMsgId) ? "2px solid #0b84ff" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
-                          boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(11,132,255,0.22)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
+                          background: isRelWholeSel(gf.relMsgId) ? "rgba(91,65,0,0.55)" : "#1f1f1f",
+                          border: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
+                          boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(251,191,36,0.28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
                           outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
                           padding: "4px 10px",
                         } as React.CSSProperties;
                       })()
                     : {
-                        left: getGroupHeaderRect(gf.rect).x,
-                        top: getGroupHeaderRect(gf.rect).y,
-                        width: getGroupHeaderRect(gf.rect).width,
-                        minHeight: getGroupHeaderRect(gf.rect).height,
-                        background: "#1f1f1f",
+                        left: groupHeaderRect.x,
+                        top: groupHeaderRect.y,
+                        width: groupHeaderRect.width,
+                        minHeight: groupHeaderRect.height,
+                        background: isRelWholeSel(gf.relMsgId) ? "#5b4100" : isSummaryHeader ? "rgba(52,211,153,0.08)" : "#1f1f1f",
                         color: "#f5f5f5",
                         borderRadius: 6,
-                        border: isRelWholeSel(gf.relMsgId) ? "2px solid #0b84ff" : (lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444"),
-                        boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(11,132,255,0.22)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 6px 14px rgba(0,0,0,0.35)"),
+                        borderTop: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
+                        borderRight: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
+                        borderBottom: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : "1px solid #444",
+                        borderLeft: isRelWholeSel(gf.relMsgId) ? "2px solid #fbbf24" : lastClickedMessageId===gf.relMsgId ? "1px solid rgba(56,189,248,0.8)" : `3px solid ${headerKindColor}`,
+                        boxShadow: isRelWholeSel(gf.relMsgId) ? "0 8px 20px rgba(251,191,36,0.28)" : (lastClickedMessageId===gf.relMsgId ? "0 6px 16px rgba(56,189,248,0.14)" : "0 4px 10px rgba(0,0,0,0.5)"),
                         outline: lastClickedMessageId===gf.relMsgId ? "1px dashed #0b84ff" : "none",
-                        padding: "8px 10px",
+                        padding: "12px 16px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
                       }),
                   position: "absolute",
                   zIndex: 5,
                   cursor: "pointer",
                   pointerEvents: "auto",
                   userSelect: "none",
+                  boxSizing: "border-box",
                 }}>
                 {(() => {
                   const relMsg = msgMap.get(gf.relMsgId);
                   const isMergeTopic = gf.relType === "merge";
                   const isSummaryTopic = gf.relType === "summary";
+                  const summaryContent = isSummaryTopic ? relMsg?.content : undefined;
                   const targetIds = Array.from(new Set(
                     (edgesByRelMsg.get(gf.relMsgId) ?? [])
                       .filter(ed => !ed.to.messageId.startsWith('anon:'))
@@ -3394,11 +4737,47 @@ export default function GraphView(props: GraphViewProps) {
                         : `分类（${targetIds.length}）`
                   );
                   if (isMergeTopic) {
+                    const scMerge = stakeCounts?.[gf.relMsgId];
+                    const truthPro = scMerge?.truth.pro ?? 0;
+                    const truthCon = scMerge?.truth.con ?? 0;
+                    const valuePro = scMerge?.value.pro ?? 0;
+                    const valueCon = scMerge?.value.con ?? 0;
                     return (
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, height: "100%" }}>
                         <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+                          {isRelWholeSel(gf.relMsgId) && <span style={{ marginRight: 6, fontSize: 10, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: "#fbbf24", color: "#111827" }}>归并</span>}
                           {topicTitle}
                         </span>
+                        {(truthPro > 0 || truthCon > 0) && (
+                          <span style={{ fontSize: 10, flexShrink: 0 }}>
+                            <span style={{ color: "#a5b4fc" }}>⚖️</span>
+                            {truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
+                            {truthCon > 0 && <span style={{ color: "#f87171" }}>👎{truthCon}</span>}
+                          </span>
+                        )}
+                        {(valuePro > 0 || valueCon > 0) && (
+                          <span style={{ fontSize: 10, flexShrink: 0 }}>
+                            <span style={{ color: "#fcd34d" }}>💎</span>
+                            {valuePro > 0 && <span style={{ color: "#4ade80" }}>👍{valuePro}</span>}
+                            {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
+                          </span>
+                        )}
+                        {onSettlementToggleTruth && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(gf.relMsgId); }}
+                            data-guide-settlement-entry="true" data-guide-target-message={gf.relMsgId}
+                            style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}
+                            title="真假仲裁"
+                          >⚖️</button>
+                        )}
+                        {onSettlementToggleValue && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(gf.relMsgId); }}
+                            data-guide-settlement-entry="true" data-guide-target-message={gf.relMsgId}
+                            style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "rgba(245,158,11,0.2)" : "none", border: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === gf.relMsgId && settlementOpenType === 'VALUE' ? "#fcd34d" : "#6b7280", lineHeight: 1 }}
+                            title="价值仲裁"
+                          >💎</button>
+                        )}
                         <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 500, color: "#9ca3af" }}>
                           💬{targetIds.length}
                         </span>
@@ -3411,18 +4790,26 @@ export default function GraphView(props: GraphViewProps) {
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {topicTitle}
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#f3f4f6", flex: 1, minWidth: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                          {isRelWholeSel(gf.relMsgId) && <span style={{ display: "inline-block", marginRight: 6, fontSize: 10, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: "#fbbf24", color: "#111827" }}>{isSummaryTopic ? "总结" : "分类"}</span>}
+                          {isSummaryTopic ? (
+                            <>
+                              <span style={{ display: "block", fontSize: 10, color: "#6ee7b7", marginBottom: 2 }}>总结内容</span>
+                              <span style={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{summaryContent || topicTitle}</span>
+                            </>
+                          ) : topicTitle}
                         </span>
-                        <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 999, background: isMergeTopic ? "rgba(148,163,184,0.22)" : "rgba(2,150,80,0.2)", color: isMergeTopic ? "#cbd5e1" : "#86efac" }}>
-                          {isMergeTopic ? "归并" : "进行中"}
+                        <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 999, background: isMergeTopic ? "rgba(148,163,184,0.22)" : isSummaryTopic ? "rgba(52,211,153,0.2)" : "rgba(34,197,94,0.2)", color: isMergeTopic ? "#cbd5e1" : isSummaryTopic ? "#6ee7b7" : "#86efac" }}>
+                          {isMergeTopic ? "归并容器" : isSummaryTopic ? "总结容器" : "分类容器"}
                         </span>
                       </div>
-                      <div style={{ marginTop: 4, fontSize: 10, color: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>由 {relMsg?.author ?? "系统"} 发起</span>
-                        <span style={{ flexShrink: 0 }}>💬 {targetIds.length}</span>
-                        <span style={{ flexShrink: 0 }}>{relMsg ? new Date(relMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
-                      </div>
+                      {!isSummaryTopic && (
+                        <div style={{ marginTop: 4, fontSize: 10, color: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>由 {relMsg?.author ?? "系统"} 发起</span>
+                          <span style={{ flexShrink: 0 }}>💬 {targetIds.length}</span>
+                          <span style={{ flexShrink: 0 }}>{relMsg ? new Date(relMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                        </div>
+                      )}
                     </>
                   );
                 })()}
@@ -3436,15 +4823,46 @@ export default function GraphView(props: GraphViewProps) {
           styled and interactive identically to text-message decoration badges.
           Icon area: quick-send agree/disagree targeting the arrange relation message.
           Body area: toggle selection of all agree/disagree relation messages on this arrange. */}
-      {arrangeFrames.map(sf=>{
+      {visibleArrangeFrames.map(sf=>{
         const sfTagItems=tagsByRelMsgState.get(sf.relMsgId)??[];
-        if (sf.relAgreeCount===0&&sf.relDisagreeCount===0&&sfTagItems.length===0) return null;
         const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
         let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[];
+        // Phase 6: ⚖️ settlement entry at top-right of arrange frame
+        if (onSettlementToggleTruth) {
+          const sc = stakeCounts?.[sf.relMsgId];
+          const truthPro = sc?.truth.pro ?? 0;
+          const truthCon = sc?.truth.con ?? 0;
+          const valuePro = sc?.value.pro ?? 0;
+          const valueCon = sc?.value.con ?? 0;
+          nodes.push(
+            <div key={`sf-settle-${sf.relMsgId}`} data-rel-overlay="true"
+              style={{position:"absolute",left:sfDecLeft,top:sfDecTop,zIndex:7,
+                display:"flex",gap:4,alignItems:"center",pointerEvents:"auto"}}>
+              {(truthPro > 0 || truthCon > 0) && <span style={{fontSize:10}}><span style={{color:"#a5b4fc"}}>⚖️</span>{truthPro > 0 && <span style={{color:"#4ade80"}}>👍{truthPro}</span>}{truthCon > 0 && <span style={{color:"#f87171"}}>👎{truthCon}</span>}</span>}
+              {(valuePro > 0 || valueCon > 0) && <span style={{fontSize:10}}><span style={{color:"#fcd34d"}}>💎</span>{valuePro > 0 && <span style={{color:"#4ade80"}}>👍{valuePro}</span>}{valueCon > 0 && <span style={{color:"#f87171"}}>👎{valueCon}</span>}</span>}
+              <button
+                onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleTruth(sf.relMsgId); }}
+                data-guide-settlement-entry="true" data-guide-target-message={sf.relMsgId}
+                style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "rgba(99,102,241,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'TRUTH' ? "#a5b4fc" : "#6b7280", lineHeight: 1 }}
+                title="真假仲裁"
+              >⚖️</button>
+              {onSettlementToggleValue && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new Event('guide-settlement-opened')); onSettlementToggleValue(sf.relMsgId); }}
+                  data-guide-settlement-entry="true" data-guide-target-message={sf.relMsgId}
+                  style={{ fontSize: 13, cursor: "pointer", background: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "rgba(245,158,11,0.2)" : "none", border: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: settlementOpenMsgId === sf.relMsgId && settlementOpenType === 'VALUE' ? "#fcd34d" : "#6b7280", lineHeight: 1 }}
+                  title="价值仲裁"
+                >💎</button>
+              )}
+            </div>
+          );
+          sfDecTop += DEC_H + DEC_GAP;
+        }
         for (const kind of ["agree","disagree"] as const) {
           const count=kind==="agree"?sf.relAgreeCount:sf.relDisagreeCount;
           if (count<=0) continue;
+          const isSelected=isDecorationSelected(sf.relMsgId,kind);
           const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
@@ -3454,8 +4872,8 @@ export default function GraphView(props: GraphViewProps) {
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
               style={{position:"absolute",left:sfDecLeft,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
-                background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
                 overflow:"hidden"}}>
               <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(sf.relMsgId,kind);}}
                 style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
@@ -3481,9 +4899,8 @@ export default function GraphView(props: GraphViewProps) {
           const count=relMsgIds.length;
           const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
           const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
-          const isTagSel=relMsgIds.some(id=>isRelWholeSel(id));
           nodes.push(
-            <div key={`sftag-${relMsgIds[0]}`} data-rel-overlay="true"
+            <div key={`sftag-${relMsgIds[0]}`} data-msgid={sf.relMsgId} data-jump-msgids={[sf.relMsgId, ...relMsgIds].join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               title={`标注：${displayLabel}；单击选中，双击展开详情`}
@@ -3494,9 +4911,9 @@ export default function GraphView(props: GraphViewProps) {
                 padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
               <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                 width:tagW,height:TAG_H,boxSizing:"border-box",
-                background:isTagSel?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
-                fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                border:isTagSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
+                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
+                border:"1px solid rgba(255,255,255,0.15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                 🏷{displayLabel}
               </span>
@@ -3508,7 +4925,7 @@ export default function GraphView(props: GraphViewProps) {
       })}
 
       {/* GROUP frame decoration badges — AGREE/DISAGREE badges to the RIGHT of the group frame */}
-      {groupFrames.map(gf=>{
+      {visibleGroupFrames.map(gf=>{
         if (gf.relAgreeCount===0&&gf.relDisagreeCount===0) return null;
         const gfDecLeft=gf.rect.x+gf.rect.width+DEC_RIGHT_GAP;
         let gfDecTop=gf.rect.y+DEC_RIGHT_TOP;
@@ -3516,6 +4933,7 @@ export default function GraphView(props: GraphViewProps) {
         for (const kind of ["agree","disagree"] as const) {
           const count=kind==="agree"?gf.relAgreeCount:gf.relDisagreeCount;
           if (count<=0) continue;
+          const isSelected=isDecorationSelected(gf.relMsgId,kind);
           const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
@@ -3525,8 +4943,8 @@ export default function GraphView(props: GraphViewProps) {
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,gf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
               style={{position:"absolute",left:gfDecLeft,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
-                background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
+                fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
                 overflow:"hidden"}}>
               <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(gf.relMsgId,kind);}}
                 style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
@@ -3549,7 +4967,6 @@ export default function GraphView(props: GraphViewProps) {
         groups.map(group=>{
           const count=group.relMsgIds.length;
           const displayLabel=count>1?`${group.label}（${count}人）`:group.label;
-          const isSelected=group.relMsgIds.some(id=>isRelWholeSel(id));
           // Full-size agree/disagree decoration badges to the right of the tag badge, stacked vertically.
           // For icon click: quick-send targeting the first tag relation message in the group.
           // For body click: toggle selection of agree/disagree relations targeting any tag in the group.
@@ -3560,7 +4977,7 @@ export default function GraphView(props: GraphViewProps) {
           if (!tagIconRelMsgId) return (
             <React.Fragment key={`tag-${_mid}-${group.label}`}>
               <div
-                data-rel-overlay="true"
+                data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
@@ -3571,9 +4988,9 @@ export default function GraphView(props: GraphViewProps) {
                   padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
-                  background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
+                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
                   fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                  border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                  border:"1px solid rgba(255,255,255,0.15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                   🏷{displayLabel}
                 </span>
@@ -3583,7 +5000,7 @@ export default function GraphView(props: GraphViewProps) {
           return (
             <React.Fragment key={`tag-${_mid}-${group.label}`}>
               <div
-                data-rel-overlay="true"
+                data-msgid={_mid} data-jump-msgids={[_mid, ...group.relMsgIds].join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
@@ -3594,9 +5011,9 @@ export default function GraphView(props: GraphViewProps) {
                   padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
-                  background:isSelected?"rgba(200,160,0,0.95)":"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
+                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
                   fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                  border:isSelected?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                  border:"1px solid rgba(255,255,255,0.15)",
                   whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                   🏷{displayLabel}
                 </span>
@@ -3608,6 +5025,8 @@ export default function GraphView(props: GraphViewProps) {
                 return (["agree","disagree"] as const).map(kind=>{
                   const cnt=kind==="agree"?group.relAgreeCount:group.relDisagreeCount;
                   if (cnt<=0) return null;
+                  const selectedDecorationIds=kind==="agree"?group.relAgreeMsgIds:group.relDisagreeMsgIds;
+                  const isDecorationSel=selectedDecorationIds.some(isRelWholeSel);
                   const top=curTop; curTop+=DEC_H+DEC_GAP;
                   const bgColor=kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
                   const icon=kind==="agree"?"👍":"👎";
@@ -3619,7 +5038,7 @@ export default function GraphView(props: GraphViewProps) {
                       title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
                       style={{position:"absolute",left:tagDecLeft,top:top,width:DEC_W,height:DEC_H,zIndex:7,
                         background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-                        fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+                        fontSize:11,pointerEvents:"auto",boxShadow:isDecorationSel?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isDecorationSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
                         overflow:"hidden"}}>
                       <div onClick={ev=>{ev.stopPropagation();onDecorationIconClick?.(tagIconRelMsgId,kind);}}
                         style={{width:DEC_ICON_W,height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
@@ -3643,17 +5062,33 @@ export default function GraphView(props: GraphViewProps) {
       {decorationRectsState&&decorationsByMsgState&&Object.entries(decorationRectsState).map(([,v])=>{
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
         const cnt=v.kind==="agree"?counts.agreeCount:counts.disagreeCount;
-        const bgColor=v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
+        const baseBg=v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
         const icon=v.kind==="agree"?"👍":"👎";
+        const decKey=`${v.messageId}::${v.kind}`;
+        const isSel=selectedDecorations?.has(decKey)??false;
+        const bgColor=isSel
+          ? "rgba(91,65,0,0.55)"
+          : baseBg;
+        const borderStyle=isSel
+          ?"2px solid #fbbf24"
+          :"1px solid rgba(255,255,255,0.08)";
+        const shadowStyle=isSel
+          ?"0 2px 8px rgba(251,191,36,0.35)"
+          :"0 2px 6px rgba(0,0,0,0.5)";
         return (
           <div key={`dec-${v.key}`}
+            data-msgid={v.messageId}
+            data-jump-msgids={edges
+              .filter(edge => edge.relationType === v.kind && edge.to.messageId === v.messageId)
+              .map(edge => edge.relationMessageId)
+              .join(' ') || undefined}
             data-rel-overlay="true"
             onClick={ev=>{ev.stopPropagation();}}
             onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,v.messageId,v.kind);}}
-            title={`${v.kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+            title={`${v.kind==="agree"?"赞同":"反对"}${isSel?"（已选中）":""}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
             style={{position:"absolute",left:v.rect.x,top:v.rect.y,width:v.rect.width,height:v.rect.height,zIndex:7,
               background:bgColor,color:"#fff",borderRadius:4,display:"flex",alignItems:"center",
-              fontSize:11,pointerEvents:"auto",boxShadow:"0 2px 6px rgba(0,0,0,0.5)",border:"1px solid rgba(255,255,255,0.08)",
+              fontSize:11,pointerEvents:"auto",boxShadow:shadowStyle,border:borderStyle,
               overflow:"hidden"}}>
             {/* Icon area: click = quick send */}
             <div
@@ -3676,19 +5111,26 @@ export default function GraphView(props: GraphViewProps) {
       })}
 
       {/* INLINE BADGES (RECOMMEND/ARCHIVE) — small badge anchored to target message card */}
-      {Array.from(inlineBadgesByMsg.entries()).map(([_mid, badges]) =>
+      {Array.from(inlineBadgesByMsg.entries()).map(([, badges]) =>
         badges.map(badge => {
           const isWholeSel = isRelWholeSel(badge.relMsgId);
           const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'rgba(100,100,120,0.9)';
+          const tooltip = badge.subDetails && badge.subDetails.length > 0
+            ? `${badge.relLabel}\n${badge.subDetails.map(d => {
+                const stLabels: Record<string,string> = { SPAM:'垃圾', OFFTOPIC:'跑题', LOWVALUE:'低质', IMPORTANT:'重要', CUSTOM:'自定义' };
+                return `  ${d.customLabel || stLabels[d.subType] || d.subType}: ${d.count}人`;
+              }).join('\n')}\n双击查看详情`
+            : `${badge.relLabel}；双击展开操作详情`;
           return (
-            <div key={`badge-${badge.relMsgId}`} data-rel-overlay="true"
+            <div key={`badge-${badge.relMsgId}`} data-msgid={badge.relMsgId} data-jump-msgids={[badge.relMsgId, ...(badge.relMsgIds ?? [])].join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
-              onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId);}}
-              title={`${badge.relLabel}：${badge.relMsgId}；单击选中，双击展开操作详情`}
+              onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId, { relMsgIds: badge.relMsgIds, subDetails: badge.subDetails });}}
+              title={tooltip}
               style={{position:"absolute",left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,
-                zIndex:5,background:bg,color:"#fff",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
-                fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.5)",
-                border:isWholeSel?"1px solid rgba(255,255,255,0.5)":"1px solid rgba(255,255,255,0.15)",
+                zIndex:5,background:isWholeSel?"#fbbf24":bg,color:isWholeSel?"#111827":"#fff",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
+                boxShadow:isWholeSel?"0 2px 8px rgba(251,191,36,0.35)":"0 1px 4px rgba(0,0,0,0.5)",
+                border:isWholeSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
               {badge.relLabel}
             </div>
@@ -3698,6 +5140,12 @@ export default function GraphView(props: GraphViewProps) {
 
     </div>
   );
+}
+
+export default function GraphView(props: GraphViewProps) {
+  return props.comparisonPair
+    ? <ComparisonGraphPair {...props} />
+    : <GraphViewCanvas {...props} />;
 }
 
 

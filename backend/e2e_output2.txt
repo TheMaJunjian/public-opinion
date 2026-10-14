@@ -1,0 +1,74 @@
+FAIL src/test/e2e-flow.test.ts
+  鈼?Console
+
+    console.log
+        Round2 status: 201
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:236:13)
+
+    console.log
+        Settle2 status: 200
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:251:13)
+
+    console.log
+        鉁?Alice: available=160, locked=32, balance=160
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:341:13)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?4. 鍒涘缓鍚勭被鍏崇郴娑堟伅
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+      192 |           targetRefs: [{ kind: 'message', messageId: msgId1 }],
+      193 |         });
+    > 194 |       expect(archive.status).toBe(201);
+          |                              ^
+      195 |     }
+      196 |   });
+      197 |
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:194:30)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?8. 楠岃瘉锛氭墍鏈夋搷浣滈兘浜х敓浜?Message 璁板綍
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 9
+    Received:    6
+
+      295 |     expect(codeMsgs.length).toBe(1);                     // CODE 娑堟伅
+      296 |     expect(roundMsgs.length).toBeGreaterThanOrEqual(2);  // 2 杞粨绠?= 鈮? ROUND + 鈮? ROUND_RESULT
+    > 297 |     expect(relMsgs.length).toBeGreaterThanOrEqual(9);    // AGREE + DISAGREE + REF + ANNO + 5脳ARCHIVE + 2 votes
+          |                            ^
+      298 |
+      299 |     console.log(`  鉁?鎬绘秷鎭? ${allMsgs.length}`);
+      300 |     console.log(`     TEXT: ${textMsgs.length}, GOV: ${govMsgs.length}, CODE: ${codeMsgs.length}`);
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:297:28)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?9. 楠岃瘉锛氱粨绠椾骇鐢熶簡 ROUND 鍜?ROUND_RESULT 娑堟伅
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 4
+    Received:    3
+
+      311 |     });
+      312 |
+    > 313 |     expect(roundMsgs.length).toBeGreaterThanOrEqual(4); // 2 ROUND + 2 ROUND_RESULT
+          |                              ^
+      314 |
+      315 |     const rounds = await prisma.settlementRound.findMany({
+      316 |       where: { messageId: msgId1 },
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:313:30)
+
+Test Suites: 1 failed, 7 skipped, 1 of 8 total
+Tests:       3 failed, 122 skipped, 7 passed, 132 total
+Snapshots:   0 total
+Time:        5.684 s, estimated 7 s
+Ran all test suites with tests matching "E2E".

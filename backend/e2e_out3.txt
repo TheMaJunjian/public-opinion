@@ -1,0 +1,72 @@
+FAIL src/test/e2e-flow.test.ts (6.088 s)
+  鈼?Console
+
+    console.log
+        Round2 status: 201
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:236:13)
+
+    console.log
+        Settle2 status: 200
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:251:13)
+
+    console.log
+        馃搳 鎬绘秷鎭? 13 | kind鍒嗗竷: ["TEXT","RELATION","ROUND_RESULT","ROUND","GOVERNANCE","CODE"]
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:293:13)
+
+    console.log
+        鉁?ROUND娑堟伅: 1, ROUND_RESULT: 2
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:321:13)
+
+    console.log
+        鉁?缁撶畻杞: 2
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:322:13)
+
+    console.log
+        鉁?Alice: available=160, locked=32, balance=160
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:339:13)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?4. 鍒涘缓鍚勭被鍏崇郴娑堟伅
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 400
+
+      192 |           targetRefs: [{ kind: 'message', messageId: msgId1 }],
+      193 |         });
+    > 194 |       expect(archive.status).toBe(201);
+          |                              ^
+      195 |     }
+      196 |   });
+      197 |
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:194:30)
+
+  鈼?E2E 鈥?瀹屾暣鐢ㄦ埛娴佺▼锛堟ā鎷熸墍鏈夊墠绔搷浣滐級 鈥?8. 楠岃瘉锛氭墍鏈夋搷浣滈兘浜х敓浜?Message 璁板綍
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 9
+    Received:    6
+
+      297 |     expect(codeMsgs.length).toBe(1);
+      298 |     expect(roundMsgs.length).toBeGreaterThanOrEqual(1); // 鑷冲皯鏈変竴涓猘uto round鎴栫敤鎴峰彂璧风殑round
+    > 299 |     expect(relMsgs.length).toBeGreaterThanOrEqual(9);
+          |                            ^
+      300 |   });
+      301 |
+      302 |   // 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?[39m
+
+      at Object.<anonymous> (src/test/e2e-flow.test.ts:299:28)
+
+Test Suites: 1 failed, 7 skipped, 1 of 8 total
+Tests:       2 failed, 122 skipped, 8 passed, 132 total
+Snapshots:   0 total
+Time:        6.867 s
+Ran all test suites with tests matching "E2E".

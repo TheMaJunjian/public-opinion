@@ -17,10 +17,10 @@ const founder = randomBytes(32).toString('hex');
 const env = join(directory, '.env');
 const override = join(directory, 'compose.yml');
 const caddy = join(directory, 'Caddyfile');
-writeFileSync(env, `DOMAIN=localhost\nPOSTGRES_PASSWORD=${password}\nGONGLUN_FOUNDER_KEY=${founder}\n`);
+writeFileSync(env, `DOMAIN=localhost\nPOSTGRES_PASSWORD=${password}\nGONGLUN_FOUNDER_KEY=${founder}\nGONGLUN_IMAGE=${project}-api:latest\n`);
 writeFileSync(caddy, 'localhost {\n tls internal\n reverse_proxy api:3000 {\n flush_interval -1\n }\n}\n');
 writeFileSync(override, `services:\n  postgres:\n    ports:\n      - "127.0.0.1:54331:5432"\n  caddy:\n    ports: !override\n      - "127.0.0.1:54443:443"\n    volumes: !override\n      - ${JSON.stringify(caddy.replaceAll('\\', '/') + ':/etc/caddy/Caddyfile:ro')}\n      - caddy_data:/data\n      - caddy_config:/config\n`);
-const args = ['compose', '-p', project, '-f', resolve('deploy/docker-compose.prod.yml'), '-f', override, '--env-file', env];
+const args = ['compose', '-p', project, '-f', resolve('deploy/docker-compose.prod.yml'), '-f', resolve('deploy/docker-compose.build.yml'), '-f', override, '--env-file', env];
 function compose(...command) {
   const result = spawnSync('docker', [...args, ...command], {stdio:'inherit'});
   if (result.status !== 0) throw new Error(`Compose ${command[0]} failed`);
@@ -112,6 +112,35 @@ try {
   assert.ok(compact.body.relationRecords.every(index=>Number.isInteger(index)&&compact.body.messages[index]));
   const migratedWrite=await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'Migrated production write'}]},{cookie:oldLogin.headers['set-cookie'][0].split(';')[0],'x-csrf-token':oldLogin.body.csrf});
   assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,299);
+  // Exercise the same prebuilt image against the already migrated DB. The DB
+  // container (including its start time and volume) must remain untouched.
+  const capturePostgres=()=>{
+    const id=spawnSync('docker',[...args,'ps','-q','postgres'],{encoding:'utf8'}).stdout.trim();
+    return spawnSync('docker',['inspect','--format','{{.Id}} {{.State.StartedAt}} {{json .Mounts}}',id],{encoding:'utf8'}).stdout.trim();
+  };
+  const originalPostgres=capturePostgres();
+  const migrationEnv=join(directory,'.env.migration');
+  const migrationText=schema=>`MIGRATION_TARGET_DATABASE_URL=${databaseUrl}\nMIGRATION_TARGET_SCHEMA=${schema}\n`;
+  writeFileSync(env,readFileSync(env,'utf8')+`GONGLUN_MIGRATION_ENV_FILE=${migrationEnv.replaceAll('\\','/')}\n`);
+  args.splice(7,0,'-f',resolve('deploy/docker-compose.rehearsal.yml'));
+  writeFileSync(override,readFileSync(override,'utf8')+'    ports: !reset []\n');
+  writeFileSync(migrationEnv,migrationText('missing_target'));
+  const refused=spawnSync('docker',[...args,'run','--rm','--no-deps','-T','api','node','scripts/start-existing.mjs','--check'],{stdio:'inherit'});
+  assert.notEqual(refused.status,0);
+  const checking=new Pool({connectionString:databaseUrl});
+  try {
+    assert.equal((await checking.query("SELECT to_regnamespace('missing_target') AS name")).rows[0].name,null);
+    await checking.query("UPDATE migrated_fixture.settings SET value=(value::jsonb || '{\"mode\":\"read-only-rehearsal\"}'::jsonb)::text WHERE key='migration'");
+  } finally {await checking.end();}
+  writeFileSync(migrationEnv,migrationText('migrated_fixture'));
+  compose('run','--rm','--no-deps','-T','api','node','scripts/start-existing.mjs','--check');
+  compose('up','-d','--no-deps','--no-build','--pull','never','--wait','api');
+  assert.equal(capturePostgres(),originalPostgres);
+  const preserved=await request('/api/login','POST',{name:'legacy-user',password:'old'});
+  assert.equal(preserved.status,200);assert.equal(preserved.body.account.available,299);
+  assert.ok((await request('/api/ui/snapshot?parent=legacy-topic')).body.messages.some(message=>message.id==='legacy-message'));
+  assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'must remain read only'}]})).status,503);
+  console.log('PASS: prebuilt rehearsal image, empty target rejected, same PostgreSQL container/start time/volume, preserved login/balance/messages, read-only writes blocked');
   console.log('PASS: actual Prisma migration CLI → production image → Caddy HTTPS → bcrypt login, preserved message and balance, new write');
 } finally {
   try { compose('down','--volumes','--remove-orphans'); }

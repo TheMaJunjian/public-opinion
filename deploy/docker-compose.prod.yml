@@ -15,9 +15,7 @@ services:
       retries: 10
       start_period: 10s
   api:
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    image: ${GONGLUN_IMAGE:-gonglun:unconfigured}
     restart: unless-stopped
     depends_on:
       postgres:

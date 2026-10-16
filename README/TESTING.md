@@ -6,6 +6,7 @@
 npm ci
 npm run db:up
 npm test
+npm run test:deployment
 npm run build
 ```
 
@@ -29,3 +30,5 @@ npm run typecheck
 # 生产容器验证
 
 运行 `npm run test:production`，需要 Docker Compose 2.24.4+ 和空闲的本机 54443、54331 端口。脚本使用独立随机 Compose 项目与临时凭据，验证 PostgreSQL、API、Caddy 内部 CA 的 HTTPS、前端静态页面、首位用户保护、Secure Cookie、CSRF、消息写入、API 重启后的持久化、会话及登录；随后运行实际迁移 CLI，将合成旧 Prisma 数据转换到新 schema，重建生产 API 验证 bcrypt 登录、旧消息及余额、新版写入。结束后删除本轮测试容器和卷。内部 CA 测试不替代真实域名的 DNS 与公网证书验收，合成数据不替代真实备份演练。
+
+该验证显式合并仅供本地/CI 的 `docker-compose.build.yml`；生产 Compose 本身只有镜像引用。验证还将已迁移的数据切到镜像只读演练入口，检查错误目标不创建 schema、原 PostgreSQL 容器 ID/启动时间/数据卷不变，以及旧登录、余额、消息和禁止写入的行为。`test:deployment` 另行验证部署脚本在缺库、错误目标、镜像缺失或校验失败时不替换服务，并检查下载校验顺序、无构建更新、配置不改写及显式镜像回退。

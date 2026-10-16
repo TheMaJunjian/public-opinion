@@ -23,6 +23,7 @@
     "db:stop": "docker compose -f deploy/docker-compose.dev.yml stop postgres",
     "test": "vitest run",
     "test:production": "node scripts/production-smoke.mjs",
+    "test:deployment": "node --test scripts/deployment.test.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {

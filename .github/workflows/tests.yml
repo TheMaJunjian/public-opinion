@@ -4,6 +4,7 @@ on:
     branches: [main, "codex/**", "copilot/**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -22,5 +23,64 @@ jobs:
       - name: Start PostgreSQL for integration tests
         run: npm run db:up
       - run: npm test
-      - name: Build deployment image
-        run: docker build -t gonglun:ci .
+      - run: npm run test:deployment
+      - name: Verify deployment image and migrated data
+        run: npm run test:production
+  images:
+    name: Build Linux ${{ matrix.arch }} server image
+    needs: verify
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/frontend-implementation-rewrite')
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and save runtime image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" -t "gonglun:sha-$GITHUB_SHA" .
+          docker save "gonglun:sha-$GITHUB_SHA" | gzip -1 > "gonglun-linux-$ARCH.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-image-${{ matrix.arch }}
+          path: gonglun-linux-${{ matrix.arch }}.tar.gz
+          compression-level: 0
+          retention-days: 3
+  publish:
+    name: Publish verified server images
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: server-image-*
+          path: images
+          merge-multiple: true
+      - name: Publish immutable commit release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          cd images
+          sha256sum gonglun-linux-*.tar.gz > SHA256SUMS
+          tag="server-$COMMIT"
+          printf 'Prebuilt server images for commit %s. Includes Linux amd64 and arm64 images and SHA256SUMS. Database contents and deployment credentials are not included.\n' "$COMMIT" > ../notes.txt
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = false ]; then
+              echo 'This commit already has a published image; leaving it unchanged.'
+              exit 0
+            fi
+            gh release upload "$tag" gonglun-linux-*.tar.gz SHA256SUMS --clobber
+          else
+            gh release create "$tag" gonglun-linux-*.tar.gz SHA256SUMS --target "$COMMIT" --title "Server ${COMMIT:0:7}" --notes-file ../notes.txt --prerelease --draft
+          fi
+          gh release edit "$tag" --draft=false

@@ -1,0 +1,6 @@
+# Explicit local/CI build only. Server deployment never includes this file.
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile

@@ -1,0 +1,116 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve, join, dirname, basename } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { databaseConfiguration, verifyExistingDatabase } from './image-database.mjs';
+
+const target = { GONGLUN_REHEARSAL: '1', MIGRATION_TARGET_DATABASE_URL: 'postgresql://gonglun:test-password@127.0.0.1:54330/gonglun_v2_rehearsal', MIGRATION_TARGET_SCHEMA: 'public' };
+test('rehearsal keeps the exact migrated DB, schema and credentials when using container networking', () => {
+  const configuration = databaseConfiguration({ ...target, DATABASE_URL: 'postgresql://ignored:ignored@postgres/gonglun', MIGRATION_TARGET_SCHEMA: 'verified_target' });
+  const url = new URL(configuration.url);
+  assert.equal(url.hostname, 'postgres'); assert.equal(url.port, '5432');
+  assert.equal(url.pathname, '/gonglun_v2_rehearsal'); assert.equal(url.password, 'test-password');
+  assert.equal(configuration.schema, 'verified_target');
+  for (const env of [{ GONGLUN_REHEARSAL: '1' }, { ...target, MIGRATION_TARGET_SCHEMA: 'public; DROP SCHEMA public' }, { ...target, MIGRATION_TARGET_DATABASE_URL: 'postgresql://user:pass@old-server/legacy' }]) {
+    assert.throws(() => databaseConfiguration(env));
+  }
+});
+
+test('database preflight only reads and rejects empty, legacy and non-read-only rehearsal targets', async () => {
+  for (const scenario of ['valid', 'empty', 'legacy', 'native', 'production']) {
+    const queries = []; let closed = false;
+    class FakeClient {
+      async connect() {}
+      async query(sql) {
+        queries.push(sql);
+        if (scenario === 'legacy') throw new Error('relation settings does not exist');
+        if (sql.includes('.settings')) return { rows: [{ value: JSON.stringify({ mode: scenario === 'native' ? 'native-rehearsal' : 'read-only-rehearsal' }) }] };
+        return { rows: [{ count: scenario === 'empty' ? 0 : 252 }] };
+      }
+      async end() { closed = true; }
+    }
+    const configuration = databaseConfiguration(scenario === 'production' ? { DATABASE_URL: target.MIGRATION_TARGET_DATABASE_URL } : target);
+    if (scenario === 'valid') assert.equal((await verifyExistingDatabase(configuration, FakeClient)).users, 252);
+    else await assert.rejects(verifyExistingDatabase(configuration, FakeClient));
+    assert.ok(closed); assert.ok(queries.every(sql => /^(BEGIN .*READ ONLY|SELECT |COMMIT)/.test(sql)));
+    assert.ok(!queries.some(sql => /CREATE|INSERT|UPDATE|DELETE|DROP/.test(sql)));
+  }
+});
+
+const bash = process.platform === 'win32' ? resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe') : 'bash';
+function deploy(t, flags = [], overrides = {}) {
+  const directory = mkdtempSync(join(tmpdir(), 'gonglun-deploy-test-'));
+  t.after(() => {
+    assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
+    assert.ok(basename(directory).startsWith('gonglun-deploy-test-'));
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const deployment = join(directory, 'deploy'), bin = join(directory, 'bin'), log = join(directory, 'docker.log');
+  mkdirSync(deployment); mkdirSync(bin);
+  copyFileSync(resolve('deploy/deploy.sh'), join(deployment, 'deploy.sh'));
+  writeFileSync(join(deployment, '.env.prod'), 'POSTGRES_PASSWORD=keep-existing-password\nGONGLUN_DATABASE_NAME=existing-final\n');
+  writeFileSync(join(directory, '.env.migration'), 'MIGRATION_TARGET_DATABASE_URL=keep-existing-migrated-target\n');
+  writeFileSync(join(bin, 'docker'), `#!/usr/bin/env bash
+printf '%s\\t' "$@" >> "$DOCKER_TEST_LOG"; printf '\\n' >> "$DOCKER_TEST_LOG"
+case "$1" in
+  inspect) echo true ;;
+  info) echo x86_64 ;;
+  load) touch "$DOCKER_TEST_LOG.loaded" ;;
+  image)
+    if [ "$3" = --format ]; then printf '%040d\\n' 0
+    elif [ "$MOCK_LOCAL_IMAGE" != 1 ] && [ ! -f "$DOCKER_TEST_LOG.loaded" ]; then exit 1; fi ;;
+  compose)
+    case " $* " in
+      *" ps -q postgres "*) [ "$MOCK_NO_DATABASE" = 1 ] || echo original-postgres-container ;;
+      *" run "*) [ "$MOCK_BAD_TARGET" != 1 ] ;;
+    esac ;;
+esac
+`, { mode: 0o755 });
+  writeFileSync(join(bin, 'git'), '#!/usr/bin/env bash\ncase " $* " in *" rev-parse HEAD "*) printf "%040d\\n" 0 ;; *) echo https://github.com/owner/repository.git ;; esac\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'curl'), `#!/usr/bin/env bash
+[ "$MOCK_MISSING_RELEASE" != 1 ] || exit 22
+while [ "$#" -gt 0 ]; do if [ "$1" = --output ]; then output="$2"; shift 2; else url="$1"; shift; fi; done
+case "$url" in
+  */SHA256SUMS) printf image-data | sha256sum | awk '{ print $1 "  gonglun-linux-amd64.tar.gz" }' > "$output" ;;
+  *) if [ "$MOCK_CORRUPT_IMAGE" = 1 ]; then printf damaged > "$output"; else printf image-data > "$output"; fi ;;
+esac
+`, { mode: 0o755 });
+  const result = spawnSync(bash, ['-c', `
+if command -v cygpath >/dev/null 2>&1; then bin=$(cygpath -u "$1"); script=$(cygpath -u "$2"); log=$(cygpath -u "$3"); else bin="$1"; script="$2"; log="$3"; fi
+shift 3; export PATH="$bin:$PATH" DOCKER_TEST_LOG="$log"; exec bash "$script" "$@"
+`, 'deployment-test', bin, join(deployment, 'deploy.sh'), log, ...flags], { encoding: 'utf8', timeout: 20000, env: { ...process.env, ...overrides } });
+  assert.equal(readFileSync(join(deployment, '.env.prod'), 'utf8'), 'POSTGRES_PASSWORD=keep-existing-password\nGONGLUN_DATABASE_NAME=existing-final\n');
+  assert.equal(readFileSync(join(directory, '.env.migration'), 'utf8'), 'MIGRATION_TARGET_DATABASE_URL=keep-existing-migrated-target\n');
+  const commands = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => line.split('\t').filter(Boolean)) : [];
+  return { ...result, commands, marker: existsSync(join(deployment, '.env.image')) };
+}
+
+test('download, checksum and load precede read-only preflight and detached API replacement', t => {
+  const result = deploy(t, ['--rehearsal']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const load = result.commands.findIndex(args => args[0] === 'load');
+  const check = result.commands.findIndex(args => args.includes('--check'));
+  const updates = result.commands.filter(args => args.includes('up'));
+  assert.ok(load >= 0 && check > load); assert.equal(updates.length, 1);
+  assert.ok(updates[0].includes('--no-deps') && updates[0].includes('--no-build') && updates[0].includes('-d'));
+  assert.equal(updates[0].at(-1), 'api'); assert.ok(result.marker);
+  assert.ok(!result.commands.some(args => args.includes('down') || args.includes('build') || args.includes('--volumes')));
+});
+
+for (const [scenario, environment] of Object.entries({ 'missing original PostgreSQL': { MOCK_NO_DATABASE: '1' }, 'bad target': { MOCK_BAD_TARGET: '1' }, 'corrupted download': { MOCK_CORRUPT_IMAGE: '1' }, 'unfinished GitHub build': { MOCK_MISSING_RELEASE: '1' } })) {
+  test(`deployment stops before replacing services: ${scenario}`, t => {
+    const result = deploy(t, ['--rehearsal'], environment);
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.ok(!result.commands.some(args => args.includes('up'))); assert.equal(result.marker, false);
+    if (scenario === 'corrupted download') assert.ok(!result.commands.some(args => args[0] === 'load'));
+  });
+}
+
+test('an explicit rollback reuses the retained local image without downloading or building', t => {
+  const result = deploy(t, ['--rehearsal', '--image', 'gonglun:previous'], { MOCK_LOCAL_IMAGE: '1' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(!result.commands.some(args => ['load', 'info'].includes(args[0])));
+  assert.ok(result.commands.some(args => args.includes('--check')));
+});

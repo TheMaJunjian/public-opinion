@@ -1,0 +1,12 @@
+# Use the existing migrated target from .env.migration without changing .env.prod.
+services:
+  api:
+    env_file:
+      - ${GONGLUN_MIGRATION_ENV_FILE:-../.env.migration}
+    environment:
+      GONGLUN_REHEARSAL: "1"
+      NODE_ENV: development
+      TRUST_PROXY: "0"
+    ports:
+      - "127.0.0.1:33000:3000"
+    command: ["node", "scripts/start-existing.mjs"]

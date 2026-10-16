@@ -57,6 +57,7 @@ import { clearBrowserSelection, relationTypeName } from '../utils/graphTextSelec
 import LeaderboardModal from '../components/LeaderboardModal';
 import { MessageJumpOverlay } from '../components/PopupOverlay';
 import PromptModal from '../components/PromptModal';
+import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress } from '../components/WorkbenchLoadingBoundary';
 import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import WorkbenchPanel from '../components/WorkbenchPanel';
 import useStakeCalculation from '../hooks/useStakeCalculation';
@@ -95,6 +96,10 @@ interface MessageWorkbenchPageProps {
 }
 
 export default function MessageWorkbenchPage({ topControlsFrozen = false, topControlsOffset = 68 }: MessageWorkbenchPageProps) {
+  return <WorkbenchLoadingBoundary><MessageWorkbenchContent topControlsFrozen={topControlsFrozen} topControlsOffset={topControlsOffset} /></WorkbenchLoadingBoundary>;
+}
+
+function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset = 68 }: MessageWorkbenchPageProps) {
   const { messageId: routeMessageId } = useParams<{ messageId: string }>();
   const scopeMessageId = routeMessageId ?? 'root';
   const [searchParams, setSearchParams] = useSearchParams();
@@ -109,6 +114,7 @@ export default function MessageWorkbenchPage({ topControlsFrozen = false, topCon
     displayUser, correctionVersions, preloadedData, viewerUsers, loading,
     tagCounts,
   } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate });
+  useWorkbenchLoadingProgress(loading, loadError);
   const { relationBarRef, relationLeftControlsRef, relationRightControlsRef, relationBarHeight, relationBarMinWidth, relationControlsRightOffset } = useRelationToolbar(loading);
 
   // Messages that have no DOM element in the non-linear graph view.
@@ -2258,13 +2264,7 @@ export default function MessageWorkbenchPage({ topControlsFrozen = false, topCon
 
   if (!authLoading && !preloadedData && !user) return null;
   if (loading) {
-    return <PromptModal
-      open
-      title="正在加载"
-      message="正在加载消息数据，请稍候…"
-      hideActions
-      onConfirm={() => undefined}
-    />;
+    return null;
   }
   if (loadError) {
     return (

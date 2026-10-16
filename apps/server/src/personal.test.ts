@@ -2,21 +2,37 @@ import { afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { bindRoles, type Json, type Message, type Part, type Session } from '@gonglun/core';
-import { createApp } from './app.js';
+import { createTestApp, cleanupTestDatabases } from './test-database.js';
 
-type App = ReturnType<typeof createApp>;
+type App = Awaited<ReturnType<typeof createTestApp>>;
 type Actor = { agent: ReturnType<typeof request.agent>; session: Session };
 const instances: App[] = [];
-const setup = () => { const app = createApp({ dbPath: ':memory:', settlementTickMs: 60_000 }); instances.push(app); return app; };
+const setup = async () => { const app = await createTestApp(); instances.push(app); return app; };
 async function register(app: App, name: string): Promise<Actor> { const agent = request.agent(app); const response = await agent.post('/api/register').send({ name, password: 'personal-password' }); expect(response.status).toBe(201); return { agent, session: response.body }; }
 async function send(actor: Actor, parts: Part[]): Promise<Message> { const response = await actor.agent.post('/api/messages').set('x-csrf-token', actor.session.csrf).send({ requestId: randomUUID(), parts }); expect(response.status, response.text).toBe(201); return response.body.message; }
 const text = (value: string): Part => ({ id: 'text', type: 'text', text: value });
 const relation = (value: string, target: string, role = 'target'): Part => ({ id: 'relation', type: 'relation', relation: value, roles: bindRoles({ [role]: [{ messageId: target }] }) });
-afterEach(() => { for (const app of instances.splice(0)) app.close(); });
+afterEach(async () => { for (const app of instances.splice(0)) await app.close(); await cleanupTestDatabases(); });
 
 describe('authoritative personal views', () => {
+  it('keeps the last committed personal action when the same user sends concurrent requests', async () => {
+    const app = await setup();
+    const alice = await register(app, 'alice');
+    const target = await send(alice, [text('并发关注的消息')]);
+    const before = await app.store.account(alice.session.user.id);
+    const sent = await Promise.all(['follow', 'unfollow', 'follow', 'unfollow'].map(action => send(alice, [relation(action, target.id)])));
+    const latest = [...sent].sort((a, b) => b.sequence - a.sequence)[0]!;
+    const lastAction = latest.parts.find(part => part.type === 'relation');
+    const marks = await alice.agent.get('/api/me/marks').query({ ids: target.id });
+    expect(marks.status, marks.text).toBe(200);
+    expect(marks.body.personalStates[0].followed).toBe(lastAction?.type === 'relation' && lastAction.relation === 'follow');
+    expect(new Set(sent.map(message => message.sequence)).size).toBe(sent.length);
+    expect((await app.store.account(alice.session.user.id)).available).toBe(before.available - sent.length * (await app.store.rules()).protocolFee);
+    expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM personal_actions WHERE "authorId"=$1 AND "targetId"=$2').get(alice.session.user.id, target.id))?.n).toBe(sent.length);
+  });
+
   it('searches and filters across organizations unless an explicit parent is selected', async () => {
-    const app = setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
+    const app = await setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
     const anchor = await send(bob, [text('问题')]);
     const nested = await send(alice, [text('组织内的独特证据'), relation('evidence', anchor.id)]);
     const category = await send(bob, [text('嵌套分类'), { id: 'group', type: 'relation', relation: 'classify', roles: bindRoles({ members: [{ messageId: nested.id }] }) }]);
@@ -39,7 +55,7 @@ describe('authoritative personal views', () => {
   });
 
   it('keeps old personal actions across pagination and fresh login, including nested followed messages', async () => {
-    const app = setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
+    const app = await setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
     const target = await send(bob, [text('一个长期关注的问题')]);
     for (const action of ['follow', 'read', 'block', 'archive']) await send(alice, [relation(action, target.id)]);
     await send(bob, [text('组织'), { id: 'group', type: 'relation', relation: 'classify', roles: bindRoles({ members: [{ messageId: target.id }] }) }]);
@@ -66,7 +82,7 @@ describe('authoritative personal views', () => {
   });
 
   it('paginates unseen and blocked records on the server rather than filtering one loaded page', async () => {
-    const app = setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
+    const app = await setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
     const old = await send(bob, [text('更早的未读记录')]);
     const blocked = await send(bob, [text('屏蔽的记录')]); await send(alice, [relation('block', blocked.id)]);
     const read = await send(bob, [text('已经读过的记录')]); await send(alice, [relation('read', read.id)]);
@@ -81,12 +97,12 @@ describe('authoritative personal views', () => {
   });
 
   it('provides followed descendant activity and explicit notifications with cursor and after filters', async () => {
-    const app = setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
+    const app = await setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
     const group = await send(bob, [text('关注的分类'), { id: 'group', type: 'relation', relation: 'classify', roles: {} }]);
     const child = await send(bob, [text('分类内的问题'), relation('member-of', group.id, 'parent')]);
     await send(bob, [text('关注之前'), relation('reply', child.id)]);
     await send(alice, [relation('follow', group.id)]);
-    const cutoff = app.store.latestSequence();
+    const cutoff = await app.store.latestSequence();
     const update = await send(bob, [text('新的进展'), relation('reply', child.id)]);
     const mine = await send(alice, [text('我的问题')]);
     const explicit = await send(bob, [text('请看这条信息'), relation('notify', mine.id)]);
@@ -103,14 +119,14 @@ describe('authoritative personal views', () => {
   });
 
   it('does not execute an old personal action again when its message is publicly amended', async () => {
-    const app = setup(); const alice = await register(app, 'alice');
+    const app = await setup(); const alice = await register(app, 'alice');
     const target = await send(alice, [text('持续的议题')]);
     const original = await send(alice, [relation('follow', target.id)]);
     await send(alice, [relation('unfollow', target.id)]);
     const proposal = await send(alice, [relation('amend', original.id), { id: 'data', type: 'data', value: { expectedRevision: 1, parts: [relation('follow', target.id), text('修改旧关注消息的说明')] } as unknown as Json }]);
     await send(alice, [relation('authorize', proposal.id)]);
-    expect(app.store.message(original.id).revision).toBe(2);
+    expect((await app.store.message(original.id)).revision).toBe(2);
     expect((await alice.agent.get('/api/me/marks').query({ ids: target.id })).body.personalStates[0].followed).toBe(false);
-    expect(app.store.db.prepare('SELECT COUNT(*) AS n FROM personal_actions WHERE sourceId=?').get(original.id)?.n).toBe(1);
+    expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM personal_actions WHERE "sourceId"=$1').get(original.id))?.n).toBe(1);
   });
 });

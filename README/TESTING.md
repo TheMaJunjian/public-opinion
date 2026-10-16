@@ -4,18 +4,24 @@
 
 ```sh
 npm ci
+npm run db:up
 npm test
 npm run build
 ```
 
-`npm test` 使用 Vitest 运行共享模型、真实 SQLite 后端集成和 React 工作台测试。后端测试各自创建独立数据库，不要求外部服务。
+`npm test` 使用 Vitest 运行共享模型、真实 PostgreSQL 后端集成和 React 工作台测试。`npm run db:up` 启动本地 PostgreSQL；每个后端测试使用随机独立 schema，结束后只清理本轮测试创建的 schema。
+
+使用其他测试数据库时设置 `TEST_DATABASE_URL`，账号需要创建和删除 schema 的权限。测试不会读取生产用的 `DATABASE_URL`。默认测试地址与本地开发 PostgreSQL 相同，但测试 schema 与应用数据隔离。
 
 开发时可以指定文件或项目缩小范围：
 
 ```sh
 npx vitest run apps/server/src/ui.test.ts
-npx vitest run frontend/src/test/topic-detail-page.test.tsx
+npx vitest run frontend/src/test/message-workbench-page.test.tsx
 npm run typecheck
 ```
 
-重点检查消息部件及版本引用、事务提交与重复重试、结算守恒和推翻、组织恢复、原发送操作、分页期间的增量同步，以及非线性布局。浏览器检查使用单独的测试数据库和本地测试账号。
+重点检查消息部件及版本引用、事务提交与重复重试、结算守恒和推翻、组织恢复、原发送操作、分页期间的增量同步，以及非线性布局。PostgreSQL 测试还覆盖两个 API 实例并发重试、超额支出、重复结算、嵌套事务回滚、读取快照和跨实例 SSE。浏览器检查使用单独的测试数据库和本地测试账号。
+# 生产容器验证
+
+运行 `npm run test:production`，需要 Docker Compose 2.24.4+ 和空闲的本机 54443、54331 端口。脚本使用独立随机 Compose 项目与临时凭据，验证 PostgreSQL、API、Caddy 内部 CA 的 HTTPS、前端静态页面、首位用户保护、Secure Cookie、CSRF、消息写入、API 重启后的持久化、会话及登录；随后运行实际迁移 CLI，将合成旧 Prisma 数据转换到新 schema，重建生产 API 验证 bcrypt 登录、旧消息及余额、新版写入。结束后删除本轮测试容器和卷。内部 CA 测试不替代真实域名的 DNS 与公网证书验收，合成数据不替代真实备份演练。

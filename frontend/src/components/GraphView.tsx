@@ -4,12 +4,11 @@ import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCar
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
-import { getRelationTitle } from '../types';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import { computeCorrectionVersions, isCardMessage, isContentKind } from '../utils/modelBridge';
 import { computeSceneLayout } from '../utils/frameLayout';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
-import { getMessageProminence, needsSeparateStanceCard } from '../utils/messageDisplay';
+import { getMessageProminence, getOrganizationTitle, needsSeparateStanceCard } from '../utils/messageDisplay';
 import MessageTextPart from './MessageTextPart';
 import { describeUnit } from '../utils/selectionLabel';
 import { PART_SELECTION_EVENT, isMessageElementSelected, isWholeMessageSelection, messageTypeReference } from '../utils/messageElementSelection';
@@ -19,6 +18,10 @@ import OrganizationFrameHeader from './graph/OrganizationFrameHeader';
 import MessageSettlementActions from './MessageSettlementActions';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
+import RelatedMessages from './RelatedMessages';
+import JoinRecordBadges from './JoinRecordBadges';
+import ComparisonPane, { COMPARISON_HEADER_HEIGHT } from './ComparisonPane';
+import {indexRelatedMessages,isRejectedContainer} from '../utils/relatedMessages';
 import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD } from '../utils/layout';
 import type { Relation } from '../types';
 
@@ -31,6 +34,10 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 export interface GraphViewProps {
   messages: DemoMessage[];
+  relatedMessages?:DemoMessage[];
+  standaloneMessageIds?:ReadonlySet<string>;
+  rejectedContainerIds?:ReadonlySet<string>;
+  onRelatedMessageNavigate?:(id:string)=>void;
   edges: DemoEdge[];
   homeMatchIds?: Set<string>;
   homeContextRoleByMessageId?: Map<string, 'source' | 'target' | 'source-target'>;
@@ -89,13 +96,17 @@ export interface GraphViewProps {
   traceFrameIds?: Set<string>;
   /** Render two aligned comparison projections using the same graph layout. */
   comparisonPair?: boolean;
+  comparisonSingle?: boolean;
+  comparisonScopeHeader?: React.ReactNode;
   comparisonTargetId?: string | null;
   comparisonDisplay?: 'agree' | 'disagree';
   comparisonRecommendedDisplay?: 'agree' | 'disagree';
   comparisonAgreeMessages?: DemoMessage[];
+  comparisonAgreeContext?: Pick<GraphViewProps,'relatedMessages'|'rejectedContainerIds'|'joinStatusByMessage'|'crossClassifyRefs'>;
   comparisonAgreeEdges?: DemoEdge[];
   comparisonAgreeHideMessageIds?: Set<string>;
   comparisonDisagreeMessages?: DemoMessage[];
+  comparisonDisagreeContext?: Pick<GraphViewProps,'relatedMessages'|'rejectedContainerIds'|'joinStatusByMessage'|'crossClassifyRefs'>;
   comparisonDisagreeEdges?: DemoEdge[];
   comparisonDisagreeHideMessageIds?: Set<string>;
   comparisonAgreeSuppressedRelIds?: Set<string>;
@@ -123,7 +134,7 @@ export interface GraphViewProps {
   crossClassifyRefs?: Map<string, { outgoing: Record<string, string[]>; incoming: Record<string, string[]> }>;
   /** 点击跨分类引用标签：选中关系消息 */
   onCrossRefTagClick?: (e: React.MouseEvent, relMsgIds: string[]) => void;
-  /** 点击加入消息标签；incoming 表示“被加入”，outgoing 表示“加入” */
+  /** 点击加入消息标签；incoming 查看消息的“加入”，outgoing 查看容器的“被加入” */
   onNavigateToMessage?: (messageId: string) => void;
   /** JOIN records grouped by their target message, used by the target filter badge. */
   joinRelationsByTarget?: Map<string, Relation[]>;
@@ -134,7 +145,7 @@ export interface GraphViewProps {
 }
 
 const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
-const COMPARISON_HEADER_HEIGHT = 28;
+
 const COMPARISON_CANVAS_EXTRA_RIGHT_PAD = 96;
 
 function ComparisonGraphPair(props: GraphViewProps) {
@@ -321,24 +332,24 @@ function ComparisonGraphPair(props: GraphViewProps) {
   return (
     <div ref={pairRef} data-comparison-pair="true" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 8, width: '100%', minHeight: '100%' }}>
       <div style={{ display: 'grid', gridTemplateColumns: `${agreeRatio}fr 30px ${1 - agreeRatio}fr`, gap: 8, alignItems: 'stretch' }}>
-      <div data-comparison-view="agree" style={{ minWidth: 0, minHeight: 0, border: '1px solid #365314', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: `0 0 ${COMPARISON_HEADER_HEIGHT}px`, height: COMPARISON_HEADER_HEIGHT, boxSizing: 'border-box', display: 'flex', alignItems: 'center', padding: '6px 8px', color: '#86efac', background: '#17210f', fontSize: 12, fontWeight: 600 }}>赞同后显示{props.comparisonRecommendedDisplay === 'agree' ? ' · 推荐显示' : ''}</div>
+      <ComparisonPane side="agree" recommended={props.comparisonRecommendedDisplay === 'agree'}>
+        {props.comparisonScopeHeader}
         <div ref={agreeViewportRef} data-comparison-viewport="agree" style={viewportStyle}>
-          <GraphView {...props} messages={props.comparisonAgreeMessages ?? props.messages} edges={props.comparisonAgreeEdges ?? props.edges} hideMessageIds={props.comparisonAgreeHideMessageIds ?? props.hideMessageIds} comparisonPair={false} comparisonDisplay="agree" comparisonSuppressedRelIds={props.comparisonAgreeSuppressedRelIds} autoCenterMessageId={null} />
+          <GraphView {...props} {...props.comparisonAgreeContext} messages={props.comparisonAgreeMessages ?? props.messages} edges={props.comparisonAgreeEdges ?? props.edges} hideMessageIds={props.comparisonAgreeMessages ? props.comparisonAgreeHideMessageIds : props.hideMessageIds} comparisonPair={false} comparisonSingle={false} comparisonDisplay="agree" comparisonSuppressedRelIds={props.comparisonAgreeSuppressedRelIds} autoCenterMessageId={null} />
         </div>
-      </div>
+      </ComparisonPane>
       <div data-comparison-divider="true" style={{ minHeight: 0, marginTop: COMPARISON_HEADER_HEIGHT, display: 'grid', gridTemplateColumns: '14px minmax(0, 1fr)', gap: 4, position: 'sticky', top: 0, alignSelf: 'start', height: Math.max(scrollHostSize.viewportHeight, 1), overflow: 'hidden', background: '#2a2a2a', borderRadius: 4 }}>
         <div ref={verticalScrollRef} data-comparison-scroll-vertical="true" aria-label="对比视图垂直滚动条" style={{ minHeight: 0, minWidth: 0, height: '100%', overflowY: 'scroll', overflowX: 'hidden', scrollbarGutter: 'stable', borderRadius: 4 }}>
           <div style={{ height: Math.max(scrollHostSize.height, contentSize.height, 1), width: 1 }} />
         </div>
         <div onPointerDown={handleSplitPointerDown} role="separator" aria-label="调整对比视图宽度" style={{ minWidth: 0, cursor: 'col-resize', background: '#3a3a3a', borderRadius: 4, touchAction: 'none', userSelect: 'none' }} />
       </div>
-      <div data-comparison-view="disagree" style={{ minWidth: 0, minHeight: 0, border: '1px solid #7f1d1d', borderRadius: 6, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: `0 0 ${COMPARISON_HEADER_HEIGHT}px`, height: COMPARISON_HEADER_HEIGHT, boxSizing: 'border-box', display: 'flex', alignItems: 'center', padding: '6px 8px', color: '#fca5a5', background: '#2a1212', fontSize: 12, fontWeight: 600 }}>反对后显示{props.comparisonRecommendedDisplay === 'disagree' ? ' · 推荐显示' : ''}</div>
+      <ComparisonPane side="disagree" recommended={props.comparisonRecommendedDisplay === 'disagree'}>
+        {props.comparisonScopeHeader}
         <div ref={disagreeViewportRef} data-comparison-viewport="disagree" style={viewportStyle}>
-          <GraphView {...props} messages={props.comparisonDisagreeMessages ?? props.messages} edges={props.comparisonDisagreeEdges ?? props.edges} hideMessageIds={props.comparisonDisagreeHideMessageIds ?? props.hideMessageIds} comparisonPair={false} comparisonDisplay="disagree" comparisonSuppressedRelIds={props.comparisonDisagreeSuppressedRelIds} autoCenterMessageId={null} />
+          <GraphView {...props} {...props.comparisonDisagreeContext} messages={props.comparisonDisagreeMessages ?? props.messages} edges={props.comparisonDisagreeEdges ?? props.edges} hideMessageIds={props.comparisonDisagreeMessages ? props.comparisonDisagreeHideMessageIds : props.hideMessageIds} comparisonPair={false} comparisonSingle={false} comparisonDisplay="disagree" comparisonSuppressedRelIds={props.comparisonDisagreeSuppressedRelIds} autoCenterMessageId={null} />
         </div>
-      </div>
+      </ComparisonPane>
       </div>
       <div ref={horizontalScrollRef} data-comparison-scroll-horizontal="true" aria-label="对比视图水平滚动条" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 1, opacity: 0, pointerEvents: 'none', overflowX: 'scroll', overflowY: 'hidden' }}>
         <div style={{ width: Math.max(contentSize.width, 1), height: 1 }} />
@@ -378,7 +389,14 @@ function GraphViewCanvas(props: GraphViewProps) {
     // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
+  const isJoinEffective = (record: Relation) => joinStatusByMessage
+    ? joinStatusByMessage.get(record.id) === 'valid' : record.state?.membershipActive === true;
+  const renderJoinRecords = (messageId: string, isContainer = false, compact = false) => <JoinRecordBadges
+    messageId={messageId} memberRecords={joinRelationsByTarget?.get(messageId)} containerRecords={joinRelationsBySource?.get(messageId)}
+    isContainer={isContainer} isEffective={isJoinEffective} onOpen={onJoinFilterClick} compact={compact}/>;
+
   const messages = inputMessages;
+  const relatedByTarget=useMemo(()=>indexRelatedMessages(props.relatedMessages??messages,props.rejectedContainerIds),[props.relatedMessages,messages,props.rejectedContainerIds]);
   const edges = inputEdges;
   const traceFrameIds = props.traceFrameIds ?? new Set<string>();
   // Expanded frame IDs are only meaningful inside an active trace window.
@@ -404,8 +422,8 @@ function GraphViewCanvas(props: GraphViewProps) {
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals, normalIds,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId, frameBlocks, frameDepthMap,
     correctedEdgeIdsByRelMsg, pipelineCol, pipelineMaxCol } = useMemo(() => projectGraphScene({
-      messages, edges, traceExpandedFrameIds, isTraceWindow,
-    }), [messages, edges, traceExpandedFrameIds, isTraceWindow]);
+      messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,hiddenMessageIds:effectiveHideMessageIds,
+    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.standaloneMessageIds,props.rejectedContainerIds,props.hideMessageIds,comparisonSuppressedRelIds]);
 
   const measuredHeights = useCardMeasurements(canvasRef, cardRefs);
   // Reserved: populate via ResizeObserver when cards need variable widths (e.g. MERGE headers).
@@ -679,6 +697,10 @@ function GraphViewCanvas(props: GraphViewProps) {
             // because secondary relation types create duplicate edges.
             const targetCount = (() => {
               const seen = new Set<string>();
+              if(isRejectedContainer(msg,props.rejectedContainerIds)) {
+                for(const ref of [...msg.targetRefs??[],...msg.declaredTargetRefs??[]]) seen.add(ref.kind==='relation'?ref.relationId:ref.messageId);
+                for(const join of joinRelationsBySource?.get(msg.id)??[])for(const ref of join.targetRefs)seen.add(ref.kind==='relation'?ref.relationId:ref.messageId);
+              }
               for (const e of edges) {
                 if (e.relationMessageId !== msg.id) continue;
                 if (e.to.messageId.startsWith('anon:')) continue;
@@ -686,11 +708,9 @@ function GraphViewCanvas(props: GraphViewProps) {
               }
               return seen.size;
             })();
-            const classificationTitle = getRelationTitle(msg.relationPayload) || `分类（${targetCount}）`;
+            const classificationTitle = getOrganizationTitle(msg, targetCount);
             const relatedJoinRelations = joinRelationsByTarget?.get(msg.id) ?? [];
             const outgoingJoinRelations = joinRelationsBySource?.get(msg.id) ?? [];
-            const validJoinCount = relatedJoinRelations.filter(join => joinStatusByMessage?.get(join.id) === 'valid').length;
-            const invalidJoinCount = relatedJoinRelations.length - validJoinCount;
             const isWhole = draftUnits.some(u => isWholeMessageSelection(u, msg.id));
             const isActive = lastClickedMessageId === msg.id;
             const isClassificationStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
@@ -698,7 +718,8 @@ function GraphViewCanvas(props: GraphViewProps) {
               activeText={activeTextSelectId === msg.id} isWhole={isWhole} isActive={isActive} isStanceTarget={isClassificationStanceTarget}
               homeLabel={homeRoleLabel(msg.id)} stakes={stakeCounts?.[msg.id]}
               relatedJoinRelations={relatedJoinRelations} outgoingJoinRelations={outgoingJoinRelations}
-              validJoinCount={validJoinCount} invalidJoinCount={invalidJoinCount}
+              relatedMessages={<RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedMessageNavigate??onNavigateToMessage}/>}
+              isJoinEffective={isJoinEffective}
               cardRef={el => { cardRefs.current[msg.id] = el; }} headerRef={el => { headerRefs.current[msg.id] = el; }} contentRef={el => { contentRefs.current[msg.id] = el; }}
               onMessageClick={onMessageClick} onMessageDoubleClick={onMessageDoubleClick} onMessageMouseDown={onMessageMouseDown} onMessageMouseUp={onMessageMouseUp}
               onTextMouseUp={onTextMouseUp} onSettlementToggleTruth={onSettlementToggleTruth} onSettlementToggleValue={onSettlementToggleValue}
@@ -771,12 +792,8 @@ function GraphViewCanvas(props: GraphViewProps) {
           })();
           const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
           const kindBg = kindMeta ? kindMeta.bg : undefined;
-          const relatedJoinRelations = joinRelationsByTarget?.get(msg.id) ?? [];
-          const outgoingJoinRelations = joinRelationsBySource?.get(msg.id) ?? [];
           const joinStatus = joinStatusByMessage?.get(msg.id);
           const joinIsInvalid = joinStatus === 'rejected' || joinStatus === 'superseded' || joinStatus === 'container-rejected';
-          const validJoinCount = relatedJoinRelations.filter(join => joinStatusByMessage?.get(join.id) === 'valid').length;
-          const invalidJoinCount = relatedJoinRelations.length - validJoinCount;
 
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
@@ -943,28 +960,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                   : <MessageTextPart message={msg} activeText={activeTextSelectId === msg.id} onMouseUp={onTextMouseUp}>{renderContent(msg)}</MessageTextPart>}
               </div>
               )}
-              {(outgoingJoinRelations.length > 0 || relatedJoinRelations.length > 0) && onJoinFilterClick && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', whiteSpace: 'nowrap', overflow: 'hidden' }}>
-                  {outgoingJoinRelations.length > 0 && (
-                    <button
-                      onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'outgoing'); }}
-                      title="筛选显示该容器发出的全部加入消息"
-                      style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(16,185,129,0.14)', color: '#a7f3d0', border: '1px solid rgba(16,185,129,0.4)', cursor: 'pointer' }}
-                    >
-                      加入消息：{outgoingJoinRelations.length} 条
-                    </button>
-                  )}
-                  {relatedJoinRelations.length > 0 && (
-                    <button
-                      onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'incoming'); }}
-                      title="筛选显示把此消息加入容器的全部加入消息"
-                      style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.14)', color: '#bfdbfe', border: '1px solid rgba(59,130,246,0.4)', cursor: 'pointer' }}
-                    >
-                      被加入消息：{validJoinCount} 条有效{invalidJoinCount > 0 ? `，${invalidJoinCount} 条无效` : ''}
-                    </button>
-                  )}
-                </div>
-              )}
+              <RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedMessageNavigate??onNavigateToMessage}/>
+              {renderJoinRecords(msg.id, ['classify','summary','merge','arrange'].includes(msg.relationType ?? ''))}
               {(notifyUsersByRelationMsg.get(msg.id)?.length ?? 0) > 0 && (
                 <div style={{ marginTop: 6, fontSize: 11, color: '#67e8f9' }}>
                   通知与会者：
@@ -1443,6 +1440,10 @@ function GraphViewCanvas(props: GraphViewProps) {
               <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             </>}
+            {onJoinFilterClick && <div data-msgid={sf.relMsgId} data-rel-overlay="true"
+              style={{position:'absolute',left:x+(sfCorrInfo?100:8),top:y-HH+1,zIndex:frameZ+1,pointerEvents:'auto',background:'#101010'}}>
+              {renderJoinRecords(sf.relMsgId,true,true)}
+            </div>}
             {/* Correction badge — embedded in frame top border when this arrange is a CORRECT target */}
             {sfCorrInfo&&(()=>{
               const ci=sfCorrInfo[0];
@@ -1567,7 +1568,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   userSelect: "none",
                   boxSizing: "border-box",
                 }}>
-                <OrganizationFrameHeader message={msgMap.get(gf.relMsgId)} messageId={gf.relMsgId} kind={gf.relType}
+                <OrganizationFrameHeader message={msgMap.get(gf.relMsgId)} messageId={gf.relMsgId} kind={gf.relType} joinBadges={renderJoinRecords(gf.relMsgId,true,true)}
                   memberCount={new Set((edgesByRelMsg.get(gf.relMsgId) ?? []).filter(edge => !edge.to.messageId.startsWith('anon:')).map(edge => edge.to.messageId)).size}
                   selectedUnits={draftUnits} activeText={activeTextSelectId === gf.relMsgId} onTextMouseUp={onTextMouseUp}
                   counts={stakeCounts?.[gf.relMsgId]} openMessageId={settlementOpenMsgId} openType={settlementOpenType}
@@ -1904,6 +1905,11 @@ function GraphViewCanvas(props: GraphViewProps) {
 export default function GraphView(props: GraphViewProps) {
   return props.comparisonPair
     ? <ComparisonGraphPair {...props} />
-    : <GraphViewCanvas {...props} />;
+    : props.comparisonSingle && props.comparisonDisplay
+      ? <ComparisonPane side={props.comparisonDisplay}>
+          {props.comparisonScopeHeader}
+          <div data-comparison-viewport={props.comparisonDisplay} style={{ minWidth: 0, minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}><GraphViewCanvas {...props} /></div>
+        </ComparisonPane>
+      : <GraphViewCanvas {...props} />;
 }
 

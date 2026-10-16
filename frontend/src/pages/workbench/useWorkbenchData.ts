@@ -152,8 +152,17 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate }
       onError(error) { setLoadError(error.message); setLoading(false); },
     });
     const reload = () => sync.reload();
+    const committed = (event: Event) => {
+      const pages = (event as CustomEvent<import('../../data/workbench').WorkbenchSnapshot[]>).detail;
+      if (!pages.some(page => sync.applyCommitted(page))) sync.reload();
+    };
     window.addEventListener('gonglun:reload', reload);
-    return () => { window.removeEventListener('gonglun:reload', reload); sync.stop(); };
+    window.addEventListener('gonglun:committed', committed);
+    return () => {
+      window.removeEventListener('gonglun:reload', reload);
+      window.removeEventListener('gonglun:committed', committed);
+      sync.stop();
+    };
   }, [scopeMessageId, leaderboardRefreshVersion, authLoading, user?.id, preloadedData]);
 
   useEffect(() => {

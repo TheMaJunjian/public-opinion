@@ -321,6 +321,7 @@ export async function createJoinRelationsForContainer(dependencies: CreateJoinRe
         : target;
       const existingJoin = relationsRef.current.find(relation =>
         relation.relationType?.toUpperCase() === 'JOIN' &&
+        relation.state?.membershipActive === true &&
         relation.sourceMessageId === containerId &&
         relation.targetRefs.some(ref =>
           targetRef.kind === 'relation'
@@ -330,7 +331,9 @@ export async function createJoinRelationsForContainer(dependencies: CreateJoinRe
               : ref.kind === 'message' && ref.messageId === tgtMid
         )
       );
-      if (existingJoin) continue;
+      // Reusing a historical, inactive JOIN would leave the member outside the
+      // requested container. Only an already effective placement is a no-op.
+      if (existingJoin?.state?.membershipActive === true) continue;
       const relation = await createRel(scopeMessageId!, {
         relationType: 'JOIN',
         sourceMessageId: containerId,

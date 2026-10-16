@@ -14,3 +14,7 @@ backend
 refactor
 apps/web
 *.tsbuildinfo
+**/backups
+**/*.dump
+deploy/restored-manifest.jsonl
+migration-reports

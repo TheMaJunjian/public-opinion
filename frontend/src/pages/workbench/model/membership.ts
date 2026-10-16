@@ -1,6 +1,27 @@
 import type { Relation, TargetRef } from '../../../types';
 import type { DemoEdge } from '../../../utils/modelBridge';
-import { targetIsOwnedByContainer } from './containerTargets';
+import { resolveMemberships, type MembershipAction } from '@gonglun/core';
+
+/** Materialize active JOIN membership for display without changing declarations. */
+export function projectJoinMembershipEdges(edges:DemoEdge[],relations:Relation[],effective:Set<string>,visibleContainers:ReadonlySet<string>):DemoEdge[] {
+  const byId=new Map(relations.map(relation=>[relation.id,relation]));
+  const seen=new Set(edges.map(edge=>`${edge.relationMessageId}:${edge.to.messageId}`));
+  const result=[...edges];
+  const winners = getEffectiveJoinByTarget(relations.filter(relation => relation.relationType.toUpperCase() !== 'JOIN' || effective.has(relation.id)), new Set(), new Set());
+  for(const join of relations){
+    if(join.relationType.toUpperCase()!=='JOIN'||!effective.has(join.id)||!join.sourceMessageId||!visibleContainers.has(join.sourceMessageId))continue;
+    const container=byId.get(join.sourceMessageId),type=container?.relationType.toLowerCase();
+    if(!type||!['classify','summary','merge','arrange'].includes(type))continue;
+    for(const [index,ref] of join.targetRefs.entries()){
+      const id=ref.kind==='relation'?ref.relationId:ref.messageId,key=`${join.sourceMessageId}:${id}`;
+      if (winners.get(id) !== join.id) continue;
+      if(seen.has(key))continue;
+      seen.add(key);
+      result.push({id:`membership:${join.id}:${index}`,relationMessageId:join.sourceMessageId,relationType:type as DemoEdge['relationType'],relationLabel:type,from:{messageId:`anon:${join.sourceMessageId}`,selection:{kind:'whole'}},to:{messageId:id,selection:{kind:'whole'},reference:ref.reference}});
+    }
+  }
+  return result;
+}
 
 export function isAppendToExistingClassifyAction(options: {
   relationType: string | null;
@@ -18,7 +39,7 @@ export function isAppendToExistingClassifyAction(options: {
 /** Return rejected container IDs that must also receive AGREE to restore a JOIN. */
 export function getJoinRecoveryTargetIds(
   targetMessageIds: string[],
-  relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId'>[],
+  relations: (Pick<Relation, 'id' | 'relationType' | 'sourceMessageId'> & Partial<Pick<Relation,'payload'>>)[],
   rejectedContainerIds: Set<string>,
 ): string[] {
   const targetIdSet = new Set(targetMessageIds);
@@ -27,6 +48,7 @@ export function getJoinRecoveryTargetIds(
       .filter(relation =>
         targetIdSet.has(relation.id) &&
         relation.relationType?.toUpperCase() === 'JOIN' &&
+        !relation.payload?.membershipHistory &&
         !!relation.sourceMessageId &&
         rejectedContainerIds.has(relation.sourceMessageId)
       )
@@ -57,15 +79,15 @@ export function getRejectedJoinRelationIds(
  */
 const JOIN_RELATION_TYPES = new Set(['JOIN']);
 
-type JoinRelationRecord = Omit<Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs' | 'createdAt'>, 'createdAt'> & { createdAt?: string; createdBy?: Relation['createdBy'] };
+type JoinRelationRecord = Omit<Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs' | 'createdAt'>, 'createdAt'> & { createdAt?: string; createdBy?: Relation['createdBy']; payload?: Relation['payload']; state?: Relation['state'] };
 
 function getJoinTargetKey(ref: TargetRef): string {
-  return ref.kind === 'relation' ? `relation:${ref.relationId}` : `message:${ref.messageId}`;
+  return ref.kind === 'relation' ? ref.relationId : ref.messageId;
 }
 
 function joinTargetsMessage(joinRelation: JoinRelationRecord, messageId: string): boolean {
   return (joinRelation.targetRefs as TargetRef[]).some(ref =>
-    (ref.kind === 'message' || ref.kind === 'text-fragment') && ref.messageId === messageId
+    (ref.kind === 'relation' ? ref.relationId : ref.messageId) === messageId
   );
 }
 
@@ -85,10 +107,11 @@ export function getActiveJoinRelationsForMessage(
   rejectedContainerIds: Set<string>,
   rejectedJoinRelationIds?: Set<string>,
 ): JoinRelationRecord[] {
+  const effective = getEffectiveJoinRelationIds(relations, rejectedContainerIds, rejectedJoinRelationIds ?? new Set());
   const staleJoinRelationIds = new Set(getStaleJoinRelationIds(relations));
   const candidates = relations
     .filter(r =>
-      JOIN_RELATION_TYPES.has(r.relationType) &&
+      JOIN_RELATION_TYPES.has(r.relationType.toUpperCase()) && effective.has(r.id) &&
       !!r.sourceMessageId &&
       !rejectedContainerIds.has(r.id) &&
       !rejectedContainerIds.has(r.sourceMessageId) &&
@@ -110,33 +133,30 @@ export function getEffectiveJoinRelationIds(
   rejectedJoinRelationIds: Set<string>,
   userDisagreedJoinRelationIds?: ReadonlySet<string>,
 ): Set<string> {
-  const staleJoinRelationIds = new Set(getStaleJoinRelationIds(relations));
-  const targetKeys = new Set<string>();
+  return new Set(getEffectiveJoinByTarget(relations, rejectedContainerIds, rejectedJoinRelationIds, userDisagreedJoinRelationIds).values());
+}
+
+/** Preserve the winning target as well as the record ID for older multi-target JOINs. */
+export function getEffectiveJoinByTarget(
+  relations: JoinRelationRecord[], rejectedContainerIds: Set<string>, rejectedJoinRelationIds: Set<string>, userDisagreedJoinRelationIds?: ReadonlySet<string>,
+): Map<string, string> {
+  const actions: MembershipAction[] = relations.flatMap(relation => relation.relationType.toUpperCase() === 'JOIN' && relation.payload?.membershipHistory ? [relation.payload.membershipHistory] : []);
+  const rejected = new Set([...rejectedContainerIds, ...rejectedJoinRelationIds, ...(userDisagreedJoinRelationIds ?? [])]);
+  const resolved = resolveMemberships(actions, rejected);
+  const latest = new Map<string, {id:string; time:number}>();
   for (const relation of relations) {
-    if (relation.relationType?.toUpperCase() !== 'JOIN') continue;
+    if (relation.relationType?.toUpperCase() !== 'JOIN' || !relation.sourceMessageId
+      || rejectedContainerIds.has(relation.id) || rejectedJoinRelationIds.has(relation.id)
+      || userDisagreedJoinRelationIds?.has(relation.id) || rejectedContainerIds.has(relation.sourceMessageId)) continue;
+    const time = new Date(relation.createdAt ?? 0).getTime();
     for (const ref of relation.targetRefs as TargetRef[]) {
-      targetKeys.add(getJoinTargetKey(ref));
+      const key = getJoinTargetKey(ref), previous = latest.get(key);
+      if (resolved.trackedMembers.has(key)) continue;
+      // Equal times keep the first source record, matching stable sort semantics.
+      if (!previous || time > previous.time) latest.set(key, {id:relation.id,time});
     }
   }
-  const effective = new Set<string>();
-  for (const targetKey of targetKeys) {
-    const candidates = relations.filter(relation =>
-      relation.relationType?.toUpperCase() === 'JOIN' &&
-      !!relation.sourceMessageId &&
-      !rejectedContainerIds.has(relation.id) &&
-      !rejectedJoinRelationIds.has(relation.id) &&
-      !userDisagreedJoinRelationIds?.has(relation.id) &&
-      !staleJoinRelationIds.has(relation.id) &&
-      !rejectedContainerIds.has(relation.sourceMessageId) &&
-      (relation.targetRefs as TargetRef[]).some(ref => getJoinTargetKey(ref) === targetKey)
-    );
-    const join = [...candidates]
-      .sort((a, b) => {
-        return new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime();
-      })[0];
-    if (join) effective.add(join.id);
-  }
-  return effective;
+  return new Map([...latest].map(([id, join]) => [id, join.id] as const).concat([...resolved.effective].map(([id, action]) => [id, action.id] as const)));
 }
 
 /** Keep container frame edges only for their currently effective JOIN members. */
@@ -146,29 +166,23 @@ export function filterContainerEdgesByEffectiveJoins(
   effectiveJoinRelationIds: Set<string>,
 ): DemoEdge[] {
   const containerTypes = new Set(['CLASSIFY', 'SUMMARY', 'ARRANGE', 'MERGE']);
-  return edges.filter(edge => {
-    if (!containerTypes.has(edge.relationType.toUpperCase())) return true;
-    const container = relations.find(relation => relation.id === edge.relationMessageId);
-    const originalTargetRef = (container?.targetRefs as TargetRef[] | undefined)?.find(ref =>
-      (ref.kind === 'relation' && ref.relationId === edge.to.messageId) ||
-      (ref.kind !== 'relation' && ref.messageId === edge.to.messageId)
-    );
-    if (originalTargetRef && targetIsOwnedByContainer(
-      edge.relationMessageId,
-      originalTargetRef,
-      relations,
-      effectiveJoinRelationIds,
-    )) return true;
-    return relations.some(relation =>
-      relation.relationType?.toUpperCase() === 'JOIN' &&
-      relation.sourceMessageId === edge.relationMessageId &&
-      effectiveJoinRelationIds.has(relation.id) &&
-      (relation.targetRefs as TargetRef[]).some(ref =>
-        (ref.kind === 'relation' && ref.relationId === edge.to.messageId) ||
-        (ref.kind !== 'relation' && ref.messageId === edge.to.messageId)
-      )
-    );
+  const members=new Map(relations.filter(relation=>containerTypes.has(relation.relationType.toUpperCase())).map(relation=>[relation.id,new Set(relation.targetRefs.map(ref=>ref.kind==='relation'?ref.relationId:ref.messageId))]));
+  const winners = getEffectiveJoinByTarget(relations.filter(relation => relation.relationType.toUpperCase() !== 'JOIN' || effectiveJoinRelationIds.has(relation.id)),new Set(),new Set());
+  const joined=new Set<string>(),owners=new Map<string,Set<string>>();
+  for(const join of relations) if(join.relationType.toUpperCase()==='JOIN') for(const ref of join.targetRefs) {
+    const id=ref.kind==='relation'?ref.relationId:ref.messageId;
+    joined.add(id);
+    if(join.sourceMessageId&&effectiveJoinRelationIds.has(join.id)&&winners.get(id)===join.id) {
+      const current=owners.get(id)??new Set<string>();current.add(join.sourceMessageId);owners.set(id,current);
+    }
+  }
+  return edges.filter(edge=>{
+    if(!containerTypes.has(edge.relationType.toUpperCase()))return true;
+    const target=edge.to.messageId;
+    if(owners.get(target)?.has(edge.relationMessageId))return true;
+    return !joined.has(target)&&members.get(edge.relationMessageId)?.has(target)===true;
   });
+
 }
 
 /** Return the latest JOIN action for each target in the current user's view. */

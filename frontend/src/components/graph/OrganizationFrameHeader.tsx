@@ -1,4 +1,4 @@
-import type { MouseEvent } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import type { DemoMessage, UnitSelection } from '../../utils/modelBridge';
 import { getRelationTitle } from '../../types';
 import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../../utils/messageElementSelection';
@@ -7,8 +7,9 @@ import MessageTextPart from '../MessageTextPart';
 import MessageSettlementActions, { type MessageStakeCounts } from '../MessageSettlementActions';
 
 export default function OrganizationFrameHeader({ message, messageId, kind, memberCount, selectedUnits, activeText,
-  counts, openMessageId, openType, onTruth, onValue, onTextMouseUp,
+  counts, openMessageId, openType, onTruth, onValue, onTextMouseUp, joinBadges,
 }: {
+  joinBadges?: ReactNode;
   message?: DemoMessage;
   messageId: string;
   kind: 'classify' | 'summary' | 'merge';
@@ -32,6 +33,7 @@ export default function OrganizationFrameHeader({ message, messageId, kind, memb
       <div style={{ fontSize: 12, fontWeight: 600, color: '#f3f4f6', flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
         {message ? <MessageTextPart message={message} activeText={activeText} onMouseUp={onTextMouseUp}>{content}</MessageTextPart> : content}
       </div>
+      {joinBadges}
       {kind === 'merge' && <MessageSettlementActions messageId={messageId} counts={counts} openMessageId={openMessageId} openType={openType} onTruth={onTruth} onValue={onValue} />}
       {kind === 'merge' && <MessageElement reference={membersRef} selected={isMessageElementSelected(selectedUnits, membersRef)} label="所含消息" style={{ fontSize: 10, color: '#9ca3af', flexShrink: 0 }}>💬{memberCount}</MessageElement>}
       <MessageElement reference={typeRef} selected={isMessageElementSelected(selectedUnits, typeRef)} label={label}

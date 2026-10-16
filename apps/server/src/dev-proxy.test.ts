@@ -6,9 +6,10 @@ import { expect, it } from 'vitest';
 import type { Session } from '@gonglun/core';
 import webConfig from '../../../frontend/vite.config.js';
 import { createApp } from './app.js';
+import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
 
 it('registers, logs in and sends through the actual development proxy while rejecting foreign origins', async () => {
-  const app = createApp({ dbPath: ':memory:' });
+  const app = (await createTestApp());
   const backend = app.listen(0, '127.0.0.1');
   let web: ViteDevServer | undefined;
   try {
@@ -37,15 +38,15 @@ it('registers, logs in and sends through the actual development proxy while reje
     const input = { requestId: randomUUID(), parts: [{ id: 'body', type: 'text', text: '通过开发页面发言' }] };
     const headers = { Cookie: cookie, 'x-csrf-token': session.csrf };
     expect((await post('/messages', input, headers)).status).toBe(201);
-    const before = app.store.latestSequence();
+    const before = (await app.store.latestSequence());
     const rejected = await post('/messages', { ...input, requestId: randomUUID() }, { ...headers, Origin: 'https://foreign.example' });
     expect(rejected.status).toBe(403);
-    expect(app.store.latestSequence()).toBe(before);
+    expect((await app.store.latestSequence())).toBe(before);
     expect((await post('/register', { ...credentials, name: 'blocked' }, { Origin: 'https://foreign.example' })).status).toBe(403);
   } finally {
     await web?.close();
     backend.closeAllConnections();
     await new Promise<void>((resolve, reject) => backend.close(error => error ? reject(error) : resolve()));
-    app.close();
+    (await app.close());await cleanupTestDatabases();
   }
 });

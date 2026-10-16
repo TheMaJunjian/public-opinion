@@ -85,6 +85,7 @@ export interface MessageState {
   messageId: string; revision: number; suppressed: boolean;
   supportCount: number; oppositionCount: number; recommendationTotal: number;
   executedStance?: ExecutedStance;
+  membershipActive?: boolean;
 }
 export interface Change {
   sequence: number; messages: Message[]; memberships: Membership[];

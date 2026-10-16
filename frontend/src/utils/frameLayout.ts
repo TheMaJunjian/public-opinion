@@ -108,7 +108,11 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     const children: Item[] = [];
     for (const child of frame.directCardIds) if (owners.get(child) === id) children.push(measure(child));
     for (const child of frame.childRelMsgIds) if (parents.get(child) === id) children.push(measure(child));
-    children.sort(order);
+    const declared=messages.get(id)?.parts?.some(part=>part.type==='display');
+    if(declared&&(frame.targetLayout==='single-row'||frame.targetLayout==='single-column')) {
+      const positions=new Map([...frame.cardIds].map((member,index)=>[member,index]));
+      children.sort((a,b)=>(positions.get(a.id)??Infinity)-(positions.get(b.id)??Infinity)||order(a,b));
+    } else children.sort(order);
     const columns = [...new Set(children.map(child => child.column))].sort((a, b) => a - b);
     const columnIndexes = new Map(columns.map((column, index) => [column, index]));
     item.column = columns[0] ?? item.column;

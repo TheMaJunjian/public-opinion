@@ -1,10 +1,13 @@
-import React, { type ComponentProps, type ReactNode } from 'react';
+import React, {useMemo, type ComponentProps, type ReactNode } from 'react';
+import RelatedMessages from '../../../components/RelatedMessages';
+import JoinRecordBadges from '../../../components/JoinRecordBadges';
+import {indexRelatedMessages,isRejectedContainer} from '../../../utils/relatedMessages';
 import { useNavigate } from 'react-router-dom';
 import MessageCard, { type MessageCardContext, type MessageCardProps } from '../../../components/MessageCard';
 import RoundHistory from '../../../components/RoundHistory';
 import SettlementPanel from '../../../components/SettlementPanel';
 import type { Relation } from '../../../types';
-import { getRelationTitle } from '../../../types';
+import { getOrganizationTitle } from '../../../utils/messageDisplay';
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import { messageScopePath } from '../../../utils/messageRoutes';
 import { type CorrectionVersion, type DemoEdge, type DemoMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
@@ -62,7 +65,10 @@ interface Props {
   cardHandlers: Pick<MessageCardProps, 'onClick' | 'onDoubleClick' | 'onMouseDown' | 'onMouseUp' | 'onContentMouseUp'>;
   scopeMessageId: string;
   onJoinFilter: (messageId: string, direction: 'incoming' | 'outgoing') => void;
+  onRemoveMember?: (joinId: string) => void;
   onNavigate: (messageId: string) => void;
+  onRelatedNavigate?:(messageId:string)=>void;
+  standaloneMessageIds?:ReadonlySet<string>;
   onCorrectionNavigate: (messageId: string, switchToList: boolean) => void;
   renderRelation: (message: DemoMessage) => ReactNode;
   renderContent: (message: DemoMessage) => ReactNode;
@@ -74,14 +80,16 @@ export default function WorkbenchMessageList(props: Props) {
     onNavigate: handleNavigateToMessage, onCorrectionNavigate: handleNavigateFromCorrectionTemporaryCategory,
     renderRelation: renderRelationContentWithTargets, renderContent: renderMessageContentWithAnchorsForList } = props;
   const { messages, edges, msgMap, relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds, summaryCoverageByMessageId, correctionVersions } = props.catalog;
-  const { tagSourceIdsForList, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts, correctionFilterTargetId, joinFilterTargetId } = props.display;
+  const { tagSourceIdsForList, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts, correctionFilterTargetId } = props.display;
   const { comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap, stanceEffectByRelMsgId } = props.comparison;
   const { draftUnits, activeTextSelectId, lastClickedMessageId } = props.selection;
+  const relatedByTarget=useMemo(()=>indexRelatedMessages(messages,rejectedContainerIds),[messages,rejectedContainerIds]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {messagesToRenderFiltered
         .filter(msg => !tagSourceIdsForList.has(msg.id))
+        .filter(msg=>!isRejectedContainer(msg,rejectedContainerIds)||props.standaloneMessageIds?.has(msg.id))
         .map(msg => {
           const isWholeSelected = draftUnits.some(u => isWholeMessageSelection(u, msg.id));
           const isActiveText = activeTextSelectId === msg.id;
@@ -96,7 +104,7 @@ export default function WorkbenchMessageList(props: Props) {
           const memberCount = isOrganizationMessage
             ? collectOwnedByRelation(msg.id, relationById).textIds.size
             : 0;
-          const organizationTitle = isOrganizationMessage ? (getRelationTitle(msg.relationPayload) || (isClassification ? `分类（${memberCount}）` : isMerge ? `归并（${memberCount}）` : `总结（${memberCount}）`)) : "";
+          const organizationTitle = isOrganizationMessage ? getOrganizationTitle(msg, memberCount) : "";
           const summaryCoverages = summaryCoverageByMessageId.get(msg.id) ?? [];
           const settleTargetId = msg.settlementTargetId;
           const targetMsg = settleTargetId ? msgMap.get(settleTargetId) : undefined;
@@ -181,6 +189,7 @@ export default function WorkbenchMessageList(props: Props) {
 
           return (
             <MessageCard
+              relatedMessages={<RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedNavigate??handleNavigateToMessage}/>}
               selectedUnits={draftUnits}
               key={msg.id} msg={msg} ctx={ctx}
               onClick={cardHandlers.onClick}
@@ -250,19 +259,14 @@ export default function WorkbenchMessageList(props: Props) {
                   <div style={{ fontSize: 10, color: "#6b7280", textAlign: "right", width: "100%" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 1, minWidth: 0, width: "100%", gap: 8, flexWrap: "nowrap", whiteSpace: "nowrap", overflow: "hidden" }}>
                     <div style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0, overflow: "hidden" }}>
-                      {outgoingJoinRelations.length > 0 && (
+                      <JoinRecordBadges messageId={msg.id} memberRecords={relatedJoinRelations} containerRecords={outgoingJoinRelations}
+                        isContainer={isOrganizationMessage} isEffective={join => effectiveJoinRelationIds.has(join.id)} onOpen={onJoinFilter}/>
+                      {effectiveJoinCount === 1 && props.onRemoveMember && (
                         <button
-                          onClick={(event) => { event.stopPropagation(); onJoinFilter(msg.id, 'outgoing'); }}
-                          title="筛选显示该容器发出的全部加入消息"
-                          style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(16,185,129,0.14)", color: "#a7f3d0", border: "1px solid rgba(16,185,129,0.4)", cursor: "pointer" }}
-                        >加入消息：{outgoingJoinRelations.length} 条</button>
-                      )}
-                      {relatedJoinRelations.length > 0 && (
-                        <button
-                          onClick={(event) => { event.stopPropagation(); onJoinFilter(msg.id, 'incoming'); }}
-                          title="筛选显示把此消息加入容器的全部加入消息"
-                          style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinFilterTargetId === msg.id ? "rgba(59,130,246,0.28)" : "rgba(59,130,246,0.14)", color: "#bfdbfe", border: "1px solid rgba(59,130,246,0.4)", cursor: "pointer" }}
-                        >被加入消息：{effectiveJoinCount} 条生效</button>
+                          onClick={event => { event.stopPropagation(); props.onRemoveMember?.(relatedJoinRelations.find(join => effectiveJoinRelationIds.has(join.id))!.id); }}
+                          title="选择反对此次加入；发送后恢复到此前仍有效的归属"
+                          style={{ flexShrink: 0, fontSize: 10, padding: '1px 6px', borderRadius: 4, border: '1px solid #7f1d1d', background: '#451a1a', color: '#fca5a5', cursor: 'pointer' }}
+                        >移出容器</button>
                       )}
                     </div>
                     <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
@@ -288,10 +292,10 @@ export default function WorkbenchMessageList(props: Props) {
               }
               badges={
                 <>
-                  {msg.kind === "join" && joinRelation && joinIsEffective && (
+                  {msg.kind === "join" && joinRelation && (
                     <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                       <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>
-                        生效
+                        {joinIsEffective ? '生效' : '未生效'}
                       </span>
                     </div>
                   )}

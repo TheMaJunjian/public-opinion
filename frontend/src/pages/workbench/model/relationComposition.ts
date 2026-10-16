@@ -5,7 +5,7 @@ import type { DemoMessage, RelationType } from '../../../utils/modelBridge';
 export const ALL_RELATION_TYPES: RelationType[] = [
   'annotation', 'reference', 'reply', 'notify', 'agree', 'disagree', 'tag', 'arrange',
   'correct', 'classify', 'merge', 'summary',
-  'proposal', 'delegation', 'code_change', 'operations', 'authorize',
+  'proposal', 'delegation', 'code_change', 'operations',
 ];
 
 export const MAX_TAG_LABEL_DISPLAY_LENGTH = 20;

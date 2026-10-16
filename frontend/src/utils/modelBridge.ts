@@ -11,9 +11,17 @@ export const READABLE_RELATION_TYPES = new Set([
 ]);
 
 /** Message kinds that are rendered as readable cards in the graph. */
+export function hasReadableMessageContent(message: {relationType?:string;parts?:Part[]}) {
+  const type=message.relationType?.toLowerCase()??'';
+  // Organization bodies belong to their scope card or frame header.
+  if(type==='merge'||type==='arrange'||type==='correct')return false;
+  const metadata=message.parts?.some(part=>part.type==='data'&&part.value&&typeof part.value==='object'&&!Array.isArray(part.value)&&'legacyTopicId' in part.value&&part.value.kind==='RELATION');
+  if(metadata&&!READABLE_RELATION_TYPES.has(type)&&type!=='correct')return false;
+  return !!message.parts?.some(part => part.type === 'text' && part.text.trim().length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend');
+}
 export function isCardMessage(message: { kind: MessageKind; relationType?: string; parts?: Part[] } | undefined): boolean {
   return !!message && (isContentKind(message.kind)
-    || message.parts?.some(part => part.type === 'text' && part.text.length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend')
+    || hasReadableMessageContent(message)
     || (message.kind === 'relation' && READABLE_RELATION_TYPES.has((message.relationType ?? '').toLowerCase())));
 }
 
@@ -82,6 +90,7 @@ export type DemoMessage = {
   relationType?: RelationType;
   relationPayload?: RelationPayload;
   targetRefs?: TargetRef[];
+  declaredTargetRefs?:TargetRef[];
   /** Join info for container-add records (加入容器消息) */
   joinInfo?: {
     containerId: string;
@@ -211,7 +220,7 @@ export function kindLabel(backendKind: string, _targetRefs?: any, settlementType
   const labels: Record<string, string> = {
     TEXT: '[文本消息]',
     GOVERNANCE: '🏛️ 治理提案\n—— 可投票/讨论/结算',
-    CODE: '💻 代码\n—— 代码变更需按当前规则授权生效',
+    CODE: '💻 代码\n—— 修改代码并部署后生效',
     OPERATIONS: '📊 运营\n—— 收入、统计等程序运营信息',
     ROUND: isValue
       ? '💎 发起价值仲裁\n—— 推荐/冷藏标注进入投票\n双击卡片查看结算详情'
@@ -243,6 +252,7 @@ export function convertMessagesToDemoModel(
   relations: BackendRelation[]
 ): { messages: DemoMessage[]; edges: DemoEdge[] } {
   const msgContentMap = new Map(messages.map(m => [m.id, m.content]));
+  const messageById=new Map(messages.map(message=>[message.id,message]));
   // Build a set of relation IDs to detect when sourceMessageId references a relation message.
   const relationIds = new Set(relations.map(r => r.id));
   const relationById = new Map(relations.map(relation => [relation.id, relation]));
@@ -278,6 +288,7 @@ export function convertMessagesToDemoModel(
       relationType: ((m as any).relationType ?? persistedRelation?.relationType)?.toLowerCase() as RelationType | undefined,
       relationPayload: (m as any).relationPayload ?? persistedRelation?.payload ?? undefined,
       targetRefs: (m as any).targetRefs ?? persistedRelation?.targetRefs ?? undefined,
+      declaredTargetRefs:m.declaredTargetRefs??persistedRelation?.declaredTargetRefs,
   }});
 
   const demoEdges: DemoEdge[] = [];
@@ -291,7 +302,7 @@ export function convertMessagesToDemoModel(
     // Governance relations are persisted as content messages. The API may
     // still expose a compatibility relation projection, but it must not
     // create a second card for the same backend entity.
-    const persistedMessage = messages.find(message => message.id === rel.id);
+    const persistedMessage = messageById.get(rel.id);
     if (persistedMessage && (persistedMessage as any).kind !== 'RELATION') seenRelMsgIds.add(rel.id);
 
     // JOIN relations: internal membership records — skip edge creation.
@@ -351,6 +362,7 @@ export function convertMessagesToDemoModel(
         relationType: relType as RelationType,
         relationPayload: rel.payload,
         targetRefs: rel.targetRefs,
+        declaredTargetRefs:rel.declaredTargetRefs,
         sourceMessageId: rel.sourceMessageId,
         sourceRefs: rel.sourceRefs,
         joinInfo,

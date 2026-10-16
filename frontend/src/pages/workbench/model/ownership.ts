@@ -1,133 +1,151 @@
 import type { Relation, TargetRef } from '../../../types';
-import { normalizeContainerTargetRef, targetIsOwnedByContainer } from './containerTargets';
-import { getEffectiveJoinRelationIds } from './membership';
-import { getRelationTargetIds } from './relationComposition';
+import { getEffectiveJoinByTarget } from './membership';
+type ContainerRelation = Pick<Relation,'id'|'relationType'|'sourceMessageId'|'targetRefs'> & Partial<Pick<Relation,'payload'|'state'|'createdAt'>>;
+const containerTypes=new Set(['CLASSIFY','SUMMARY','MERGE','ARRANGE']);
 
-export function collectContainerVisibleIds(
-  containerId: string,
-  relations: Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs'>[],
-  rejectedContainerIds: Set<string> = new Set(),
-  rejectedJoinRelationIds: Set<string> = new Set(),
-): { textIds: Set<string>; relationIds: Set<string> } {
-  const textIds = new Set<string>();
-  const relationIds = new Set<string>();
-  const effectiveJoinRelationIds = getEffectiveJoinRelationIds([...relations], rejectedContainerIds, rejectedJoinRelationIds);
-  const container = relations.find(r => r.id === containerId);
-  if (!container) return { textIds, relationIds };
-
-  const containerType = container.relationType?.toUpperCase();
-  if (containerType === 'ARRANGE' && container.sourceMessageId) {
-    textIds.add(container.sourceMessageId);
+/** Build once per traversal. Avoid scanning every relation for every member. */
+function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejectedJoins:Set<string>) {
+  const byId=new Map(relations.map(relation=>[relation.id,relation]));
+  const normalize=(ref:TargetRef):TargetRef=>ref.kind!=='relation'&&containerTypes.has(byId.get(ref.messageId)?.relationType?.toUpperCase()??'')?{kind:'relation',relationId:ref.messageId}:ref;
+  const key=(ref:TargetRef)=>{const normalized=normalize(ref);return normalized.kind==='relation'?`r:${normalized.relationId}`:`m:${normalized.messageId}`;};
+  const effective=getEffectiveJoinByTarget(relations,rejected,rejectedJoins);
+  const releasedJoins=new Map<string,Map<string,string>>();
+  const effectiveFor=(id:string)=>{
+    // Native membership is restored by its history, never by flattening the
+    // rejected container's declarations back into its current parent.
+    if (byId.get(id)?.payload?.independentMemberships || (bySource.get(id) ?? []).some(join => join.payload?.membershipHistory)) return effective;
+    if(!rejected.has(id))return effective;
+    let joins=releasedJoins.get(id);
+    if(!joins){const parents=new Set(rejected);parents.delete(id);joins=getEffectiveJoinByTarget(relations,parents,rejectedJoins);releasedJoins.set(id,joins);}
+    return joins;
+  };
+  const bySource=new Map<string,ContainerRelation[]>(),byTarget=new Map<string,ContainerRelation[]>();
+  for(const relation of relations) if(relation.relationType?.toUpperCase()==='JOIN') {
+    if(relation.sourceMessageId) (bySource.get(relation.sourceMessageId)??(bySource.set(relation.sourceMessageId,[]),bySource.get(relation.sourceMessageId)!)).push(relation);
+    for(const ref of relation.targetRefs??[]) (byTarget.get(key(ref))??(byTarget.set(key(ref),[]),byTarget.get(key(ref))!)).push(relation);
   }
-
-  for (const ref of container.targetRefs ?? []) {
-    if (!targetIsOwnedByContainer(containerId, ref, relations, effectiveJoinRelationIds)) continue;
-    const normalizedRef = normalizeContainerTargetRef(ref, relations);
-    if (normalizedRef.kind === 'relation') {
-      relationIds.add(normalizedRef.relationId);
-    } else {
-      textIds.add(normalizedRef.messageId);
+  const direct=(id:string)=>{
+    const textIds=new Set<string>(),relationIds=new Set<string>(),relation=byId.get(id);
+    const add=(ref:TargetRef)=>{const normalized=normalize(ref);if(normalized.kind==='relation')relationIds.add(normalized.relationId);else textIds.add(normalized.messageId);};
+    if(!relation)return {textIds,relationIds};
+    const memberJoins=effectiveFor(id);
+    if(relation.relationType?.toUpperCase()==='ARRANGE'&&relation.sourceMessageId)textIds.add(relation.sourceMessageId);
+    for(const ref of relation.targetRefs??[]) {
+      if (relation.payload?.independentMemberships) continue;
+      const joins=byTarget.get(key(ref));
+      const targetId=ref.kind==='relation'?ref.relationId:ref.messageId;
+      if(!joins?.length||joins.some(join=>join.sourceMessageId===id&&memberJoins.get(targetId)===join.id))add(ref);
     }
-  }
-
-  for (const relation of relations) {
-    if (relation.relationType?.toUpperCase() !== 'JOIN') continue;
-    if (relation.sourceMessageId !== containerId) continue;
-    if (rejectedContainerIds.has(relation.id)) continue;
-    if (rejectedContainerIds.has(relation.sourceMessageId)) continue;
-    if (rejectedJoinRelationIds.has(relation.id)) continue;
-    if (!effectiveJoinRelationIds.has(relation.id)) continue;
-    for (const ref of relation.targetRefs ?? []) {
-      const normalizedRef = normalizeContainerTargetRef(ref, relations);
-      if (normalizedRef.kind === 'relation') {
-        relationIds.add(normalizedRef.relationId);
-      } else {
-        textIds.add(normalizedRef.messageId);
-      }
-    }
-  }
-
-  return { textIds, relationIds };
+    for(const join of bySource.get(id)??[]) for(const ref of join.targetRefs??[])if(memberJoins.get(ref.kind==='relation'?ref.relationId:ref.messageId)===join.id)add(ref);
+    return {textIds,relationIds};
+  };
+  return {byId,direct};
 }
 
-export function collectOwnedByRelation(
-  relationId: string,
-  relationById: Map<string, Relation>,
-  visited = new Set<string>(),
-  rejectedContainerIds?: Set<string>,
-  rejectedJoinRelationIds?: Set<string>,
-): { textIds: Set<string>; relationIds: Set<string> } {
-  const textIds = new Set<string>();
-  const relationIds = new Set<string>();
-  if (visited.has(relationId)) return { textIds, relationIds };
-  visited.add(relationId);
-  const relation = relationById.get(relationId);
-  if (!relation) return { textIds, relationIds };
-  const effectiveJoinRelationIds = getEffectiveJoinRelationIds([...relationById.values()], rejectedContainerIds ?? new Set(), rejectedJoinRelationIds ?? new Set());
+export function collectContainerVisibleIds(containerId:string,relations:ContainerRelation[],rejectedContainerIds=new Set<string>(),rejectedJoinRelationIds=new Set<string>()) {
+  return ownershipIndex(relations,rejectedContainerIds,rejectedJoinRelationIds).direct(containerId);
+}
 
-  for (const targetRef of relation.targetRefs ?? []) {
-    if (!targetIsOwnedByContainer(relationId, targetRef, [...relationById.values()], effectiveJoinRelationIds)) continue;
-    const normalizedRef = normalizeContainerTargetRef(targetRef, [...relationById.values()]);
-    if (normalizedRef.kind === 'relation') relationIds.add(normalizedRef.relationId);
-    else textIds.add(normalizedRef.messageId);
-  }
-  const relType = relation.relationType.toUpperCase();
-  if (relType === 'ARRANGE' && relation.sourceMessageId) {
-    textIds.add(relation.sourceMessageId);
-  }
-  for (const childRelationId of getRelationTargetIds(relation.targetRefs)) {
-    relationIds.add(childRelationId);
-    const child = relationById.get(childRelationId);
-    if (!child) continue;
-    const childType = child.relationType.toUpperCase();
-    if (childType !== 'CLASSIFY' && childType !== 'MERGE' && childType !== 'ARRANGE' && childType !== 'SUMMARY') continue;
+export function collectOwnedByRelation(relationId:string,relationById:Map<string,Relation>,visited=new Set<string>(),rejectedContainerIds=new Set<string>(),rejectedJoinRelationIds=new Set<string>()) {
+  return createContainerOwnership([...relationById.values()],rejectedContainerIds,rejectedJoinRelationIds).owned(relationId,visited);
+}
 
-    // Skip "加入" relations whose parent container is rejected —
-    // their targets return to the parent canvas instead of being owned here.
-    if (rejectedContainerIds && rejectedContainerIds.size > 0) {
-      // A child with sourceMessageId is a "加入" relation (any container type).
-      // If its parent container is rejected, the membership is dissolved.
-      if (child.sourceMessageId && rejectedContainerIds.has(child.sourceMessageId)) {
-        continue;
-      }
-      // Skip child containers that are themselves rejected.
-      if (rejectedContainerIds.has(childRelationId)) {
-        continue;
-      }
+/** One consistent membership index for a real or simulated organization state. */
+export function createContainerOwnership(relations:ContainerRelation[],rejectedContainerIds=new Set<string>(),rejectedJoinRelationIds=new Set<string>()) {
+  const index=ownershipIndex(relations,rejectedContainerIds,rejectedJoinRelationIds);
+  const cached=new Map<string,{textIds:Set<string>;relationIds:Set<string>}>();
+  const owned=(relationId:string,visited=new Set<string>())=>{
+  const cacheable=visited.size===0;
+  if(cacheable&&cached.has(relationId))return cached.get(relationId)!;
+  const result={textIds:new Set<string>(),relationIds:new Set<string>()};
+  const visit=(id:string)=>{
+    if(visited.has(id))return;
+    visited.add(id);
+    const direct=index.direct(id);
+    for(const text of direct.textIds)result.textIds.add(text);
+    for(const childId of direct.relationIds) {
+      result.relationIds.add(childId);
+      const child=index.byId.get(childId);
+      // Rejection dissolves this child into its parent canvas, not out of all
+      // ancestor scopes. Ancestors must still own the released descendants.
+      if(!child||!containerTypes.has(child.relationType.toUpperCase()))continue;
+      visit(childId);
     }
-    if (rejectedJoinRelationIds && rejectedJoinRelationIds.size > 0 && rejectedJoinRelationIds.has(childRelationId)) {
-      continue;
+  };
+  visit(relationId);
+  if(cacheable)cached.set(relationId,result);
+  return result;
+  };
+  const active=(type:string,scopeOwners?:ReadonlySet<string>)=>{
+    const result={textIds:new Set<string>(),relationIds:new Set<string>()};
+    for(const relation of relations){
+      if(relation.relationType.toUpperCase()!==type.toUpperCase()||rejectedContainerIds.has(relation.id)||(scopeOwners&&!scopeOwners.has(relation.id)))continue;
+      const members=owned(relation.id);
+      members.textIds.forEach(id=>result.textIds.add(id));
+      members.relationIds.forEach(id=>result.relationIds.add(id));
     }
-
-    const nested = collectOwnedByRelation(childRelationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds);
-    nested.textIds.forEach(id => textIds.add(id));
-    nested.relationIds.forEach(id => relationIds.add(id));
-  }
-
-  for (const joinRel of relationById.values()) {
-    if (joinRel.id === relationId) continue;
-    if (joinRel.relationType?.toUpperCase() !== 'JOIN') continue;
-    if (joinRel.sourceMessageId !== relationId) continue;
-    if (rejectedContainerIds && rejectedContainerIds.size > 0 && rejectedContainerIds.has(joinRel.id)) continue;
-    if (rejectedJoinRelationIds && rejectedJoinRelationIds.size > 0 && rejectedJoinRelationIds.has(joinRel.id)) continue;
-    if (!effectiveJoinRelationIds.has(joinRel.id)) continue;
-    for (const targetRef of joinRel.targetRefs ?? []) {
-      const normalizedRef = normalizeContainerTargetRef(targetRef, [...relationById.values()]);
-      if (normalizedRef.kind === 'message' || normalizedRef.kind === 'text-fragment') {
-        textIds.add(normalizedRef.messageId);
-      } else if (normalizedRef.kind === 'relation') {
-        relationIds.add(normalizedRef.relationId);
-        const targetRelation = relationById.get(normalizedRef.relationId);
-        if (targetRelation && (targetRelation.relationType?.toUpperCase() === 'CLASSIFY' || targetRelation.relationType?.toUpperCase() === 'MERGE' || targetRelation.relationType?.toUpperCase() === 'ARRANGE' || targetRelation.relationType?.toUpperCase() === 'SUMMARY')) {
-          const nested = collectOwnedByRelation(normalizedRef.relationId, relationById, visited, rejectedContainerIds, rejectedJoinRelationIds);
-          nested.textIds.forEach(id => textIds.add(id));
-          nested.relationIds.forEach(id => relationIds.add(id));
-        }
+    return result;
+  };
+  const released=(id:string)=>{
+    const result={textIds:new Set<string>(),relationIds:new Set<string>()},visited=new Set<string>();
+    const visit=(parent:string)=>{
+      if(visited.has(parent))return;visited.add(parent);
+      const direct=index.direct(parent);
+      direct.textIds.forEach(member=>result.textIds.add(member));
+      for(const member of direct.relationIds){
+        result.relationIds.add(member);
+        const type=index.byId.get(member)?.relationType.toUpperCase();
+        if(type==='MERGE'||type==='ARRANGE'||rejectedContainerIds.has(member))visit(member);
       }
+    };
+    visit(id);return result;
+  };
+  return {direct:index.direct,owned,active,released};
+}
+
+export type ContainerOwnership=ReturnType<typeof createContainerOwnership>;
+
+interface FindContainingClassificationInput {
+  relationById: Map<string,Relation>;
+  relations: Relation[];
+  rejectedContainerIds: Set<string>;
+  rejectedJoinRelationIds: Set<string>;
+}
+
+export function findContainingClassification(dependencies: FindContainingClassificationInput, messageId: string): string | null {
+  const { relationById, relations, rejectedContainerIds, rejectedJoinRelationIds } = dependencies;
+  const targetRelation = relationById.get(messageId);
+  let anchorId = messageId;
+  if (targetRelation) {
+    const relationType = targetRelation.relationType.toUpperCase();
+    const sourceId = targetRelation.sourceMessageId ?? null;
+    const firstTarget = (targetRelation.targetRefs ?? []).find(ref =>
+      ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation',
+    );
+    const targetId = firstTarget?.kind === 'relation'
+      ? firstTarget.relationId
+      : firstTarget?.messageId;
+    if (['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT'].includes(relationType)) {
+      anchorId = sourceId || messageId;
+    } else if (['AGREE', 'DISAGREE', 'TAG'].includes(relationType)) {
+      anchorId = targetId || messageId;
     }
   }
-
-  return { textIds, relationIds };
+  let match: { id: string; size: number } | null = null;
+  for (const relation of relations) {
+    if (!['CLASSIFY', 'SUMMARY'].includes(relation.relationType) || rejectedContainerIds.has(relation.id)) continue;
+    const owned = collectOwnedByRelation(
+      relation.id,
+      relationById,
+      new Set(),
+      rejectedContainerIds,
+      rejectedJoinRelationIds,
+    );
+    if (!owned.textIds.has(anchorId) && !owned.relationIds.has(anchorId)) continue;
+    const size = owned.textIds.size + owned.relationIds.size;
+    if (!match || size < match.size) match = { id: relation.id, size };
+  }
+  return match?.id ?? null;
 }
 
 /**

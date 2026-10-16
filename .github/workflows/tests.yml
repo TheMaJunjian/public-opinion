@@ -19,6 +19,8 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Start PostgreSQL for integration tests
+        run: npm run db:up
       - run: npm test
       - name: Build deployment image
         run: docker build -t gonglun:ci .

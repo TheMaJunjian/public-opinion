@@ -15,11 +15,35 @@ const category: DemoMessage = {
 afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); });
 
 describe('visible organization card elements', () => {
+  it('keeps whitespace beside JOIN badges navigable after leaving and returning to a classification card',()=>{
+    const navigate=vi.fn(),select=vi.fn(),openRecords=vi.fn();
+    const join={id:'join-leaf',relationType:'JOIN',sourceMessageId:category.id,targetRefs:[{kind:'message' as const,messageId:'leaf'}],createdAt:'2026-01-01',createdBy:{id:'u',username:'甲',createdAt:''}};
+    const card=(isWhole:boolean)=><ClassificationCard msg={category} selectedUnits={[]} box={{x:0,y:0,width:340}}
+      targetCount={1} title={category.content} activeText={false} isWhole={isWhole} isActive={false} isStanceTarget={false}
+      homeLabel={null} relatedJoinRelations={[]} outgoingJoinRelations={[join]} isJoinEffective={()=>true}
+      cardRef={null} headerRef={null} contentRef={null} onMessageClick={select} onMessageDoubleClick={navigate}
+      onMessageMouseDown={select} onMessageMouseUp={select} onTextMouseUp={vi.fn()} onJoinFilterClick={openRecords}/>;
+    const view=render(card(false));
+    const blankRow=()=>view.getByRole('button',{name:'查看被加入消息（1条）'}).parentElement!;
+    fireEvent.click(blankRow());view.rerender(card(true));fireEvent.click(blankRow());
+    fireEvent.doubleClick(blankRow());
+    expect(navigate).toHaveBeenCalledOnce();expect(navigate.mock.calls[0][1]).toBe(category.id);
+    expect(openRecords).not.toHaveBeenCalled();
+    view.rerender(<div>分类内容</div>);view.rerender(card(false));
+    navigate.mockClear();select.mockClear();
+    fireEvent.mouseDown(blankRow());fireEvent.mouseUp(blankRow());fireEvent.doubleClick(blankRow());
+    expect(navigate).toHaveBeenCalledOnce();expect(select).toHaveBeenCalledTimes(2);
+    navigate.mockClear();select.mockClear();
+    const badge=view.getByRole('button',{name:'查看被加入消息（1条）'});
+    fireEvent.mouseDown(badge);fireEvent.mouseUp(badge);fireEvent.click(badge);fireEvent.doubleClick(badge);
+    expect(openRecords).toHaveBeenCalledWith(category.id,'outgoing');
+    expect(navigate).not.toHaveBeenCalled();expect(select).not.toHaveBeenCalled();
+  });
   it('navigates consistently when double-clicking classification title, visible labels or card padding', () => {
     const navigate = vi.fn();
     const { getByText, getByRole, container } = render(<ClassificationCard msg={category} selectedUnits={[]} box={{ x: 0, y: 0, width: 340 }}
       targetCount={1} title={category.content} activeText={false} isWhole={false} isActive={false} isStanceTarget={false}
-      homeLabel={null} relatedJoinRelations={[]} outgoingJoinRelations={[]} validJoinCount={0} invalidJoinCount={0}
+      homeLabel={null} relatedJoinRelations={[]} outgoingJoinRelations={[]} isJoinEffective={()=>false}
       cardRef={null} headerRef={null} contentRef={null} onMessageClick={vi.fn()} onMessageDoubleClick={navigate} onTextMouseUp={vi.fn()} />);
     fireEvent.doubleClick(getByText(category.content));
     fireEvent.doubleClick(container.querySelector('[data-msgid]')!);

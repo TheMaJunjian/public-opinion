@@ -21,6 +21,8 @@ export const partsSchema=z.array(part).min(1).max(64).superRefine((parts,ctx)=>{
 export const sendSchema=z.object({requestId:identifier,parts:partsSchema,recommendation:safe.optional(),wager:safe.optional(),selfStance:z.enum(['pro','con']).optional()}).strict();
 export function parseSend(input:unknown):SendInput {
   const parsed=sendSchema.parse(input);
+  if (parsed.parts.some(part => ['membership-history', 'organization-memberships'].includes(part.id)))
+    throw new DomainError('归属执行记录由服务器生成');
   if(JSON.stringify(parsed).length>100000) throw new DomainError('消息过大');
   validateJson(parsed); return parsed as SendInput;
 }
@@ -32,15 +34,21 @@ export function validateJson(value:unknown,depth=0):void {
     validateJson(child,depth+1);
   }
 }
-export function readReference(store:Store,ref:Reference):unknown {
-  const value=resolveReference(ref,(messageId,revision)=>store.message(messageId,revision));
-  if(value===undefined) throw new DomainError('引用部件、路径或文本范围不存在');
-  return value;
+export async function readReference(store: Store, ref: Reference): Promise<unknown> {
+    const message = await store.message(ref.messageId, ref.revision);
+    const value = resolveReference(ref, () => message);
+    if (value === undefined)
+        throw new DomainError('引用部件、路径或文本范围不存在');
+    return value;
 }
-export function validateReferences(store:Store,parts:Part[]):void {
-  for(const part of parts) {
-    if(part.type==='relation')for(const bindings of Object.values(part.roles))for(const binding of bindings)readReference(store,binding.reference);
-    if(part.type==='display'&&part.target)readReference(store,part.target);
-  }
+export async function validateReferences(store: Store, parts: Part[]): Promise<void> {
+    for (const part of parts) {
+        if (part.type === 'relation')
+            for (const bindings of Object.values(part.roles))
+                for (const binding of bindings)
+                    await readReference(store, binding.reference);
+        if (part.type === 'display' && part.target)
+            await readReference(store, part.target);
+    }
 }
 export const rulesSchema=z.object({version:safe.min(1),protocolFee:safe.min(1),initialGrant:safe,operatingReserve:safe,lowQualityPenalty:safe,settlementDelayMs:safe.max(30*86400000),contributionWeights:z.object({content:safe,relation:safe,agreement:safe,evidence:safe,duplicate:safe,earlyBonus:safe,earlyWindow:safe,unrecognizedAuthorCap:safe}).strict()}).strict();

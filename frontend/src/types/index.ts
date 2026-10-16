@@ -37,6 +37,7 @@ export interface Message {
   relationType?: RelationType | null;
   relSourceId?: string | null;
   targetRefs?: TargetRef[];
+  declaredTargetRefs?:TargetRef[];
   relationPayload?: RelationPayload | null;
 }
 
@@ -114,6 +115,8 @@ export type TargetRef = ({ reference?: Reference } & (
 export type RelationTargetLayout = 'single-column' | 'multi-column' | 'single-row';
 
 export interface RelationPayload {
+  independentMemberships?: boolean;
+  membershipHistory?: import('@gonglun/core').MembershipAction;
   label?: string;
   title?: string;
   targetLayout?: RelationTargetLayout;
@@ -153,6 +156,7 @@ export interface Relation {
    */
   sourceMessageId: string | null;
   targetRefs: TargetRef[];
+  declaredTargetRefs?:TargetRef[];
   payload?: RelationPayload;
   createdAt: string;
   createdBy: User;

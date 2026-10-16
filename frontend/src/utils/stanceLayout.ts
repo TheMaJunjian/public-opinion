@@ -1,5 +1,6 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import { needsSeparateStanceCard } from './messageDisplay';
+import { hasReadableMessageContent } from './modelBridge';
 
 /** Execution locations are separate from the edges a user actually selected.
  * Keeping the original edges intact preserves trace, selection and reference chains.
@@ -11,9 +12,7 @@ export function projectStanceLayoutEdges(messages: DemoMessage[], edges: DemoEdg
     const relation = byId.get(edge.relationMessageId);
     const execution = relation?.executedStance;
     if (!execution) return edge;
-    const sourceId = edge.from.messageId.startsWith('anon:') && relation && (needsSeparateStanceCard(relation, byId) || relation.parts?.some(part =>
-      part.type === 'text' ? part.text.trim() : part.type === 'code' ? part.source.trim() : part.type === 'web' ? part.excerpt.trim() : false,
-    )) ? relation.id : edge.from.messageId;
+    const sourceId = edge.from.messageId.startsWith('anon:') && relation && (needsSeparateStanceCard(relation, byId) || hasReadableMessageContent(relation)) ? relation.id : edge.from.messageId;
     return {
       ...edge,
       relationType: execution.side === 'pro' ? 'agree' : 'disagree',

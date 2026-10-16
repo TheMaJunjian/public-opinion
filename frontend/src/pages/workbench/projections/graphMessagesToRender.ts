@@ -6,11 +6,11 @@ import type {
 } from "../../../utils/modelBridge";
 import { isContentKind } from "../../../utils/modelBridge";
 import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from "../../../utils/traceProjection";
-import { collectContainerVisibleIds } from '../model/ownership';
-import { getRelationTargetIds, getTextTargetIds } from '../model/relationComposition';
+import { collectContainerVisibleIds,collectOwnedByRelation,type ContainerOwnership } from '../model/ownership';
 import type { TraceEntry } from "../types";
 
 interface DeriveGraphMessagesToRenderInput {
+  containerOwnership?: ContainerOwnership;
   traceEntries: TraceEntry[];
   messagesToShow: DemoMessage[];
   messages: DemoMessage[];
@@ -44,6 +44,8 @@ interface DeriveGraphMessagesToRenderInput {
 
 export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderInput): { graphMessagesToRender: DemoMessage[]; graphEdgesToRender: DemoEdge[]; listMessagesToRender: DemoMessage[]; listEdgesToRender: DemoEdge[]; hideMessageIds?: undefined; } | { graphMessagesToRender: DemoMessage[]; graphEdgesToRender: DemoEdge[]; listMessagesToRender: DemoMessage[]; listEdgesToRender: DemoEdge[]; hideMessageIds: Set<string> | undefined; } {
   const { traceEntries, messagesToShow, messages, edgesToShow, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceDistance, traceExpandedFrameIds, isInsideClassify, currentClassifyRelMsgId, relationById, relations, rejectedContainerIds, rejectedJoinRelationIds, msgMap, activeClassifyOwnership, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifiedTargetTextIds, graphOwnedRelationIds, traceRelationMsgIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, activeSummaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds } = input;
+  const directMembers=(id:string)=>input.containerOwnership?.direct(id)??collectContainerVisibleIds(id,relations,rejectedContainerIds,rejectedJoinRelationIds);
+  const ownedMembers=(id:string)=>input.containerOwnership?.owned(id)??collectOwnedByRelation(id,relationById,new Set(),rejectedContainerIds,rejectedJoinRelationIds);
   // A trace entry owns the canvas projection immediately. The classify state
   // is cleared asynchronously when entering trace, so checking it here can
   // render the old sub-canvas together with the new trace window.
@@ -74,18 +76,19 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
   }
   if (isInsideClassify && currentClassifyRelMsgId && !useTraceWindow) {
     const classificationRelation = relationById.get(currentClassifyRelMsgId);
-    const containerVisible = collectContainerVisibleIds(currentClassifyRelMsgId, relations, rejectedContainerIds, rejectedJoinRelationIds);
+    const containerVisible = directMembers(currentClassifyRelMsgId);
     const classificationTextIds = new Set<string>(containerVisible.textIds);
     const classificationRelationIds = new Set<string>(containerVisible.relationIds);
     // Nested CLASSIFY/SUMMARY relations are opaque cards in the parent
-    // canvas. collectContainerVisibleIds recursively includes their text
-    // targets, so remove those descendants before building the projection.
-    for (const nestedRelationId of classificationRelationIds) {
+    // canvas. Remove their full ownership closure, including JOIN descendants.
+    for (const nestedRelationId of [...classificationRelationIds]) {
       const nestedRelation = relationById.get(nestedRelationId);
       const nestedType = nestedRelation?.relationType?.toUpperCase();
       if (nestedType !== 'CLASSIFY' && nestedType !== 'SUMMARY') continue;
-      const nestedVisible = collectContainerVisibleIds(nestedRelationId, relations, rejectedContainerIds, rejectedJoinRelationIds);
+      if(rejectedContainerIds.has(nestedRelationId)) continue;
+      const nestedVisible = ownedMembers(nestedRelationId);
       for (const textId of nestedVisible.textIds) classificationTextIds.delete(textId);
+      for (const relationId of nestedVisible.relationIds) classificationRelationIds.delete(relationId);
     }
     if (classificationRelation) {
       const queue = Array.from(classificationRelationIds);
@@ -118,11 +121,12 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
           // nested framing relations) is expanded inline.
           // CLASSIFY and SUMMARY targets are shown as scope cards but not expanded
           // (user must double-click to enter them).
-          getTextTargetIds(rel.targetRefs).forEach(id => classificationTextIds.add(id));
-          getRelationTargetIds(rel.targetRefs).forEach(id => {
+          const nestedVisible=directMembers(relId);
+          nestedVisible.textIds.forEach(id => classificationTextIds.add(id));
+          nestedVisible.relationIds.forEach(id => {
             classificationRelationIds.add(id);
             const childRelType = relationById.get(id)?.relationType?.toUpperCase();
-            if ((childRelType === 'ARRANGE' || childRelType === 'MERGE') && !visited.has(id)) {
+            if ((childRelType === 'ARRANGE' || childRelType === 'MERGE' || rejectedContainerIds.has(id)) && !visited.has(id)) {
               queue.push(id);
             }
             // CLASSIFY and SUMMARY remain as opaque scope cards.
@@ -134,11 +138,12 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
           // the current view; the user must double-click to enter them.
           // Exception: rejected classifies release their messages into the parent view.
           if (rejectedContainerIds.has(relId)) {
-            getTextTargetIds(rel.targetRefs).forEach(id => classificationTextIds.add(id));
-            getRelationTargetIds(rel.targetRefs).forEach(id => {
+            const nestedVisible=directMembers(relId);
+            nestedVisible.textIds.forEach(id => classificationTextIds.add(id));
+            nestedVisible.relationIds.forEach(id => {
               classificationRelationIds.add(id);
               const childRelType = relationById.get(id)?.relationType?.toUpperCase();
-              if ((childRelType === 'ARRANGE' || childRelType === 'MERGE') && !visited.has(id)) {
+              if ((childRelType === 'ARRANGE' || childRelType === 'MERGE' || rejectedContainerIds.has(id)) && !visited.has(id)) {
                 queue.push(id);
               }
             });
@@ -146,13 +151,24 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
         }
       }
     }
+    // Frames can introduce classifications through JOINs during expansion.
+    // Their descendants stay behind the classification card, including when
+    // an annotation in the surrounding Topic refers to those descendants.
+    const opaqueMembers=new Set<string>();
+    for(const id of [...classificationRelationIds]) {
+      const nested=relationById.get(id);
+      if(!nested||!['CLASSIFY','SUMMARY'].includes(nested.relationType.toUpperCase())||rejectedContainerIds.has(id))continue;
+      const owned=ownedMembers(id);
+      for(const member of owned.textIds){opaqueMembers.add(member);classificationTextIds.delete(member);}
+      for(const member of owned.relationIds){opaqueMembers.add(member);classificationRelationIds.delete(member);}
+    }
     for (const e of baseEdges) {
       if (!classificationRelationIds.has(e.relationMessageId)) continue;
       const relation = relationById.get(e.relationMessageId);
       if (relation?.relationType.toUpperCase() !== 'ANNOTATION') continue;
       for (const endpointId of [e.from.messageId, e.to.messageId]) {
         const endpoint = msgMap.get(endpointId);
-        if (endpoint && isContentKind(endpoint.kind)) classificationTextIds.add(endpointId);
+        if (endpoint && isContentKind(endpoint.kind)&&!opaqueMembers.has(endpointId)) classificationTextIds.add(endpointId);
       }
     }
     // Expand classificationTextIds with text messages that have CORRECT (更正) relations
@@ -173,7 +189,7 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
           if (e.from.messageId !== tid && e.to.messageId !== tid) continue;
           classificationRelationIds.add(e.relationMessageId);
           const other = e.from.messageId === tid ? e.to.messageId : e.from.messageId;
-          if (!classificationTextIds.has(other)) {
+          if (!classificationTextIds.has(other)&&!opaqueMembers.has(other)) {
             classificationTextIds.add(other);
             correctQ.push(other);
           }
@@ -188,6 +204,9 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
     }
     for (const [relMsgId, relEdges] of edgesByRel) {
       if (relMsgId === currentClassifyRelMsgId || classificationRelationIds.has(relMsgId)) continue;
+      // Organization membership is explicit. Sharing a visible endpoint must
+      // not pull an ancestor container back into its own descendant canvas.
+      if(getPresentationSpec(relEdges[0]?.relationType??'').isContainer)continue;
       const textEndpoints = relEdges
         .flatMap(e => [e.from.messageId, e.to.messageId])
         .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
@@ -236,10 +255,8 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
     // its hiddenTargetIds for covered messages.
     const classificationEdges = baseEdges.filter(e => {
       if (!visibleIds.has(e.relationMessageId)) return false;
-      // Inside a classify sub-canvas, exclude nested CLASSIFY/SUMMARY edges
-      // to prevent duplicate group frames.  The sub-canvas already renders
-      // nested classify relations as scope cards via classificationRelationIds.
-      if (isInsideClassify && (e.relationType === 'classify' || e.relationType === 'summary')) return false;
+      // Keep membership edges for counts and navigation. GraphView already
+      // renders nested classifications as opaque cards, not expanded frames.
       if (e.relationType === 'classify' || e.relationType === 'summary') return true;
       return (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
         visibleIds.has(e.to.messageId);
@@ -272,6 +289,42 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
     ...listExclusiveRelMsgIds,
     ...replacedRelationMsgIds,
   ]);
+  const directlyTracedFrameMemberIds = new Set<string>();
+  if (useTraceWindow) {
+    for (const edge of edges) {
+      if (!traceExpandedFrameIds.has(edge.relationMessageId)) continue;
+      if (!isTraceExpandableFrameType(edge.relationType)) continue;
+      if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
+      if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
+    }
+    for (const edge of edges) {
+      if (edge.relationType.toLowerCase() !== 'correct') continue;
+      if (!directlyTracedFrameMemberIds.has(edge.from.messageId) && !directlyTracedFrameMemberIds.has(edge.to.messageId)) continue;
+      if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
+      if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
+    }
+    for (const frameId of traceExpandedFrameIds) {
+      const expandedMembers = collectContainerVisibleIds(
+        frameId,
+        relations,
+        rejectedContainerIds,
+        rejectedJoinRelationIds,
+      );
+      expandedMembers.textIds.forEach(messageId => directlyTracedFrameMemberIds.add(messageId));
+    }
+    // Expansion exposes only the direct members of an explicitly expanded
+    // SUMMARY/CLASSIFY frame. MERGE and ARRANGE remain ordinary relations in
+    // trace mode and must not recursively expand through this path.
+    for (const frameId of traceExpandedFrameIds) {
+      for (const edge of edges) {
+        if (edge.relationMessageId !== frameId) continue;
+        for (const memberId of [edge.from.messageId, edge.to.messageId]) {
+          if (memberId.startsWith('anon:')) continue;
+          directlyTracedFrameMemberIds.add(memberId);
+        }
+      }
+    }
+  }
   const listMessages = skipClassifyHiding
     ? baseMessages
     : baseMessages.filter(m => {
@@ -369,42 +422,6 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
       owners.add(relationId);
       traceOpaqueMemberOwners.set(messageId, owners);
     });
-  }
-  const directlyTracedFrameMemberIds = new Set<string>();
-  if (useTraceWindow) {
-    for (const edge of edges) {
-      if (!traceExpandedFrameIds.has(edge.relationMessageId)) continue;
-      if (!isTraceExpandableFrameType(edge.relationType)) continue;
-      if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
-      if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
-    }
-    for (const edge of edges) {
-      if (edge.relationType.toLowerCase() !== 'correct') continue;
-      if (!directlyTracedFrameMemberIds.has(edge.from.messageId) && !directlyTracedFrameMemberIds.has(edge.to.messageId)) continue;
-      if (!edge.from.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.from.messageId);
-      if (!edge.to.messageId.startsWith('anon:')) directlyTracedFrameMemberIds.add(edge.to.messageId);
-    }
-    for (const frameId of traceExpandedFrameIds) {
-      const expandedMembers = collectContainerVisibleIds(
-        frameId,
-        relations,
-        rejectedContainerIds,
-        rejectedJoinRelationIds,
-      );
-      expandedMembers.textIds.forEach(messageId => directlyTracedFrameMemberIds.add(messageId));
-    }
-    // Expansion exposes only the direct members of an explicitly expanded
-    // SUMMARY/CLASSIFY frame. MERGE and ARRANGE remain ordinary relations in
-    // trace mode and must not recursively expand through this path.
-    for (const frameId of traceExpandedFrameIds) {
-      for (const edge of edges) {
-        if (edge.relationMessageId !== frameId) continue;
-        for (const memberId of [edge.from.messageId, edge.to.messageId]) {
-          if (memberId.startsWith('anon:')) continue;
-          directlyTracedFrameMemberIds.add(memberId);
-        }
-      }
-    }
   }
   const graphMessages = skipClassifyHiding && !useTraceWindow
     ? baseMessages

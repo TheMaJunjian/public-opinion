@@ -1,12 +1,13 @@
 import { applyMessageFilter, type MessageFilterSettings } from "../../../components/MessageFilterPanel";
 import type { CleanVisibleIds } from '../../../hooks/useCleanView';
 import type { Relation, User } from "../../../types";
+import {getPresentationSpec} from '../../../types';
 import type {
   DemoEdge,
   DemoMessage
 } from "../../../utils/modelBridge";
 import { computeEffectiveSuppressedRelIds } from "../../../utils/modelBridge";
-import { filterContainerEdgesByEffectiveJoins } from '../model/membership';
+import { filterContainerEdgesByEffectiveJoins,projectJoinMembershipEdges } from '../model/membership';
 
 interface DeriveNormalGraphProjectionInput {
   graphMessagesToRender: DemoMessage[];
@@ -38,13 +39,15 @@ export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionIn
   const scopedMessages = applyMessageFilter(homeScopedMessages, msgFilter);
   const filteredMessages = applyMessageFilter(homeScopedMessages, msgFilter);
   const suppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
-  const rawEdges = filterContainerEdgesByEffectiveJoins(
+  const declaredEdges = filterContainerEdgesByEffectiveJoins(
     graphEdgesToRender,
     relations,
     effectiveJoinRelationIds,
   );
+  const rawEdges=projectJoinMembershipEdges(declaredEdges,relations,effectiveJoinRelationIds,new Set(graphMessagesToRender.map(message=>message.id)));
+  const visibleContainerIds=new Set(scopedMessages.map(message=>message.id));
   const cleanEdges = cleanVisibleIds
-    ? rawEdges.filter(edge => cleanVisibleIds.visibleRelIds.has(edge.relationMessageId))
+    ? rawEdges.filter(edge => cleanVisibleIds.visibleRelIds.has(edge.relationMessageId)||(getPresentationSpec(edge.relationType).isContainer&&visibleContainerIds.has(edge.relationMessageId)))
     : rawEdges;
   const homeEdges = homeFilterResult
     ? cleanEdges.filter(edge =>

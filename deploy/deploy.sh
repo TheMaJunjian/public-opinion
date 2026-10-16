@@ -16,9 +16,12 @@ if [ ! -f .env.prod ]; then
 elif ! grep -q '^GONGLUN_FOUNDER_KEY=.' .env.prod; then
   printf '\nGONGLUN_FOUNDER_KEY=%s\n' "$(openssl rand -hex 32)" >> .env.prod
 fi
+if ! grep -q '^POSTGRES_PASSWORD=[^[:space:]]' .env.prod; then
+  printf '\nPOSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 32)" >> .env.prod
+fi
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --wait
 DOMAIN_VALUE="$(sed -n 's/^DOMAIN=//p' .env.prod | head -n 1)"
 echo "Ready: https://$DOMAIN_VALUE"
 echo "Health: https://$DOMAIN_VALUE/api/health"
 echo 'The first account requires GONGLUN_FOUNDER_KEY from deploy/.env.prod.'
-echo 'Messages and the SQLite ledger persist in the gonglun_data volume.'
+echo 'Messages and the contribution ledger persist in the postgres_data volume.'

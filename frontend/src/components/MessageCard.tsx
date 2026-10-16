@@ -56,6 +56,7 @@ export interface MessageCardProps {
   children?: React.ReactNode;
   /** onMouseUp handler for content area text selection */
   onContentMouseUp?: (e: React.MouseEvent, msgId: string) => void;
+  relatedMessages?:React.ReactNode;
 }
 
 export default function MessageCard({
@@ -76,6 +77,7 @@ export default function MessageCard({
   onSettlementTargetClick,
   children,
   onContentMouseUp,
+  relatedMessages,
 }: MessageCardProps) {
   const {
     isWholeSelected, isActiveText, isOrganizationMessage,
@@ -306,6 +308,7 @@ export default function MessageCard({
       )}
 
       {/* Overlays */}
+      {relatedMessages}
       {overlays}
     </div>
   );

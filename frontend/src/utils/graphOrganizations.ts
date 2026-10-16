@@ -9,8 +9,9 @@ export function buildFrameBlocks(params: {
   msgMap: Map<string, DemoMessage>;
   keepEmptyFrameIds?: Set<string>;
   traceMode?: boolean;
+  opaqueFrameIds?:ReadonlySet<string>;
 }): FrameBlock[] {
-  const { edges, visibleCardIds, msgMap, keepEmptyFrameIds = new Set<string>(), traceMode = false } = params;
+  const { edges, visibleCardIds, msgMap, keepEmptyFrameIds = new Set<string>(), traceMode = false,opaqueFrameIds } = params;
   const grouped = new Map<string, DemoEdge[]>();
   for (const edge of edges) {
     if (!traceMode && !hasActiveDisplayEffect(edge, msgMap)) continue;
@@ -18,11 +19,13 @@ export function buildFrameBlocks(params: {
     list.push(edge); grouped.set(edge.relationMessageId, list);
   }
   const isFrame = (type: string, messageId?: string) => {
-    const parts = messageId ? msgMap.get(messageId)?.parts : undefined;
+    if(messageId&&opaqueFrameIds?.has(messageId))return false;
+    const declaration=messageId?msgMap.get(messageId):undefined;
+    const parts = declaration?.parts;
     if (parts) return ['classify', 'summary', 'merge', 'arrange'].includes(type.toLowerCase());
     const spec = getPresentationSpec(type);
     return ['arrange-frame', 'frame-group', 'replace-overlay'].includes(spec.kind)
-      || !(type.toUpperCase() in PRESENTATION_SPECS);
+      || !(type.toUpperCase() in PRESENTATION_SPECS)&&declaration?.kind==='relation';
   };
   const blocks = new Map<string, FrameBlock>();
   for (const [id, relations] of grouped) {
@@ -89,5 +92,12 @@ export function buildFrameBlocks(params: {
     return all;
   };
   for (const id of blocks.keys()) collect(id);
-  return [...blocks.values()];
+  // References to hidden organizations can leave an empty wrapper behind.
+  // Such a wrapper has no rendered cards, but still consumed a layout row.
+  const kept=new Set([...blocks.keys()].filter(id=>keepEmptyFrameIds.has(id)||[...descendants.get(id)!].some(member=>visibleCardIds.has(member)||keepEmptyFrameIds.has(member))));
+  return [...blocks.values()].filter(block=>kept.has(block.relMsgId)).map(block=>({...block,
+    cardIds:new Set([...block.cardIds].filter(id=>visibleCardIds.has(id)||kept.has(id))),
+    directCardIds:new Set([...block.directCardIds].filter(id=>visibleCardIds.has(id))),
+    childRelMsgIds:block.childRelMsgIds.filter(id=>kept.has(id)),
+  }));
 }

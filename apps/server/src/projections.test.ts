@@ -1,37 +1,40 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bindRoles, resolveStance, type Message, type Part, type Reference } from '@gonglun/core';
 import { Mutation, Store } from './db.js';
-import { initializeProjections, recordStance, statesFor } from './projections.js';
+import { recordStance, statesFor } from './projections.js';
+import { cleanupTestDatabases, createTestStore } from './test-database.js';
 
 const stores: Store[] = [];
-afterEach(() => { vi.restoreAllMocks(); for (const store of stores.splice(0)) store.close(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const store of stores.splice(0)) await store.close(); await cleanupTestDatabases(); });
 
-function fixture() {
-  const store = new Store(':memory:');
-  initializeProjections(store);
+async function fixture() {
+  const store = await createTestStore();
   stores.push(store);
-  function publish(parts: Part[], authorId = 'alice'): Message {
-    return store.transaction(() => {
+  async function publish(parts: Part[], authorId = 'alice'): Promise<Message> {
+    return store.transaction(async () => {
       const tx = new Mutation(store);
-      const message = tx.create(authorId, parts);
-      tx.commit();
+      const message = await tx.create(authorId, parts);
+      await tx.commit();
       return store.message(message.id);
     });
   }
-  function stance(target: Reference, side: 'pro' | 'con'): Message {
-    return store.transaction(() => {
+  async function stance(target: Reference, side: 'pro' | 'con'): Promise<Message> {
+    return store.transaction(async () => {
       const tx = new Mutation(store);
-      const message = tx.create('alice', [{
+      const message = await tx.create('alice', [{
         id: 'stance', type: 'relation', relation: side === 'pro' ? 'agree' : 'disagree',
         roles: bindRoles({ target: [target] }),
       }]);
-      const resolved = resolveStance(target, side, (id, revision) => store.message(id, revision));
-      recordStance(store, message, resolved);
-      tx.commit();
+      const revisions = (await store.db.prepare('SELECT body FROM revisions ORDER BY revision').all()).map(row => JSON.parse(row.body) as Message);
+      const byRevision = new Map(revisions.map(item => [`${item.id}:${item.revision}`, item]));
+      const current = new Map(revisions.map(item => [item.id, item]));
+      const resolved = resolveStance(target, side, (id, revision) => revision === undefined ? current.get(id) : byRevision.get(`${id}:${revision}`));
+      await recordStance(store, message, resolved);
+      await tx.commit();
       return store.message(message.id);
     });
   }
-  const summary = publish([
+  const summary = await publish([
     { id: 'content', type: 'text', text: '总结内容' },
     { id: 'organization', type: 'relation', relation: 'summary', roles: { members: [] } },
   ]);
@@ -39,53 +42,54 @@ function fixture() {
 }
 
 describe('authoritative organization display states', () => {
-  it('keeps an effective opposition after more than 100 later references push it out of the context page', () => {
-    const { store, publish, stance, summary } = fixture();
-    const opposition = stance({ messageId: summary.id, revision: 1 }, 'con');
-    for (let index = 0; index < 120; index++) publish([{
+  it('keeps an effective opposition after more than 100 later references push it out of the context page', async () => {
+    const { store, publish, stance, summary } = await fixture();
+    const opposition = await stance({ messageId: summary.id, revision: 1 }, 'con');
+    for (let index = 0; index < 120; index++) await publish([{
       id: 'reference', type: 'relation', relation: 'reference',
       roles: bindRoles({ target: [{ messageId: summary.id }] }),
     }], `reader-${index}`);
-    const boundedReferences = store.db.prepare(`
-      SELECT source.id FROM refs JOIN messages source ON source.id = refs.sourceId
-      WHERE refs.targetId = ? ORDER BY source.sequence DESC LIMIT 100
+    const boundedReferences = await store.db.prepare(`
+      SELECT source.id FROM refs JOIN messages source ON source.id = refs."sourceId"
+      WHERE refs."targetId" = $1 ORDER BY source.sequence DESC LIMIT 100
     `).all(summary.id);
     expect(boundedReferences).toHaveLength(100);
     expect(boundedReferences.some(row => row.id === opposition.id)).toBe(false);
-    expect(statesFor(store, [summary.id])).toEqual([expect.objectContaining({
+    expect(await statesFor(store, [summary.id])).toEqual([expect.objectContaining({
       messageId: summary.id, suppressed: true, supportCount: 0, oppositionCount: 1,
     })]);
   });
 
-  it('does not reinterpret a recorded historical stance when its referenced source is edited', () => {
-    const { store, stance, summary } = fixture();
-    const original = stance({ messageId: summary.id, revision: 1 }, 'con');
-    stance({ messageId: original.id, revision: 1, partId: 'stance' }, 'con');
-    const before = statesFor(store, [summary.id]);
+  it('does not reinterpret a recorded historical stance when its referenced source is edited', async () => {
+    const { store, stance, summary } = await fixture();
+    const original = await stance({ messageId: summary.id, revision: 1 }, 'con');
+    await stance({ messageId: original.id, revision: 1, partId: 'stance' }, 'con');
+    const before = await statesFor(store, [summary.id]);
     expect(before[0]).toMatchObject({ suppressed: false, supportCount: 1, oppositionCount: 0 });
 
-    store.transaction(() => {
+    await store.transaction(async () => {
       const tx = new Mutation(store);
       const updated: Message = {
         ...original, revision: 2,
         parts: [{ id: 'stance', type: 'relation', relation: 'agree', roles: bindRoles({ target: [{ messageId: summary.id, revision: 1 }] }) }],
       };
-      tx.put(updated);
+      await tx.put(updated);
       // Even an accidental replay cannot overwrite the original execution-time statement.
-      recordStance(store, updated, { target: { messageId: summary.id, revision: 1 }, side: 'pro' });
-      tx.commit();
+      await recordStance(store, updated, { target: { messageId: summary.id, revision: 1 }, side: 'pro' });
+      await tx.commit();
     });
 
-    expect(statesFor(store, [summary.id])).toEqual(before);
-    expect(store.message(original.id).revision).toBe(2);
-    expect(store.message(original.id, 1).parts[0]).toMatchObject({ relation: 'disagree' });
+    expect(await statesFor(store, [summary.id])).toEqual(before);
+    expect((await store.message(original.id)).revision).toBe(2);
+    expect((await store.message(original.id, 1)).parts[0]).toMatchObject({ relation: 'disagree' });
   });
 
-  it('loads execution bases once per bounded batch rather than once per visible message', () => {
-    const { store, publish } = fixture();
-    const ids = Array.from({ length: 201 }, (_, index) => publish([{ id: 'text', type: 'text', text: `消息 ${index}` }]).id);
+  it('loads execution bases once per bounded batch rather than once per visible message', async () => {
+    const { store, publish } = await fixture();
+    const ids: string[] = [];
+    for (let index = 0; index < 201; index++) ids.push((await publish([{ id: 'text', type: 'text', text: `消息 ${index}` }])).id);
     const prepare = vi.spyOn(store.db, 'prepare');
-    expect(statesFor(store, ids)).toHaveLength(201);
+    expect(await statesFor(store, ids)).toHaveLength(201);
     expect(prepare.mock.calls.filter(([sql]) => /FROM execution_stances/.test(String(sql)))).toHaveLength(2);
   });
 });

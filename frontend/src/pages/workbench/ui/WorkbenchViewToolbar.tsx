@@ -5,7 +5,7 @@ import HomeFilterPanel from '../../../components/HomeFilterPanel';
 import MessageFilterPanel from '../../../components/MessageFilterPanel';
 import { Z_INDEX } from '../../../constants/zIndex';
 import type { Relation } from '../../../types';
-import type { DemoEdge, DemoMessage, UnitSelection } from '../../../utils/modelBridge';
+import type { DemoMessage, UnitSelection } from '../../../utils/modelBridge';
 import { resolveNavigationTargetId } from '../model/navigation';
 type ViewMode = 'list' | 'graph';
 interface ViewNavigation {
@@ -20,13 +20,9 @@ interface ViewNavigation {
   scheduleViewNavigation: (messageId: string) => void;
 }
 interface ComparisonControls {
-  comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null;
-  setComparisonMode: Dispatch<SetStateAction<boolean>>; setComparisonTargetId: Dispatch<SetStateAction<string | null>>;
-  setComparisonReviewed: Dispatch<SetStateAction<boolean>>;
-  setComparisonReviewBaseMessages: Dispatch<SetStateAction<DemoMessage[] | null>>;
-  setComparisonReviewBaseEdges: Dispatch<SetStateAction<DemoEdge[] | null>>;
-  setDraftUnits: Dispatch<SetStateAction<UnitSelection[]>>;
-  enterTemporaryCategory: (force?: boolean) => void;
+  singleSideReview?: boolean; comparisonMode: boolean; comparisonReviewed: boolean; comparisonTargetId: string | null;
+  setComparisonTargetId: Dispatch<SetStateAction<string | null>>;
+  onStartComparison: () => void;
 }
 interface Props {
   top: number; scopeMessageId: string; exportTitle: string; showAlert: (message: string) => void;
@@ -36,7 +32,7 @@ interface Props {
 }
 export default function WorkbenchViewToolbar({ top, scopeMessageId, exportTitle, showAlert, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard }: Props) {
   const { viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation } = view;
-  const { comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonMode, setComparisonTargetId, setComparisonReviewed, setComparisonReviewBaseMessages, setComparisonReviewBaseEdges, setDraftUnits, enterTemporaryCategory } = comparison;
+  const { singleSideReview, comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison } = comparison;
   return (
     <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414", position: "sticky", top, zIndex: Z_INDEX.header - 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -67,19 +63,7 @@ export default function WorkbenchViewToolbar({ top, scopeMessageId, exportTitle,
           <CleanFilterPanel {...clean} />
           <MessageFilterPanel {...filter} />
           {!comparisonMode && !comparisonReviewed && <button
-            onClick={() => {
-              setComparisonMode(current => {
-                const next = !current;
-                if (next) enterTemporaryCategory(true);
-                setComparisonTargetId(null);
-                setComparisonReviewed(false);
-                setComparisonReviewBaseMessages(null);
-                setComparisonReviewBaseEdges(null);
-                if (next) setDraftUnits([]);
-                return next;
-              });
-              setViewMode('list');
-            }}
+            onClick={onStartComparison}
             style={{ padding: "2px 8px", borderRadius: 4, border: comparisonMode ? "1px solid #22c55e" : "1px solid #666", background: comparisonMode ? "#12351f" : "#333", color: comparisonMode ? "#86efac" : "#fff", fontSize: 12, cursor: "pointer" }}
             title="查看赞同/反对生效后的不同显示效果"
           >
@@ -94,7 +78,7 @@ export default function WorkbenchViewToolbar({ top, scopeMessageId, exportTitle,
           >
             排行榜
           </button>
-          {!comparisonMode && !comparisonReviewed && correctionFilterTargetId === null && <button onClick={() => {
+          {!singleSideReview && !comparisonMode && !comparisonReviewed && correctionFilterTargetId === null && <button onClick={() => {
             if (leftPanelRef.current) {
               viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
             }

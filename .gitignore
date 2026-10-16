@@ -10,3 +10,9 @@ README/debug/
 .env
 .env.*
 !.env.example
+!.env.migration.example
+!deploy/.env.prod.example
+deploy/backups/
+*.dump
+deploy/restored-manifest.jsonl
+migration-reports/

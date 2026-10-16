@@ -1,192 +1,163 @@
-import type { Relation } from "../../../types";
-import type {
-  DemoEdge,
-  DemoMessage
-} from "../../../utils/modelBridge";
-import { isContentKind } from "../../../utils/modelBridge";
-import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from "../../../utils/traceProjection";
+import type { Relation } from '../../../types';
+import { isContentKind, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
+import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from '../../../utils/traceProjection';
 import { expandTextIdsWithCorrections } from '../model/correction';
 import { expandTextIdsWithSettlementResults } from '../model/navigation';
-import { collectOwnedByRelation } from '../model/ownership';
-import type { TraceEntry } from "../types";
+import { deriveContainerEffect, isContainerType, type ContainerEffect } from '../model/containerEffect';
+import { projectContainerCanvas } from './containerCanvas';
+import type { TraceEntry } from '../types';
+import { deriveCrossClassifyRefs } from './crossClassifyRefs';
+import { projectGraphScene } from '../../../utils/graphProjection';
 
-interface DeriveComparisonGraphProjectionsInput {
+export interface DeriveComparisonGraphProjectionsInput {
   comparisonReviewed: boolean;
   comparisonTargetId: string | null;
+  username: string | null;
+  scopeId: string | null;
+  baseScopeId?: string | null;
+  sourceEffect?: ContainerEffect;
   traceEntries: TraceEntry[];
-  rejectedContainerIds: Set<string>;
   relations: Relation[];
-  relationById: Map<string, Relation>;
-  rejectedJoinRelationIds: Set<string>;
   edges: DemoEdge[];
-  msgMap: Map<string, DemoMessage>;
   messages: DemoMessage[];
-  mergeOwnership: { textIds: Set<string>; relationIds: Set<string>; };
   collectExclusiveRelationMsgIds: (hiddenTextIds: Set<string>, ownedRelationIds: Set<string>) => Set<string>;
   replacedRelationMsgIds: Set<string>;
   comparisonReviewBaseMessages: DemoMessage[] | null;
   isInsideClassify: boolean;
-  normalGraphProjection: { messages: DemoMessage[]; scopedMessages: DemoMessage[]; edges: DemoEdge[]; };
+  normalGraphProjection: { messages: DemoMessage[]; scopedMessages: DemoMessage[]; edges: DemoEdge[] };
   comparisonReviewBaseEdges: DemoEdge[] | null;
-  comparisonAgreeSuppressedRelIds: Set<string>;
-  comparisonDisagreeSuppressedRelIds: Set<string>;
   traceRelationMsgIds: Set<string>;
   traceContainerMemberships: TraceContainerMembership[];
   traceDistance: number;
   traceExpandedFrameIds: Set<string>;
+  filterMessages?: (messages: DemoMessage[]) => DemoMessage[];
 }
 
-export function deriveComparisonGraphProjections(input: DeriveComparisonGraphProjectionsInput): { agree: { messages: DemoMessage[]; edges: DemoEdge[]; hideMessageIds: undefined; }; disagree: { messages: DemoMessage[]; edges: DemoEdge[]; hideMessageIds: undefined; }; } | null {
-  const { comparisonReviewed, comparisonTargetId, traceEntries, rejectedContainerIds, relations, relationById, rejectedJoinRelationIds, edges, msgMap, messages, mergeOwnership, collectExclusiveRelationMsgIds, replacedRelationMsgIds, comparisonReviewBaseMessages, isInsideClassify, normalGraphProjection, comparisonReviewBaseEdges, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds, traceRelationMsgIds, traceContainerMemberships, traceDistance, traceExpandedFrameIds } = input;
+export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInput, side: 'agree' | 'disagree') {
+  const { comparisonReviewed, comparisonTargetId, messages, relations, edges, username, scopeId,
+    traceEntries, traceDistance, traceExpandedFrameIds, traceRelationMsgIds, collectExclusiveRelationMsgIds,
+    replacedRelationMsgIds, comparisonReviewBaseMessages, comparisonReviewBaseEdges, normalGraphProjection, isInsideClassify } = input;
   if (!comparisonReviewed || !comparisonTargetId) return null;
-  const traceStartIds = traceEntries.length > 0
-    ? traceEntries[traceEntries.length - 1].ids.filter(Boolean)
-    : [];
+  const traceStartIds = traceEntries.at(-1)?.ids.filter(Boolean) ?? [];
   const traceStartIdSet = new Set(traceStartIds);
+  const targetType = relations.find(relation => relation.id === comparisonTargetId)?.relationType;
+  const targetIsContainer = isContainerType(targetType);
+  const organizationEffect = targetIsContainer || targetType?.toUpperCase() === 'JOIN';
 
-  const buildProjection = (side: 'agree' | 'disagree') => {
-    const sideRejectedContainerIds = new Set(rejectedContainerIds);
-    if (side === 'agree') sideRejectedContainerIds.delete(comparisonTargetId);
-    else sideRejectedContainerIds.add(comparisonTargetId);
-
-    const sideClassifyOwnership = { textIds: new Set<string>(), relationIds: new Set<string>() };
-    for (const relation of relations) {
-      if (relation.relationType !== 'CLASSIFY' || sideRejectedContainerIds.has(relation.id)) continue;
-      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), sideRejectedContainerIds, rejectedJoinRelationIds);
-      owned.textIds.forEach(id => sideClassifyOwnership.textIds.add(id));
-      owned.relationIds.forEach(id => sideClassifyOwnership.relationIds.add(id));
-    }
-    const sideSummaryOwnership = { textIds: new Set<string>(), relationIds: new Set<string>() };
-    for (const relation of relations) {
-      if (relation.relationType !== 'SUMMARY' || sideRejectedContainerIds.has(relation.id)) continue;
-      const owned = collectOwnedByRelation(relation.id, relationById, new Set(), sideRejectedContainerIds, rejectedJoinRelationIds);
-      owned.textIds.forEach(id => sideSummaryOwnership.textIds.add(id));
-      owned.relationIds.forEach(id => sideSummaryOwnership.relationIds.add(id));
-    }
-    const sideClassifyTextIds = expandTextIdsWithSettlementResults(
-      expandTextIdsWithCorrections(sideClassifyOwnership.textIds, edges, msgMap),
-      messages,
-    );
-    const sideSummaryTextIds = expandTextIdsWithCorrections(sideSummaryOwnership.textIds, edges, msgMap);
-    const sideHiddenTextIds = new Set(sideClassifyTextIds);
-    sideSummaryTextIds.forEach(id => sideHiddenTextIds.add(id));
-    const sideOwnedRelationIds = new Set(sideClassifyOwnership.relationIds);
-    mergeOwnership.relationIds.forEach(id => sideOwnedRelationIds.add(id));
-    sideSummaryOwnership.relationIds.forEach(id => sideOwnedRelationIds.add(id));
-    const sideExclusiveRelMsgIds = collectExclusiveRelationMsgIds(sideHiddenTextIds, sideOwnedRelationIds);
-    const sideClassifyRelationIdsByType = (type: string) => new Set(
-      [...sideClassifyOwnership.relationIds].filter(id => relationById.get(id)?.relationType.toUpperCase() === type),
-    );
-    const sideHiddenRelationIds = new Set<string>([
-      ...sideClassifyRelationIdsByType('CLASSIFY'),
-      ...sideClassifyRelationIdsByType('MERGE'),
-      ...sideClassifyRelationIdsByType('ARRANGE'),
-      ...sideClassifyRelationIdsByType('SUMMARY'),
-      ...sideSummaryOwnership.relationIds,
-      ...sideExclusiveRelMsgIds,
-      ...replacedRelationMsgIds,
-    ]);
-    const projectionBaseMessages = comparisonReviewBaseMessages
+  // The original comparison projection is the only final projection. Preview
+  // calls this same function for one side, rather than constructing a category.
+  const project = (effect: ContainerEffect) => {
+    const { msgMap, relationById, suppressed } = effect;
+    const rebased = input.baseScopeId !== undefined && scopeId !== input.baseScopeId
+      ? projectContainerCanvas(effect,scopeId?{kind:'inside',id:scopeId}:{kind:'root'}) : null;
+    // An assumed approval changes the container's effect, never its parent.
+    // Bound forced targets and released members by the ordinary canvas for
+    // this side, so inspecting C cannot lift it out of an opaque ancestor A.
+    const organizationScope=organizationEffect&&traceStartIds.length===0
+      ? rebased??projectContainerCanvas(effect,scopeId?{kind:'inside',id:scopeId}:{kind:'root'}) : null;
+    const organizationScopeIds=organizationScope?new Set(organizationScope.messages.map(message=>message.id)):null;
+    const baseMessages = rebased?.messages ?? comparisonReviewBaseMessages
       ?? (isInsideClassify ? normalGraphProjection.scopedMessages : normalGraphProjection.messages);
-    const projectionBaseEdges = comparisonReviewBaseEdges ?? normalGraphProjection.edges;
-    const targetMessageIds = new Set([comparisonTargetId]);
-    const comparisonTargetEdges = edges.filter(edge => edge.relationMessageId === comparisonTargetId);
-    const targetRelationType = relationById.get(comparisonTargetId)?.relationType.toUpperCase();
-    const targetIsContainer = targetRelationType && ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(targetRelationType);
-    if (!targetIsContainer) {
-      for (const edge of comparisonTargetEdges) {
-        if (!edge.from.messageId.startsWith('anon:')) targetMessageIds.add(edge.from.messageId);
-        if (!edge.to.messageId.startsWith('anon:')) targetMessageIds.add(edge.to.messageId);
-      }
+    const baseEdges = rebased?.edges ?? comparisonReviewBaseEdges ?? normalGraphProjection.edges;
+    const scopeOwners = scopeId ? new Set([...baseMessages.map(message=>message.id),comparisonTargetId]) : undefined;
+    if(scopeId)scopeOwners?.delete(scopeId);
+    const classify = effect.ownership.active('CLASSIFY',scopeOwners), summary = effect.ownership.active('SUMMARY',scopeOwners);
+    const hiddenTextIds = new Set([
+      ...expandTextIdsWithSettlementResults(expandTextIdsWithCorrections(classify.textIds, effect.edges, msgMap), effect.messages),
+      ...expandTextIdsWithCorrections(summary.textIds, effect.edges, msgMap),
+    ]);
+    const ownedRelationIds = new Set([...classify.relationIds,...summary.relationIds,...effect.ownership.active('MERGE',scopeOwners).relationIds]);
+    const exclusive = collectExclusiveRelationMsgIds(hiddenTextIds, ownedRelationIds);
+    const hiddenRelationIds = new Set([
+      ...[...classify.relationIds].filter(id => isContainerType(relationById.get(id)?.relationType)),
+      ...summary.relationIds,...exclusive,...replacedRelationMsgIds,
+    ]);
+    const targetEdges = edges.filter(edge => edge.relationMessageId === comparisonTargetId);
+    const targetIds = new Set(scopeId === comparisonTargetId ? [] : [comparisonTargetId]);
+    for (const edge of organizationEffect ? [] : edges.filter(edge => edge.relationMessageId === comparisonTargetId)) {
+      if (!edge.from.messageId.startsWith('anon:')) targetIds.add(edge.from.messageId);
+      if (!edge.to.messageId.startsWith('anon:')) targetIds.add(edge.to.messageId);
     }
-    const releasedTarget = side === 'disagree' && targetIsContainer
-      ? collectOwnedByRelation(
-        comparisonTargetId,
-        relationById,
-        new Set(),
-        new Set(),
-        rejectedJoinRelationIds,
-      )
-      : null;
-    if (releasedTarget) {
-      const targetRelation = relationById.get(comparisonTargetId);
-      for (const ref of targetRelation?.targetRefs ?? []) {
-        if (ref.kind === 'relation') releasedTarget.relationIds.add(ref.relationId);
-        else releasedTarget.textIds.add(ref.messageId);
-      }
+    const releasedTarget = side === 'disagree' && targetIsContainer ? effect.ownership.released(comparisonTargetId) : null;
+    if(releasedTarget || side === 'agree' && ['ARRANGE','MERGE'].includes(targetType?.toUpperCase()??'')){
+      const members=releasedTarget??effect.ownership.released(comparisonTargetId);
+      members.textIds.forEach(id=>targetIds.add(id));members.relationIds.forEach(id=>targetIds.add(id));
     }
-    releasedTarget?.textIds.forEach(id => targetMessageIds.add(id));
-    releasedTarget?.relationIds.forEach(id => targetMessageIds.add(id));
-    const baseMessagesWithTarget = [...projectionBaseMessages];
-    const baseMessageIds = new Set(baseMessagesWithTarget.map(message => message.id));
-    for (const targetId of targetMessageIds) {
-      if (baseMessageIds.has(targetId)) continue;
-      const targetMessage = msgMap.get(targetId);
-      if (targetMessage) {
-        baseMessagesWithTarget.push(targetMessage);
-        baseMessageIds.add(targetId);
-      }
-    }
-    const baseEdgesWithTarget = [
-      ...projectionBaseEdges,
-      ...(side === 'agree' || traceStartIdSet.has(comparisonTargetId)
-        ? comparisonTargetEdges.filter(edge => !projectionBaseEdges.some(existing => existing.id === edge.id))
-        : []),
-    ];
-    const sideSuppressedRelIds = side === 'agree'
-      ? comparisonAgreeSuppressedRelIds
-      : comparisonDisagreeSuppressedRelIds;
-    const forcedVisibleIds = side === 'agree' ? targetMessageIds : new Set<string>();
-    releasedTarget?.textIds.forEach(id => forcedVisibleIds.add(id));
-    releasedTarget?.relationIds.forEach(id => forcedVisibleIds.add(id));
-    const scopedBaseMessageIds = new Set(projectionBaseMessages.map(message => message.id));
-    const graphMessages = (side === 'agree' || releasedTarget || traceStartIdSet.has(comparisonTargetId) ? baseMessagesWithTarget : projectionBaseMessages).filter(message => {
+    const withTarget = new Map<string,DemoMessage>(baseMessages.map(message => [message.id, {...message,state:msgMap.get(message.id)?.state}]));
+    for (const id of targetIds) if (!withTarget.has(id) && msgMap.has(id)) withTarget.set(id,msgMap.get(id)!);
+    const scopedIds = new Set(baseMessages.map(message => message.id));
+    const forcedVisibleIds = side==='agree'?targetIds:new Set([...(releasedTarget?.textIds??[]),...(releasedTarget?.relationIds??[])]);
+    const projectedMessages = (side === 'agree' || releasedTarget || traceStartIdSet.has(comparisonTargetId) ? [...withTarget.values()] : baseMessages).filter(message => {
+      if(organizationScopeIds&&!organizationScopeIds.has(message.id))return false;
       if (forcedVisibleIds.has(message.id)) return true;
-      if (sideSuppressedRelIds.has(message.id)) return false;
-      if (isInsideClassify && scopedBaseMessageIds.has(message.id)) return true;
-      if (isContentKind(message.kind) && sideHiddenTextIds.has(message.id)) return false;
-      if (message.kind === 'relation' && sideHiddenRelationIds.has(message.id)) return false;
-      if (isContentKind(message.kind) && sideOwnedRelationIds.has(message.id)) return false;
-      return true;
+      if (suppressed.has(message.id)) return false;
+      if (!organizationEffect && isInsideClassify && scopedIds.has(message.id)) return true;
+      if (isContentKind(message.kind) && (hiddenTextIds.has(message.id) || ownedRelationIds.has(message.id))) return false;
+      return message.kind !== 'relation' || !hiddenRelationIds.has(message.id);
     });
-    const graphVisibleIds = new Set(graphMessages.map(message => message.id));
-    const graphEdges = baseEdgesWithTarget.filter(edge => {
-      if (sideSuppressedRelIds.has(edge.relationMessageId) && !traceStartIdSet.has(edge.relationMessageId)) return false;
-      if (!graphVisibleIds.has(edge.relationMessageId)
-        && !traceRelationMsgIds.has(edge.relationMessageId)
-        && !traceStartIdSet.has(edge.relationMessageId)) return false;
-      if (traceRelationMsgIds.has(edge.relationMessageId)) return true;
-      if (edge.relationType === 'classify' || edge.relationType === 'summary') return true;
-      const fromOk = edge.from.messageId.startsWith('anon:') || graphVisibleIds.has(edge.from.messageId);
-      const toOk = graphVisibleIds.has(edge.to.messageId);
-      return fromOk && toOk;
-    });
-    if (traceEntries.length === 0) {
-      return { messages: graphMessages, edges: graphEdges, hideMessageIds: undefined };
+    const visibleIds = new Set(projectedMessages.map(message => message.id));
+    // The original canvas may hide a member and its reference. Once the
+    // assumed side releases both endpoints, recover their reference from the
+    // shared data instead of restricting it to the old canvas's edges.
+    const references=effect.messages.filter(message=>message.relationType==='reference');
+    const allowedReferences=new Set((input.filterMessages?.(references)??references).map(message=>message.id));
+    const referenceEdges=effect.edges.filter(edge=>edge.relationType==='reference'
+      && allowedReferences.has(edge.relationMessageId)
+      && (edge.from.messageId.startsWith('anon:')||visibleIds.has(edge.from.messageId))
+      && visibleIds.has(edge.to.messageId));
+    for(const edge of referenceEdges){
+      const relation=effect.msgMap.get(edge.relationMessageId);
+      if(relation&&!visibleIds.has(relation.id)){projectedMessages.push(relation);visibleIds.add(relation.id);}
     }
-    const traceProjection = applyTraceFrameVisibility(buildTraceProjection({
-      messages: [
-        ...graphMessages,
-        ...traceStartIds
-          .filter(id => !graphVisibleIds.has(id))
-          .map(id => msgMap.get(id))
-          .filter((message): message is DemoMessage => Boolean(message)),
-      ],
-      edges: graphEdges,
-      containerMemberships: traceContainerMemberships,
-      excludedRelationIds: sideSuppressedRelIds,
-      startIds: traceStartIds,
-      distance: traceDistance,
-    }), traceExpandedFrameIds);
-    const visibleMessages = traceProjection.messages.filter(message => graphVisibleIds.has(message.id));
-    const visibleIds = new Set(visibleMessages.map(message => message.id));
-    const visibleEdges = traceProjection.edges.filter(edge => {
-      if (!visibleIds.has(edge.relationMessageId)) return false;
-      return (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId))
-        && visibleIds.has(edge.to.messageId);
+    const membershipEdges=effect.projectEdges([...baseEdges,...targetEdges,...referenceEdges],visibleIds);
+    const projectedEdges = [...new Map([...membershipEdges,...(traceStartIdSet.has(comparisonTargetId)?targetEdges:[])].map(edge => [edge.id,edge])).values()].filter(edge => {
+      if (suppressed.has(edge.relationMessageId) && !traceStartIdSet.has(edge.relationMessageId)) return false;
+      if (!visibleIds.has(edge.relationMessageId) && !traceRelationMsgIds.has(edge.relationMessageId) && !traceStartIdSet.has(edge.relationMessageId)) return false;
+      if (traceRelationMsgIds.has(edge.relationMessageId) || ['classify','summary'].includes(edge.relationType)) return true;
+      return (edge.from.messageId.startsWith('anon:') || visibleIds.has(edge.from.messageId)) && visibleIds.has(edge.to.messageId);
     });
-    return { messages: visibleMessages, edges: visibleEdges, hideMessageIds: undefined };
+    return {messages:projectedMessages,edges:projectedEdges,hideMessageIds:undefined};
   };
 
-  return { agree: buildProjection('agree'), disagree: buildProjection('disagree') };
+    const effect = deriveContainerEffect({messages,relations,edges,username,assumption:{messageId:comparisonTargetId,side}});
+    let canvas = project(effect);
+    if (traceStartIds.length) {
+      const traceMessages = organizationEffect ? effect.messages : [
+        ...canvas.messages,
+        ...traceStartIds.filter(id => !canvas.messages.some(message => message.id === id))
+          .map(id => effect.msgMap.get(id)).filter((message):message is DemoMessage => !!message),
+      ];
+      // A rejected trace anchor still connects to its released direct members;
+      // it supplies reachability, without restoring its frame or membership.
+      const memberships=[...effect.memberships];
+      for(const id of traceStartIds)if(organizationEffect&&effect.rejectedContainerIds.has(id)){
+        const members=effect.ownership.direct(id);
+        memberships.push({containerId:id,relationType:effect.relationById.get(id)!.relationType.toLowerCase() as DemoEdge['relationType'],targetIds:[...members.textIds,...members.relationIds]});
+      }
+      const trace = applyTraceFrameVisibility(buildTraceProjection({
+        messages:traceMessages, edges:organizationEffect?effect.edges:canvas.edges,
+        containerMemberships:memberships,excludedRelationIds:effect.suppressed,startIds:traceStartIds,distance:traceDistance,
+      }),new Set([...traceExpandedFrameIds,...effect.rejectedContainerIds]));
+      const allowed = organizationEffect ? null : new Set(canvas.messages.map(message => message.id));
+      const visible = trace.messages.filter(message => !allowed || allowed.has(message.id));
+      const visibleIds = new Set(visible.map(message => message.id));
+      canvas = {...canvas,messages:visible,edges:trace.edges.filter(edge => visibleIds.has(edge.relationMessageId)
+        && (edge.from.messageId.startsWith('anon:')||visibleIds.has(edge.from.messageId)) && visibleIds.has(edge.to.messageId))};
+    }
+    const finalMessages=input.filterMessages?.(canvas.messages)??canvas.messages;
+    const scene=projectGraphScene({messages:finalMessages,edges:canvas.edges,
+      traceExpandedFrameIds,isTraceWindow:traceStartIds.length>0,
+      rejectedContainerIds:effect.rejectedContainerIds,hiddenMessageIds:effect.suppressed});
+    const references=effect.messages.filter(message=>message.relationType==='reference');
+    const allowedReferences=new Set((input.filterMessages?.(references)??references).map(message=>message.id));
+    const crossClassifyRefs=deriveCrossClassifyRefs({
+      edges:effect.edges.filter(edge=>edge.relationType==='reference'&&allowedReferences.has(edge.relationMessageId)),
+      msgMap:effect.msgMap,graphVisibleTextIds:new Set(scene.normalIds),
+    });
+    return {...canvas,messages:finalMessages,suppressed:effect.suppressed,context:{...effect.context,crossClassifyRefs},effect};
+}
+
+export function deriveComparisonGraphProjections(input: DeriveComparisonGraphProjectionsInput) {
+  if(!input.comparisonReviewed||!input.comparisonTargetId)return null;
+  return {agree:projectComparisonSide(input,'agree')!,disagree:projectComparisonSide(input,'disagree')!};
 }

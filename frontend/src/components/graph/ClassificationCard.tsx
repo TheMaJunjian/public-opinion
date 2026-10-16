@@ -1,4 +1,4 @@
-import type { Ref } from 'react';
+import type { Ref, ReactNode } from 'react';
 import type { DemoMessage, UnitSelection } from '../../utils/modelBridge';
 import type { Relation } from '../../types';
 import type { GraphViewProps } from '../GraphView';
@@ -7,6 +7,7 @@ import { isMessageElementSelected, messageMembersReference, messageTypeReference
 import MessageTextPart from '../MessageTextPart';
 import MessageElement from '../MessageElement';
 import MessageSettlementActions from '../MessageSettlementActions';
+import JoinRecordBadges from '../JoinRecordBadges';
 
 type CardCallbacks = Pick<GraphViewProps, 'onMessageClick' | 'onMessageDoubleClick' | 'onMessageMouseDown' | 'onMessageMouseUp' | 'onTextMouseUp' | 'onSettlementToggleTruth' | 'onSettlementToggleValue' | 'onJoinFilterClick' | 'settlementOpenMsgId' | 'settlementOpenType'>;
 interface ClassificationCardProps extends CardCallbacks {
@@ -23,18 +24,18 @@ interface ClassificationCardProps extends CardCallbacks {
   stakes?: { truth: { pro: number; con: number }; value: { pro: number; con: number } };
   relatedJoinRelations: Relation[];
   outgoingJoinRelations: Relation[];
-  validJoinCount: number;
-  invalidJoinCount: number;
+  isJoinEffective: (record: Relation) => boolean;
   cardRef: Ref<HTMLDivElement>;
   headerRef: Ref<HTMLDivElement>;
   contentRef: Ref<HTMLDivElement>;
+  relatedMessages?:ReactNode;
 }
 
 /** Classification presentation shares the card's click/double-click surface with its title. */
 export default function ClassificationCard({
   msg, selectedUnits, box, targetCount, title, activeText, isWhole, isActive, isStanceTarget,
-  homeLabel, stakes, relatedJoinRelations, outgoingJoinRelations, validJoinCount, invalidJoinCount,
-  cardRef, headerRef, contentRef, onMessageClick, onMessageDoubleClick, onMessageMouseDown, onMessageMouseUp,
+  homeLabel, stakes, relatedJoinRelations, outgoingJoinRelations, isJoinEffective,
+  cardRef, headerRef, contentRef, relatedMessages, onMessageClick, onMessageDoubleClick, onMessageMouseDown, onMessageMouseUp,
   onTextMouseUp, onSettlementToggleTruth, onSettlementToggleValue, onJoinFilterClick, settlementOpenMsgId, settlementOpenType,
 }: ClassificationCardProps) {
   const prominence = getMessageProminence(msg);
@@ -74,28 +75,9 @@ export default function ClassificationCard({
                   </div>
                 </div>
 
-              {(outgoingJoinRelations.length > 0 || relatedJoinRelations.length > 0) && onJoinFilterClick && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', whiteSpace: 'nowrap', overflow: 'hidden' }}>
-                    {outgoingJoinRelations.length > 0 && (
-                      <button
-                        onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'outgoing'); }}
-                        title="筛选显示该容器发出的全部加入消息"
-                        style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(16,185,129,0.14)', color: '#a7f3d0', border: '1px solid rgba(16,185,129,0.4)', cursor: 'pointer' }}
-                      >
-                        加入消息：{outgoingJoinRelations.length} 条
-                      </button>
-                    )}
-                    {relatedJoinRelations.length > 0 && (
-                      <button
-                        onClick={event => { event.stopPropagation(); onJoinFilterClick(msg.id, 'incoming'); }}
-                        title="筛选显示把此分类加入容器的全部加入消息"
-                        style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.14)', color: '#bfdbfe', border: '1px solid rgba(59,130,246,0.4)', cursor: 'pointer' }}
-                      >
-                        被加入消息：{validJoinCount} 条有效{invalidJoinCount > 0 ? `，${invalidJoinCount} 条无效` : ''}
-                      </button>
-                    )}
-                  </div>
-                )}
+              <JoinRecordBadges messageId={msg.id} memberRecords={relatedJoinRelations} containerRecords={outgoingJoinRelations}
+                isContainer isEffective={isJoinEffective} onOpen={onJoinFilterClick}/>
+                {relatedMessages}
               </div>
             );
 }

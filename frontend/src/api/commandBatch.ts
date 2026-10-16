@@ -1,7 +1,9 @@
 import type { Message, Relation, User } from '../types';
+import type { WorkbenchSnapshot } from '../data/workbench';
 
 export interface Command { id: string; method: string; path: string; body: Record<string, unknown> }
 export interface CommandEnvelope { requestId: string; commands: Command[] }
+export interface CommandCommit { snapshots?: WorkbenchSnapshot[] }
 type Batch = CommandEnvelope & { failure?: Error; provisional: Map<string, Message | Relation> };
 function storageKey() { return `gonglun:pending-send:${JSON.parse(localStorage.getItem('user') || '{}').id || 'anonymous'}`; }
 let current: Batch | null = null;
@@ -58,10 +60,12 @@ export async function runCommandBatch<T>(work: () => Promise<T>, commit: (input:
   }
   sessionStorage.setItem(storageKey(), JSON.stringify(envelope));
   try {
-    await commit(envelope);
+    const committed = await commit(envelope) as CommandCommit | undefined;
     sessionStorage.removeItem(storageKey());
     onCommitted?.(batch.commands.length);
-    window.dispatchEvent(new Event('gonglun:reload'));
+    if (committed?.snapshots?.length) {
+      window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: committed.snapshots }));
+    } else window.dispatchEvent(new Event('gonglun:reload'));
     window.dispatchEvent(new Event('points-refresh'));
     return result;
   } catch (error) {

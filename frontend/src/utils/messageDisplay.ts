@@ -1,4 +1,31 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
+import { getPresentationSpec, getRelationTitle } from '../types';
+import { getRelationMessageLabel } from './attachedRelationLabels';
+
+/** Use the card's type names for entries in the selection collections. */
+export function getMessageTypeLabel(message: DemoMessage | undefined): string {
+  if (!message) return '消息';
+  if (['classify', 'summary', 'merge'].includes(message.relationType ?? '')) return getPresentationSpec(message.relationType!).label;
+  const specific = getRelationMessageLabel(message);
+  if (specific) return specific;
+  if (message.kind === 'relation') return getPresentationSpec(message.relationType ?? 'relation').label;
+  if (message.kind === 'round' || message.kind === 'round_result') {
+    return `${message.roundPayload?.settlementType === 'VALUE' ? '价值' : '真假'}仲裁${message.kind === 'round_result' ? '结算' : ''}`;
+  }
+  return ({ normal: '文本', join: '加入', governance: '治理提案', code: '代码', operations: '运营' } as Record<string, string>)[message.kind] ?? '消息';
+}
+
+/** Visible organization text, without the bridge's synthetic target-ID summary. */
+export function getOrganizationTitle(message: DemoMessage, memberCount?: number): string {
+  const label = ({ classify: '分类', summary: '总结', merge: '归并' } as Record<string, string>)[message.relationType ?? ''];
+  if (!label) return '';
+  const count = memberCount ?? new Set((message.targetRefs ?? []).map(ref => ref.kind === 'relation' ? ref.relationId : ref.messageId)).size;
+  return getRelationTitle(message.relationPayload) || `${label}（${count}）`;
+}
+
+export function getMessageCardContent(message: DemoMessage | undefined): string {
+  return message ? getOrganizationTitle(message) || message.content : '';
+}
 
 /** Only recommendation expenditure buys prominence; wagers are not recommendations. */
 export function getMessageProminence(message: Pick<DemoMessage, 'state' | 'spending'> | undefined) {
@@ -20,8 +47,8 @@ const organizations = new Set(['classify', 'summary', 'merge', 'arrange']);
 export function needsSeparateStanceCard(message: DemoMessage, messages: ReadonlyMap<string, DemoMessage>): boolean {
   const target = message.executedStance?.target;
   if (!target) return false;
-  return !!(target.partId || target.memberId || target.path?.length || target.range
-    || target.revision !== undefined && target.revision !== messages.get(target.messageId)?.revision);
+  const current=messages.get(target.messageId);
+  return !!current && target.revision !== undefined && target.revision !== current.revision;
 }
 
 /** Keep the declaration available for inspection, while suspending its display effect. */

@@ -7,7 +7,7 @@ import type {
   DemoMessage,
   UnitSelection
 } from "../../../utils/modelBridge";
-import { collectOwnedByRelation } from '../model/ownership';
+import { findContainingClassification as findClassification } from '../model/ownership';
 import type { ClassifyStackEntry, TraceEntry, TraceSnapshot, ViewMode } from '../types';
 
 interface CaptureSnapshotDependencies {
@@ -364,40 +364,8 @@ interface FindContainingClassificationDependencies {
   rejectedJoinRelationIds: Set<string>;
 }
 
-export function findContainingClassification(dependencies: FindContainingClassificationDependencies, messageId: string): string | null {
-  const { relationById, relations, rejectedContainerIds, rejectedJoinRelationIds } = dependencies;
-  const targetRelation = relationById.get(messageId);
-  let anchorId = messageId;
-  if (targetRelation) {
-    const relationType = targetRelation.relationType.toUpperCase();
-    const sourceId = targetRelation.sourceMessageId ?? null;
-    const firstTarget = (targetRelation.targetRefs ?? []).find(ref =>
-      ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation',
-    );
-    const targetId = firstTarget?.kind === 'relation'
-      ? firstTarget.relationId
-      : firstTarget?.messageId;
-    if (['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT'].includes(relationType)) {
-      anchorId = sourceId || messageId;
-    } else if (['AGREE', 'DISAGREE', 'TAG'].includes(relationType)) {
-      anchorId = targetId || messageId;
-    }
-  }
-  let match: { id: string; size: number } | null = null;
-  for (const relation of relations) {
-    if (!['CLASSIFY', 'SUMMARY'].includes(relation.relationType) || rejectedContainerIds.has(relation.id)) continue;
-    const owned = collectOwnedByRelation(
-      relation.id,
-      relationById,
-      new Set(),
-      rejectedContainerIds,
-      rejectedJoinRelationIds,
-    );
-    if (!owned.textIds.has(anchorId) && !owned.relationIds.has(anchorId)) continue;
-    const size = owned.textIds.size + owned.relationIds.size;
-    if (!match || size < match.size) match = { id: relation.id, size };
-  }
-  return match?.id ?? null;
+export function findContainingClassification(dependencies: FindContainingClassificationDependencies,messageId:string):string|null {
+  return findClassification(dependencies,messageId);
 }
 
 interface ExitClassificationDependencies {

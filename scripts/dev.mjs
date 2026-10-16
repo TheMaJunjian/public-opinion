@@ -1,6 +1,12 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { ensureDevelopmentDatabase, loadEnvironment } from './postgres.mjs';
+
+loadEnvironment();
+try { await ensureDevelopmentDatabase(); }
+catch (error) { console.error(error.message); process.exit(1); }
+
 const require = createRequire(import.meta.url);
 const children = [
   spawn(process.execPath, [require.resolve('tsx/cli'), 'watch', 'apps/server/src/main.ts'], { stdio: 'inherit' }),

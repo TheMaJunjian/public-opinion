@@ -1,6 +1,7 @@
 import { messageScopePath } from '../utils/messageRoutes';
 import { useMemo, useRef } from 'react';
 import { describeUnit as describeVisibleSelection } from '../utils/selectionLabel';
+import { isWholeMessageSelection } from '../utils/messageElementSelection';
 import type { User } from '../types';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import MessageRelationsView from './MessageRelationsView';
@@ -8,6 +9,7 @@ import StanceHistoryPanel from './StanceHistoryPanel';
 import AuditLogView from './AuditLogView';
 import OperationLogView from './OperationLogView';
 import RevenuePanel from './RevenuePanel';
+import StagedMessageLabel from './StagedMessageLabel';
 import { useNavigate } from 'react-router-dom';
 
 interface DraftGroup {
@@ -29,6 +31,8 @@ interface WorkbenchPanelProps {
 
   // Mode
   isPreviewMode: boolean;
+  previewNotice?: string;
+  singleSideReview?: { title: string; onExit: () => void };
   isViewerMode?: boolean;
   viewerUsers?: User[];
   viewerUsername?: string;
@@ -166,6 +170,12 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   const p = props;
   const messageMap = useMemo(() => new Map(p.messages.map(message => [message.id, message])), [p.messages]);
   const describeSelection = (unit: UnitSelection) => describeVisibleSelection(unit, messageMap.get(unit.messageId));
+  const collectionContent = (unit: UnitSelection) => {
+    if (unit.selection.kind === 'text') return unit.selection.text;
+    const message = messageMap.get(unit.messageId);
+    const historic = unit.reference?.revision !== undefined && message?.revision !== undefined && unit.reference.revision !== message.revision;
+    return isWholeMessageSelection(unit, unit.messageId) && !historic ? undefined : describeSelection(unit);
+  };
   const navigate = useNavigate();
   const touchStartXRef = useRef<number | null>(null);
   const showContributionControls = !p.isPreviewMode;
@@ -270,7 +280,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       {p.sendWarning && <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 4 }}>⚠️ {p.sendWarning}</div>}
     </>
   );
-  const isComparison = Boolean(p.comparisonMode || p.comparisonReviewed);
+  const isComparison = !p.singleSideReview && Boolean(p.comparisonMode || p.comparisonReviewed);
   const comparisonDraft = p.draftUnits.length === 1 && p.draftUnits[0].selection.kind === 'whole'
     ? p.draftUnits[0]
     : null;
@@ -287,7 +297,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         当前为只读对比审阅状态，可查看赞同后与反对后的结构，不支持发送关系或消息。
       </div>}
       {p.comparisonReviewed && <button onClick={p.onReturnToComparisonCategory} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #38bdf8", background: "#123047", color: "#7dd3fc", cursor: "pointer" }}>
-        回到临时分类
+        返回对比消息
       </button>}
       <button onClick={p.onExitComparison} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>
         退出对比
@@ -297,6 +307,11 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
   return (
     <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" onWheel={handlePanelWheel} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" style={panelStyle}>
+      {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ fontWeight: 600 }}>容器查看</div>
+        <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>
+        <button onClick={p.singleSideReview.onExit} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>退出查看</button>
+      </div>}
       {p.isViewerMode && <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontWeight: 600 }}>阅览操作</span>
@@ -317,9 +332,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
         <button onClick={p.onExitViewer} style={{ width: "100%", boxSizing: "border-box", padding: "5px 12px", borderRadius: 4, border: "1px solid #f59e0b", background: "#2a1a00", color: "#f59e0b", fontSize: 12, cursor: "pointer" }}>退出阅览</button>
       </div>}
       {renderComparisonHeader()}
-      {p.isPreviewMode && (
+      {p.isPreviewMode && !p.singleSideReview && (
         <div style={{ border: "1px solid #856404", borderRadius: 6, padding: "8px 12px", background: "#3d3200", color: "#ffc107", fontSize: 13, fontWeight: 600 }}>
-          ⚠ 预览模式 — 该分类已被反对，无法发送消息或修改
+          {p.previewNotice ?? '⚠ 预览模式 — 该分类已被反对，无法发送消息或修改'}
         </div>
       )}
       <div data-guide-selection-staging="true" style={{ border: "1px solid #444", borderRadius: 6, padding: 8 }}>
@@ -359,7 +374,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             {p.draftGroups.map(g => (
               <li key={`DG-${g.messageId}`} style={{ borderBottom: "1px solid #333", paddingBottom: 6, marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <span>{describeSelection({ messageId: g.messageId, selection: { kind: 'whole' } }).replace(/^整条/, '')} · {g.wholeSelected ? '已选择整条' : `已选择 ${g.fragments.length} 处`}</span>
+                  <StagedMessageLabel messageId={g.messageId} message={messageMap.get(g.messageId)} status={g.wholeSelected ? '已选择整条' : `已选择 ${g.fragments.length} 处`} />
                   {g.wholeSelected && <button onClick={() => g.wholeUnits.forEach(p.removeUnitFromDraft)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除整条</button>}
                 </div>
                 {g.fragments.length > 0 && (
@@ -368,7 +383,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                       const label = describeSelection(u);
                       return (
                         <li key={p.selKey(u)} style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
-                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+                          <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)}
+                            content={u.selection.kind === 'text' ? u.selection.text : label}
+                            ariaLabel={`暂存片段 ${p.selKey(u)}`} status={u.selection.kind === 'text' ? '已选择片段' : '已选择消息部件'} />
                           <button onClick={() => p.removeUnitFromDraft(u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer", flex: "0 0 auto" }}>删除片段</button>
                         </li>
                       );
@@ -396,7 +413,8 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.sourceUnits.map(u => (
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                  <span>{describeSelection(u)}</span>
+                  <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`来源消息 ${p.selKey(u)}`}
+                    content={collectionContent(u)} />
                   <button onClick={() => p.removeUnitFrom("source", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
                 </li>
               ))}
@@ -412,7 +430,8 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, maxHeight: 120, overflow: "auto", fontSize: 12 }}>
               {p.targetUnits.map(u => (
                 <li key={p.selKey(u)} style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                  <span>{describeSelection(u)}</span>
+                  <StagedMessageLabel messageId={u.messageId} message={messageMap.get(u.messageId)} ariaLabel={`目标消息 ${p.selKey(u)}`}
+                    content={collectionContent(u)} />
                   <button onClick={() => p.removeUnitFrom("target", u)} style={{ fontSize: 10, padding: "0 6px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>删除</button>
                 </li>
               ))}

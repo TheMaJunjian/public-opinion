@@ -1,0 +1,6 @@
+# Temporary localhost-only access for the migration CLI on the new server.
+# Merge with docker-compose.prod.yml. Never apply to the old production host.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:54330:5432"

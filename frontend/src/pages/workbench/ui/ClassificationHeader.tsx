@@ -3,10 +3,11 @@ interface Props {
   isInsideClassify: boolean; isTemporaryJoinCategory: boolean; correctionFilterTargetId: string | null; comparisonMode: boolean;
   comparisonTargetCount: number; correctionCount: number; temporaryJoinCount: number; classificationTitle: string; classifyKindLabel: string;
   comparisonTargetId: string | null; joinFilterTargetId: string | null; currentClassifyRelMsg: DemoMessage | null | undefined;
+  joinFilterDirection?: 'incoming' | 'outgoing';
   classifyTargetCount: number; classifyExitLabel: string; onExitTemporary: () => void; onExitClassify: () => void;
 }
 export default function ClassificationHeader({ isInsideClassify, isTemporaryJoinCategory, correctionFilterTargetId, comparisonMode,
-  comparisonTargetCount, correctionCount, temporaryJoinCount, classificationTitle, classifyKindLabel, comparisonTargetId, joinFilterTargetId, currentClassifyRelMsg,
+  comparisonTargetCount, correctionCount, temporaryJoinCount, classificationTitle, classifyKindLabel, comparisonTargetId, joinFilterTargetId, joinFilterDirection = 'incoming', currentClassifyRelMsg,
   classifyTargetCount, classifyExitLabel, onExitTemporary: exitTemporaryCategory, onExitClassify: handleExitClassification }: Props) {
   return (<>
     {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null || comparisonMode) && (
@@ -16,12 +17,12 @@ export default function ClassificationHeader({ isInsideClassify, isTemporaryJoin
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
               <div style={{ fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {comparisonMode
-                  ? `对比临时分类（${comparisonTargetCount}）`
+                  ? `选择对比消息（${comparisonTargetCount}）`
                   : correctionFilterTargetId !== null
                     ? `更正记录临时分类（${correctionCount}）`
-                    : isTemporaryJoinCategory ? `加入记录临时分类（${temporaryJoinCount}）` : (classificationTitle || classifyKindLabel)}
+                    : isTemporaryJoinCategory ? `${joinFilterDirection === 'outgoing' ? '被加入' : '加入'}记录临时分类（${temporaryJoinCount}）` : (classificationTitle || classifyKindLabel)}
               </div>
-              {(comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory) && (
+              {(!comparisonMode && (correctionFilterTargetId !== null || isTemporaryJoinCategory)) && (
                 <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.18)", color: "#86efac", border: "1px solid rgba(34,197,94,0.35)", flexShrink: 0 }}>
                   临时
                 </span>
@@ -29,11 +30,11 @@ export default function ClassificationHeader({ isInsideClassify, isTemporaryJoin
             </div>
             <div style={{ fontSize: 12, color: "#94a3b8", display: "flex", gap: 12, flexWrap: "wrap" }}>
               {comparisonMode ? (
-                <span>{comparisonTargetId ? `正在审阅目标消息 ${comparisonTargetId}` : '显示所有影响显示效果的赞同/反对目标消息'}</span>
+                <span>{comparisonTargetId ? `正在审阅目标消息 ${comparisonTargetId}` : '选择消息，查看赞同后与反对后的显示效果'}</span>
               ) : correctionFilterTargetId !== null ? (
                 <span>目标消息 {correctionFilterTargetId} 的全部更正消息</span>
               ) : isTemporaryJoinCategory ? (
-                <span>目标消息 {joinFilterTargetId} 的全部加入记录</span>
+                <span>{joinFilterDirection === 'outgoing' ? `成员加入容器 ${joinFilterTargetId} 的全部记录` : `消息 ${joinFilterTargetId} 加入容器的全部记录`}（含生效和未生效记录）</span>
               ) : (
                 <>
                   <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{currentClassifyRelMsg?.author ?? "系统"}</span> 发起</span>
@@ -54,7 +55,7 @@ export default function ClassificationHeader({ isInsideClassify, isTemporaryJoin
             }
             handleExitClassification();
           }} style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", cursor: "pointer", flexShrink: 0 }}>
-            {comparisonMode || correctionFilterTargetId !== null || isTemporaryJoinCategory
+            {comparisonMode ? "退出对比" : correctionFilterTargetId !== null || isTemporaryJoinCategory
               ? "退出临时分类"
               : classifyExitLabel}
           </button>

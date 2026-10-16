@@ -1,10 +1,10 @@
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_RULES, type Account, type Change, type LedgerEntry, type Membership, type Message, type Rules, type User } from '@gonglun/core';
 import { initializeProjections, statesFor } from './projections.js';
 import { initializePersonal } from './personal-actions.js';
+import { Postgres } from './postgres.js';
+import { schemaSql } from './schema.js';
+import { initializeOrganizationMemberships } from './organizations.js';
 
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();
@@ -13,128 +13,119 @@ export function integer(value: number, label = '金额'): number {
   if (!Number.isSafeInteger(value)) throw new DomainError(`${label}超出安全整数范围`);
   return value;
 }
+
 export class Store {
-  readonly db: DatabaseSync;
-  private transactionDepth=0;
-  constructor(path: string) {
-    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS rule_versions(version INTEGER PRIMARY KEY,body TEXT NOT NULL,authorizationId TEXT,createdAt TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,password TEXT NOT NULL,founder INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS accounts(userId TEXT PRIMARY KEY,available INTEGER NOT NULL,locked INTEGER NOT NULL,earned INTEGER NOT NULL,spent INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,userId TEXT NOT NULL,csrf TEXT NOT NULL,expires INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS signing_keys(userId TEXT NOT NULL,deviceId TEXT NOT NULL,publicKey TEXT NOT NULL,createdAt TEXT NOT NULL,PRIMARY KEY(userId,deviceId));
-      CREATE TABLE IF NOT EXISTS signatures(messageId TEXT PRIMARY KEY,userId TEXT NOT NULL,deviceId TEXT NOT NULL,publicKey TEXT NOT NULL,payload TEXT NOT NULL,signature TEXT NOT NULL,createdAt TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS notification_receipts(sourceId TEXT NOT NULL,userId TEXT NOT NULL,targetId TEXT NOT NULL,PRIMARY KEY(sourceId,userId,targetId));
-      CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,authorId TEXT NOT NULL,createdAt TEXT NOT NULL,sequence INTEGER NOT NULL,body TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS message_sequence ON messages(sequence,id);
-      CREATE INDEX IF NOT EXISTS message_author ON messages(authorId,sequence);
-      CREATE TABLE IF NOT EXISTS revisions(messageId TEXT NOT NULL,revision INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(messageId,revision));
-      CREATE TABLE IF NOT EXISTS memberships(memberId TEXT PRIMARY KEY,parentId TEXT NOT NULL,sourceId TEXT NOT NULL,sourcePartId TEXT,bindingId TEXT,sourceRevision INTEGER);
-      CREATE INDEX IF NOT EXISTS members_parent ON memberships(parentId,memberId);
-      CREATE TABLE IF NOT EXISTS refs(sourceId TEXT NOT NULL,targetId TEXT NOT NULL,PRIMARY KEY(sourceId,targetId));
-      CREATE INDEX IF NOT EXISTS refs_target ON refs(targetId,sourceId);
-      CREATE TABLE IF NOT EXISTS rounds(id TEXT PRIMARY KEY,targetKey TEXT NOT NULL,body TEXT NOT NULL,createdAt TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS round_target ON rounds(targetKey,createdAt);
-      CREATE TABLE IF NOT EXISTS bets(id TEXT PRIMARY KEY,roundId TEXT NOT NULL,targetKey TEXT NOT NULL,userId TEXT NOT NULL,messageId TEXT NOT NULL,side TEXT NOT NULL,amount INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS bets_target ON bets(targetKey);
-      CREATE TABLE IF NOT EXISTS execution_stances(sourceId TEXT NOT NULL,revision INTEGER NOT NULL,partId TEXT NOT NULL,target TEXT NOT NULL,side TEXT NOT NULL,PRIMARY KEY(sourceId,revision,partId));
-      CREATE TABLE IF NOT EXISTS ledger(id TEXT PRIMARY KEY,userId TEXT NOT NULL,messageId TEXT NOT NULL,amount INTEGER NOT NULL,lockedDelta INTEGER NOT NULL,reason TEXT NOT NULL,createdAt TEXT NOT NULL,ruleVersion INTEGER NOT NULL,messageRevision INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS ledger_user ON ledger(userId,createdAt,id);
-      CREATE TABLE IF NOT EXISTS changes(sequence INTEGER PRIMARY KEY AUTOINCREMENT,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS requests(userId TEXT NOT NULL,requestId TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(userId,requestId));
-      CREATE TABLE IF NOT EXISTS command_requests(userId TEXT NOT NULL,requestId TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(userId,requestId));
-      CREATE TABLE IF NOT EXISTS effects(key TEXT PRIMARY KEY,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS escrows(messageId TEXT PRIMARY KEY,ownerId TEXT NOT NULL,amount INTEGER NOT NULL,recipientId TEXT,fulfillmentId TEXT);
-    `);
-    if(!this.db.prepare('PRAGMA table_info(ledger)').all().some(column=>column.name==='messageRevision'))this.db.exec('ALTER TABLE ledger ADD COLUMN messageRevision INTEGER NOT NULL DEFAULT 1');
-    if(!this.db.prepare('PRAGMA table_info(sessions)').all().some(column=>column.name==='deviceId'))this.db.exec('ALTER TABLE sessions ADD COLUMN deviceId TEXT');
-    this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('rules', JSON.stringify(DEFAULT_RULES));
-    this.db.prepare('INSERT OR IGNORE INTO rule_versions VALUES (?,?,NULL,?)').run(DEFAULT_RULES.version,JSON.stringify(DEFAULT_RULES),now());
-    this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('operating', '0');
-    this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('region', JSON.stringify(id()));
-    this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('minted', '0');
-    initializeProjections(this);
-    initializePersonal(this);
+  private constructor(readonly db: Postgres) {}
+
+  static async open(databaseUrl: string, options: { schema?: string } = {}): Promise<Store> {
+    const store = new Store(new Postgres(databaseUrl, options.schema));
+    try {
+      await store.transaction(async () => {
+        await store.db.exec(`CREATE SCHEMA IF NOT EXISTS "${store.db.schema}"`);
+        const legacy = await store.db.prepare(`SELECT to_regclass('"User"') AS users, to_regclass('"Message"') AS messages`).get();
+        if (legacy?.users || legacy?.messages) throw new Error('检测到旧 Prisma 数据库；请先完成 PostgreSQL 业务数据迁移，禁止自动初始化新版表');
+        await store.db.exec(schemaSql);
+        for (const [key, value] of Object.entries({ rules: DEFAULT_RULES, operating: 0, region: id(), minted: 0 })) {
+          await store.db.prepare('INSERT INTO settings VALUES ($1,$2) ON CONFLICT(key) DO NOTHING').run(key, JSON.stringify(value));
+        }
+        await store.db.prepare('INSERT INTO rule_versions VALUES ($1,$2,NULL,$3) ON CONFLICT(version) DO NOTHING').run(DEFAULT_RULES.version, JSON.stringify(DEFAULT_RULES), now());
+        await initializeProjections(store);
+        await initializePersonal(store);
+        await initializeOrganizationMemberships(store);
+      });
+      return store;
+    } catch (error) { await store.close(); throw error; }
   }
-  transaction<T>(fn: () => T): T {
-    const depth=this.transactionDepth,savepoint=`nested_${depth}`;
-    this.db.exec(depth?`SAVEPOINT ${savepoint}`:'BEGIN IMMEDIATE');
-    this.transactionDepth++;
-    try { const result = fn(); this.db.exec(depth?`RELEASE SAVEPOINT ${savepoint}`:'COMMIT'); return result; }
-    catch (error) {this.db.exec(depth?`ROLLBACK TO SAVEPOINT ${savepoint}`:'ROLLBACK');if(depth)this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);throw error;}
-    finally {this.transactionDepth--;}
+
+  transaction<T>(fn: () => T | Promise<T>): Promise<T> { return this.db.transaction(fn); }
+  read<T>(fn: () => T | Promise<T>): Promise<T> { return this.db.read(fn); }
+  async setting<T>(key: string): Promise<T> {
+    const row = await this.db.prepare('SELECT value FROM settings WHERE key=$1').get(key);
+    if (!row) throw new DomainError('设置不存在');
+    return JSON.parse(row.value) as T;
   }
-  setting<T>(key: string): T { const row = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key) as {value:string}|undefined; if (!row) throw new DomainError('设置不存在'); return JSON.parse(row.value) as T; }
-  set(key: string, value: unknown) { this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value)); }
-  rules(): Rules { return this.setting<Rules>('rules'); }
-  account(userId: string): Account {
-    const row = this.db.prepare('SELECT available,locked,earned,spent FROM accounts WHERE userId=?').get(userId);
-    if (!row) throw new DomainError('账户不存在', 404); return row as unknown as Account;
+  async set(key: string, value: unknown): Promise<void> {
+    await this.db.prepare('INSERT INTO settings VALUES ($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
   }
-  user(userId: string): User {
-    const row = this.db.prepare('SELECT id,name,founder FROM users WHERE id=?').get(userId) as {id:string;name:string;founder:number}|undefined;
-    if (!row) throw new DomainError('用户不存在', 404); return {...row, username:row.name, founder: !!row.founder};
+  rules(): Promise<Rules> { return this.setting<Rules>('rules'); }
+  async account(userId: string): Promise<Account> {
+    const row = await this.db.prepare('SELECT available,locked,earned,spent FROM accounts WHERE "userId"=$1').get(userId);
+    if (!row) throw new DomainError('账户不存在', 404);
+    return row as Account;
   }
-  message(messageId: string, revision?: number): Message {
+  async user(userId: string): Promise<User> {
+    const row = await this.db.prepare('SELECT u.id,u.name,u.founder,l."createdAt" FROM users u LEFT JOIN legacy_users l ON l.id=u.id WHERE u.id=$1').get<{id:string;name:string;founder:number;createdAt:string|null}>(userId);
+    if (!row) throw new DomainError('用户不存在', 404);
+    return {id:row.id,name:row.name,username:row.name,founder:!!row.founder,...(row.createdAt?{createdAt:row.createdAt}:{})};
+  }
+  async message(messageId: string, revision?: number): Promise<Message> {
     const row = revision === undefined
-      ? this.db.prepare('SELECT body FROM messages WHERE id=?').get(messageId)
-      : this.db.prepare('SELECT body FROM revisions WHERE messageId=? AND revision=?').get(messageId, revision);
+      ? await this.db.prepare('SELECT body FROM messages WHERE id=$1').get(messageId)
+      : await this.db.prepare('SELECT body FROM revisions WHERE "messageId"=$1 AND revision=$2').get(messageId, revision);
     if (!row) throw new DomainError('消息或版本不存在', 404);
-    return JSON.parse(row.body as string) as Message;
+    return JSON.parse(row.body) as Message;
   }
-  latestSequence(): number { return Number(this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM changes').get()!.n); }
-  operating(delta: number, allowDebt = false) {
-    const value = integer(this.setting<number>('operating') + delta);
-    if (!allowDebt && value < 0) throw new DomainError('运营资金不足'); this.set('operating',value);
+  async latestSequence(): Promise<number> {
+    return (await this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM changes').get())!.n;
   }
-  ledger(userId: string, messageId: string, amount: number, lockedDelta: number, reason: string, allowDebt = false): LedgerEntry {
-    const account = this.account(userId);
+  async operating(delta: number, allowDebt = false): Promise<void> {
+    const value = integer(await this.setting<number>('operating') + delta);
+    if (!allowDebt && value < 0) throw new DomainError('运营资金不足');
+    await this.set('operating', value);
+  }
+  async ledger(userId: string, messageId: string, amount: number, lockedDelta: number, reason: string, allowDebt = false): Promise<LedgerEntry> {
+    const entries = this.db.ledger;
+    const account = await this.account(userId);
     const available = integer(account.available + amount), locked = integer(account.locked + lockedDelta);
     if (locked < 0 || (!allowDebt && available < 0)) throw new DomainError('可用贡献点不足或锁定资金不足');
     const earned = integer(account.earned + Math.max(0, amount + lockedDelta));
     const spent = integer(account.spent + Math.max(0, -amount - lockedDelta));
-    this.db.prepare('UPDATE accounts SET available=?,locked=?,earned=?,spent=? WHERE userId=?').run(available,locked,earned,spent,userId);
-    const entry: LedgerEntry = {id:id(),userId,messageId,messageRevision:this.message(messageId).revision,amount,lockedDelta,reason,createdAt:now(),ruleVersion:this.rules().version};
-    this.db.prepare('INSERT INTO ledger VALUES (?,?,?,?,?,?,?,?,?)').run(entry.id,userId,messageId,amount,lockedDelta,reason,entry.createdAt,entry.ruleVersion,entry.messageRevision);
+    await this.db.prepare('UPDATE accounts SET available=$1,locked=$2,earned=$3,spent=$4 WHERE "userId"=$5').run(available, locked, earned, spent, userId);
+    const entry: LedgerEntry = { id: id(), userId, messageId, messageRevision: (await this.message(messageId)).revision, amount, lockedDelta, reason, createdAt: now(), ruleVersion: (await this.rules()).version };
+    await this.db.prepare('INSERT INTO ledger(id,"userId","messageId",amount,"lockedDelta",reason,"createdAt","ruleVersion","messageRevision") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)').run(entry.id,userId,messageId,amount,lockedDelta,reason,entry.createdAt,entry.ruleVersion,entry.messageRevision);
+    entries.push(entry);
     return entry;
   }
-  close() { this.db.close(); }
+  close(): Promise<void> { return this.db.close(); }
 }
 
 export class Mutation {
-  messages = new Map<string,Message>();
-  memberships = new Map<string,Membership>();
+  messages = new Map<string, Message>();
+  memberships = new Map<string, Membership>();
   removed = new Set<string>();
   affected = new Set<string>();
-  private ledgerStart:number;
-  constructor(public store: Store) {this.ledgerStart=Number(store.db.prepare('SELECT COALESCE(MAX(rowid),0) AS n FROM ledger').get()!.n);}
-  put(message: Message) {
-    this.messages.set(message.id,message);
+  private readonly ledgerStart: number;
+  constructor(public store: Store) { this.ledgerStart = store.db.ledger.length; }
+
+  async put(message: Message): Promise<void> {
+    this.messages.set(message.id, message);
     this.affected.add(message.id);
-    for(const row of this.store.db.prepare('SELECT targetId FROM refs WHERE sourceId=?').all(message.id))this.affected.add(String(row.targetId));
-    this.store.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET sequence=excluded.sequence,body=excluded.body').run(message.id,message.authorId,message.createdAt,message.sequence,JSON.stringify(message));
-    this.store.db.prepare('INSERT OR REPLACE INTO revisions VALUES (?,?,?)').run(message.id,message.revision,JSON.stringify(message));
-    this.store.db.prepare('DELETE FROM refs WHERE sourceId=?').run(message.id);
-    for(const part of message.parts) {
-      const targets=part.type==='relation'?Object.values(part.roles).flat().map(b=>b.reference):part.type==='display'&&part.target?[part.target]:[];
-      for(const target of targets){this.affected.add(target.messageId);this.store.db.prepare('INSERT OR IGNORE INTO refs VALUES (?,?)').run(message.id,target.messageId);}
+    for (const row of await this.store.db.prepare('SELECT "targetId" FROM refs WHERE "sourceId"=$1').all(message.id)) this.affected.add(row.targetId);
+    await this.store.db.prepare('INSERT INTO messages VALUES ($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET sequence=excluded.sequence,body=excluded.body').run(message.id,message.authorId,message.createdAt,message.sequence,JSON.stringify(message));
+    await this.store.db.prepare('INSERT INTO revisions("messageId",revision,body) VALUES ($1,$2,$3) ON CONFLICT("messageId",revision) DO UPDATE SET body=excluded.body').run(message.id,message.revision,JSON.stringify(message));
+    await this.store.db.prepare('DELETE FROM refs WHERE "sourceId"=$1').run(message.id);
+    for (const part of message.parts) {
+      const targets = part.type === 'relation' ? Object.values(part.roles).flat().map(b => b.reference) : part.type === 'display' && part.target ? [part.target] : [];
+      for (const target of targets) {
+        this.affected.add(target.messageId);
+        await this.store.db.prepare('INSERT INTO refs VALUES ($1,$2) ON CONFLICT DO NOTHING').run(message.id,target.messageId);
+      }
     }
   }
-  create(authorId: string, parts: Message['parts'], spending: Message['spending'] = {protocol:0,recommendation:0,wager:0},messageId?:string): Message {
-    if(messageId&&this.store.db.prepare('SELECT 1 FROM messages WHERE id=?').get(messageId))throw new DomainError('消息编号已经存在',409);
-    const timestamp=now(); const message: Message={id:messageId??id(),revision:1,authorId,createdAt:timestamp,updatedAt:timestamp,regionId:this.store.setting<string>('region'),ledgerId:'local',programVersion:'2.0.0',ruleVersion:this.store.rules().version,parts,spending,sequence:0};
-    this.put(message); return message;
+  async create(authorId: string, parts: Message['parts'], spending: Message['spending'] = {protocol:0,recommendation:0,wager:0}, messageId?: string): Promise<Message> {
+    if (messageId && await this.store.db.prepare('SELECT 1 FROM messages WHERE id=$1').get(messageId)) throw new DomainError('消息编号已经存在',409);
+    const timestamp = now();
+    const message: Message = { id:messageId??id(),revision:1,authorId,createdAt:timestamp,updatedAt:timestamp,regionId:await this.store.setting<string>('region'),ledgerId:'local',programVersion:'2.0.0',ruleVersion:(await this.store.rules()).version,parts,spending,sequence:0 };
+    await this.put(message);
+    return message;
   }
-  commit(): Change {
-    const row=this.store.db.prepare('INSERT INTO changes(body) VALUES (?)').run('{}');
-    const sequence=Number(row.lastInsertRowid);
-    for(const message of this.messages.values()) { message.sequence=sequence; this.put(message); }
-    const ledger=this.store.db.prepare('SELECT * FROM ledger WHERE rowid>? ORDER BY rowid').all(this.ledgerStart) as unknown as LedgerEntry[];
-    const change:Change={sequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:statesFor(this.store,[...this.affected]),ledger,treasury:{operating:this.store.setting<number>('operating'),issued:this.store.setting<number>('minted')}};
-    this.store.db.prepare('UPDATE changes SET body=? WHERE sequence=?').run(JSON.stringify(change),sequence);
+  async commit(): Promise<Change> {
+    const row = await this.store.db.prepare('INSERT INTO changes(body) VALUES ($1) RETURNING sequence').get('{}');
+    const sequence = row!.sequence;
+    for (const message of this.messages.values()) { message.sequence = sequence; await this.put(message); }
+    const ledger = this.store.db.ledger.slice(this.ledgerStart);
+    const change: Change = { sequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:await statesFor(this.store,[...this.affected]),ledger,treasury:{operating:await this.store.setting<number>('operating'),issued:await this.store.setting<number>('minted')} };
+    await this.store.db.prepare('UPDATE changes SET body=$1 WHERE sequence=$2').run(JSON.stringify(change),sequence);
     return change;
   }
 }

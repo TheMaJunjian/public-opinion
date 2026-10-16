@@ -144,8 +144,8 @@ export async function messageView(store: Store, message: Message, parent?: strin
     };
     return { id: message.id, kind, contentType: data.contentType === 'MARKDOWN' ? 'MARKDOWN' : 'TEXT', content: (await contentView(store, message, context)), createdAt: message.createdAt, updatedAt: message.updatedAt, createdBy: (await cachedUser(store, message.authorId, context)), relationType: type, relSourceId: sources[0]?.reference.messageId ?? null, sourceMessageId: sources[0]?.reference.messageId ?? null, sourceRefs: sources.map(b => b.reference), targetRefs: (await Promise.all(references.map(projectRef))), declaredTargetRefs: (await Promise.all(declaredTargetRefs.map(projectRef))), relationPayload: payload, payload, revision: message.revision, parts: message.parts, sequence: message.sequence, spending: message.spending, state: stateValue, executedStance: stateValue?.executedStance, supersededBy: data.legacySupersededBy ?? null };
 }
-export async function viewsFor(store: Store, messages: Message[], parent?: string) {
-    const ids = messages.map(m => m.id), states = new Map((await statesFor(store, ids)).map(s => [s.messageId, s])), context: ViewContext = { users: new Map((await allUsers(store)).map(user => [user.id, user])), messages: new Map(), members: new Map(), rounds: new Map(), recipients: new Map() };
+export async function viewsFor(store: Store, messages: Message[], parent?: string, knownUsers?: RecordData[]) {
+    const ids = messages.map(m => m.id), states = new Map((await statesFor(store, ids)).map(s => [s.messageId, s])), context: ViewContext = { users: new Map((knownUsers ?? await allUsers(store)).map(user => [user.id, user])), messages: new Map(), members: new Map(), rounds: new Map(), recipients: new Map() };
     context.users.set('system', (await userView(store, 'system')));
     const refs = new Map<string, Reference>();
     for (const message of messages) {
@@ -208,8 +208,8 @@ export async function accountView(store: Store, userId: string) {
     }
     return { points: { available: account.available, locked: account.locked }, balance: { amount: account.available, debtFrozen: account.available < 0 }, breakdown: { initialMinted: sum(r => r.reason === '初始发放' ? Number(r.amount) : 0), totalEarned, totalLost, totalProtocolFees: sum(r => r.reason === '协议费' ? -Number(r.amount) : 0) } };
 }
-export async function stakesFor(store: Store, ids: string[]): Promise<Record<string, RecordData>> {
-    const users = new Map((await allUsers(store)).map(user => [user.id, user])), result: Record<string, RecordData> = {};
+export async function stakesFor(store: Store, ids: string[], knownUsers?: RecordData[]): Promise<Record<string, RecordData>> {
+    const users = new Map((knownUsers ?? await allUsers(store)).map(user => [user.id, user])), result: Record<string, RecordData> = {};
     for (const id of ids)
         result[id] = { messageId: id, pool: { lockedPro: 0, lockedCon: 0 }, pools: { TRUTH: { lockedPro: 0, lockedCon: 0 }, VALUE: { lockedPro: 0, lockedCon: 0 } }, stakes: [], counts: { pro: 0, con: 0 }, countsByType: { TRUTH: { pro: 0, con: 0 }, VALUE: { pro: 0, con: 0 } } };
     for (let offset = 0; offset < ids.length; offset += 200) {
@@ -335,7 +335,9 @@ export async function attentionUsers(store: Store, ids?: string[]) { const rows 
         (result[id] ??= []).push(String(row.authorId));
 } return result; }
 export async function snapshot(store: Store, parent: string, query: RecordData, userId?: string) {
-    const limit = Math.min(200, Math.max(1, Number(query.limit) || 200)), after = Number(query.after ?? 0);
+    const batch = Number(query.batch ?? 1);
+    if (!Number.isInteger(batch) || batch < 1 || batch > 4) throw new DomainError('快照批次数必须为 1 到 4');
+    const limit = Math.min(200, Math.max(1, Number(query.limit) || 200)) * batch, after = Number(query.after ?? 0);
     if (!Number.isSafeInteger(after) || after < 0)
         throw new DomainError('变更游标无效');
     if (query.after !== undefined) {
@@ -351,11 +353,11 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
                 present.add(message.id);
             }
         }
-        const views = (await viewsFor(store, messages, parent)), ids = messages.map(m => m.id), marks = [];
+        const users = await allUsers(store), views = (await viewsFor(store, messages, parent, users)), ids = messages.map(m => m.id), marks = [];
         if (userId)
             for (let i = 0; i < ids.length; i += 100)
                 marks.push(...(await personalMarks(store, userId, ids.slice(i, i + 100))));
-        return { scope: (await scopeView(store, parent)), messages: views, relations: views.filter(v => v.relationType), users: (await allUsers(store)), stakes: (await stakesFor(store, ids)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: selected.length ? Number(selected.at(-1)!.sequence) : after, hasMore: changeRows.length > 100, nextCursor: null, removedMemberships: [...new Set(changes.flatMap(c => c.removedMemberships))], removedMessageIds: changedIds.filter(id => id !== parent && !present.has(id)) };
+        return { scope: (await scopeView(store, parent)), messages: views, relations: views.filter(v => v.relationType), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: selected.length ? Number(selected.at(-1)!.sequence) : after, hasMore: changeRows.length > 100, nextCursor: null, removedMemberships: [...new Set(changes.flatMap(c => c.removedMemberships))], removedMessageIds: changedIds.filter(id => id !== parent && !present.has(id)) };
     }
     const scope = scopeSql(parent), params: (string | number)[] = [...scope.params], extra: string[] = [];
     const parameter=(value:string|number)=>{params.push(value);return `$${params.length}`;};
@@ -376,7 +378,7 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
         extra.push(`(m.sequence<${sequence} OR (m.sequence=${sequence} AND m.id<${id}))`);
     }
     const bound=parameter(limit+1);
-    const rows = (await store.db.prepare(`${scope.cte} SELECT m.body FROM messages m WHERE ${scope.predicate}${extra.length ? ' AND ' + extra.join(' AND ') : ''} ORDER BY m.sequence DESC,m.id DESC LIMIT ${bound}`).all(...params)), messages = rows.slice(0, limit).map(r => JSON.parse(String(r.body)) as Message), last = messages.at(-1), views = (await viewsFor(store, messages, parent)), ids = messages.map(m => m.id);
+    const rows = (await store.db.prepare(`${scope.cte} SELECT m.body FROM messages m WHERE ${scope.predicate}${extra.length ? ' AND ' + extra.join(' AND ') : ''} ORDER BY m.sequence DESC,m.id DESC LIMIT ${bound}`).all(...params)), messages = rows.slice(0, limit).map(r => JSON.parse(String(r.body)) as Message), last = messages.at(-1), users = await allUsers(store), views = (await viewsFor(store, messages, parent, users)), ids = messages.map(m => m.id);
     const removedMemberships: string[] = [], removedMessageIds: string[] = [];
     if (after) {
         for (const row of (await store.db.prepare("SELECT body FROM changes WHERE sequence>$1").all(after))) {
@@ -392,5 +394,5 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
     if (userId)
         for (let i = 0; i < ids.length; i += 100)
             marks.push(...(await personalMarks(store, userId, ids.slice(i, i + 100))));
-    return { scope: (await scopeView(store, parent)), messages: views, relations: views.filter(v => v.relationType), users: (await allUsers(store)), stakes: (await stakesFor(store, ids)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
+    return { scope: (await scopeView(store, parent)), messages: views, relations: views.filter(v => v.relationType), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
 }

@@ -5,6 +5,7 @@ import { currentSession, requireCsrf, requireSession, rotateSigningKey, verifyDe
 import { DomainError, id, Store } from './db.js';
 import { dataOf } from './economy.js';
 import { executeBatch, executeCommand } from './ui-commands.js';
+import { sendSnapshot } from './snapshot-response.js';
 import { accountView, allUsers, attentionUsers, legacyType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
 /** Transport views for the established interaction model. The domain contains messages only. */
 export function createUiRouter(store: Store, publish: () => Promise<void>) {
@@ -12,7 +13,7 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     const get=(path:string,handler:(req:Request,res:Response,next:NextFunction)=>Promise<unknown>)=>
         router.get(path,(req,res,next)=>{void store.read(()=>handler(req,res,next)).catch(next);});
     get('/snapshot', async (req, res, next) => { try {
-        res.json((await snapshot(store, String(req.query.parent ?? 'root'), req.query, (await currentSession(store, req))?.user.id)));
+        await sendSnapshot(req, res, await snapshot(store, String(req.query.parent ?? 'root'), req.query, (await currentSession(store, req))?.user.id));
     }
     catch (e) {
         next(e);

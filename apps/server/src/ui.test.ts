@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomUUID, generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { createApp } from './app.js';
 import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
-import { replayArchive } from '@gonglun/core';
+import { replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
 
 const apps:Awaited<ReturnType<typeof createApp>>[]=[];
 const make=async ()=>{const app=(await createTestApp());apps.push(app);return app;};
@@ -116,6 +116,14 @@ describe('保留操作方式的消息 API',()=>{
     const app=(await make()),user=await actor(app,'发起人'),commands=Array.from({length:45},(_,i)=>({id:randomUUID(),method:'POST',path:'/messages',body:{content:`发言 ${i}`}}));
     await good(post(user,'/commands',{requestId:randomUUID(),commands}));
     const spy=vi.spyOn(app.store.db,'prepare');const response=await user.agent.get('/api/ui/snapshot?parent=root&limit=50');expect(response.status,response.text).toBe(200);expect(spy.mock.calls.length).toBeLessThan(35);spy.mockRestore();
+    const compact=await user.agent.get('/api/ui/snapshot?parent=root&limit=50&format=compact-v1').set('Accept-Encoding','gzip');
+    expect(compact.status,compact.text).toBe(200);expect(compact.headers['content-encoding']).toBe('gzip');
+    expect(compact.headers.vary).toContain('Accept-Encoding');expect(compact.headers['cache-control']).toBe('private, no-store');
+    expect(decodeWorkbenchSnapshot(compact.body)).toEqual(response.body);
+    expect(Number(compact.headers['content-length'])).toBeLessThan(Buffer.byteLength(response.text));
+    const identity=await user.agent.get('/api/ui/snapshot?parent=root&limit=50&format=compact-v1').set('Accept-Encoding','gzip;q=0, identity');
+    expect(identity.headers['content-encoding']).toBeUndefined();expect(decodeWorkbenchSnapshot(identity.body)).toEqual(response.body);
+    for(const batch of ['0','5','1.5','invalid']) expect((await user.agent.get(`/api/ui/snapshot?batch=${batch}`)).status).toBe(400);
     const sequence=response.body.sequence,source=commands[0]!.id;
     const before=(await app.store.account(user.session.user.id));
     const own=await good(post(user,'/messages',{content:'显式自赞',selfAgree:true,wager:7,recommendation:2}));expect((await app.store.account(user.session.user.id))).toMatchObject({available:before.available-10,locked:before.locked+7});

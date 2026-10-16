@@ -3,7 +3,8 @@ import { hash } from 'bcryptjs';
 import { Pool } from 'pg';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { replayArchive } from '@gonglun/core';
+import { replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
+import { WorkbenchStore, type WorkbenchSnapshot } from '../../../frontend/src/data/workbench.js';
 import { migrateLegacy } from './migrate-legacy.js';
 import { executeBatch } from './ui-commands.js';
 import { stakesFor } from './ui-projections.js';
@@ -217,12 +218,55 @@ it('preserves separate truth/value/delegation pools, active principal and source
   expect(view.status,view.text).toBe(200);
   expect(view.body.stakes['old-message'].pools).toMatchObject({TRUTH:{lockedPro:1,lockedCon:0},VALUE:{lockedPro:2,lockedCon:0},DELEGATION:{lockedPro:3,lockedCon:0}});
   expect(view.body.stakes['old-message'].stakes).toHaveLength(3);
+  const compact=await agent.get('/api/ui/snapshot?format=compact-v1&batch=4').set('Accept-Encoding','gzip');
+  expect(compact.headers['content-encoding']).toBe('gzip');
+  expect(decodeWorkbenchSnapshot<WorkbenchSnapshot>(compact.body)).toEqual(view.body);
   const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
   expect(login.status,login.text).toBe(200);
   const balance=await agent.get('/api/ui/points/balance');
   expect(balance.body.breakdown).toMatchObject({totalLost:15,totalEarned:20});
   expect(await app.store.account('old-user')).toMatchObject({available:500,locked:6});
 });
+
+it('loads every migrated message, JOIN, reference and legacy field with fewer round trips and bytes',async()=>{
+  const originals=Array.from({length:420},(_,index)=>({
+    id:`old-${String(index).padStart(4,'0')}`,topicId:'old-topic',createdById:'old-user',
+    kind:'TEXT',content:`原消息 ${index}：`+'完整历史正文。'.repeat(12),contentType:'TEXT',relationType:null,
+    targetRefs:null,relationPayload:null,relSourceId:null,supersededBy:null,createdAt:time,updatedAt:time,
+  }));
+  const legacyRelations=[
+    {id:'old-group',kind:'RELATION',relationType:'CLASSIFY',relSourceId:null,targetRefs:[{kind:'message',messageId:'old-0000'},{kind:'message',messageId:'old-0419'}],relationPayload:{title:'保留原分类声明'}},
+    {id:'join-first',kind:'RELATION',relationType:'JOIN',relSourceId:'old-group',targetRefs:[{kind:'message',messageId:'old-0000'}]},
+    {id:'join-last',kind:'RELATION',relationType:'JOIN',relSourceId:'old-group',targetRefs:[{kind:'message',messageId:'old-0419'}]},
+    {id:'cross-reference',kind:'RELATION',relationType:'REFERENCE',relSourceId:'old-0419',targetRefs:[{kind:'message',messageId:'old-0000'}]},
+  ].map(row=>({...row,topicId:'old-topic',createdById:'old-user',content:`原关系 ${row.id}`,createdAt:time,updatedAt:time}));
+  const source=await fixture({Message:[...originals,...legacyRelations]}),targetSchema=newTestSchema();
+  expect((await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true,readOnlyRehearsal:true,preserveActiveState:true})).applied).toBe(true);
+  const app=await createTestApp({databaseSchema:targetSchema});
+  async function loadAll(compact:boolean,parent='root') {
+    const store=new WorkbenchStore();let cursor:string|null= null,requests=0,bytes=0;
+    do {
+      const response:request.Response=await request(app).get('/api/ui/snapshot').query({parent,limit:100,...(cursor?{cursor}:{}),...(compact?{batch:4,format:'compact-v1'}:{})}).set('Accept-Encoding',compact?'gzip':'identity');
+      expect(response.status,response.text).toBe(200);
+      if(compact) expect(response.headers['content-encoding']).toBe('gzip');
+      const data:WorkbenchSnapshot=decodeWorkbenchSnapshot<WorkbenchSnapshot>(response.body);
+      store.apply(data,requests===0);cursor=data.nextCursor??null;
+      requests++;bytes+=Number(response.headers['content-length']);
+      expect(requests).toBeLessThan(20);
+    } while(cursor);
+    return {view:store.snapshot(),requests,bytes};
+  }
+  const original=await loadAll(false),optimized=await loadAll(true);
+  expect(optimized.view).toEqual(original.view);
+  expect(collectContainerVisibleIds('old-group',optimized.view.relations)).toEqual(collectContainerVisibleIds('old-group',original.view.relations));
+  expect(optimized.view.relations.map(row=>row.id)).toEqual(expect.arrayContaining(['old-group','join-first','join-last','cross-reference']));
+  for(const message of originals) expect(optimized.view.messages.find(row=>row.id===message.id)?.content).toBe(message.content);
+  expect(optimized.requests).toBe(Math.ceil(original.view.messages.length/400));
+  expect(optimized.requests).toBeLessThan(original.requests);
+  expect(optimized.bytes).toBeLessThan(original.bytes/3);
+  expect((await loadAll(true,'old-topic')).view).toEqual((await loadAll(false,'old-topic')).view);
+  console.info('Legacy snapshot transport:',JSON.stringify({messages:original.view.messages.length,relations:original.view.relations.length,before:{requests:original.requests,bytes:original.bytes},after:{requests:optimized.requests,bytes:optimized.bytes}}));
+},60_000);
 
 it('locks only available virtual points without minting or settling, and tolerates an unfunded remainder',async()=>{
   const source=await fixture({Stake:[{id:'virtual-stake',userId:'old-user',messageId:'old-message',roundId:'pending',side:'PRO',amount:700,settlementType:'TRUTH',createdAt:time}],BetPool:[{messageId:'old-message',settlementType:'TRUTH',lockedPro:700,lockedCon:0}],SettlementRound:[{id:'pending',messageId:'old-message',createdByUserId:'old-user',status:'VOTING',settlementType:'TRUTH',openedAt:time,closedAt:null}]});

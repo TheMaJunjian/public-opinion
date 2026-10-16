@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import https from 'node:https';
+import { gunzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { hash } from 'bcryptjs';
@@ -28,8 +29,13 @@ function request(path, method = 'GET', body, headers = {}) {
   return new Promise((resolveRequest, reject) => {
     const bytes = body === undefined ? undefined : JSON.stringify(body);
     const req = https.request({hostname:'localhost',port:54443,path,method,rejectUnauthorized:false,headers:{...headers,...(bytes?{'content-type':'application/json','content-length':Buffer.byteLength(bytes)}:{})}}, res => {
-      let text = ''; res.on('data', chunk => text += chunk);
-      res.on('end', () => resolveRequest({status:res.statusCode,headers:res.headers,body:(res.headers['content-type']??'').includes('application/json')?JSON.parse(text):text}));
+      const chunks = []; res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        try {
+          const bytes = Buffer.concat(chunks), text = (res.headers['content-encoding']==='gzip'?gunzipSync(bytes):bytes).toString('utf8');
+          resolveRequest({status:res.statusCode,headers:res.headers,body:(res.headers['content-type']??'').includes('application/json')?JSON.parse(text):text});
+        } catch(error) { reject(error); }
+      });
     });
     req.setTimeout(10000, () => req.destroy(new Error('HTTPS timeout')));
     req.on('error', reject); req.end(bytes);
@@ -98,6 +104,12 @@ try {
   const legacyView=await request('/api/ui/snapshot?parent=legacy-topic');
   assert.equal(legacyView.status,200);
   assert.ok(legacyView.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
+  const compact=await request('/api/ui/snapshot?parent=root&batch=4&format=compact-v1','GET',undefined,{'accept-encoding':'gzip'});
+  assert.equal(compact.status,200);assert.equal(compact.headers['content-encoding'],'gzip');
+  assert.equal(compact.body.snapshotEncoding,'relations-v1');
+  assert.ok(compact.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
+  assert.ok(compact.body.relationRecords.length>0);
+  assert.ok(compact.body.relationRecords.every(index=>Number.isInteger(index)&&compact.body.messages[index]));
   const migratedWrite=await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'Migrated production write'}]},{cookie:oldLogin.headers['set-cookie'][0].split(';')[0],'x-csrf-token':oldLogin.body.csrf});
   assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,299);
   console.log('PASS: actual Prisma migration CLI → production image → Caddy HTTPS → bcrypt login, preserved message and balance, new write');

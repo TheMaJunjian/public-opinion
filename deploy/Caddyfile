@@ -1,6 +1,20 @@
 {$DOMAIN} {
     encode gzip
-    reverse_proxy api:3000 {
-        flush_interval -1
+    # Always reload the entry page so it selects the current hashed JS assets.
+    @entry path / /index.html
+    header @entry Cache-Control "no-store"
+    # Cached legacy clients cannot use the new session and command protocol.
+    # Clear HTTP cache only: storage contains users' device signing keys.
+    @legacyAuth path /api/auth/*
+    handle @legacyAuth {
+        header Cache-Control "no-store"
+        header Clear-Site-Data `"cache"`
+        header Content-Type "application/json; charset=utf-8"
+        respond `{"error":"系统已升级，请刷新本页后重新登录，无需清除浏览器数据。","message":"系统已升级，请刷新本页后重新登录，无需清除浏览器数据。","code":"CLIENT_UPDATE_REQUIRED"}` 409
+    }
+    handle {
+        reverse_proxy api:3000 {
+            flush_interval -1
+        }
     }
 }

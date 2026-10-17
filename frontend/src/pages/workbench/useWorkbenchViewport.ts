@@ -3,7 +3,7 @@ import {
   handleLeftPanelTouchEnd as runHandleLeftPanelTouchEnd,
   handleLeftPanelTouchMove as runHandleLeftPanelTouchMove,
   handleLeftPanelTouchStart as runHandleLeftPanelTouchStart,
-  handleLeftPanelWheel as runHandleLeftPanelWheel,
+  handlePanelWheel,
   handleSplitterPointerDown as runHandleSplitterPointerDown,
 } from './actions/panelGestures';
 import type { ViewMode } from './types';
@@ -109,7 +109,7 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
       const visibleBottom = Math.min(rect.bottom, window.innerHeight);
       const scale = panel.offsetWidth > 0 ? rect.width / panel.offsetWidth : 1;
       const visibleLeft = Math.max(rect.left, 0);
-      const visibleRight = Math.min(rect.right, window.innerWidth);
+      const visibleRight = Math.min(rect.right, document.documentElement.clientWidth || window.innerWidth);
       const visibleWidth = Math.max(0, visibleRight - visibleLeft);
       const comparisonWidths = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'))
         .map(viewport => viewport.scrollWidth);
@@ -195,21 +195,26 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
   }, [fixedHorizontalScroll]);
 
   useEffect(() => {
-    const updateLeftPanelMinHeight = () => {
+    const updatePanelHeights = () => {
       const panel = leftPanelRef.current;
       if (!panel) return;
       const panelRect = panel.getBoundingClientRect();
       const scale = panel.offsetWidth > 0 ? panelRect.width / panel.offsetWidth : 1;
-      const minHeight = Math.max(0, Math.ceil((window.innerHeight - panelRect.top) / Math.max(scale, 0.01)));
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+      // Measure from the document origin. A viewport-relative top moves while
+      // dragging the page scrollbar and would continuously grow the page.
+      const panelDocumentTop = panelRect.top + window.scrollY;
+      const bottomPadding = panel.parentElement ? parseFloat(getComputedStyle(panel.parentElement).paddingBottom) || 0 : 0;
+      const minHeight = Math.max(0, Math.floor((viewportHeight - panelDocumentTop) / Math.max(scale, 0.01)) - bottomPadding);
       setLeftPanelMinHeight(current => current === minHeight ? current : minHeight);
     };
-    updateLeftPanelMinHeight();
-    window.addEventListener('resize', updateLeftPanelMinHeight);
-    const zoomObserver = new MutationObserver(updateLeftPanelMinHeight);
+    updatePanelHeights();
+    window.addEventListener('resize', updatePanelHeights);
+    const zoomObserver = new MutationObserver(updatePanelHeights);
     const zoomRoot = document.querySelector('[style*="scale("]');
     if (zoomRoot) zoomObserver.observe(zoomRoot, { attributes: true, attributeFilter: ['style'] });
     return () => {
-      window.removeEventListener('resize', updateLeftPanelMinHeight);
+      window.removeEventListener('resize', updatePanelHeights);
       zoomObserver.disconnect();
     };
   }, [loading]);
@@ -230,9 +235,23 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
     return runHandleLeftPanelTouchEnd({ leftPanelTouchRef });
   }
 
-  function handleLeftPanelWheel(event: React.WheelEvent<HTMLDivElement>): void {
-    return runHandleLeftPanelWheel({ rightPanelRef }, event);
-  }
+  useEffect(() => {
+    const left = leftPanelRef.current;
+    const right = rightPanelRef.current;
+    if (!left || !right) return;
+    // The right panel keeps its natural height and is browsed with the page
+    // scrollbar. Only the left canvas and nested lists have their own scroll.
+    const page = document.scrollingElement as HTMLElement | null ?? document.documentElement;
+    const scrollLeft = (event: WheelEvent) => handlePanelWheel(left, right, event, page);
+    const scrollRight = (event: WheelEvent) => handlePanelWheel(right, left, event, page);
+    // React delegates wheel events passively, so preventDefault must run here.
+    left.addEventListener('wheel', scrollLeft, { passive: false });
+    right.addEventListener('wheel', scrollRight, { passive: false });
+    return () => {
+      left.removeEventListener('wheel', scrollLeft);
+      right.removeEventListener('wheel', scrollRight);
+    };
+  }, [loading]);
 
-  return { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, leftPanelMinHeight, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd, handleLeftPanelWheel };
+  return { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, leftPanelMinHeight, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd };
 }

@@ -54,15 +54,25 @@ export function deriveContainerEffect(input: {
   const projectEdges = (edges:DemoEdge[],visibleContainers:ReadonlySet<string>) => projectJoinMembershipEdges(
     filterContainerEdgesByEffectiveJoins(edges,relations,effectiveJoinIds),relations,effectiveJoinIds,visibleContainers,
   ).filter(edge=>!suppressed.has(edge.relationMessageId));
-  const edges = projectEdges(input.edges,containerIds);
-  const memberships:TraceContainerMembership[] = relations.filter(relation=>
-    effectiveJoinIds.has(relation.id)&&relation.sourceMessageId&&containerIds.has(relation.sourceMessageId),
-  ).map(relation=>({containerId:relation.sourceMessageId!,relationType:relationById.get(relation.sourceMessageId!)!.relationType.toLowerCase() as DemoEdge['relationType'],targetIds:relation.targetRefs.map(ref=>ref.kind==='relation'?ref.relationId:ref.messageId)}));
+  // Trace uses the same winning membership edges as the canvas, retaining
+  // suppressed relations here so an explicit trace anchor can still reach them.
+  const traceEdges = projectJoinMembershipEdges(
+    filterContainerEdgesByEffectiveJoins(input.edges,relations,effectiveJoinIds),relations,effectiveJoinIds,containerIds,
+  );
+  const edges = traceEdges.filter(edge=>!suppressed.has(edge.relationMessageId));
+  // Resolve each target independently, including older multi-target JOINs.
+  // Use declarations for this index: display edges may already point at a
+  // corrected version while the original message still owns the membership.
+  const memberships:TraceContainerMembership[] = [...containerIds].map(containerId=>{
+    const direct = ownership.direct(containerId);
+    return {containerId,relationType:relationById.get(containerId)!.relationType.toLowerCase() as DemoEdge['relationType'],
+      targetIds:[...direct.textIds,...direct.relationIds]};
+  });
   const context = {
     relatedMessages: messages, rejectedContainerIds,
     joinStatusByMessage: new Map([...effectiveJoinIds].map(id=>[id,'valid' as const])),
   };
-  return {messages,relations,edges,msgMap,relationById,suppressed,rejectedContainerIds,rejectedJoinRelationIds,effectiveJoinIds,ownership,memberships,projectEdges,context};
+  return {messages,relations,edges,traceEdges,msgMap,relationById,suppressed,rejectedContainerIds,rejectedJoinRelationIds,effectiveJoinIds,ownership,memberships,projectEdges,context};
 }
 
 export type ContainerEffect=ReturnType<typeof deriveContainerEffect>;

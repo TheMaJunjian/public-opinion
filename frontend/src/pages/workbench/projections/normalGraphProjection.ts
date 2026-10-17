@@ -6,7 +6,7 @@ import type {
   DemoEdge,
   DemoMessage
 } from "../../../utils/modelBridge";
-import { computeEffectiveSuppressedRelIds } from "../../../utils/modelBridge";
+import { computeEffectiveSuppressedRelIds, withCorrectionContent } from "../../../utils/modelBridge";
 import { filterContainerEdgesByEffectiveJoins,projectJoinMembershipEdges } from '../model/membership';
 
 interface DeriveNormalGraphProjectionInput {
@@ -27,7 +27,7 @@ export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionIn
   const { graphMessagesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, messages, displayUser, graphEdgesToRender, relations, effectiveJoinRelationIds } = input;
   const scopedCorrectedMessages = graphMessagesToRender.map(message => {
     const correction = correctionVersions.get(message.id)?.current;
-    return correction ? { ...message, content: correction.content } : message;
+    return correction ? withCorrectionContent(message, correction.content) : message;
   });
   const scopedCleanMessages = cleanVisibleIds
     ? scopedCorrectedMessages.filter(message =>

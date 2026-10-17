@@ -30,6 +30,9 @@ export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDow
   function onPointerMove(ev: PointerEvent) {
     if (!splitterDragRef.current || !panelContainerRef.current) return;
     const dx = ev.clientX - splitterDragRef.current.startX;
+    // A click (including small pointer jitter) must not normalize the current
+    // layout, especially while the right panel is already at its width limit.
+    if (Math.abs(dx) < 3) return;
     const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
     const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
     const nextWidth = naturalRightPx < MIN_RIGHT_PX
@@ -100,24 +103,53 @@ export function handleLeftPanelTouchEnd(dependencies: HandleLeftPanelTouchEndDep
   leftPanelTouchRef.current = null;
 }
 
-interface HandleLeftPanelWheelDependencies {
-  rightPanelRef: React.MutableRefObject<HTMLDivElement | null>;
+type ScrollPosition = { requested: number; actual: number };
+const wheelPositions = new WeakMap<HTMLElement, { top?: ScrollPosition; left?: ScrollPosition }>();
+
+/** Consume the whole input when this area can move; hand off only at an existing boundary. */
+function consumeWheelDelta(element: HTMLElement, delta: number, axis: 'top' | 'left'): number {
+  if (delta === 0) return 0;
+  const key = axis === 'top' ? 'scrollTop' : 'scrollLeft';
+  const max = Math.max(0, axis === 'top' ? element.scrollHeight - element.clientHeight : element.scrollWidth - element.clientWidth);
+  const positions = wheelPositions.get(element) ?? {};
+  const previous = positions[axis];
+  // A scrollbar drag or navigation takes precedence over the previous wheel position.
+  const start = Math.max(0, Math.min(max, previous?.actual === element[key] ? previous.requested : element[key]));
+  const next = Math.max(0, Math.min(max, start + delta));
+  if (next === start) return delta;
+  element[key] = next;
+  positions[axis] = { requested: next, actual: element[key] };
+  wheelPositions.set(element, positions);
+  // Reaching an edge during this event still belongs to this area. A later
+  // event that starts at that edge may move its parent instead.
+  return 0;
 }
 
-export function handleLeftPanelWheel(dependencies: HandleLeftPanelWheelDependencies, event: React.WheelEvent<HTMLDivElement>): void {
-  const { rightPanelRef } = dependencies;
-  const panel = event.currentTarget;
-  if (event.deltaY === 0) return;
-  const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
-  const previousScrollTop = panel.scrollTop;
-  const nextScrollTop = Math.max(0, Math.min(maxScrollTop, previousScrollTop + event.deltaY));
-  const consumedDelta = nextScrollTop - previousScrollTop;
-  const remainingDelta = event.deltaY - consumedDelta;
-  const rightPanel = rightPanelRef.current;
+/** Own the entire wheel sequence so handoff does not depend on the browser's latched scroll target. */
+export function handlePanelWheel(panel: HTMLElement, otherPanel: HTMLElement | null, event: WheelEvent, page: HTMLElement | null = null): void {
+  if (event.defaultPrevented || !event.cancelable || event.ctrlKey || event.shiftKey || event.deltaY === 0) return;
   event.preventDefault();
-  if (consumedDelta !== 0) panel.scrollTop = nextScrollTop;
-  if (rightPanel && remainingDelta !== 0) {
-    const rightMaxScrollTop = Math.max(0, rightPanel.scrollHeight - rightPanel.clientHeight);
-    rightPanel.scrollTop = Math.max(0, Math.min(rightMaxScrollTop, rightPanel.scrollTop + remainingDelta));
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? panel.clientHeight : 1;
+  let remainingY = event.deltaY * unit;
+  let remainingX = event.deltaX * unit;
+  const visited = new Set<HTMLElement>();
+  const consume = (element: HTMLElement, force = false) => {
+    if (visited.has(element)) return;
+    visited.add(element);
+    const style = getComputedStyle(element);
+    if (force || /^(auto|scroll)$/.test(style.overflowY || style.overflow)) remainingY = consumeWheelDelta(element, remainingY, 'top');
+    if (force || /^(auto|scroll)$/.test(style.overflowX || style.overflow)) remainingX = consumeWheelDelta(element, remainingX, 'left');
+  };
+  // Keep the owning panel explicit: its nested scroll areas and ancestors must
+  // already be at their boundary before an input can reach its sibling.
+  const target = event.composedPath()[0] ?? event.target;
+  let ancestor = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+  if (!ancestor || !panel.contains(ancestor)) ancestor = panel;
+  while (ancestor && ancestor !== page) {
+    if (ancestor instanceof HTMLElement) consume(ancestor, ancestor === panel);
+    if (ancestor === panel && !page) break;
+    ancestor = ancestor.parentElement;
   }
+  if (page) consume(page, true);
+  if (otherPanel) consume(otherPanel, true);
 }

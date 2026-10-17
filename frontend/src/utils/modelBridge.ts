@@ -10,6 +10,25 @@ export const READABLE_RELATION_TYPES = new Set([
   'summary', 'classify', 'proposal', 'delegation', 'code_change', 'operations',
 ]);
 
+/** Imported CORRECT records already used legacy voting; they are not new authorization proposals. */
+export function isCorrectionProposal(message: { parts?: Part[] }): boolean {
+  const imported = message.parts?.some(part => part.type === 'data' && part.value && typeof part.value === 'object'
+    && !Array.isArray(part.value) && typeof part.value.legacyTopicId === 'string' && part.value.uiType === 'CORRECT');
+  return !imported && !!message.parts?.some(part => part.type === 'relation' && part.relation === 'amend');
+}
+
+/** Keep the displayed body consistent with legacy correction overlays without mutating stored parts. */
+export function withCorrectionContent(message: DemoMessage, content: string): DemoMessage {
+  const readable = message.parts?.filter(part => ['text', 'code', 'web'].includes(part.type));
+  return { ...message, content, ...(readable?.length === 1 ? { parts: message.parts!.map(part => {
+    if (part.id !== readable[0].id) return part;
+    if (part.type === 'text') return { ...part, text: content };
+    if (part.type === 'code') return { ...part, source: content };
+    if (part.type === 'web') return { ...part, excerpt: content };
+    return part;
+  }) } : {}) };
+}
+
 /** Message kinds that are rendered as readable cards in the graph. */
 export function hasReadableMessageContent(message: {relationType?:string;parts?:Part[]}) {
   const type=message.relationType?.toLowerCase()??'';
@@ -417,7 +436,7 @@ export function convertMessagesToDemoModel(
 
       demoEdges.push({
         id: edgeId,
-        proposalOnly: rel.parts?.some(part => part.type === 'relation' && part.relation === 'amend'),
+        proposalOnly: isCorrectionProposal(rel),
         relationMessageId: relMsgId,
         relationType: relType as RelationType,
         from: rel.sourceRefs?.[0] ? referenceToUnit(rel.sourceRefs[0]) : { messageId: fromMessageId, selection: { kind: "whole" } },
@@ -468,7 +487,7 @@ export function convertMessagesToDemoModel(
       }
       demoEdges.push({
         id: edgeId,
-        proposalOnly: m.parts?.some(part => part.type === 'relation' && part.relation === 'amend'),
+        proposalOnly: isCorrectionProposal(m),
         relationMessageId: relMsgId,
         relationType: lowerRelType,
         from: { messageId: relMsgId, selection: { kind: "whole" } },
@@ -504,7 +523,7 @@ export function computeCorrectionVersions(
       targetId: edge.to.messageId,
       baseContent: target.content,
       content,
-      valid: !edge.proposalOnly && !correction.parts?.some(part => part.type === 'relation' && part.relation === 'amend') && !invalidCorrectionIds.has(correction.id),
+      valid: !edge.proposalOnly && !isCorrectionProposal(correction) && !invalidCorrectionIds.has(correction.id),
       createdAt: correction.createdAt,
       selection: edge.to.selection,
     };

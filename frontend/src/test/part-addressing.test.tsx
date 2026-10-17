@@ -140,6 +140,20 @@ describe('core message identity and execution state', () => {
     expect(versions.versions[0].valid).toBe(false); expect(computeCorrectedEdgeMap(converted.edges).size).toBe(0);
   });
 
+  it('keeps an imported effective correction active even when its stored relation name is amend', () => {
+    const target = { ...message(), content: '好玩吗？', parts: [{ id: 'body', type: 'text' as const, text: '好玩吗？' }] };
+    const correction: Relation = { id: 'legacy-correction', revision: 1, relationType: 'CORRECT', sourceMessageId: null,
+      targetRefs: [{ kind: 'text-fragment', messageId: target.id, text: '吗？', hash: 'old', reference: { messageId: target.id, revision: 3, partId: 'body', range: { start: 2, end: 4 } } }],
+      parts: [{ id: 'relation', type: 'relation', relation: 'amend', roles: { target: [{ id: 't', reference: { messageId: target.id } }] } },
+        { id: 'data', type: 'data', value: { kind: 'RELATION', uiType: 'CORRECT', legacyTopicId: 'old-topic', correctionContent: '好玩1111' } }],
+      payload: { correctionContent: '好玩1111' }, createdBy: user, createdAt: '2026-01-02T00:00:00Z' };
+    const converted = convertMessagesToDemoModel([], [correction]);
+    expect(converted.edges[0].proposalOnly).toBe(false);
+    const messages = [target, ...converted.messages];
+    expect(computeCorrectionVersions(messages, converted.edges).get(target.id)?.current?.content).toBe('好玩1111');
+    expect(computeCorrectionVersions(messages, converted.edges, new Set([correction.id])).get(target.id)?.current).toBeUndefined();
+  });
+
   it('reverses an opposition to the stance part but does not reverse an opposition to the reason', () => {
     const original = { ...message(), id: 'original' };
     const opposed: DemoMessage = { ...message(), id: 'opposed', kind: 'relation', relationType: 'disagree', parts: [body,

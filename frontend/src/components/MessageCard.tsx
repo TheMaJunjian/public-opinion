@@ -245,7 +245,7 @@ export default function MessageCard({
       )}
 
       {/* Content */}
-      {!isOrganizationMessage && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
+      {!isOrganizationMessage && !(children != null && (msg.kind === 'relation' || msg.kind === 'join')) && msg.parts?.some(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ? (
         <div style={{ display: 'grid', gap: 8 }}>
           {msg.parts.filter(part => part.type === 'text' || part.type === 'code' || part.type === 'web').map(part => (
             <MessageTextPart key={part.id} message={msg} partId={part.id} activeText={isActiveText} onMouseUp={onContentMouseUp}>{msg.kind === 'normal' && msg.parts!.filter(item => ['text', 'code', 'web'].includes(item.type)).length === 1 ? children : undefined}</MessageTextPart>

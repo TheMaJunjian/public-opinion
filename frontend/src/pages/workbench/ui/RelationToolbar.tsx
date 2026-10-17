@@ -47,7 +47,7 @@ export default function RelationToolbar({ barRef: relationBarRef, leftControlsRe
       </div>
       <div aria-hidden="true" style={{ flex: "1 1 0", width: relationSpringWidth, minWidth: 0 }} />
       {!isPreloaded && (
-        <div ref={relationRightControlsRef} style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 12, flex: "1 1 500px", minWidth: 0, paddingLeft: 8, background: "#181818", position: "sticky", right: `${relationControlsRightOffset}px`, zIndex: Z_INDEX.header }}>
+        <div ref={relationRightControlsRef} style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto", gap: 6, fontSize: 12, flex: "0 1 auto", maxWidth: "100%", minWidth: 0, paddingLeft: 8, background: "#181818", position: "sticky", right: `${relationControlsRightOffset}px`, zIndex: Z_INDEX.header }}>
           <span>关系类型：</span>
           {ALL_RELATION_TYPES.map(rt => (
             <button key={rt} onClick={() => {

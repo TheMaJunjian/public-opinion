@@ -7,7 +7,7 @@ export function useRelationToolbar(loading: boolean) {
   const relationRightControlsRef = useRef<HTMLDivElement>(null);
   const [relationBarHeight, setRelationBarHeight] = useState(0);
   const [relationBarMinWidth, setRelationBarMinWidth] = useState(0);
-  const [relationControlsRightOffset, setRelationControlsRightOffset] = useState(0);
+  const [relationControlsRightOffset, setRelationControlsRightOffset] = useState(16);
 
   const measureRelationBar = useCallback(() => {
     const relationBar = relationBarRef.current;
@@ -22,7 +22,8 @@ export function useRelationToolbar(loading: boolean) {
       if (!leftControls || !rightControls) return;
       const leftRect = leftControls.getBoundingClientRect();
       const rightRect = rightControls.getBoundingClientRect();
-      const nextRightOffset = Math.min(0, window.innerWidth - (leftRect.right + 16 + rightRect.width));
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const nextRightOffset = Math.min(16, viewportWidth - (leftRect.right + 16 + rightRect.width));
       setRelationControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
     }
   }, []);
@@ -38,6 +39,7 @@ export function useRelationToolbar(loading: boolean) {
     updatePinnedState();
     const observer = new ResizeObserver(updatePinnedState);
     observer.observe(relationBar);
+    observer.observe(document.documentElement);
     if (relationLeftControlsRef.current) observer.observe(relationLeftControlsRef.current);
     if (relationRightControlsRef.current) observer.observe(relationRightControlsRef.current);
     window.addEventListener('resize', updatePinnedState);

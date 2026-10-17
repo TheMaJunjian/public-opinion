@@ -33,6 +33,7 @@ interface ConfirmReverseCorrectionDependencies {
   setRecommendationAmount: React.Dispatch<React.SetStateAction<number | "">>;
   setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; }; } | null>>;
   showAlert: (message: string) => void;
+  onCreated?: (messageId: string) => void;
 }
 
 export async function confirmReverseCorrection(dependencies: ConfirmReverseCorrectionDependencies): Promise<void> {
@@ -63,6 +64,7 @@ export async function confirmReverseCorrection(dependencies: ConfirmReverseCorre
     setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
     setRecommendationAmount(0);
     setComparisonPopup(null);
+    dependencies.onCreated?.(backendRel.id);
   } catch (e: any) {
     showAlert(`建立反向更正失败: ${e?.message ?? e}`);
   } finally {

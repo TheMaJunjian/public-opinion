@@ -207,22 +207,6 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   const handlePanelTouchEnd = () => {
     touchStartXRef.current = null;
   };
-  const handlePanelWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    const panel = event.currentTarget;
-    if (event.deltaY === 0) return;
-    const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
-    const previousScrollTop = panel.scrollTop;
-    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, previousScrollTop + event.deltaY));
-    const consumedDelta = nextScrollTop - previousScrollTop;
-    const remainingDelta = event.deltaY - consumedDelta;
-    const leftPanel = p.leftPanelRef.current;
-    event.preventDefault();
-    if (consumedDelta !== 0) panel.scrollTop = nextScrollTop;
-    if (leftPanel && remainingDelta !== 0) {
-      const leftMaxScrollTop = Math.max(0, leftPanel.scrollHeight - leftPanel.clientHeight);
-      leftPanel.scrollTop = Math.max(0, Math.min(leftMaxScrollTop, leftPanel.scrollTop + remainingDelta));
-    }
-  };
   const panelStyle = {
     flex: p.TOTAL_FLEX - p.leftFlex,
     padding: 8,
@@ -306,7 +290,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   );
 
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" onWheel={handlePanelWheel} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" style={panelStyle}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" style={panelStyle}>
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontWeight: 600 }}>容器查看</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>

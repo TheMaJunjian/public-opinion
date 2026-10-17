@@ -25,6 +25,7 @@ function composer(): SendDependencies {
     setSubType: vi.fn(), setRelationLabel: vi.fn(), setSubTypeCustomLabel: vi.fn(), setStakeAmount: vi.fn(),
     setRelStakeAmount: vi.fn(), setMessages: vi.fn(), setEdges: vi.fn(), setRelations: vi.fn(),
     setAuthorStakes: vi.fn(), setStakeCounts: vi.fn(), setSendError: vi.fn(),
+    onCommitted: vi.fn(),
   };
 }
 
@@ -63,6 +64,7 @@ describe('composer transaction completion', () => {
     expect(dependencies.setMessages).not.toHaveBeenCalled();
     expect(dependencies.setSendError).toHaveBeenCalledExactlyOnceWith('贡献点不足');
     expect(dependencies.setSendInFlight).toHaveBeenLastCalledWith(false);
+    expect(dependencies.onCommitted).not.toHaveBeenCalled();
     expect(dependencies.sendInFlightRef.current).toBe(false);
   });
 
@@ -76,5 +78,15 @@ describe('composer transaction completion', () => {
     expect(commit).toHaveBeenCalledOnce();
     expect(dependencies.setRecommendationAmount).toHaveBeenCalledExactlyOnceWith(0);
     expect(dependencies.setNewMessageContent).not.toHaveBeenCalled();
+    expect(dependencies.onCommitted).toHaveBeenCalledOnce();
+  });
+
+  it('does not navigate when the server rejects a batch', async () => {
+    const dependencies = composer();
+    vi.spyOn(api, 'withCommandBatch').mockRejectedValue(new Error('提交失败'));
+    await handleSendClick(dependencies);
+    expect(dependencies.onCommitted).not.toHaveBeenCalled();
+    expect(dependencies.setSendError).toHaveBeenCalledWith('提交失败');
+    expect(dependencies.setSendInFlight).toHaveBeenLastCalledWith(false);
   });
 });

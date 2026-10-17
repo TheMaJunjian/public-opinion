@@ -9,6 +9,9 @@ import { migrateLegacy } from './migrate-legacy.js';
 import { executeBatch } from './ui-commands.js';
 import { stakesFor } from './ui-projections.js';
 import { collectContainerVisibleIds } from '../../../frontend/src/pages/workbench/model/ownership.js';
+import { computeCorrectionVersions, convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBridge.js';
+import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
+import { projectContainerCanvas } from '../../../frontend/src/pages/workbench/projections/containerCanvas.js';
 import { cleanupTestDatabases, createTestApp, newTestSchema, testDatabaseUrl } from './test-database.js';
 
 afterEach(cleanupTestDatabases);
@@ -131,6 +134,36 @@ it('creates visible JOIN history when grouping an imported classification inside
     expect(view.messages.map((message: any) => message.id)).toContain(joins[0].id);
   }
   expect((await app.store.db.prepare('SELECT "parentId" FROM memberships WHERE "memberId"=$1').get('leaf'))?.parentId).toBe('inner-class');
+});
+
+it('preserves one parent through nested legacy JOINs while keeping the existing correction effective', async () => {
+  const make=(id:string,type:string|null,refs:any[]=[],source:string|null=null,at=time,payload:any=null)=>({id,topicId:'old-topic',createdById:'old-user',kind:type?'RELATION':'TEXT',content:id==='target'?'好玩吗？':id,relationType:type,targetRefs:refs,relSourceId:source,relationPayload:payload,createdAt:at,updatedAt:at});
+  const ref=(id:string,kind='message')=>kind==='relation'?{kind,relationId:id}:{kind,messageId:id};
+  const source=await fixture({Message:[make('source',null),make('target',null),make('outer','CLASSIFY'),make('frame','ARRANGE',[ref('target')]),make('inner','CLASSIFY',[ref('frame','relation')]),
+    make('target-outer','JOIN',[ref('target')],'outer'),make('frame-outer','JOIN',[ref('frame')],'outer'),
+    make('target-frame','JOIN',[ref('target')],'frame','2026-01-01T00:01:00Z'),make('inner-outer','JOIN',[ref('inner','relation')],'outer'),
+    make('frame-inner','JOIN',[ref('frame','relation')],'inner','2026-01-01T00:02:00Z'),make('source-outer','JOIN',[ref('source')],'outer'),
+    make('correction','CORRECT',[{kind:'text-fragment',messageId:'target',text:'吗？',hash:'old'}],null,'2026-01-01T00:03:00Z',{correctionContent:'好玩1111'})]});
+  const targetSchema=newTestSchema();
+  expect((await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true,preserveActiveState:true,readOnlyRehearsal:true})).blockers).toEqual([]);
+  const app=await createTestApp({databaseSchema:targetSchema}),view=(await request(app).get('/api/ui/snapshot')).body;
+  const model=convertMessagesToDemoModel(view.messages,view.relations),effect=deriveContainerEffect({...model,relations:view.relations,username:null});
+  for(const [memberId,parentId] of [['source','outer'],['target','frame'],['frame','inner'],['inner','outer']]){
+    expect((await app.store.db.prepare('SELECT "parentId" FROM memberships WHERE "memberId"=$1').get(memberId))?.parentId).toBe(parentId);
+    const owners=view.relations.filter((relation:any)=>['CLASSIFY','ARRANGE'].includes(relation.relationType)).filter((relation:any)=>{
+      const direct=effect.ownership.direct(relation.id);return direct.textIds.has(memberId)||direct.relationIds.has(memberId);
+    });
+    expect(owners.map((relation:any)=>relation.id)).toEqual([parentId]);
+  }
+  expect(effect.effectiveJoinIds.has('frame-outer')).toBe(false);
+  const outer=projectContainerCanvas(effect,{kind:'inside',id:'outer'}),inner=projectContainerCanvas(effect,{kind:'inside',id:'inner'});
+  expect(outer.messages.map(message=>message.id)).toEqual(expect.arrayContaining(['source','inner']));
+  expect(outer.messages.map(message=>message.id)).not.toContain('target');
+  expect(inner.messages.map(message=>message.id)).toContain('target');
+  const versions=computeCorrectionVersions(model.messages,model.edges,effect.suppressed).get('target');
+  expect(versions?.current?.content).toBe('好玩1111');
+  expect(versions?.versions[0].valid).toBe(true);
+  expect(view.messages.find((message:any)=>message.id==='target').content).toBe('好玩吗？');
 });
 
 it('reports locked funds, active rounds and mismatched balances without touching the target',async()=>{

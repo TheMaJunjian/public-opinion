@@ -1,4 +1,4 @@
-import type { ComponentProps, Dispatch, MutableRefObject, RefObject, SetStateAction } from 'react';
+import type { ComponentProps, Dispatch, MutableRefObject, ReactNode, RefObject, SetStateAction } from 'react';
 import { api } from '../../../api';
 import CleanFilterPanel from '../../../components/CleanFilterPanel';
 import HomeFilterPanel from '../../../components/HomeFilterPanel';
@@ -25,16 +25,18 @@ interface ComparisonControls {
   onStartComparison: () => void;
 }
 interface Props {
+  scopeHeader?: ReactNode;
   top: number; scopeMessageId: string; exportTitle: string; showAlert: (message: string) => void;
   home: ComponentProps<typeof HomeFilterPanel>; clean: ComponentProps<typeof CleanFilterPanel>; filter: ComponentProps<typeof MessageFilterPanel>;
   view: ViewNavigation; comparison: ComparisonControls;
   correctionFilterTargetId: string | null; onLeaderboard: () => void;
 }
-export default function WorkbenchViewToolbar({ top, scopeMessageId, exportTitle, showAlert, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard }: Props) {
+export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, showAlert, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard }: Props) {
   const { viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation } = view;
   const { singleSideReview, comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison } = comparison;
   return (
-    <div style={{ flex: "0 0 auto", padding: 8, borderBottom: "1px solid #333", background: "#141414", position: "sticky", top, zIndex: Z_INDEX.header - 1 }}>
+    <div data-workbench-view-toolbar="true" style={{ flex: "0 0 auto", borderBottom: "1px solid #333", background: "#141414", position: "sticky", top, zIndex: Z_INDEX.header - 1 }}>
+      <div style={{ padding: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0, flexWrap: "wrap" }}>
           <div style={{ fontWeight: 600 }}>{viewMode === "list" ? "消息列表" : "消息图"}</div>
@@ -118,6 +120,8 @@ export default function WorkbenchViewToolbar({ top, scopeMessageId, exportTitle,
           </button>}
         </div>
       </div>
+      </div>
+      {scopeHeader}
     </div>
 
   );

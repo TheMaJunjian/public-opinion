@@ -31,11 +31,13 @@ export function MessageJumpOverlay({
   visualRoot,
   targetRect,
   visualRect,
+  onReady,
 }: {
   targetElement: HTMLElement;
   visualRoot?: HTMLElement | null;
   targetRect: DOMRect;
   visualRect?: DOMRect;
+  onReady?: () => void;
 }) {
   const contentLayerRef = useRef<HTMLDivElement>(null);
   const [cloneReady, setCloneReady] = useState(false);
@@ -90,12 +92,13 @@ export function MessageJumpOverlay({
     layer.appendChild(frame);
     source.style.visibility = 'hidden';
     setCloneReady(true);
+    onReady?.();
     return () => {
       frame.remove();
       source.style.visibility = originalVisibility;
       setCloneReady(false);
     };
-  }, [targetElement, visualRoot, targetRect, visualRect]);
+  }, [targetElement, visualRoot, targetRect, visualRect, onReady]);
 
   return createPortal((
     <div

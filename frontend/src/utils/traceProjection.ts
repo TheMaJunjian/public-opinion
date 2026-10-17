@@ -146,6 +146,10 @@ export function buildTraceProjection(input: TraceProjectionInput): TraceProjecti
     if (!shouldComplete && !(endpoints.length > 0 && endpoints.every(id => visibleIds.has(id)))) continue;
     for (const id of [relationId, ...sourceIds, ...(completeTargets ? targetIds : [])]) {
       if (visibleIds.has(id)) continue;
+      // Completing a connection must not spend another hop outside the trace
+      // window. Corrections retain their paired versions as one display unit.
+      if (!(completeTargets && !inlineFrame) && isTraceTextLikeMessage(messageMap.get(id))
+        && (distances.get(id) ?? Infinity) > distance) continue;
       visibleIds.add(id);
       for (const dependent of dependentsByMessage.get(id) ?? []) if (!queued.has(dependent)) {
         queued.add(dependent); pending.push(dependent);
@@ -204,11 +208,17 @@ export function applyTraceFrameVisibility(
         && ['classify', 'summary'].includes(message.relationType?.toLowerCase() ?? ''))
       .map(message => message.id),
   );
+  const frameIds = new Set(projection.messages.filter(message => message.kind === 'relation'
+    && ['classify', 'summary', 'merge', 'arrange'].includes(message.relationType?.toLowerCase() ?? ''))
+    .map(message => message.id));
   const parentByContainer = new Map<string, string>();
   for (const [parentId, children] of childrenByRelation) {
-    if (!containerIds.has(parentId)) continue;
+    if (!frameIds.has(parentId)) continue;
     for (const childId of children) {
-      if (containerIds.has(childId) && !parentByContainer.has(childId)) {
+      if (frameIds.has(childId) && childId !== parentId && !parentByContainer.has(childId)) {
+        let ancestor: string | undefined = parentId;
+        while (ancestor && ancestor !== childId) ancestor = parentByContainer.get(ancestor);
+        if (ancestor) continue;
         parentByContainer.set(childId, parentId);
       }
     }
@@ -226,22 +236,22 @@ export function applyTraceFrameVisibility(
     if (visited.has(containerId)) return;
     const nextVisited = new Set(visited).add(containerId);
     for (const childId of childrenByRelation.get(containerId) ?? []) {
-      if (!expandedContainerIds.has(containerId)) {
+      if (containerIds.has(containerId) && !expandedContainerIds.has(containerId)) {
         visibleIds.delete(childId);
         if (childrenByRelation.has(childId)) pruneDescendants(childId, nextVisited);
       } else {
         visibleIds.add(childId);
-        if (containerIds.has(childId)) {
+        if (childrenByRelation.has(childId)) {
           resolveContainer(childId, nextVisited);
-        } else if (childrenByRelation.has(childId)) {
-          for (const nestedId of childrenByRelation.get(childId) ?? []) visibleIds.add(nestedId);
         }
       }
     }
   };
-  for (const containerId of projection.messages.map(message => message.id).filter(id => containerIds.has(id))) {
+  for (const containerId of projection.messages.map(message => message.id).filter(id => frameIds.has(id))) {
     const parentId = parentByContainer.get(containerId);
-    if (!parentId || !visibleIds.has(parentId)) resolveContainer(containerId, new Set());
+    // A hidden parent is still an ownership boundary. Resolving its expanded
+    // children as roots would restore their members outside the ancestor frame.
+    if (!parentId) resolveContainer(containerId, new Set());
   }
 
   let removedDependency = true;

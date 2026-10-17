@@ -139,6 +139,36 @@ describe('rejected child container boundaries and single-side comparison',()=>{
   }
   beforeEach(()=>{vi.clearAllMocks();HTMLElement.prototype.scrollIntoView=vi.fn();});
 
+  it('keeps cross-classification references on a JOIN member and a member expanded inside an arrangement',async()=>{
+    const relation=(id:string,relationType:string,targets:string[]=[],sourceMessageId:string|null=null):Relation=>({id,relationType,sourceMessageId,targetRefs:targets.map(messageId=>({kind:'message',messageId})),createdAt:'2026-01-01',createdBy:makeUser()});
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'测试分类'});
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('source','引用来源'),makeMessage('target','引用目标') ]});
+    mockApi.getRelations.mockResolvedValue({data:[relation('A','CLASSIFY'),relation('B','CLASSIFY',['frame']),relation('frame','ARRANGE'),relation('join-source','JOIN',['source'],'A'),relation('join-target','JOIN',['target'],'frame'),relation('reference','REFERENCE',['target'],'source')]});
+    render(<MessageWorkbenchPage/>);
+    await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
+    await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+    expect(latest().crossClassifyRefs.get('source')?.outgoing['引用']).toEqual(['reference']);
+    expect(latest().messages.some((message:Message)=>message.id==='target')).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
+    await act(async()=>latest().onMessageDoubleClick(event(),'B'));
+    expect(latest().crossClassifyRefs.get('target')?.incoming['引用']).toEqual(['reference']);
+  });
+
+  it('shows one specific change for imported corrections instead of the legacy description or duplicate before/after panels',async()=>{
+    const target=makeMessage('original','好玩吗？');
+    const correction:Relation={id:'correct',relationType:'CORRECT',sourceMessageId:null,targetRefs:[{kind:'text-fragment',messageId:'original',text:'吗？',hash:'fragment'}],payload:{correctionContent:'好玩1111'},parts:[{id:'body',type:'text',text:'建立关系：CORRECT；目标：original'}],createdAt:'2026-01-02',createdBy:makeUser()};
+    const correctionMessage:Message={...makeMessage(correction.id,'建立关系：CORRECT；目标：original'),kind:'RELATION',relationType:'CORRECT',relationPayload:correction.payload,parts:correction.parts};
+    mockApi.getWorkbenchSnapshot.mockResolvedValueOnce({scope:{messageId:'classification-1',title:'测试分类'},messages:[target,correctionMessage],relations:[correction],users:[],stakes:{},tagCounts:{},attentionUsers:{},personalStates:[],sequence:1,hasMore:false,nextCursor:null,removedMemberships:[],removedMessageIds:[]});
+    render(<MessageWorkbenchPage/>);
+    await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='original')).toBe(true));
+    fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+    const card=document.querySelector('[data-msgid="correct"]')!;
+    expect(card).toHaveTextContent('具体更改');
+    expect(card).toHaveTextContent('修改为「1111」');
+    expect(card).not.toHaveTextContent('更正前');expect(card).not.toHaveTextContent('更正后');
+    expect(card).not.toHaveTextContent('建立关系：CORRECT');
+  });
+
   it('opens complete member JOIN history from the list, including inactive records outside the current container',async()=>{
     fixture('CLASSIFY',true);
     const original=await mockApi.getRelations();
@@ -585,6 +615,372 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getScope.mockResolvedValue(scope);
     mockApi.getMessages.mockResolvedValue({ data: [makeMessage('msg-1', '第一条'), makeMessage('msg-2', '第二条')] });
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
+  });
+
+  it.each([
+    ['CLASSIFY', 'text'], ['SUMMARY', 'text'], ['CLASSIFY', 'relation'], ['SUMMARY', 'relation'],
+  ])('keeps the nested %s and its parent history after sending and locating a %s', async (relationType, sentKind) => {
+    localStorage.setItem('token', 'test-token');
+    const inner: Relation = { ...makeRelation(), id: 'inner', relationType, sourceMessageId: null,
+      targetRefs: ['msg-1', 'msg-2'].map(messageId => ({ kind: 'message', messageId })), payload: { title: '内层容器' } };
+    const outer: Relation = { ...inner, id: 'outer', relationType: 'CLASSIFY',
+      targetRefs: [{ kind: 'relation', relationId: inner.id }], payload: { title: '外层容器' } };
+    const createdRelation: Relation = { ...inner, id: 'sent-inside', relationType: 'CLASSIFY',
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }], payload: { title: '在内层发送', independentMemberships: true } };
+    const sent: Message = sentKind === 'text' ? makeMessage('sent-inside', '在内层发送') : {
+      ...makeMessage(createdRelation.id, ''), kind: 'RELATION', relationType: createdRelation.relationType,
+      relSourceId: null, targetRefs: createdRelation.targetRefs, relationPayload: createdRelation.payload,
+    };
+    const join: Relation = { ...makeRelation(), id: 'join-sent', relationType: 'JOIN', sourceMessageId: inner.id,
+      targetRefs: [{ kind: 'message', messageId: sent.id }] };
+    const memberJoin: Relation = { ...join, id: 'join-member', sourceMessageId: createdRelation.id,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }], createdAt: '2026-01-01' };
+    mockApi.getRelations.mockResolvedValue({ data: [outer, inner] });
+    if (sentKind === 'text') mockApi.createMessage.mockResolvedValueOnce(sent);
+    else mockApi.createRelation.mockResolvedValueOnce(createdRelation);
+    mockApi.withCommandBatch.mockImplementationOnce(async (work, onCommitted) => {
+      await work();
+      window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: [{
+        scope: { messageId: 'classification-1', title: '测试分类' }, sequence: 2,
+        messages: [sent, ...(sentKind === 'text' ? [join] : [join, memberJoin]).map(relation => ({
+          ...makeMessage(relation.id, ''), kind: 'RELATION', relationType: relation.relationType,
+          relSourceId: relation.sourceMessageId, targetRefs: relation.targetRefs,
+        }))],
+        relations: sentKind === 'text' ? [join] : [createdRelation, join, memberJoin],
+        users: [], stakes: {}, tagCounts: {}, attentionUsers: {},
+      }] }));
+      onCommitted?.(1);
+    });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    try {
+      render(<MessageWorkbenchPage />);
+      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      const latest = () => mockGraphView.mock.lastCall![0];
+      await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, outer.id));
+      await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, inner.id));
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      if (sentKind === 'relation') {
+        await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
+        fireEvent.click(screen.getByRole('button', { name: '分类' }));
+      }
+      fireEvent.change(screen.getByPlaceholderText(sentKind === 'text' ? '输入一条新普通消息（支持自由换行）' : '输入分类名称（不能为空）'),
+        { target: { value: '在内层发送' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(screen.getByText('已定位目标消息')).toBeInTheDocument());
+      const exitInner = screen.getByRole('button', { name: relationType === 'SUMMARY' ? '退出总结' : '退出分类' });
+      expect(exitInner.parentElement).toHaveTextContent('内层容器');
+      expect(document.querySelector(`[data-workbench-left-panel] [data-msgid="${sent.id}"]`)).not.toBeNull();
+      if (sentKind === 'text') expect(mockApi.createMessage).toHaveBeenCalledWith(inner.id, expect.objectContaining({ content: sent.content }));
+      else {
+        expect(mockApi.createRelation).toHaveBeenCalledWith(inner.id, expect.objectContaining({ relationType: 'CLASSIFY',
+          targetRefs: [expect.objectContaining({ messageId: 'msg-1' })] }));
+        expect(document.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).toBeNull();
+      }
+      fireEvent.click(exitInner);
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('外层容器');
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' }));
+      expect(screen.queryByRole('button', { name: '退出分类' })).toBeNull();
+    } finally {
+      geometry.mockRestore();
+    }
+  });
+
+  it('does not locate an appended JOIN or replace the current classification and active message', async () => {
+    localStorage.setItem('token', 'test-token');
+    const destination: Relation = { ...makeRelation(), id: 'destination', relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: [], payload: { title: '目标分类' } };
+    const current: Relation = { ...destination, id: 'current', payload: { title: '当前分类' },
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }, { kind: 'relation', relationId: destination.id }] };
+    const join: Relation = { ...makeRelation(), id: 'appended-join', relationType: 'JOIN', sourceMessageId: destination.id,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }] };
+    mockApi.getRelations.mockResolvedValue({ data: [current, destination] });
+    mockApi.createRelation.mockResolvedValueOnce(join);
+    render(<MessageWorkbenchPage />);
+    await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    const latest = () => mockGraphView.mock.lastCall![0];
+    await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
+    await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, destination.id));
+    fireEvent.click(screen.getByRole('button', { name: '加入来源集合' }));
+    await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
+    fireEvent.click(screen.getByRole('button', { name: '分类' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })));
+    expect(mockApi.createRelation).toHaveBeenCalledWith(current.id, expect.objectContaining({ relationType: 'JOIN', sourceMessageId: destination.id }));
+    expect(latest().lastClickedMessageId).toBe('msg-1');
+    expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
+    expect(screen.queryByText('已定位目标消息')).toBeNull();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('locates text and every relation in send order within the current classification, skipping generated JOINs', async () => {
+    const displayedTargets: string[] = [];
+    const transitions = new MutationObserver(() => {
+      const active = document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid][style*="visibility: hidden"]');
+      const id = active?.getAttribute('data-msgid');
+      if (id && displayedTargets[displayedTargets.length - 1] !== id) displayedTargets.push(id);
+    });
+    localStorage.setItem('token', 'test-token');
+    const current: Relation = { ...makeRelation(), id: 'current', relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: ['msg-1', 'msg-2'].map(messageId => ({ kind: 'message', messageId })), payload: { title: '当前分类' } };
+    const sent = makeMessage('sent-text', '同时发送文本和两条回复');
+    const replies: Relation[] = ['msg-1', 'msg-2'].map((messageId, index) => ({ ...makeRelation(),
+      id: `sent-reply-${index}`, sourceMessageId: sent.id, targetRefs: [{ kind: 'message', messageId }] }));
+    const generatedJoin: Relation = { ...makeRelation(), id: 'generated-join', relationType: 'JOIN', sourceMessageId: current.id,
+      targetRefs: [{ kind: 'message', messageId: sent.id }] };
+    mockApi.getRelations.mockResolvedValue({ data: [current] });
+    mockApi.createMessage.mockResolvedValueOnce(sent);
+    replies.forEach(reply => mockApi.createRelation.mockResolvedValueOnce(reply));
+    let finishCommit!: () => void;
+    mockApi.withCommandBatch.mockImplementationOnce(async (work, onCommitted) => {
+      await work();
+      await new Promise<void>(resolve => { finishCommit = resolve; });
+      const relations = [...replies, generatedJoin];
+      window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: [{
+        scope: { messageId: 'classification-1', title: '测试分类' }, sequence: 2,
+        messages: [sent, ...relations.map(relation => ({ ...makeMessage(relation.id, ''), kind: 'RELATION',
+          relationType: relation.relationType, relSourceId: relation.sourceMessageId, targetRefs: relation.targetRefs }))],
+        relations, users: [], stakes: {}, tagCounts: {}, attentionUsers: {},
+      }] }));
+      onCommitted?.(3);
+    });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    try {
+      render(<MessageWorkbenchPage />);
+      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      const latest = () => mockGraphView.mock.lastCall![0];
+      await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
+      await act(async () => {
+        latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1');
+        latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-2');
+      });
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      fireEvent.click(screen.getByRole('button', { name: '回复' }));
+      fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: sent.content } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(finishCommit).toBeDefined());
+      expect(screen.queryByText('已定位目标消息')).toBeNull();
+      transitions.observe(document.body, { subtree: true, childList: true, attributes: true });
+      await act(async () => finishCommit());
+      // Each next overlay replaces the current one as soon as it is ready.
+      await waitFor(() => expect(displayedTargets).toEqual([sent.id, ...replies.map(reply => reply.id)]), { timeout: 1000 });
+      expect(screen.getByText('已定位目标消息')).toBeInTheDocument();
+      expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="sent-text"]')?.style.visibility).toBe('');
+      expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="sent-reply-0"]')?.style.visibility).toBe('');
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
+      await waitFor(() => expect(screen.queryByText('已定位目标消息')).toBeNull(), { timeout: 2500 });
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
+      expect(mockApi.createMessage).toHaveBeenCalledOnce();
+      expect(mockApi.createRelation).toHaveBeenCalledTimes(2);
+      expect(mockNavigate).not.toHaveBeenCalled();
+    } finally {
+      transitions.disconnect();
+      geometry.mockRestore();
+    }
+  });
+
+  it('waits for delayed placement JOINs before locating a text sent inside a classification', async () => {
+    localStorage.setItem('token', 'test-token');
+    const current: Relation = { ...makeRelation(), id: 'current', relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }], payload: { title: '当前分类' } };
+    const sent = makeMessage('delayed-text', '等待归属更新后的文本');
+    const join: Relation = { ...makeRelation(), id: 'delayed-join', relationType: 'JOIN', sourceMessageId: current.id,
+      targetRefs: [{ kind: 'message', messageId: sent.id }] };
+    mockApi.getRelations.mockResolvedValue({ data: [current] });
+    mockApi.createMessage.mockResolvedValueOnce(sent);
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    try {
+      render(<MessageWorkbenchPage />);
+      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await act(async () => mockGraphView.mock.lastCall![0].onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: sent.content } });
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })));
+      // The optimistic text is present in data, but its membership has not arrived.
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 1200)); });
+      expect(screen.queryByText('已定位目标消息')).toBeNull();
+      expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+      await act(async () => window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: [{
+        scope: { messageId: 'classification-1', title: '测试分类' }, sequence: 2,
+        messages: [sent, { ...makeMessage(join.id, ''), kind: 'RELATION', relationType: join.relationType,
+          relSourceId: join.sourceMessageId, targetRefs: join.targetRefs }],
+        relations: [join], users: [], stakes: {}, tagCounts: {}, attentionUsers: {},
+      }] })));
+      await waitFor(() => expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="delayed-text"]')?.style.visibility).toBe('hidden'));
+      expect(screen.getByText('已定位目标消息')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: '正在发送' })).toBeNull();
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
+    } finally {
+      geometry.mockRestore();
+    }
+  });
+
+  it('keeps the trace view after sending a message outside the trace', async () => {
+    localStorage.setItem('token', 'test-token');
+    mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-outside-trace', '追溯中发送'));
+    render(<MessageWorkbenchPage />);
+    await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    await act(async () => mockGraphView.mock.lastCall![0].onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+    expect(screen.getByRole('button', { name: '退出追溯' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '清空' }));
+    fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: '追溯中发送' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })));
+    expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1', expect.objectContaining({ content: '追溯中发送' }));
+    await waitFor(() => expect(screen.queryByText('正在发送消息并更新关联结构，请稍候…')).toBeNull(), { timeout: 2000 });
+    expect(screen.getByRole('button', { name: '退出追溯' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '退出追溯' }));
+    expect(screen.queryByRole('button', { name: '退出追溯' })).toBeNull();
+  });
+
+  it('locates a sent message with its overlay only after a slow commit finishes', async () => {
+    let waitingForOverlay = false;
+    let uncoveredTransition = false;
+    const transitions = new MutationObserver(() => {
+      const sending = screen.queryByRole('dialog', { name: '正在发送' });
+      const located = screen.queryByText('已定位目标消息');
+      if (sending) waitingForOverlay = true;
+      if (waitingForOverlay && !sending && !located) uncoveredTransition = true;
+      if (located) waitingForOverlay = false;
+    });
+    let finishCommit!: () => void;
+    mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-message', '发送后定位'));
+    mockApi.withCommandBatch.mockImplementationOnce(async (work, onCommitted) => {
+      await work();
+      await new Promise<void>(resolve => { finishCommit = resolve; });
+      onCommitted?.(1);
+    });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute('data-workbench-left-panel')) return new DOMRect(0, 120, 600, 500);
+      if (this.getAttribute('data-msgid') === 'sent-message') {
+        const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]');
+        return new DOMRect(20, 1000 - (panel?.scrollTop ?? 0), 300, 100);
+      }
+      return new DOMRect(0, 0, 100, 30);
+    });
+    try {
+      render(<MessageWorkbenchPage />);
+      const textarea = await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      Object.defineProperties(panel, { clientHeight: { value: 500 }, scrollHeight: { value: 2000 } });
+      fireEvent.change(textarea, { target: { value: '发送后定位' } });
+      transitions.observe(document.body, { subtree: true, childList: true, attributes: true });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(finishCommit).toBeDefined());
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
+      expect(screen.getByText('正在发送消息并更新关联结构，请稍候…')).toBeInTheDocument();
+      expect(screen.queryByText('已定位目标消息')).toBeNull();
+      expect(panel.scrollTop).toBe(0);
+      await act(async () => finishCommit());
+      await waitFor(() => expect(screen.getByText('已定位目标消息')).toBeInTheDocument());
+      expect(screen.queryByText('正在发送消息并更新关联结构，请稍候…')).toBeNull();
+      expect(uncoveredTransition).toBe(false);
+      expect(panel.scrollTop).toBeGreaterThan(0);
+    } finally {
+      transitions.disconnect();
+      geometry.mockRestore();
+    }
+  });
+
+  it('locates a newly sent relation even when no text message was created', async () => {
+    mockApi.createRelation.mockResolvedValueOnce({
+      ...makeRelation(), id: 'sent-classification', relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: [], payload: { title: '发送分类后定位' },
+    });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    try {
+      render(<MessageWorkbenchPage />);
+      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      fireEvent.click(screen.getByRole('button', { name: '分类' }));
+      fireEvent.change(screen.getByPlaceholderText('输入分类名称（不能为空）'), { target: { value: '发送分类后定位' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(screen.getByText('已定位目标消息')).toBeInTheDocument());
+      expect(document.querySelector('[data-workbench-left-panel] [data-msgid="sent-classification"]')).not.toBeNull();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+    } finally {
+      geometry.mockRestore();
+    }
+  });
+
+  it('uses the global page for the natural right panel, preserving nested lists and boundary handoff', async () => {
+    render(<MessageWorkbenchPage />);
+    await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    const left = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+    const right = document.querySelector<HTMLElement>('[data-workbench-scroll-panel]')!;
+    const page = document.documentElement;
+    const pageHeight = vi.spyOn(page, 'clientHeight', 'get').mockReturnValue(200);
+    const pageContentHeight = vi.spyOn(page, 'scrollHeight', 'get').mockReturnValue(1000);
+    Object.defineProperties(left, { clientHeight: { value: 200 }, scrollHeight: { value: 1000 } });
+    Object.defineProperties(right, { clientHeight: { value: 1000 }, scrollHeight: { value: 1000 } });
+    left.scrollTop = 200;
+    page.scrollTop = 200;
+    const wheel = (target: HTMLElement, deltaY: number, canceled: boolean) => {
+      const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
+      act(() => { target.dispatchEvent(event); });
+      expect(event.defaultPrevented).toBe(canceled);
+    };
+    try {
+      expect(right.style.maxHeight).toBe('');
+      wheel(right, 120, true);
+      expect(page.scrollTop).toBe(320);
+      expect(right.scrollTop).toBe(0);
+      expect(left.scrollTop).toBe(200);
+      wheel(left, -120, true);
+      expect(left.scrollTop).toBe(80);
+      expect(page.scrollTop).toBe(320);
+      page.scrollTop = 800;
+      wheel(right, 120, true);
+      expect(left.scrollTop).toBe(200);
+      left.scrollTop = 0;
+      wheel(left, -120, true);
+      expect(page.scrollTop).toBe(680);
+
+      const recent = screen.getByText('最近关系消息').nextElementSibling as HTMLElement;
+      Object.defineProperties(recent, { clientHeight: { value: 100 }, scrollHeight: { value: 400 } });
+      page.scrollTop = 800;
+      wheel(recent.firstElementChild as HTMLElement, 120, true);
+      expect(recent.scrollTop).toBe(120);
+      expect(page.scrollTop).toBe(800);
+      expect(left.scrollTop).toBe(0);
+
+      // The list hands off to the page before it can move the opposite canvas.
+      recent.scrollTop = 280;
+      page.scrollTop = 740;
+      wheel(recent.firstElementChild as HTMLElement, 60, true);
+      expect(recent.scrollTop).toBe(300);
+      expect(page.scrollTop).toBe(740);
+      expect(left.scrollTop).toBe(0);
+      wheel(recent.firstElementChild as HTMLElement, 60, true);
+      expect(page.scrollTop).toBe(800);
+      expect(left.scrollTop).toBe(0);
+      wheel(recent.firstElementChild as HTMLElement, 60, true);
+      expect(left.scrollTop).toBe(60);
+      wheel(recent.firstElementChild as HTMLElement, -60, true);
+      expect(recent.scrollTop).toBe(240);
+      expect(page.scrollTop).toBe(800);
+      expect(left.scrollTop).toBe(60);
+
+      // The same ancestry order applies to nested content in the left canvas.
+      const leftList = document.createElement('div');
+      leftList.style.overflowY = 'auto';
+      Object.defineProperties(leftList, { clientHeight: { value: 100 }, scrollHeight: { value: 400 } });
+      left.append(leftList);
+      left.scrollTop = 20;
+      page.scrollTop = 20;
+      leftList.scrollTop = 20;
+      wheel(leftList, -100, true);
+      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([0, 20, 20]);
+      wheel(leftList, -100, true);
+      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([0, 0, 20]);
+      wheel(leftList, -100, true);
+      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([0, 0, 0]);
+      wheel(leftList, 40, true);
+      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([40, 0, 0]);
+    } finally {
+      page.scrollTop = 0;
+      pageHeight.mockRestore();
+      pageContentHeight.mockRestore();
+    }
   });
 
   it('keeps the selected classification itself as the new classification member', async () => {
@@ -1594,6 +1990,95 @@ describe('MessageWorkbenchPage trace container frame projection', () => {
       expect(props.traceExpandedFrameIds.has('rel-classify')).toBe(false);
       expect(props.edges.map((edge: { relationMessageId: string }) => edge.relationMessageId)).toContain('rel-classify');
     });
+  });
+
+  it('traces current membership without leaking a moved member outside its old frame', async () => {
+    mockApi.getMessages.mockResolvedValue({ data: [makeMessage('moved', '已迁走'), makeMessage('stayed', '仍在原分类')] });
+    const relation = (id: string, type: string, targets: string[], source: string | null = null, at = '2024-01-01'): Relation => ({
+      id, relationType: type, sourceMessageId: source,
+      targetRefs: targets.map(messageId => ({ kind: 'message', messageId })),
+      payload: { title: id }, createdAt: at, createdBy: makeUser(),
+    });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      relation('old-frame', 'CLASSIFY', ['moved', 'stayed']), relation('new-frame', 'CLASSIFY', []),
+      relation('old-join', 'JOIN', ['moved', 'stayed'], 'old-frame'),
+      relation('new-join', 'JOIN', ['moved'], 'new-frame', '2024-01-02'),
+    ] });
+    render(<MessageWorkbenchPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+    const latest = () => mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    act(() => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'old-frame'));
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+    await waitFor(() => expect(latest().messages.map((item: { id: string }) => item.id)).toEqual(['old-frame']));
+    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'old-frame'));
+    await waitFor(() => {
+      expect(latest().messages.map((item: { id: string }) => item.id).sort()).toEqual(['old-frame', 'stayed']);
+      expect(latest().edges.filter((item: { relationMessageId: string }) => item.relationMessageId === 'old-frame')
+        .map((item: { to: { messageId: string } }) => item.to.messageId)).toEqual(['stayed']);
+    });
+  });
+
+  it.each([false, true])('keeps F at distance two when E references D inside a nested arrangement (JOINs: %s)', async withJoins => {
+    mockApi.getMessages.mockResolvedValue({ data: ['D', 'E', 'F'].map(id => makeMessage(id, `正文 ${id}`)) });
+    const relation = (id: string, type: string, targets: string[], source: string | null = null): Relation => ({
+      id, relationType: type, sourceMessageId: source, targetRefs: targets.map(messageId => ({ kind: 'message', messageId })),
+      payload: { title: id }, createdAt: '2024-01-01', createdBy: makeUser(),
+    });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      relation('A', 'CLASSIFY', ['B']), relation('B', 'CLASSIFY', ['E', 'C']), relation('C', 'ARRANGE', ['D', 'F']),
+      relation('ref', 'REFERENCE', ['D'], 'E'),
+      ...(withJoins ? [relation('join-a', 'JOIN', ['B'], 'A'), relation('join-b', 'JOIN', ['E', 'C'], 'B'),
+        relation('join-c', 'JOIN', ['D', 'F'], 'C')] : []),
+    ] });
+    render(<MessageWorkbenchPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+    const latest = () => mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    const ids = () => latest().messages.map((item: { id: string }) => item.id);
+    // Enter B first, just as selecting E from its containing classification.
+    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'A'));
+    await waitFor(() => expect(ids()).toContain('B'));
+    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'B'));
+    await waitFor(() => expect(ids()).toContain('E'));
+    act(() => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'E'));
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+    await waitFor(() => expect(ids()).toEqual(['B']));
+    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'B'));
+    await waitFor(() => {
+      expect(ids()).toEqual(expect.arrayContaining(['B', 'C', 'D', 'E', 'ref']));
+      expect(ids()).not.toContain('F');
+    });
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    expect(screen.queryByText('正文 F')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '+' }));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息图' }));
+    await waitFor(() => expect(ids()).toContain('A'));
+    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'A'));
+    await waitFor(() => expect(ids()).toContain('B'));
+    act(() => latest().onMessageDoubleClick({ stopPropagation: vi.fn() }, 'B'));
+    await waitFor(() => expect(ids()).toContain('F'));
+  });
+
+  it.each(['MERGE', 'ARRANGE'])('respects distance changes around a %s in graph and list views', async type => {
+    mockApi.getMessages.mockResolvedValue({ data: ['anchor', 'near', 'far'].map(id => makeMessage(id, `正文 ${id}`)) });
+    mockApi.getRelations.mockResolvedValue({ data: [
+      { id: 'ref', relationType: 'REFERENCE', sourceMessageId: 'anchor', targetRefs: [{ kind: 'message', messageId: 'near' }], createdAt: '2024-01-01', createdBy: makeUser() },
+      { id: 'group', relationType: type, sourceMessageId: null, targetRefs: ['near', 'far'].map(messageId => ({ kind: 'message', messageId })), createdAt: '2024-01-02', createdBy: makeUser() },
+    ] });
+    render(<MessageWorkbenchPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+    const latest = () => mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
+    const ids = () => latest().messages.map((item: { id: string }) => item.id);
+    act(() => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'anchor'));
+    fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
+    await waitFor(() => { expect(screen.getByText('追溯距离：1')).toBeInTheDocument(); expect(ids()).not.toContain('far'); });
+    fireEvent.click(screen.getByRole('button', { name: '+' }));
+    await waitFor(() => { expect(screen.getByText('追溯距离：2')).toBeInTheDocument(); expect(ids()).toContain('far'); });
+    fireEvent.click(screen.getByRole('button', { name: '-' }));
+    await waitFor(() => expect(ids()).not.toContain('far'));
+    fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+    expect(screen.queryByText('正文 far')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '+' }));
+    await waitFor(() => expect(screen.getByText('正文 far')).toBeInTheDocument());
   });
 
   it('expands a summary frame that is nested inside the current classify classification', async () => {

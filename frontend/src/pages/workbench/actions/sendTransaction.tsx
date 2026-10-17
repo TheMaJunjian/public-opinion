@@ -56,6 +56,7 @@ interface HandleSendClickDependencies {
   setAuthorStakes: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   setStakeCounts: React.Dispatch<React.SetStateAction<Record<string, { truth: { pro: number; con: number; }; value: { pro: number; con: number; }; }>>>;
   setSendError: React.Dispatch<React.SetStateAction<string | null>>;
+  onCommitted?: () => void;
 }
 
 export async function handleSendClick(dependencies: HandleSendClickDependencies): Promise<void> {
@@ -80,7 +81,10 @@ export async function handleSendClick(dependencies: HandleSendClickDependencies)
     let committedCount = 0;
     await api.withCommandBatch(async () => handleQuickSendAndRelateFromDraftTargets(), count => { committedCount = count; });
     if (committedCount === 0) restoreComposer();
-    else if (relationType !== 'correct') setRecommendationAmount(0);
+    else {
+      if (relationType !== 'correct') setRecommendationAmount(0);
+      dependencies.onCommitted?.();
+    }
   } catch (error) {
     restoreComposer();
     setMessages(previous.messages); setEdges(previous.edges); setRelations(previous.relations);

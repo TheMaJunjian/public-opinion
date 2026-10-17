@@ -28,6 +28,7 @@ interface HandleSendMessageOnlyDependencies {
   minSelfStake: number;
   setNewMessageContent: React.Dispatch<React.SetStateAction<string>>;
   scrollMsgToCenter: (msgId: string, options?: { dependencyIds?: string[]; }) => void;
+  onCreated?: (messageId: string) => void;
   setClassifyKey: React.Dispatch<React.SetStateAction<number>>;
   handleAuthError: (err: unknown) => Promise<boolean>;
 }
@@ -76,7 +77,8 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
     // Reset to rule default
     setStakeAmount(minSelfStake);
     if (!overrideContent) setNewMessageContent("");
-    scrollMsgToCenter(msg.id);
+    if (dependencies.onCreated) dependencies.onCreated(msg.id);
+    else scrollMsgToCenter(msg.id);
     window.dispatchEvent(new Event('points-refresh'));
     if (isInsideClassify) setClassifyKey(key => key + 1);
     return msg;

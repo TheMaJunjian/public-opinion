@@ -14,13 +14,14 @@ import type {
   RelationType,
   UnitSelection,
 } from '../utils/modelBridge';
-import { computeEffectiveSuppressedRelIds, computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isContentKind } from '../utils/modelBridge';
+import { computeEffectiveSuppressedRelIds, computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isContentKind, withCorrectionContent } from '../utils/modelBridge';
 import { getLatestUserReadStatusByMessageId } from './workbench/model/filters';
 import { blockCorrectionForSecondBettor as runBlockCorrectionForSecondBettor, handleAuthError as runHandleAuthError, requireAuth as runRequireAuth } from './workbench/actions/authentication';
 import { clearDraftAll as runClearDraftAll, commitDraftTo as runCommitDraftTo, handleCanvasBlankClick as runHandleCanvasBlankClick, handleFragmentAnchorClick as runHandleFragmentAnchorClick, handleMessageClick as runHandleMessageClick, handleMessageDoubleClick as runHandleMessageDoubleClick, handleMessageMouseDown as runHandleMessageMouseDown, handleMessageMouseUp as runHandleMessageMouseUp, handleTextMouseUp as runHandleTextMouseUp, toggleFragmentSelection as runToggleFragmentSelection, toggleWholeUnit as runToggleWholeUnit, undoRecentClickActionsForMessage as runUndoRecentClickActionsForMessage } from './workbench/actions/cardSelection';
 import { renderAlertMessage as runRenderAlertMessage, renderMessageContentWithAnchorsForList as runRenderMessageContentWithAnchorsForList, renderRelationContentWithTargets as runRenderRelationContentWithTargets } from './workbench/actions/messageRendering';
 import { confirmReverseCorrection as runConfirmReverseCorrection, handleComparisonVote as runHandleComparisonVote, handleCrossRefTagClick as runHandleCrossRefTagClick, handleDecorationBodyClick as runHandleDecorationBodyClick, handleDecorationDoubleClick as runHandleDecorationDoubleClick, handleDecorationIconClick as runHandleDecorationIconClick, handleGroupFrameClick as runHandleGroupFrameClick, handleGroupFrameDoubleClick as runHandleGroupFrameDoubleClick, handleInlineBadgeClick as runHandleInlineBadgeClick, handleInlineBadgeDoubleClick as runHandleInlineBadgeDoubleClick, handleTagBodyClick as runHandleTagBodyClick, handleTagDoubleClick as runHandleTagDoubleClick } from './workbench/actions/relationActions';
 import { clampAndSetScroll, findMessageElements, cancelScrollRafs as runCancelScrollRafs, scheduleViewNavigation as runScheduleViewNavigation, scrollMsgToCenter as runScrollMsgToCenter, showMessagePulse as runShowMessagePulse } from './workbench/actions/scrollNavigation';
+import type { ScrollMessageOptions } from './workbench/actions/scrollNavigation';
 import { handleQuickSendAndRelateFromDraftTargets as runHandleQuickSendAndRelateFromDraftTargets } from './workbench/actions/sendDraft';
 import { createJoinRelationsForContainer as runCreateJoinRelationsForContainer, handleCreateRelationWithSourcesAndTargets as runHandleCreateRelationWithSourcesAndTargets, sendTagRelation as runSendTagRelation } from './workbench/actions/sendRelation';
 import { attachMessageToCurrentClassify as runAttachMessageToCurrentClassify, handleSendMessageOnly as runHandleSendMessageOnly, registerCreatedRelationInCurrentClassify as runRegisterCreatedRelationInCurrentClassify } from './workbench/actions/sendText';
@@ -31,7 +32,7 @@ import { deriveComparisonGraphProjections, projectComparisonSide } from './workb
 import type { DeriveComparisonGraphProjectionsInput } from './workbench/projections/comparisonGraphProjections';
 import { deriveCrossClassifyRefs } from './workbench/projections/crossClassifyRefs';
 import { deriveGraphMessagesToRender } from './workbench/projections/graphMessagesToRender';
-import { deriveGraphVisibleTextIds } from './workbench/projections/graphVisibleTextIds';
+import { projectGraphScene } from '../utils/graphProjection';
 import { deriveHiddenInGraphView } from './workbench/projections/hiddenInGraphView';
 import { deriveHomeFilterResult } from './workbench/projections/homeFilterResult';
 import { deriveMessagesToShow } from './workbench/projections/messagesToShow';
@@ -52,6 +53,7 @@ import WorkbenchViewToolbar from './workbench/ui/WorkbenchViewToolbar';
 import type { Json } from '@gonglun/core';
 import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { Z_INDEX } from '../constants/zIndex';
 import GraphView from '../components/GraphView';
 import { clearBrowserSelection, relationTypeName } from '../utils/graphTextSelection';
 import LeaderboardModal from '../components/LeaderboardModal';
@@ -205,6 +207,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
 
   // Phase 3: auto-open settlement from URL params (triggered by points-navigate)
   const pendingScrollMsgRef = useRef<string | null>(null);
+  const pendingScrollCompletionRef = useRef<ScrollMessageOptions['onComplete']>();
   useEffect(() => {
     const targetMsgId = searchParams.get('msg');
     const settlementMsgId = searchParams.get('settlement');
@@ -516,7 +519,9 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       // it to the joined target; the JOIN card is the requested destination.
       const dependencyIds = pendingScrollDependencyIdsRef.current;
       pendingScrollDependencyIdsRef.current = [];
-      scrollMsgToCenter(pendingScrollMsgRef.current, { dependencyIds });
+      const onComplete = pendingScrollCompletionRef.current;
+      pendingScrollCompletionRef.current = undefined;
+      scrollMsgToCenter(pendingScrollMsgRef.current, { dependencyIds, onComplete });
       pendingScrollMsgRef.current = null;
     }
   }, [loading, messages, classifyKey, traceKey, scrollKey, viewMode]);
@@ -590,6 +595,52 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendInFlight, setSendInFlight] = useState(false);
   const sendInFlightRef = useRef(false);
+  const sentMessageTargetsRef = useRef<string[]>([]);
+  const [sentMessageTargets, setSentMessageTargets] = useState<string[]>([]);
+  const [awaitingSendOverlay, setAwaitingSendOverlay] = useState(false);
+  const waitingForSendOverlay = awaitingSendOverlay && sentMessageTargets.length > 0 && !loadError;
+  const handleSendOverlayReady = useCallback(() => setAwaitingSendOverlay(false), []);
+  const activeSentMessageRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const sentMessageTarget = sentMessageTargets[0];
+    if (sendInFlight || loading || !sentMessageTarget || activeSentMessageRef.current) return;
+    const target = messages.find(message => message.id === sentMessageTarget);
+    if (!target) return;
+    const advance = () => {
+      activeSentMessageRef.current = null;
+      setSentMessageTargets(queue => queue[0] === sentMessageTarget ? queue.slice(1) : queue);
+    };
+    // Membership records update the structure without moving the user's view.
+    if (target.kind === 'join' || target.relationType?.toLowerCase() === 'join') { advance(); return; }
+    activeSentMessageRef.current = sentMessageTarget;
+    if (!renderedMessageIdsRef.current.has(sentMessageTarget)) setHomeFilterMode(null);
+    handleNavigateToMessage(sentMessageTarget, { select: false, preserveScope: true,
+      onComplete: located => {
+        if (activeSentMessageRef.current !== sentMessageTarget) return;
+        // Prepare the next target immediately; its overlay replaces this one
+        // as soon as it is ready, without waiting for the display timer.
+        if (located) advance();
+        else {
+          // Placement JOINs can arrive in a later snapshot. Keep this target
+          // queued until that render rather than silently dropping the message.
+          activeSentMessageRef.current = null;
+          // A message outside a temporary or trace view may remain queued
+          // until the user returns. Release the dialog so they can navigate.
+          if (traceEntries.length > 0 || temporaryCategoryStackRef.current.length > 0) setAwaitingSendOverlay(false);
+          if (messagesRef.current !== messages) setSentMessageTargets(queue => [...queue]);
+        }
+      },
+    });
+  }, [sendInFlight, loading, sentMessageTargets, messages, viewMode, classifyKey, traceKey]);
+
+  useEffect(() => () => {
+    activeSentMessageRef.current = null;
+  }, []);
+
+  function recordSentMessage(messageId: string): void {
+    if (!sentMessageTargetsRef.current.includes(messageId)) sentMessageTargetsRef.current.push(messageId);
+  }
 
   useEffect(() => {
     setSendError(null);
@@ -1066,11 +1117,13 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         : unitSelectionToReference(targetRefToUnit(ref), currentMessages),
     });
     try {
-      return await api.createRelation(classifyRelMsgIdRef.current ?? scopeMessageId, {
+      const relation = await api.createRelation(classifyRelMsgIdRef.current ?? scopeMessageId, {
         ...data, targetRefs, sourceRefs, stakeAmount: 0,
         wager: amount, selfAgree: type !== 'agree' && type !== 'disagree' && amount > 0,
         recommendation: data.recommendation ?? (primary ? recommendationRef.current : 0),
       });
+      if (sendInFlightRef.current && type !== 'join') recordSentMessage(relation.id);
+      return relation;
     } catch (e: any) {
       api.cancelCommandBatch(e);
       const isTokenFailure = e instanceof ApiError && e.status === 401 && (
@@ -1388,7 +1441,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     () => collectExclusiveRelationMsgIds(graphHiddenTextIds, graphOwnedRelationIds),
     [edges, msgMap, graphHiddenTextIds, graphOwnedRelationIds]
   );
-  const { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, leftPanelMinHeight, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd, handleLeftPanelWheel } = useWorkbenchViewport({ comparisonReviewed, viewMode, loading });
+  const { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, leftPanelMinHeight, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd } = useWorkbenchViewport({ comparisonReviewed, viewMode, loading });
   const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagePulseRafRef = useRef<number | null>(null);
@@ -1436,13 +1489,13 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
   const MAX_SCROLL_ATTEMPTS = 60;
 
-  function showMessagePulse(targetId: string, element: HTMLElement, requestId = scrollRequestIdRef.current): void {
-    return runShowMessagePulse({ scrollRequestIdRef, messagePulseTimerRef, messagePulseRafRef, leftPanelRef, findMessageElements, setMessagePulse }, targetId, element, requestId);
+  function showMessagePulse(targetId: string, element: HTMLElement, requestId = scrollRequestIdRef.current, onShown?: (shown: boolean) => void): void {
+    return runShowMessagePulse({ scrollRequestIdRef, messagePulseTimerRef, messagePulseRafRef, leftPanelRef, findMessageElements, setMessagePulse }, targetId, element, requestId, onShown);
   }
 
 
 
-  function scrollMsgToCenter(msgId: string, options?: { dependencyIds?: string[] }): void {
+  function scrollMsgToCenter(msgId: string, options?: ScrollMessageOptions): void {
     return runScrollMsgToCenter({ scrollRequestIdRef, pendingScrollMsgIdRef, MAX_SCROLL_ATTEMPTS, pendingScrollDependencyIdsRef, leftPanelRef, scrollRafRef, findMessageElements, relationsRef, edgesRef, showMessagePulse, cancelScrollRafs }, msgId, options);
   }
 
@@ -1625,7 +1678,9 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   async function handleSendMessageOnly(overrideContent?: string): Promise<DemoMessage | null> {
-    return runHandleSendMessageOnly({ requireAuth, newMessageContent, scopeMessageId, stakeAmount, setSendError, selectedRelationRef, recommendationRef, stakeFeeAmountRef, isInsideClassify, availablePoints, currentClassifyRelMsgId, setMessages, mergeStakeSnapshot, setAuthorStakes, setStakeAmount, minSelfStake, setNewMessageContent, scrollMsgToCenter, setClassifyKey, handleAuthError }, overrideContent);
+    return runHandleSendMessageOnly({ requireAuth, newMessageContent, scopeMessageId, stakeAmount, setSendError, selectedRelationRef, recommendationRef, stakeFeeAmountRef, isInsideClassify, availablePoints, currentClassifyRelMsgId, setMessages, mergeStakeSnapshot, setAuthorStakes, setStakeAmount, minSelfStake, setNewMessageContent, scrollMsgToCenter, setClassifyKey, handleAuthError,
+      onCreated: messageId => { if (sendInFlightRef.current) recordSentMessage(messageId); else scrollMsgToCenter(messageId); },
+    }, overrideContent);
   }
 
   function handleMessageMouseDown(e: React.MouseEvent, messageId: string): void {
@@ -1775,7 +1830,15 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   async function handleSendClick(): Promise<void> {
-    return runHandleSendClick({ sendInFlightRef, draftUnits, sourceUnits, targetUnits, activeTextSelectId, newMessageContent, relationType, secondaryRelationType, subType, subTypeCustomLabel, relationLabel, stakeAmount, relStakeAmount, recommendationAmount, messages, edges, relations, authorStakes, stakeCounts, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, savedTextBeforeDelegationRef, delegationContentBufferRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setRecommendationAmount, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setSubType, setRelationLabel, setSubTypeCustomLabel, setStakeAmount, setRelStakeAmount, setMessages, setEdges, setRelations, messagesRef, edgesRef, relationsRef, setAuthorStakes, setStakeCounts, setSendError });
+    if (sendInFlightRef.current) return;
+    sentMessageTargetsRef.current = [];
+    return runHandleSendClick({ sendInFlightRef, draftUnits, sourceUnits, targetUnits, activeTextSelectId, newMessageContent, relationType, secondaryRelationType, subType, subTypeCustomLabel, relationLabel, stakeAmount, relStakeAmount, recommendationAmount, messages, edges, relations, authorStakes, stakeCounts, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, savedTextBeforeDelegationRef, delegationContentBufferRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setRecommendationAmount, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setSubType, setRelationLabel, setSubTypeCustomLabel, setStakeAmount, setRelStakeAmount, setMessages, setEdges, setRelations, messagesRef, edgesRef, relationsRef, setAuthorStakes, setStakeCounts, setSendError,
+      onCommitted: () => {
+        const committedTargets = [...sentMessageTargetsRef.current];
+        if (committedTargets.length > 0) setAwaitingSendOverlay(true);
+        setSentMessageTargets(queue => [...queue, ...committedTargets.filter(id => !queue.includes(id))]);
+      },
+    });
   }
 
 
@@ -2047,7 +2110,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     return runRenderRelationContentWithTargets({ handleNavigateToMessage }, message);
   }
 
-  const { messagesToShow, edgesToShow, traceExpandableContainerIds } = useMemo(() => deriveMessagesToShow({ traceEntries, messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceDistance, traceExpandedFrameIds }), [messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
+  const { messagesToShow, edgesToShow, traceExpandableContainerIds } = useMemo(() => deriveMessagesToShow({ traceEntries, messages, edges:containerEffect.traceEdges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceDistance, traceExpandedFrameIds }), [containerEffect, messages, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceEntries, traceDistance, msgMap, traceExpandedFrameIds]);
 
   const canSetTrace = (!!lastClickedMessageId && messages.some(m => m.id === lastClickedMessageId)) || getSelectedWholeMessageIds().length > 0;
   const canExitTrace = traceEntries.length > 0;
@@ -2067,7 +2130,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     }
     return ids;
   }, [traceEntries, msgMap]);
-  const traceFrameIds = useMemo(() => deriveTraceFrameIds({ traceRelationMsgIds, traceEntries, edges, traceContainerMemberships, traceExpandableContainerIds, msgMap }), [traceRelationMsgIds, traceEntries, edges, msgMap, traceExpandableContainerIds]);
+  const traceFrameIds = useMemo(() => deriveTraceFrameIds({ traceRelationMsgIds, traceEntries, edges:containerEffect.traceEdges, traceContainerMemberships, traceExpandableContainerIds, msgMap }), [containerEffect, traceRelationMsgIds, traceEntries, edges, msgMap, traceExpandableContainerIds]);
   const classifyTargetCount = useMemo(
     () => currentClassifyRelMsgId ? collectOwnedByRelation(currentClassifyRelMsgId, relationById).textIds.size : 0,
     [currentClassifyRelMsgId, relationById]
@@ -2096,17 +2159,17 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       : (joinRelationsByTarget.get(joinFilterTargetId)?.length ?? 0))
     : 0;
 
-  // 当前视图实际可见的内容消息ID集（考虑追溯/分类上下文）
-  const graphVisibleTextIds = useMemo(() => deriveGraphVisibleTextIds({ isInsideClassify, currentClassifyRelMsgId, traceEntries, relationById, msgMap, messages, graphHiddenTextIds, graphOwnedRelationIds }), [isInsideClassify, currentClassifyRelMsgId, relationById, messages, graphHiddenTextIds, graphOwnedRelationIds]);
-
-  // 跨分类引用标签：按二级标签分组（"证据" / "引用" / 自定义）
-  // 消息 A（可见）引用 B（不可见）→ A 上显示 outgoing 标签
-  // B（不可见）被 A 引用 → 若 B 在某视图中可见，显示 incoming 标签
-  const crossClassifyRefs = useMemo(() => deriveCrossClassifyRefs({ edges, msgMap, graphVisibleTextIds }), [edges, msgMap, graphVisibleTextIds]);
-
-  const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender, hideMessageIds } = useMemo(() => deriveGraphMessagesToRender({ containerOwnership:containerEffect.ownership,traceEntries, messagesToShow, messages, edgesToShow, edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceDistance, traceExpandedFrameIds, isInsideClassify, currentClassifyRelMsgId, relationById, relations, rejectedContainerIds, rejectedJoinRelationIds, msgMap, activeClassifyOwnership, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifiedTargetTextIds, graphOwnedRelationIds, traceRelationMsgIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, activeSummaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds }), [containerEffect,messages, edges, traceContainerMemberships, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, activeClassifyOwnership, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds]);
+  const { graphMessagesToRender, graphEdgesToRender, listMessagesToRender, listEdgesToRender, hideMessageIds } = useMemo(() => deriveGraphMessagesToRender({ containerOwnership:containerEffect.ownership,traceEntries, messagesToShow, messages, edgesToShow, edges:traceEntries.length > 0 ? containerEffect.traceEdges : edges, traceContainerMemberships, effectiveSuppressedRelIdsForLayout, traceDistance, traceExpandedFrameIds, isInsideClassify, currentClassifyRelMsgId, relationById, relations, rejectedContainerIds, rejectedJoinRelationIds, msgMap, activeClassifyOwnership, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, classifiedTargetTextIds, graphOwnedRelationIds, traceRelationMsgIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, activeSummaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds }), [containerEffect,messages, edges, traceContainerMemberships, relationById, relations, messagesToShow, edgesToShow, traceEntries, isInsideClassify, currentClassifyRelMsgId, msgMap, classifiedTargetTextIds, classifiedTargetClassifyRelMsgIds, classifiedTargetMergeRelMsgIds, classifiedTargetARRANGERelMsgIds, classifiedTargetSummaryRelMsgIds, listExclusiveRelMsgIds, replacedRelationMsgIds, activeClassifyOwnership, classifyOwnership, summaryOwnership, graphExclusiveRelMsgIds, graphHiddenTextIds, traceRelationMsgIds, traceExpandedFrameIds, rejectedContainerIds, rejectedJoinRelationIds]);
 
   const normalGraphProjection = useMemo(() => deriveNormalGraphProjection({ graphMessagesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, messages, displayUser, graphEdgesToRender, relations, effectiveJoinRelationIds }), [messages, graphMessagesToRender, graphEdgesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, displayUser?.username, relations, effectiveJoinRelationIds]);
+
+  // Use the rendered scope, including effective JOINs and expanded frames.
+  const crossClassifyRefs = useMemo(() => {
+    const scene = projectGraphScene({ ...normalGraphProjection, traceExpandedFrameIds,
+      isTraceWindow: traceEntries.length > 0, rejectedContainerIds, hiddenMessageIds: hideMessageIds });
+    return deriveCrossClassifyRefs({ edges: edges.filter(edge => !containerEffect.suppressed.has(edge.relationMessageId)),
+      msgMap, graphVisibleTextIds: new Set(scene.normalIds) });
+  }, [normalGraphProjection, traceExpandedFrameIds, traceEntries, rejectedContainerIds, hideMessageIds, edges, containerEffect.suppressed, msgMap]);
 
   const comparisonInput = useMemo<DeriveComparisonGraphProjectionsInput>(() => ({
     comparisonReviewed,comparisonTargetId,username:displayUser?.username??null,scopeId:currentClassifyRelMsgId,
@@ -2115,7 +2178,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     filterMessages:values=>applyMessageFilter(values.filter(message=>
       (!cleanVisibleIds||cleanVisibleIds.visibleTextIds.has(message.id)||cleanVisibleIds.visibleRelIds.has(message.id))
       &&(!homeFilterResult||homeFilterResult.displayIds.has(message.id))),msgFilter)
-      .map(message=>{const correction=correctionVersions.get(message.id)?.current;return correction?{...message,content:correction.content}:message;}),
+      .map(message=>{const correction=correctionVersions.get(message.id)?.current;return correction?withCorrectionContent(message,correction.content):message;}),
   }),[containerEffect,comparisonReviewed,comparisonTargetId,currentClassifyRelMsgId,displayUser?.username,messages,relations,edges,traceEntries,traceDistance,traceExpandedFrameIds,traceRelationMsgIds,traceContainerMemberships,replacedRelationMsgIds,comparisonReviewBaseMessages,comparisonReviewBaseEdges,isInsideClassify,normalGraphProjection,cleanVisibleIds,homeFilterResult,msgFilter,correctionVersions]);
   const comparisonGraphProjections=useMemo(()=>deriveComparisonGraphProjections(comparisonInput),[comparisonInput]);
   const containerPreview=useMemo(()=>{
@@ -2133,7 +2196,12 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   async function confirmReverseCorrection(): Promise<void> {
-    return runConfirmReverseCorrection({ sendInFlightRef, comparisonPopup, scopeMessageId, setSendInFlight, createRel, msgMap, registerCreatedRelationInCurrentClassify, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setRecommendationAmount, setComparisonPopup, showAlert });
+    return runConfirmReverseCorrection({ sendInFlightRef, comparisonPopup, scopeMessageId, setSendInFlight, createRel, msgMap, registerCreatedRelationInCurrentClassify, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setRecommendationAmount, setComparisonPopup, showAlert,
+      onCreated: messageId => {
+        setAwaitingSendOverlay(true);
+        setSentMessageTargets(queue => [...queue, messageId]);
+      },
+    });
   }
 
   async function handleDecorationIconClick(messageId: string, kind: "agree" | "disagree"): Promise<void> {
@@ -2179,7 +2247,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
-  const handleNavigateToMessage = useCallback((messageId: string) => {
+  const handleNavigateToMessage = useCallback((messageId: string, options?: { select?: boolean; preserveScope?: boolean; onComplete?: ScrollMessageOptions['onComplete'] }) => {
     scrollRequestIdRef.current++;
     const wasTemporaryCategoryActive = temporaryCategoryStackRef.current.length > 0
       || joinFilterTargetId !== null;
@@ -2208,27 +2276,35 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         }));
       }
     }
-    if (wasTemporaryCategoryActive) {
-      exitAllTemporaryCategories({ restoreMessageFilter: false });
-      if (targetMessage?.kind === 'join') {
-        setClassifyRelMsgId(null);
-        setClassifyKey(k => k + 1);
+    if (!options?.preserveScope) {
+      activeSentMessageRef.current = null;
+      setAwaitingSendOverlay(false);
+      setSentMessageTargets([]);
+      if (wasTemporaryCategoryActive) {
+        exitAllTemporaryCategories({ restoreMessageFilter: false });
+        if (targetMessage?.kind === 'join') {
+          setClassifyRelMsgId(null);
+          setClassifyKey(k => k + 1);
+        }
+      } else {
+        setJoinFilterTargetId(null);
       }
-    } else {
-      setJoinFilterTargetId(null);
+      setTraceEntries([]);
+      setTraceKey(k => k + 1);
+      // Explicit navigation chooses the target's scope through the ownership effect.
+      classifyStackRef.current = [];
+      setClassifyRelMsgId(null);
+      setClassifyKey(k => k + 1);
+      setPreviewClassifyId(null);
+      setAutoClassifyMsgId(messageId);
+    } else if (hiddenInGraphView.has(messageId)) {
+      // Sending locates the result within the current scope and keeps its history.
+      setViewMode('list');
     }
-    setMessagePulse(null);
-    setTraceEntries([]);
-    setTraceKey(k => k + 1);
-    // Navigation from an alert must not remain inside the previous summary/classify.
-    // Let the ownership effect choose the target's containing container afterwards.
-    classifyStackRef.current = [];
-    setClassifyRelMsgId(null);
-    setClassifyKey(k => k + 1);
-    setPreviewClassifyId(null);
-    setAutoClassifyMsgId(messageId);
+    // Keep the current send overlay until the next one can replace it.
+    if (!options?.preserveScope) setMessagePulse(null);
     // Clear candidates and select the target message as whole
-    setDraftUnits([{ messageId, selection: { kind: 'whole' as const } }]);
+    if (options?.select !== false) setDraftUnits([{ messageId, selection: { kind: 'whole' as const } }]);
     setSourceUnits([]);
     setTargetUnits([]);
     setLastClickedMessageId(messageId);
@@ -2236,8 +2312,9 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     // when the target is already on the current canvas (no classifyKey change).
     pendingScrollDependencyIdsRef.current = [];
     pendingScrollMsgRef.current = messageId;
+    pendingScrollCompletionRef.current = options?.onComplete;
     setScrollKey(k => k + 1);
-  }, [cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert]);
+  }, [cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView]);
 
   function confirmMessageIdNavigation(): void {
     return runConfirmMessageIdNavigation({ messageIdInput, showAlert, messagesRef, handleNavigateToMessage, setAutoClassifyMsgId });
@@ -2278,7 +2355,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
   const messagesWithCorrections = messagesToRender.map(message => {
     const correction = correctionVersions.get(message.id)?.current;
-    return correction ? { ...message, content: correction.content } : message;
+    return correction ? withCorrectionContent(message, correction.content) : message;
   });
   // Phase 6: Apply clean mode filter (multi-dimensional rules via useCleanView)
   const messagesToRenderClean = cleanVisibleIds
@@ -2388,7 +2465,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const graphMessagesFinal = (previewMessages??messagesToRenderFiltered)
     .map(message => {
       const correction = correctionVersions.get(message.id)?.current;
-      return correction ? { ...message, content: correction.content } : message;
+      return correction ? withCorrectionContent(message, correction.content) : message;
     });
   const comparisonAgreeGraph = comparisonGraphProjections?.agree;
   const comparisonDisagreeGraph = comparisonGraphProjections?.disagree;
@@ -2457,6 +2534,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
           <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", width: "100%", minWidth: 0 }}>
             <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
               <WorkbenchViewToolbar top={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
+                scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
                 home={{ mode: homeFilterMode, onChange: setHomeFilterMode }}
                 clean={{ active: cleanMode, filters: cleanFilters, matchCount: cleanVisibleIds?.visibleTextIds.size ?? 0, totalCount: contentMsgCount, onAdd: addCleanFilter, onRemove: removeCleanFilter, onUpdate: updateCleanFilter, onClear: clearCleanView }}
@@ -2464,24 +2542,22 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                 view={{ viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount: traceEntries.length, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation }}
                 comparison={{ singleSideReview:Boolean(containerPreview), comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison: startComparison }}
                 correctionFilterTargetId={correctionFilterTargetId} onLeaderboard={() => setShowLeaderboard(true)} />
-              {!containerPreview&&!comparisonReviewed&&classificationHeader}
 
               <div ref={leftPanelRef}
                 data-workbench-left-panel="true"
-                className={`workbench-left-panel ${previewClassifyId !== null && !containerPreview ? "preview-mode " : ""}${comparisonReviewed ? "comparison-scroll-host" : ""}`}
-                style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, maxHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+                className={`workbench-left-panel ${previewClassifyId !== null && !containerPreview ? "preview-mode" : ""}`}
+                style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, maxHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
                 onTouchStart={handleLeftPanelTouchStart}
                 onTouchMove={handleLeftPanelTouchMove}
                 onTouchEnd={handleLeftPanelTouchEnd}
                 onTouchCancel={handleLeftPanelTouchEnd}
-                onWheel={handleLeftPanelWheel}
                 onDoubleClick={e => {
                   const t = e.target as HTMLElement;
                   // Skip if clicked on a message card, SVG edge, or relation overlay
                   if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
                   handleCanvasBlankClick();
                 }}>
-                {messagePulse && <MessageJumpOverlay targetElement={messagePulse.element} visualRoot={messagePulse.visualRoot} targetRect={messagePulse.rect} visualRect={messagePulse.visualRect} />}
+                {messagePulse && <MessageJumpOverlay targetElement={messagePulse.element} visualRoot={messagePulse.visualRoot} targetRect={messagePulse.rect} visualRect={messagePulse.visualRect} onReady={handleSendOverlayReady} />}
                 {(previewMessages??messagesToRenderFiltered).length === 0 && !containerPreview && !comparisonReviewed ? (
                   <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                     <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
@@ -2706,7 +2782,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               setRelStakeAmount={setRelStakeAmount}
               availablePoints={availablePoints}
               effectiveMinStake={effectiveMinStake}
-              singleButtonEnabled={singleButtonEnabled && !sendInFlight && !comparisonReviewed && !isPreloaded}
+              singleButtonEnabled={singleButtonEnabled && !sendInFlight && !waitingForSendOverlay && !comparisonReviewed && !isPreloaded}
               singleButtonLabel={singleButtonLabel}
               sendValidationLabel={sendValidationLabel}
               totalConsumption={totalConsumption}
@@ -2762,7 +2838,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
           ref={fixedHorizontalScrollRef}
           data-fixed-left-horizontal-scroll="true"
           aria-label="左侧视图水平滚动条"
-          style={{ position: "fixed", left: fixedHorizontalScroll.left, bottom: fixedHorizontalScroll.bottom, width: fixedHorizontalScroll.width, height: 14, overflowX: "scroll", overflowY: "hidden", scrollbarGutter: "stable", zIndex: 2147483647, background: "#101010" }}
+          style={{ position: "fixed", left: fixedHorizontalScroll.left, bottom: fixedHorizontalScroll.bottom, width: fixedHorizontalScroll.width, height: 14, overflowX: "scroll", overflowY: "hidden", scrollbarGutter: "stable", zIndex: Z_INDEX.header - 2, background: "#101010" }}
         >
           <div style={{ width: fixedHorizontalScroll.contentWidth, height: 1 }} />
         </div>,
@@ -2770,7 +2846,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       )}
 
       <PromptModal
-        open={sendInFlight}
+        open={sendInFlight || waitingForSendOverlay}
         title="正在发送"
         message="正在发送消息并更新关联结构，请稍候…"
         hideActions

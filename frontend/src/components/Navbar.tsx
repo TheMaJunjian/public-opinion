@@ -22,7 +22,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   const navRef = useRef<HTMLElement>(null);
   const leftControlsRef = useRef<HTMLDivElement>(null);
   const rightControlsRef = useRef<HTMLDivElement>(null);
-  const [rightControlsRightOffset, setRightControlsRightOffset] = useState(0);
+  const [rightControlsRightOffset, setRightControlsRightOffset] = useState(16);
 
   useEffect(() => {
     const nav = navRef.current;
@@ -37,13 +37,17 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
 
       const leftRect = leftControls.getBoundingClientRect();
       const rightRect = rightControls.getBoundingClientRect();
-      const nextRightOffset = Math.min(0, window.innerWidth - (leftRect.right + 16 + rightRect.width));
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      // Preserve the navbar's outer padding even when the workbench is wider
+      // than the viewport. CSS sticky accounts for the native scrollbar.
+      const nextRightOffset = Math.min(16, viewportWidth - (leftRect.right + 16 + rightRect.width));
       setRightControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
     };
 
     updateLayout();
     const observer = new ResizeObserver(updateLayout);
     observer.observe(nav);
+    observer.observe(document.documentElement);
     window.addEventListener('resize', updateLayout);
     return () => {
       observer.disconnect();
@@ -60,7 +64,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   }
 
   return (
-    <nav ref={navRef} className="relative bg-indigo-700 text-white px-6 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
+    <nav ref={navRef} className="relative bg-indigo-700 text-white pl-6 pr-4 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
       <div ref={leftControlsRef} className="relative flex shrink-0 items-center gap-4">
         <Link to="/" className="flex flex-col leading-tight hover:opacity-90 transition-opacity">
           <span className="text-xl font-bold tracking-widest">公论</span>
@@ -113,7 +117,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
         </button>
       </div>
       <div aria-hidden="true" className="min-w-0 flex-1" />
-      <div ref={rightControlsRef} className="sticky flex shrink-0 items-center gap-4 bg-indigo-700 pl-2 pr-4" style={{ right: `${rightControlsRightOffset}px`, zIndex: Z_INDEX.popup }}>
+      <div ref={rightControlsRef} className="sticky flex shrink-0 items-center gap-4 bg-indigo-700 pl-2" style={{ right: `${rightControlsRightOffset}px`, zIndex: Z_INDEX.popup }}>
         {user ? (
           <>
             <button

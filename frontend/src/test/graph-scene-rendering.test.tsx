@@ -2,7 +2,8 @@ import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import GraphView, { type GraphViewProps } from '../components/GraphView';
 import { projectGraphScene } from '../utils/graphProjection';
-import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
+import { withCorrectionContent, type DemoEdge, type DemoMessage } from '../utils/modelBridge';
+import MessageCard from '../components/MessageCard';
 import { GRID_TOP } from '../utils/layout';
 import type { Relation } from '../types';
 
@@ -22,6 +23,16 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it('renders corrected part text in both graph and list cards while retaining the original stored text',()=>{
+    const original:DemoMessage={...message('corrected-target'),content:'好玩吗？',parts:[{id:'body',type:'text',text:'好玩吗？'}]};
+    const corrected=withCorrectionContent(original,'好玩1111');
+    const graph=renderScene([corrected],[]);
+    expect(graph.container.querySelector('[data-msgid="corrected-target"]')).toHaveTextContent('好玩1111');
+    expect(graph.container).not.toHaveTextContent('好玩吗？');graph.unmount();
+    const list=render(<MessageCard msg={corrected} ctx={{}}/>);
+    expect(list.container).toHaveTextContent('好玩1111');expect(list.container).not.toHaveTextContent('好玩吗？');
+    expect(original.parts![0]).toEqual({id:'body',type:'text',text:'好玩吗？'});
+  });
   it.each(['classify','summary','merge','arrange'] as const)('opens both JOIN directions on a nested %s without selecting the container',type=>{
     const group:DemoMessage={...message('group'),kind:'relation',relationType:type,relationPayload:{title:'容器'}};
     const join=(id:string,source:string,target:string):Relation=>({id,relationType:'JOIN',sourceMessageId:source,targetRefs:[{kind:'message',messageId:target}],createdAt:'2026-01-01',createdBy:{id:'u',username:'tester',createdAt:''}});

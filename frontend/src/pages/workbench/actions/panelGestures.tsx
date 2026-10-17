@@ -126,7 +126,7 @@ export function handleLeftPanelTouchEnd(dependencies: HandleLeftPanelTouchEndDep
 type ScrollPosition = { requested: number; actual: number };
 const wheelPositions = new WeakMap<HTMLElement, { top?: ScrollPosition; left?: ScrollPosition }>();
 
-/** Consume the whole input when this area can move; hand off only at an existing boundary. */
+/** Consume only the distance available here and return the remainder. */
 function consumeWheelDelta(element: HTMLElement, delta: number, axis: 'top' | 'left'): number {
   if (delta === 0) return 0;
   const key = axis === 'top' ? 'scrollTop' : 'scrollLeft';
@@ -140,18 +140,18 @@ function consumeWheelDelta(element: HTMLElement, delta: number, axis: 'top' | 'l
   element[key] = next;
   positions[axis] = { requested: next, actual: element[key] };
   wheelPositions.set(element, positions);
-  // Reaching an edge during this event still belongs to this area. A later
-  // event that starts at that edge may move its parent instead.
-  return 0;
+  return delta - (next - start);
 }
 
 /** Own the entire wheel sequence so handoff does not depend on the browser's latched scroll target. */
 export function handlePanelWheel(panel: HTMLElement, otherPanel: HTMLElement | null, event: WheelEvent, page: HTMLElement | null = null): void {
-  if (event.defaultPrevented || !event.cancelable || event.ctrlKey || event.shiftKey || event.deltaY === 0) return;
+  if (event.defaultPrevented || !event.cancelable || event.ctrlKey || (event.deltaX === 0 && event.deltaY === 0)) return;
   event.preventDefault();
-  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? panel.clientHeight : 1;
-  let remainingY = event.deltaY * unit;
-  let remainingX = event.deltaX * unit;
+  const unitY = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? panel.clientHeight : 1;
+  const unitX = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? panel.clientWidth : 1;
+  const shiftedWheel = event.shiftKey && event.deltaX === 0;
+  let remainingY = shiftedWheel ? 0 : event.deltaY * unitY;
+  let remainingX = (event.deltaX + (shiftedWheel ? event.deltaY : 0)) * unitX;
   const visited = new Set<HTMLElement>();
   const consume = (element: HTMLElement, force = false) => {
     if (visited.has(element)) return;

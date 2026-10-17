@@ -1,5 +1,5 @@
 import { BrowserRouter, HashRouter, Routes, Route } from 'react-router-dom';
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import Navbar from './components/Navbar';
 import GestureShortcutManager from './components/GestureShortcutManager';
@@ -23,7 +23,24 @@ function AppContent() {
   const [topControlsFrozen, setTopControlsFrozen] = useState(false);
   const [navbarHeight, setNavbarHeight] = useState(68);
   const [interfaceZoom, setInterfaceZoom] = useState(1);
+  const appRootRef = useRef<HTMLDivElement>(null);
   const Router = window.location.protocol === 'file:' || import.meta.env.PROD ? HashRouter : BrowserRouter;
+
+  useLayoutEffect(() => {
+    const updateVisibleHeight = () => {
+      if (!appRootRef.current) return;
+      const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
+      const visibleHeight = Math.max(layoutHeight, window.visualViewport?.height ?? 0);
+      appRootRef.current.style.minHeight = `${visibleHeight / interfaceZoom}px`;
+    };
+    updateVisibleHeight();
+    window.addEventListener('resize', updateVisibleHeight);
+    window.visualViewport?.addEventListener('resize', updateVisibleHeight);
+    return () => {
+      window.removeEventListener('resize', updateVisibleHeight);
+      window.visualViewport?.removeEventListener('resize', updateVisibleHeight);
+    };
+  }, [interfaceZoom]);
 
   useEffect(() => {
     const handleGuideAvailability = (event: Event) => {
@@ -80,6 +97,7 @@ function AppContent() {
   return (
     <Router>
         <div
+          ref={appRootRef}
           className="min-h-screen min-w-0 flex flex-col bg-[#101010]"
           style={{
             transform: interfaceZoom === 1 ? 'none' : `scale(${interfaceZoom})`,
@@ -100,7 +118,7 @@ function AppContent() {
             onToggleTopControls={() => setTopControlsFrozen(!topControlsFrozen)}
             onHeightChange={setNavbarHeight}
           />
-          <main className="flex-1">
+          <main className="flex-1 flex flex-col">
             <Suspense fallback={routeFallback}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />

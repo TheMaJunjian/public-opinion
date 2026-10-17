@@ -28,8 +28,6 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
   const [fixedHorizontalScroll, setFixedHorizontalScroll] = useState<FixedHorizontalScroll | null>(null);
   const fixedHorizontalScrollValueRef = useRef<FixedHorizontalScroll | null>(null);
 
-  const [leftPanelMinHeight, setLeftPanelMinHeight] = useState(0);
-
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
 
   const viewModeScrollRef = useRef<{ graph: { top: number; left: number } | null; list: { top: number; left: number } | null }>({ graph: null, list: null });
@@ -108,7 +106,8 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
         setFixedHorizontalScroll(null);
       };
       const panel = leftPanelRef.current;
-      const isTouchDevice = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+      const isTouchDevice = navigator.maxTouchPoints > 0
+        || window.matchMedia('(hover: none) and (pointer: coarse), (max-width: 768px)').matches;
       if (!panel || isTouchDevice) {
         hideFixedScroll();
         return;
@@ -214,31 +213,6 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
     };
   }, [fixedHorizontalScroll]);
 
-  useEffect(() => {
-    const updatePanelHeights = () => {
-      const panel = leftPanelRef.current;
-      if (!panel) return;
-      const panelRect = panel.getBoundingClientRect();
-      const scale = panel.offsetWidth > 0 ? panelRect.width / panel.offsetWidth : 1;
-      const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-      // Measure from the document origin. A viewport-relative top moves while
-      // dragging the page scrollbar and would continuously grow the page.
-      const panelDocumentTop = panelRect.top + window.scrollY;
-      const bottomPadding = panel.parentElement ? parseFloat(getComputedStyle(panel.parentElement).paddingBottom) || 0 : 0;
-      const minHeight = Math.max(0, Math.floor((viewportHeight - panelDocumentTop) / Math.max(scale, 0.01)) - bottomPadding);
-      setLeftPanelMinHeight(current => current === minHeight ? current : minHeight);
-    };
-    updatePanelHeights();
-    window.addEventListener('resize', updatePanelHeights);
-    const zoomObserver = new MutationObserver(updatePanelHeights);
-    const zoomRoot = document.querySelector('[style*="scale("]');
-    if (zoomRoot) zoomObserver.observe(zoomRoot, { attributes: true, attributeFilter: ['style'] });
-    return () => {
-      window.removeEventListener('resize', updatePanelHeights);
-      zoomObserver.disconnect();
-    };
-  }, [loading]);
-
   function handleSplitterPointerDown(e: React.PointerEvent<HTMLDivElement>): void {
     return runHandleSplitterPointerDown({ setSplitterActive, panelContainerRef, splitterDragRef, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, BASE_WIDTH, getMinimumContainerWidth, setContainerWidth, setLeftFlex, TOTAL_FLEX }, e);
   }
@@ -273,5 +247,5 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
     };
   }, [loading]);
 
-  return { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, leftPanelMinHeight, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd };
+  return { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd };
 }

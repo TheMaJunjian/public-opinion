@@ -5,43 +5,21 @@ import { useWorkbenchViewport } from '../pages/workbench/useWorkbenchViewport';
 const originalResizeObserver = window.ResizeObserver;
 afterEach(() => { window.ResizeObserver = originalResizeObserver; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-it('keeps the left canvas minimum height stable while the naturally sized right panel uses page scrolling', () => {
-  let pageScroll = 0;
-  const observers: ResizeObserverCallback[] = [];
-  window.ResizeObserver = class {
-    constructor(callback: ResizeObserverCallback) { observers.push(callback); }
-    observe() {} unobserve() {} disconnect() {}
-  };
-  vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(700);
+it('does not show the fixed horizontal scrollbar on a narrow mobile viewport', async () => {
+  vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
+    matches: query.includes('max-width: 768px'), media: query, onchange: null,
+    addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+  }));
   vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(500);
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    const top = this.dataset.testid === 'left' ? 200 - pageScroll
-      : this.dataset.testid === 'right' ? Math.max(50, 120 - pageScroll) : 120 - pageScroll;
-    return new DOMRect(0, top, 500, 500);
-  });
+  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1000);
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 500, 400));
   function Viewport() {
     const viewport = useWorkbenchViewport({ comparisonReviewed: false, viewMode: 'graph', loading: false });
-    return <div ref={viewport.panelContainerRef}>
-      <div style={{ paddingBottom: 8 }}><div ref={viewport.leftPanelRef} data-testid="left" style={{ minHeight: viewport.leftPanelMinHeight }} /></div>
-      <div ref={viewport.rightPanelRef} data-testid="right" />
-    </div>;
+    return <><div ref={viewport.leftPanelRef} /><span data-testid="fixed-scroll">{viewport.fixedHorizontalScroll ? 'shown' : 'hidden'}</span></>;
   }
   render(<Viewport />);
-  const assertHeights = () => {
-    expect(screen.getByTestId('left').style.minHeight).toBe('492px');
-    expect(screen.getByTestId('right').style.maxHeight).toBe('');
-  };
-  assertHeights();
-  for (const offset of [8, 16, 32, 80, 160, 0]) {
-    act(() => {
-      pageScroll = offset;
-      vi.stubGlobal('scrollY', offset);
-      window.dispatchEvent(new Event('scroll'));
-      window.dispatchEvent(new Event('resize'));
-      for (const callback of [...observers]) callback([], {} as ResizeObserver);
-    });
-    assertHeights();
-  }
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(screen.getByTestId('fixed-scroll')).toHaveTextContent('hidden');
 });
 
 it('does not redraw the workbench for unchanged scroll and DOM measurements', async () => {

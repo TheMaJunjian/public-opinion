@@ -1451,7 +1451,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     () => collectExclusiveRelationMsgIds(graphHiddenTextIds, graphOwnedRelationIds),
     [edges, msgMap, graphHiddenTextIds, graphOwnedRelationIds]
   );
-  const { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, leftPanelMinHeight, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd } = useWorkbenchViewport({ comparisonReviewed, viewMode, loading });
+  const { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd } = useWorkbenchViewport({ comparisonReviewed, viewMode, loading });
   const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagePulseRafRef = useRef<number | null>(null);
@@ -2537,13 +2537,13 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   return (
     <>
       <ErrorBoundary>
-        <div style={{ minHeight: "100%", width: effectiveContainerWidth, maxWidth: "100%", minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
+        <div style={{ flex: "1 0 auto", width: effectiveContainerWidth, maxWidth: "100%", minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
           <RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
             top={topControlsFrozen ? topControlsOffset : 0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded}
             messageIdInput={messageIdInput} onMessageIdChange={setMessageIdInput} onJump={confirmMessageIdNavigation}
             composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />
 
-          <div ref={panelContainerRef} style={{ display: "flex", flex: "0 0 auto", width: "100%", minWidth: 0 }}>
+          <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
             <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
               <WorkbenchViewToolbar top={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
                 scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
@@ -2558,7 +2558,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               <div ref={leftPanelRef}
                 data-workbench-left-panel="true"
                 className={`workbench-left-panel ${previewClassifyId !== null && !containerPreview ? "preview-mode" : ""}`}
-                style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+                style={{ flex: "1 0 auto", boxSizing: "border-box", overflowY: "auto", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
                 onTouchStart={handleLeftPanelTouchStart}
                 onTouchMove={handleLeftPanelTouchMove}
                 onTouchEnd={handleLeftPanelTouchEnd}

@@ -617,20 +617,32 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
   });
 
-  it('keeps the left message graph uncapped while retaining a viewport minimum height', async () => {
-    const viewportHeight = vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(700);
-    const width = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(500);
+  it('keeps the left view free of height caps after sending', async () => {
+    localStorage.setItem('token', 'test-token');
+    mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-height-check', '新增消息'));
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 200, 500, 500));
     try {
       render(<MessageWorkbenchPage />);
       await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
       const left = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
-      expect(left.style.minHeight).not.toBe('');
+      expect(left.style.height).toBe('');
+      expect(left.style.minHeight).toBe('');
       expect(left.style.maxHeight).toBe('');
+      expect(left.style.flexGrow).toBe('1');
+      expect(left.style.flexShrink).toBe('0');
+      fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: '新增消息' } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => {
+        expect(mockApi.createMessage).toHaveBeenCalled();
+        expect(document.querySelector('[data-workbench-scroll-panel]')?.textContent).toContain('新增消息');
+      });
+      expect(document.querySelector<HTMLElement>('[data-workbench-left-panel]')).toBe(left);
+      expect(left.style.height).toBe('');
+      expect(left.style.minHeight).toBe('');
+      expect(left.style.maxHeight).toBe('');
+      expect(left.style.flexGrow).toBe('1');
     } finally {
       geometry.mockRestore();
-      width.mockRestore();
-      viewportHeight.mockRestore();
     }
   });
 
@@ -965,17 +977,17 @@ describe('MessageWorkbenchPage composer refresh', () => {
       page.scrollTop = 740;
       wheel(recent.firstElementChild as HTMLElement, 60, true);
       expect(recent.scrollTop).toBe(300);
-      expect(page.scrollTop).toBe(740);
+      expect(page.scrollTop).toBe(780);
       expect(left.scrollTop).toBe(0);
       wheel(recent.firstElementChild as HTMLElement, 60, true);
       expect(page.scrollTop).toBe(800);
-      expect(left.scrollTop).toBe(0);
+      expect(left.scrollTop).toBe(40);
       wheel(recent.firstElementChild as HTMLElement, 60, true);
-      expect(left.scrollTop).toBe(60);
+      expect(left.scrollTop).toBe(100);
       wheel(recent.firstElementChild as HTMLElement, -60, true);
       expect(recent.scrollTop).toBe(240);
       expect(page.scrollTop).toBe(800);
-      expect(left.scrollTop).toBe(60);
+      expect(left.scrollTop).toBe(100);
 
       // The same ancestry order applies to nested content in the left canvas.
       const leftList = document.createElement('div');
@@ -985,10 +997,6 @@ describe('MessageWorkbenchPage composer refresh', () => {
       left.scrollTop = 20;
       page.scrollTop = 20;
       leftList.scrollTop = 20;
-      wheel(leftList, -100, true);
-      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([0, 20, 20]);
-      wheel(leftList, -100, true);
-      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([0, 0, 20]);
       wheel(leftList, -100, true);
       expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([0, 0, 0]);
       wheel(leftList, 40, true);

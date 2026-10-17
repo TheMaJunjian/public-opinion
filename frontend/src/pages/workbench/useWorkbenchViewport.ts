@@ -6,6 +6,7 @@ import {
   handlePanelWheel,
   handleSplitterPointerDown as runHandleSplitterPointerDown,
 } from './actions/panelGestures';
+import type { LeftPanelTouchGesture } from './actions/panelGestures';
 import type { ViewMode } from './types';
 
 export interface WorkbenchViewportInput {
@@ -14,15 +15,18 @@ export interface WorkbenchViewportInput {
   loading: boolean;
 }
 
+type FixedHorizontalScroll = { left: number; bottom: number; width: number; contentWidth: number; scale: number };
+
 /** Owns panel sizing, scrollbars and pointer/touch gestures; selections and view history stay outside. */
 export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: WorkbenchViewportInput) {
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
 
-  const leftPanelTouchRef = useRef<{ x: number } | null>(null);
+  const leftPanelTouchRef = useRef<LeftPanelTouchGesture | null>(null);
 
   const fixedHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
 
-  const [fixedHorizontalScroll, setFixedHorizontalScroll] = useState<{ left: number; bottom: number; width: number; contentWidth: number; scale: number } | null>(null);
+  const [fixedHorizontalScroll, setFixedHorizontalScroll] = useState<FixedHorizontalScroll | null>(null);
+  const fixedHorizontalScrollValueRef = useRef<FixedHorizontalScroll | null>(null);
 
   const [leftPanelMinHeight, setLeftPanelMinHeight] = useState(0);
 
@@ -98,10 +102,15 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
 
   useEffect(() => {
     const updateFixedHorizontalScroll = () => {
+      const hideFixedScroll = () => {
+        if (fixedHorizontalScrollValueRef.current === null) return;
+        fixedHorizontalScrollValueRef.current = null;
+        setFixedHorizontalScroll(null);
+      };
       const panel = leftPanelRef.current;
       const isTouchDevice = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
       if (!panel || isTouchDevice) {
-        setFixedHorizontalScroll(null);
+        hideFixedScroll();
         return;
       }
       const rect = panel.getBoundingClientRect();
@@ -115,43 +124,54 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
         .map(viewport => viewport.scrollWidth);
       const contentWidth = Math.max(panel.scrollWidth, ...comparisonWidths, 0) * scale;
       if (visibleBottom <= visibleTop || visibleWidth <= 0 || contentWidth <= rect.width + 1) {
-        setFixedHorizontalScroll(null);
+        hideFixedScroll();
         return;
       }
-      setFixedHorizontalScroll({
+      const next = {
         left: visibleLeft,
         bottom: 0,
         width: visibleWidth,
         contentWidth,
         scale,
+      };
+      const current = fixedHorizontalScrollValueRef.current;
+      if (current
+        && current.left === next.left
+        && current.bottom === next.bottom
+        && current.width === next.width
+        && current.contentWidth === next.contentWidth
+        && current.scale === next.scale) return;
+      fixedHorizontalScrollValueRef.current = next;
+      setFixedHorizontalScroll(next);
+    };
+    let frame: number | null = null;
+    const scheduleUpdate = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        updateFixedHorizontalScroll();
       });
     };
-    const scheduleUpdate = () => window.requestAnimationFrame(updateFixedHorizontalScroll);
-    updateFixedHorizontalScroll();
     scheduleUpdate();
-    window.addEventListener('resize', updateFixedHorizontalScroll);
-    window.addEventListener('scroll', updateFixedHorizontalScroll, { passive: true });
-    const observer = new ResizeObserver(updateFixedHorizontalScroll);
+    window.addEventListener('resize', scheduleUpdate);
+    window.addEventListener('scroll', scheduleUpdate, { passive: true });
+    const observer = new ResizeObserver(scheduleUpdate);
     if (leftPanelRef.current) {
       observer.observe(leftPanelRef.current);
       Array.from(leftPanelRef.current.children).forEach(element => observer.observe(element));
       leftPanelRef.current.querySelectorAll<HTMLElement>('[data-comparison-viewport], [data-jump-canvas]')
         .forEach(element => observer.observe(element));
     }
-    const mutationObserver = new MutationObserver(() => {
-      updateFixedHorizontalScroll();
-    });
-    mutationObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
+    const mutationObserver = new MutationObserver(scheduleUpdate);
+    if (leftPanelRef.current) mutationObserver.observe(leftPanelRef.current, { childList: true, subtree: true });
     return () => {
-      window.removeEventListener('resize', updateFixedHorizontalScroll);
-      window.removeEventListener('scroll', updateFixedHorizontalScroll);
+      window.removeEventListener('resize', scheduleUpdate);
+      window.removeEventListener('scroll', scheduleUpdate);
       observer.disconnect();
       mutationObserver.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [comparisonReviewed, viewMode, containerWidth, leftFlex]);
+  }, [comparisonReviewed, viewMode, containerWidth, leftFlex, loading]);
 
   useEffect(() => {
     const panel = leftPanelRef.current;
@@ -239,8 +259,8 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
     const left = leftPanelRef.current;
     const right = rightPanelRef.current;
     if (!left || !right) return;
-    // The right panel keeps its natural height and is browsed with the page
-    // scrollbar. Only the left canvas and nested lists have their own scroll.
+    // Both panels use their natural height and the page scrollbar. Nested
+    // lists and horizontal canvas overflow keep their own scroll handling.
     const page = document.scrollingElement as HTMLElement | null ?? document.documentElement;
     const scrollLeft = (event: WheelEvent) => handlePanelWheel(left, right, event, page);
     const scrollRight = (event: WheelEvent) => handlePanelWheel(right, left, event, page);

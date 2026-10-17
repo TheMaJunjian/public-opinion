@@ -24,6 +24,7 @@ import ComparisonPane, { COMPARISON_HEADER_HEIGHT } from './ComparisonPane';
 import {indexRelatedMessages,isRejectedContainer} from '../utils/relatedMessages';
 import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD } from '../utils/layout';
 import type { Relation } from '../types';
+import { noteWorkbenchDrawingProgress, reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
 
 // ========================= Layout types =========================
 
@@ -359,6 +360,7 @@ function ComparisonGraphPair(props: GraphViewProps) {
 }
 
 function GraphViewCanvas(props: GraphViewProps) {
+  const renderStartedAt = performance.now();
   const {
     messages: inputMessages, edges: inputEdges, invalidCorrectionIds, draftUnits, activeTextSelectId, lastClickedMessageId,
     onMessageClick, onMessageDoubleClick, onTextMouseUp,
@@ -519,6 +521,11 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   const { positionedEdges, labelBboxes, decorationRectsState, decorationsByMsgState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, relDecByRelMsgState, tagsByRelMsgState } = useGraphOverlays({
     canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
+  });
+
+  useLayoutEffect(() => {
+    reportWorkbenchDrawingDuration(performance.now() - renderStartedAt);
+    noteWorkbenchDrawingProgress();
   });
 
   const visibleArrangeFrames = arrangeFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId));

@@ -5,7 +5,9 @@ import type { ExportData } from '../../api/client';
 import { syncWorkbench } from '../../data/workbench';
 import type { Relation, ScopeView, User } from '../../types';
 import type { DemoEdge, DemoMessage } from '../../utils/modelBridge';
+import type { ViewMode } from './types';
 import { computeCorrectionVersions, computeEffectiveSuppressedRelIds, convertMessagesToDemoModel } from '../../utils/modelBridge';
+import { beginWorkbenchDrawing, beginWorkbenchSync, finishWorkbenchSync } from '../../utils/workbenchActivity';
 
 export const VIEWER_USERNAME_KEY = 'export-viewer-username';
 
@@ -14,10 +16,13 @@ export interface WorkbenchDataInput {
   authLoading: boolean;
   scopeMessageId: string;
   navigate: NavigateFunction;
+  viewMode: ViewMode;
 }
 
 /** Owns snapshot loading, incremental synchronization and exported-data viewing. */
-export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate }: WorkbenchDataInput) {
+export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode }: WorkbenchDataInput) {
+  const graphViewRef = useRef(viewMode === 'graph');
+  graphViewRef.current = viewMode === 'graph';
   const [loading, setLoading] = useState(true);
   const [tagCounts, setTagCounts] = useState<Record<string, Record<string, number>>>({});
   const [scope, setScope] = useState<ScopeView | null>(null);
@@ -73,6 +78,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate }
       createdBy: { id: r.authorId, username: r.author, createdAt: '' },
     }));
 
+    if (graphViewRef.current) beginWorkbenchDrawing();
     const { messages: demoMsgs, edges: demoEdges } = convertMessagesToDemoModel(
       backendMessages, backendRelations
     );
@@ -122,7 +128,9 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate }
       parent: scopeMessageId,
       load: api.getWorkbenchSnapshot,
       events: api.subscribeChanges,
+      onSyncState: active => { if (active) beginWorkbenchSync(); else finishWorkbenchSync(); },
       onSnapshot(snapshot) {
+        if (graphViewRef.current) beginWorkbenchDrawing();
         const active = snapshot.messages.filter(message => !message.supersededBy);
         const activeIds = new Set(active.map(message => message.id));
         const visibleRelations = snapshot.relations.filter(relation => activeIds.has(relation.id));

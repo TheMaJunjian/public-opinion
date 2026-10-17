@@ -4,6 +4,7 @@ import { emptyGraphOverlays, measureGraphOverlays } from '../utils/graphOverlays
 import type { GraphOverlayInput } from '../utils/graphOverlays';
 import type { Rect } from '../utils/layout';
 import { LABEL_BBOX_STABILITY_THRESHOLD } from '../utils/graphPresentationGeometry';
+import { reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
 type LabelBbox = Rect;
 
 export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> & {
@@ -16,7 +17,9 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
   const [labelBboxes, setLabelBboxes] = useState<Record<string, LabelBbox>>({});
   const { positionedEdges } = overlays;
   useEffect(() => {
+    const startedAt = performance.now();
     const measured = measureGraphOverlays({ canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg });
+    reportWorkbenchDrawingDuration(performance.now() - startedAt);
     if (measured) setOverlays(measured);
   }, [canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg]);
   useEffect(() => {

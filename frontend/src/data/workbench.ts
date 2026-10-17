@@ -71,6 +71,7 @@ interface SyncOptions {
   events: (after: number) => EventSource;
   onSnapshot: (snapshot: WorkbenchSnapshot) => void;
   onError: (error: Error) => void;
+  onSyncState?: (active: boolean) => void;
 }
 
 /** Serialize snapshots and replay changes after the first page's sequence. SSE only wakes the reader. */
@@ -100,6 +101,7 @@ export function syncWorkbench(options: SyncOptions) {
   async function refresh() {
     if (running || stopped) return;
     running = true; queued = false;
+    options.onSyncState?.(true);
     try {
       let changed=false;
       if (reset) {
@@ -142,6 +144,7 @@ export function syncWorkbench(options: SyncOptions) {
       }
     } finally {
       running = false;
+      options.onSyncState?.(false);
       if (queued && !timer && !stopped) schedule();
     }
   }

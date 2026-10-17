@@ -1,7 +1,7 @@
 import { useRelationToolbar } from './workbench/useRelationToolbar';
 import { useWorkbenchViewport } from './workbench/useWorkbenchViewport';
 import { useWorkbenchData, VIEWER_USERNAME_KEY } from './workbench/useWorkbenchData';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
@@ -60,12 +60,14 @@ import LeaderboardModal from '../components/LeaderboardModal';
 import { MessageJumpOverlay } from '../components/PopupOverlay';
 import PromptModal from '../components/PromptModal';
 import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress } from '../components/WorkbenchLoadingBoundary';
+import WorkbenchActivityIndicator from '../components/WorkbenchActivityIndicator';
 import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import WorkbenchPanel from '../components/WorkbenchPanel';
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import type { MessageStakes, Relation, TargetRef } from '../types';
 import { getPresentationSpec, getRelationTitle } from '../types';
 import { operationLog } from '../utils/debugLog';
+import { beginWorkbenchDrawing, reportWorkbenchDrawingDuration, resetWorkbenchActivity } from '../utils/workbenchActivity';
 import { PART_SELECTION_EVENT, isWholeMessageSelection, type PartSelectionDetail } from '../utils/messageElementSelection';
 import { groupDraftSelections } from './workbench/actions/cardSelection';
 import { referenceToUnit, targetRefToUnit, unitSelectionToReference } from '../utils/modelBridge';
@@ -98,10 +100,16 @@ interface MessageWorkbenchPageProps {
 }
 
 export default function MessageWorkbenchPage({ topControlsFrozen = false, topControlsOffset = 68 }: MessageWorkbenchPageProps) {
-  return <WorkbenchLoadingBoundary><MessageWorkbenchContent topControlsFrozen={topControlsFrozen} topControlsOffset={topControlsOffset} /></WorkbenchLoadingBoundary>;
+  useEffect(() => () => resetWorkbenchActivity(), []);
+  return <>
+    <WorkbenchLoadingBoundary><MessageWorkbenchContent topControlsFrozen={topControlsFrozen} topControlsOffset={topControlsOffset} /></WorkbenchLoadingBoundary>
+    <WorkbenchActivityIndicator />
+  </>;
 }
 
 function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset = 68 }: MessageWorkbenchPageProps) {
+  const renderStartedAt = performance.now();
+  const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const { messageId: routeMessageId } = useParams<{ messageId: string }>();
   const scopeMessageId = routeMessageId ?? 'root';
   const [searchParams, setSearchParams] = useSearchParams();
@@ -115,7 +123,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     setLeaderboardRefreshVersion, registeredUsers, isPreloaded, viewerUser, setViewerUser,
     displayUser, correctionVersions, preloadedData, viewerUsers, loading,
     tagCounts,
-  } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate });
+  } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode });
   useWorkbenchLoadingProgress(loading, loadError);
   const { relationBarRef, relationLeftControlsRef, relationRightControlsRef, relationBarHeight, relationBarMinWidth, relationControlsRightOffset } = useRelationToolbar(loading);
 
@@ -444,7 +452,9 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const pendingScrollDependencyIdsRef = useRef<string[]>([]);
 
   const [lastClickedMessageId, setLastClickedMessageId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  useLayoutEffect(() => {
+    if (!loading && viewMode === 'graph') reportWorkbenchDrawingDuration(performance.now() - renderStartedAt);
+  });
   const [guideActive, setGuideActive] = useState(false);
   const guideTargetIdRef = useRef<string | null>(null);
 
@@ -1774,6 +1784,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   function enterClassification(relMsgId: string): void {
+    if (viewMode === 'graph') beginWorkbenchDrawing();
     return runEnterClassification({ captureSnapshot, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey }, relMsgId);
   }
   function findContainingClassification(messageId: string): string | null {
@@ -1781,6 +1792,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   function exitClassification(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }): void {
+    if (viewMode === 'graph') beginWorkbenchDrawing();
     return runExitClassification({ classifyStackRef, setClassifyRelMsgId, setClassifyKey, setPreviewClassifyId, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, restoreSnapshot, setViewMode }, _options);
   }
 
@@ -2546,7 +2558,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               <div ref={leftPanelRef}
                 data-workbench-left-panel="true"
                 className={`workbench-left-panel ${previewClassifyId !== null && !containerPreview ? "preview-mode" : ""}`}
-                style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, maxHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+                style={{ flex: "0 0 auto", minHeight: leftPanelMinHeight || undefined, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
                 onTouchStart={handleLeftPanelTouchStart}
                 onTouchMove={handleLeftPanelTouchMove}
                 onTouchEnd={handleLeftPanelTouchEnd}

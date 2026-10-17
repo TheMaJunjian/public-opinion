@@ -16,7 +16,6 @@ html, body, #root {
 
 .workbench-left-panel {
   z-index: 0;
-  overscroll-behavior-y: contain;
   scrollbar-width: auto;
   scrollbar-color: #666 #1a1a1a;
   scrollbar-gutter: stable;

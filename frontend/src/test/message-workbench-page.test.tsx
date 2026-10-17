@@ -617,6 +617,23 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
   });
 
+  it('keeps the left message graph uncapped while retaining a viewport minimum height', async () => {
+    const viewportHeight = vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(700);
+    const width = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(500);
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 200, 500, 500));
+    try {
+      render(<MessageWorkbenchPage />);
+      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      const left = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      expect(left.style.minHeight).not.toBe('');
+      expect(left.style.maxHeight).toBe('');
+    } finally {
+      geometry.mockRestore();
+      width.mockRestore();
+      viewportHeight.mockRestore();
+    }
+  });
+
   it.each([
     ['CLASSIFY', 'text'], ['SUMMARY', 'text'], ['CLASSIFY', 'relation'], ['SUMMARY', 'relation'],
   ])('keeps the nested %s and its parent history after sending and locating a %s', async (relationType, sentKind) => {

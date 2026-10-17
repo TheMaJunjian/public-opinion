@@ -56,17 +56,29 @@ export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDow
   document.addEventListener('pointercancel', onPointerUp);
 }
 
+export interface LeftPanelTouchGesture {
+  x: number;
+  startX: number;
+  startY: number;
+  axis: 'horizontal' | 'vertical' | null;
+}
+
 interface HandleLeftPanelTouchStartDependencies {
-  leftPanelTouchRef: React.MutableRefObject<{ x: number; } | null>;
+  leftPanelTouchRef: React.MutableRefObject<LeftPanelTouchGesture | null>;
 }
 
 export function handleLeftPanelTouchStart(dependencies: HandleLeftPanelTouchStartDependencies, e: React.TouchEvent<HTMLDivElement>): void {
   const { leftPanelTouchRef } = dependencies;
-  leftPanelTouchRef.current = e.touches.length === 1 ? { x: e.touches[0].clientX } : null;
+  leftPanelTouchRef.current = e.touches.length === 1 ? {
+    x: e.touches[0].clientX,
+    startX: e.touches[0].clientX,
+    startY: e.touches[0].clientY,
+    axis: null,
+  } : null;
 }
 
 interface HandleLeftPanelTouchMoveDependencies {
-  leftPanelTouchRef: React.MutableRefObject<{ x: number; } | null>;
+  leftPanelTouchRef: React.MutableRefObject<LeftPanelTouchGesture | null>;
   leftPanelRef: React.MutableRefObject<HTMLDivElement | null>;
 }
 
@@ -80,7 +92,15 @@ export function handleLeftPanelTouchMove(dependencies: HandleLeftPanelTouchMoveD
   const documentScroller = document.scrollingElement;
   if (!panel || !documentScroller) return;
   const touch = e.touches[0];
-  const deltaX = touch.clientX - leftPanelTouchRef.current.x;
+  const gesture = leftPanelTouchRef.current;
+  if (!gesture.axis) {
+    const totalX = touch.clientX - gesture.startX;
+    const totalY = touch.clientY - gesture.startY;
+    if (Math.max(Math.abs(totalX), Math.abs(totalY)) < 6) return;
+    gesture.axis = Math.abs(totalX) > Math.abs(totalY) ? 'horizontal' : 'vertical';
+  }
+  if (gesture.axis === 'vertical') return;
+  const deltaX = touch.clientX - gesture.x;
   const panelMax = Math.max(0, panel.scrollWidth - panel.clientWidth);
   const documentMax = Math.max(0, documentScroller.scrollWidth - documentScroller.clientWidth);
   const panelAtEdge = (panel.scrollLeft <= 0 && deltaX > 0) || (panel.scrollLeft >= panelMax - 1 && deltaX < 0);
@@ -91,11 +111,11 @@ export function handleLeftPanelTouchMove(dependencies: HandleLeftPanelTouchMoveD
       documentScroller.scrollLeft = next;
     }
   }
-  leftPanelTouchRef.current = { x: touch.clientX };
+  gesture.x = touch.clientX;
 }
 
 interface HandleLeftPanelTouchEndDependencies {
-  leftPanelTouchRef: React.MutableRefObject<{ x: number; } | null>;
+  leftPanelTouchRef: React.MutableRefObject<LeftPanelTouchGesture | null>;
 }
 
 export function handleLeftPanelTouchEnd(dependencies: HandleLeftPanelTouchEndDependencies): void {

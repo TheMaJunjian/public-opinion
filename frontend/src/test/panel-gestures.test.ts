@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { handlePanelWheel, handleSplitterPointerDown } from '../pages/workbench/actions/panelGestures';
+import { handleLeftPanelTouchEnd, handleLeftPanelTouchMove, handleLeftPanelTouchStart, handlePanelWheel, handleSplitterPointerDown } from '../pages/workbench/actions/panelGestures';
 
 function panel(top = 0) {
   const element = document.createElement('div');
@@ -13,6 +13,38 @@ function panel(top = 0) {
 }
 
 afterEach(() => document.body.replaceChildren());
+
+it('leaves vertical swipes in the left graph to page scrolling while handing off horizontal edge swipes', () => {
+  const left = panel();
+  left.scrollLeft = 800;
+  const page = document.documentElement;
+  const originalScrollingElement = Object.getOwnPropertyDescriptor(document, 'scrollingElement');
+  Object.defineProperty(document, 'scrollingElement', { configurable: true, value: page });
+  const pageWidth = vi.spyOn(page, 'scrollWidth', 'get').mockReturnValue(1200);
+  const viewportWidth = vi.spyOn(page, 'clientWidth', 'get').mockReturnValue(400);
+  const touchRef: Parameters<typeof handleLeftPanelTouchStart>[0]['leftPanelTouchRef'] = { current: null };
+  const touch = (x: number, y: number) => ({ touches: [{ clientX: x, clientY: y }], preventDefault: vi.fn() });
+  try {
+    handleLeftPanelTouchStart({ leftPanelTouchRef: touchRef }, touch(100, 100) as unknown as Parameters<typeof handleLeftPanelTouchStart>[1]);
+    const vertical = touch(90, 60);
+    handleLeftPanelTouchMove({ leftPanelTouchRef: touchRef, leftPanelRef: { current: left } }, vertical as unknown as Parameters<typeof handleLeftPanelTouchMove>[1]);
+    expect(vertical.preventDefault).not.toHaveBeenCalled();
+    expect(page.scrollLeft).toBe(0);
+
+    handleLeftPanelTouchEnd({ leftPanelTouchRef: touchRef });
+    handleLeftPanelTouchStart({ leftPanelTouchRef: touchRef }, touch(100, 100) as unknown as Parameters<typeof handleLeftPanelTouchStart>[1]);
+    const horizontal = touch(60, 98);
+    handleLeftPanelTouchMove({ leftPanelTouchRef: touchRef, leftPanelRef: { current: left } }, horizontal as unknown as Parameters<typeof handleLeftPanelTouchMove>[1]);
+    expect(horizontal.preventDefault).toHaveBeenCalledOnce();
+    expect(page.scrollLeft).toBe(40);
+  } finally {
+    if (originalScrollingElement) Object.defineProperty(document, 'scrollingElement', originalScrollingElement);
+    else Reflect.deleteProperty(document, 'scrollingElement');
+    pageWidth.mockRestore();
+    viewportWidth.mockRestore();
+    page.scrollLeft = 0;
+  }
+});
 
 describe('linked panel wheel scrolling', () => {
   it.each(['left', 'right'])('keeps scrolling within the %s panel before its boundary', () => {

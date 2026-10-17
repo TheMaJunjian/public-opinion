@@ -7,6 +7,21 @@ const message = (id: string, revision = 1, content = id): Message => ({ id, revi
 const page = (sequence: number, messages: Message[] = []): WorkbenchSnapshot => ({ sequence, messages, relations: [], users: [], stakes: {}, tagCounts: {}, attentionUsers: {}, scope: { messageId: null, title: '公论' } });
 
 describe('authoritative workbench records', () => {
+  it('reports the network synchronization window separately from graph drawing', async () => {
+    let resolveFirst!: (snapshot: WorkbenchSnapshot) => void;
+    const load = vi.fn(({ after }: { after?: number }) => after === undefined
+      ? new Promise<WorkbenchSnapshot>(resolve => { resolveFirst = resolve; })
+      : Promise.resolve(page(1)));
+    const onSyncState = vi.fn();
+    const sync = syncWorkbench({ parent: 'root', load, events: () => ({ close() {} }) as EventSource,
+      onSnapshot: vi.fn(), onError: error => { throw error; }, onSyncState });
+    expect(onSyncState).toHaveBeenCalledWith(true);
+    expect(onSyncState).not.toHaveBeenCalledWith(false);
+    resolveFirst(page(1, [message('a')]));
+    await vi.waitFor(() => expect(onSyncState).toHaveBeenLastCalledWith(false));
+    sync.stop();
+  });
+
   it('shows generated JOIN records from the send response without waiting for SSE or a reload', async () => {
     const load = vi.fn(async (_query: { after?: number }) => page(10, [message('member')]));
     const source = { close: vi.fn() } as unknown as EventSource;

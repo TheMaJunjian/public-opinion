@@ -62,7 +62,7 @@ describe('workbench loading through drawing', () => {
     step(2000); // A long render held the main thread for almost two seconds.
     advance(1);
     expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
-    for (let time = 2016; time <= 2144; time += 16) step(time);
+    for (let time = 2016; nextFrame && time <= 2144; time += 16) step(time);
     advance(1);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -77,6 +77,24 @@ describe('workbench loading through drawing', () => {
     fireEvent.keyDown(document, { key: 'Enter' });
     expect(shortcut).toHaveBeenCalledOnce();
     document.removeEventListener('keydown', shortcut);
+  });
+
+  it('finishes drawing when a mobile browser delivers animation frames only every 100ms', () => {
+    let now = 0;
+    let nextFrame: FrameRequestCallback | undefined;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { nextFrame = callback; return 1; });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => { nextFrame = undefined; });
+    render(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
+    for (const time of [100, 200, 300, 400]) {
+      now = time;
+      const callback = nextFrame;
+      nextFrame = undefined;
+      if (callback) act(() => callback(time));
+      advance(1);
+    }
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
   });
 
   it('releases loading on failure and cleans up pending drawing on unmount', () => {

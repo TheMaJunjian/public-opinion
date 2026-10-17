@@ -19,7 +19,6 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     const root = content.current;
     if (phase !== 'drawing' || !root) return;
     let changedAt = performance.now();
-    let previousFrame = changedAt;
     let stableFrames = 0;
     let frame = 0;
     let completion: ReturnType<typeof setTimeout> | undefined;
@@ -33,14 +32,13 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       }
     };
     // Card measurement and relation-label placement commit in later renders.
-    // Each change restarts the quiet period; a slow frame also delays readiness.
+    // Each content change restarts the quiet period. Frame cadence alone does
+    // not mean layout is changing: mobile browsers may throttle every frame.
     const mutations = new MutationObserver(changed);
     mutations.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
     const sizes = new ResizeObserver(changed);
     for (const child of root.children) sizes.observe(child);
     const check = (now: number) => {
-      if (now - previousFrame > 80) changed();
-      previousFrame = now;
       const fontsLoading = document.fonts?.status === 'loading';
       if (!fontsLoading && now - changedAt >= 120) stableFrames += 1;
       else stableFrames = 0;

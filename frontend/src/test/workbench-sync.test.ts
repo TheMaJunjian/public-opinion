@@ -109,6 +109,20 @@ describe('authoritative workbench records', () => {
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
     sync.stop();
   });
+
+  it('checks for missed messages after a tab resumes without replacing its current view', async () => {
+    const load = vi.fn(async ({ after }: { after?: number }) => after === 10
+      ? page(11, [message('new')])
+      : after === 11 ? page(11) : page(10, [message('old')]));
+    const updated = vi.fn();
+    const sync = syncWorkbench({ parent: 'root', load, events: () => ({ close() {} }) as EventSource,
+      onSnapshot: updated, onError: error => { throw error; } });
+    await vi.waitFor(() => expect(updated).toHaveBeenCalledTimes(1));
+    sync.catchUp();
+    await vi.waitFor(() => expect(updated.mock.lastCall?.[0].messages.map((item: Message) => item.id)).toEqual(['old', 'new']));
+    expect(load.mock.calls.at(-1)?.[0]).toMatchObject({ after: 10 });
+    sync.stop();
+  });
 });
 
 it('does not redraw an unchanged graph when the event stream reconnects',async()=>{

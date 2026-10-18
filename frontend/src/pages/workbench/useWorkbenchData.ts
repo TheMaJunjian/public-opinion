@@ -160,15 +160,25 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       onError(error) { setLoadError(error.message); setLoading(false); },
     });
     const reload = () => sync.reload();
+    const catchUp = () => sync.catchUp();
     const committed = (event: Event) => {
       const pages = (event as CustomEvent<import('../../data/workbench').WorkbenchSnapshot[]>).detail;
       if (!pages.some(page => sync.applyCommitted(page))) sync.reload();
     };
     window.addEventListener('gonglun:reload', reload);
+    window.addEventListener('gonglun:catch-up', catchUp);
     window.addEventListener('gonglun:committed', committed);
+    const resume = () => { if (!document.hidden) sync.catchUp(); };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('focus', resume);
     return () => {
       window.removeEventListener('gonglun:reload', reload);
+      window.removeEventListener('gonglun:catch-up', catchUp);
       window.removeEventListener('gonglun:committed', committed);
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('focus', resume);
       sync.stop();
     };
   }, [scopeMessageId, leaderboardRefreshVersion, authLoading, user?.id, preloadedData]);

@@ -1,12 +1,12 @@
 import type { DemoMessage } from '../../../utils/modelBridge';
 interface Props {
-  isInsideClassify: boolean; isTemporaryJoinCategory: boolean; correctionFilterTargetId: string | null; comparisonMode: boolean;
+  isInsideClassify: boolean; isRouteScope?: boolean; isTemporaryJoinCategory: boolean; correctionFilterTargetId: string | null; comparisonMode: boolean;
   comparisonTargetCount: number; correctionCount: number; temporaryJoinCount: number; classificationTitle: string; classifyKindLabel: string;
   comparisonTargetId: string | null; joinFilterTargetId: string | null; currentClassifyRelMsg: DemoMessage | null | undefined;
   joinFilterDirection?: 'incoming' | 'outgoing';
   classifyTargetCount: number; classifyExitLabel: string; onExitTemporary: () => void; onExitClassify: () => void;
 }
-export default function ClassificationHeader({ isInsideClassify, isTemporaryJoinCategory, correctionFilterTargetId, comparisonMode,
+export default function ClassificationHeader({ isInsideClassify, isRouteScope = false, isTemporaryJoinCategory, correctionFilterTargetId, comparisonMode,
   comparisonTargetCount, correctionCount, temporaryJoinCount, classificationTitle, classifyKindLabel, comparisonTargetId, joinFilterTargetId, joinFilterDirection = 'incoming', currentClassifyRelMsg,
   classifyTargetCount, classifyExitLabel, onExitTemporary: exitTemporaryCategory, onExitClassify: handleExitClassification }: Props) {
   return (<>
@@ -37,9 +37,9 @@ export default function ClassificationHeader({ isInsideClassify, isTemporaryJoin
                 <span>{joinFilterDirection === 'outgoing' ? `成员加入容器 ${joinFilterTargetId} 的全部记录` : `消息 ${joinFilterTargetId} 加入容器的全部记录`}（含生效和未生效记录）</span>
               ) : (
                 <>
-                  <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{currentClassifyRelMsg?.author ?? "系统"}</span> 发起</span>
+                  {!isRouteScope && <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{currentClassifyRelMsg?.author ?? "系统"}</span> 发起</span>}
                   <span>💬 {classifyTargetCount} 条观点</span>
-                  <span>{currentClassifyRelMsg ? new Date(currentClassifyRelMsg.createdAt).toLocaleDateString('zh-CN') : ""}</span>
+                  {!isRouteScope && currentClassifyRelMsg && <span>{new Date(currentClassifyRelMsg.createdAt).toLocaleDateString('zh-CN')}</span>}
                 </>
               )}
             </div>

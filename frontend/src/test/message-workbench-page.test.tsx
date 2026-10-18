@@ -139,6 +139,33 @@ describe('rejected child container boundaries and single-side comparison',()=>{
   }
   beforeEach(()=>{vi.clearAllMocks();HTMLElement.prototype.scrollIntoView=vi.fn();});
 
+  it('shows an exit for a classification opened directly from its URL', async () => {
+    fixture();
+    render(<MessageWorkbenchPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '退出分类' })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('测试分类');
+    fireEvent.click(screen.getByRole('button', { name: '退出分类' }));
+    expect(mockNavigate).toHaveBeenCalledWith('/messages');
+  });
+
+  it('confirms a standalone text send when a message is selected', async () => {
+    localStorage.setItem('token', 'test-token');
+    fixture();
+    render(<MessageWorkbenchPage />);
+    await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'A')).toBe(true));
+    await act(async () => latest().onMessageClick(event(), 'A'));
+    fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: '独立发言' } });
+    fireEvent.click(document.querySelector('[data-guide-send="true"]')!);
+    expect(screen.getByRole('dialog', { name: '确认发送文本消息' })).toBeInTheDocument();
+    expect(mockApi.createMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(mockApi.createMessage).not.toHaveBeenCalled();
+    fireEvent.click(document.querySelector('[data-guide-send="true"]')!);
+    mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-confirmed', '独立发言'));
+    fireEvent.click(screen.getByRole('button', { name: '仍然发送' }));
+    await waitFor(() => expect(mockApi.createMessage).toHaveBeenCalledTimes(1));
+  });
+
   it('keeps cross-classification references on a JOIN member and a member expanded inside an arrangement',async()=>{
     const relation=(id:string,relationType:string,targets:string[]=[],sourceMessageId:string|null=null):Relation=>({id,relationType,sourceMessageId,targetRefs:targets.map(messageId=>({kind:'message',messageId})),createdAt:'2026-01-01',createdBy:makeUser()});
     mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'测试分类'});
@@ -390,7 +417,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     fireEvent.click(screen.getAllByRole('button',{name:'退出对比'})[0]);
     await waitFor(()=>expect(latest().comparisonPair).toBe(false));
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('B');
-    expect(screen.queryByRole('button',{name:'退出分类'})).toBeNull();
+    expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent('测试分类');
     expect(mockApi.createRelation).not.toHaveBeenCalled();
   });
 
@@ -475,7 +502,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('C');
     expect(latest().messages.map((message:Message)=>message.id)).not.toContain('B');
     expect(latest().messages.map((message:Message)=>message.id)).toContain('outside');
-    expect(screen.queryByRole('button',{name:'退出分类'})).toBeNull();
+    expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent('测试分类');
     // Normal navigation and a comparison round-trip retain the root scope.
     await act(async()=>latest().onMessageDoubleClick(event(),'P'));
     fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
@@ -708,7 +735,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.click(exitInner);
       expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('外层容器');
       fireEvent.click(screen.getByRole('button', { name: '退出分类' }));
-      expect(screen.queryByRole('button', { name: '退出分类' })).toBeNull();
+      expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('测试分类');
     } finally {
       geometry.mockRestore();
     }

@@ -613,6 +613,19 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const activeSentMessageRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!waitingForSendOverlay || sendInFlight) return;
+    // A message can already be committed while its canvas placement is still
+    // unavailable (for example after waking a suspended browser tab).
+    const timer = window.setTimeout(() => {
+      activeSentMessageRef.current = null;
+      setAwaitingSendOverlay(false);
+      setSentMessageTargets([]);
+      window.dispatchEvent(new Event('gonglun:catch-up'));
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [waitingForSendOverlay, sendInFlight]);
+
+  useEffect(() => {
     const sentMessageTarget = sentMessageTargets[0];
     if (sendInFlight || loading || !sentMessageTarget || activeSentMessageRef.current) return;
     const target = messages.find(message => message.id === sentMessageTarget);
@@ -716,6 +729,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const [showRevenue, setShowRevenue] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
+  const [confirmStandaloneSend, setConfirmStandaloneSend] = useState(false);
 
   const showAlert = useCallback((message: string) => {
     if (sendInFlightRef.current) api.cancelCommandBatch(new Error(message));
@@ -1841,8 +1855,13 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     return runHandleQuickSendAndRelateFromDraftTargets({ requireAuth, singleButtonEnabled, newMessageContent, savedTextOnTypeSwitchRef, draftUnits, targetUnits, setSendError, sourceUnits, resolveEffectiveTargetUnits, relationType, hasTextContent, stakeAmount, containerRelationTypes, appendContainerType, relStakeAmount, effectiveMinStake, subType, subTypeStakeMap, relationStakeMap, totalConsumption, availablePoints, handleSendMessageOnly, guideTargetIdRef, setNewMessageContent, getContainerMembershipTargetError, joinOnlyAction, getContainerCycleError, showAlert, relationsRef, getJoinContainerCycleError, createJoinRelationsForContainer, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setSubType, setRelationType, setSecondaryRelationType, relationLabel, handleCreateRelationWithSourcesAndTargets, secondaryRelationType, msgMap, createRel, scopeMessageId, registerCreatedRelationInCurrentClassify, edgesRef, sendTagRelation, subTypeCustomBufferRef, setSubTypeCustomLabel, setComparisonPopup, correctionVersions, blockCorrectionForSecondBettor, edges, relationById, organizationTargetRef, getGroupedTargetTextMessageIds, relationTypeByRelMsgId, hasCrossNonReferenceTextLinkForClassifyTargets, getClassifyTargetRefs, isInsideClassify, currentClassifyRelMsgId, classifyStackRef, appendCreatedRelation, setTraceKey, isGovernanceOrOpsType, relations, setRelations, hasTargetsAvailable, user, setMessages, relStakeRef, setAuthorStakes, mergeStakeSnapshot });
   }
 
-  async function handleSendClick(): Promise<void> {
+  async function handleSendClick(confirmedStandalone = false): Promise<void> {
     if (sendInFlightRef.current) return;
+    if (!confirmedStandalone && relationType === null && newMessageContent.trim()
+      && (draftUnits.length > 0 || sourceUnits.length > 0 || targetUnits.length > 0)) {
+      setConfirmStandaloneSend(true);
+      return;
+    }
     sentMessageTargetsRef.current = [];
     return runHandleSendClick({ sendInFlightRef, draftUnits, sourceUnits, targetUnits, activeTextSelectId, newMessageContent, relationType, secondaryRelationType, subType, subTypeCustomLabel, relationLabel, stakeAmount, relStakeAmount, recommendationAmount, messages, edges, relations, authorStakes, stakeCounts, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, savedTextBeforeDelegationRef, delegationContentBufferRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setRecommendationAmount, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setSubType, setRelationLabel, setSubTypeCustomLabel, setStakeAmount, setRelStakeAmount, setMessages, setEdges, setRelations, messagesRef, edgesRef, relationsRef, setAuthorStakes, setStakeCounts, setSendError,
       onCommitted: () => {
@@ -2529,10 +2548,11 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   // Overridden stances: the user's previous stance messages that are no longer active.
   const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null);
   const relationSpringWidth = Math.max(0, effectiveContainerWidth - relationBarMinWidth);
-  const classificationHeader = <ClassificationHeader isInsideClassify={isInsideClassify} isTemporaryJoinCategory={isTemporaryJoinCategory} correctionFilterTargetId={correctionFilterTargetId} comparisonMode={comparisonMode}
-                comparisonTargetCount={comparisonViewIds?.size ?? 0} correctionCount={correctionTemporaryViewIds?.size ?? 0} temporaryJoinCount={temporaryJoinCount} classificationTitle={classificationTitle} classifyKindLabel={classifyKindLabel}
+  const isRouteScope = scopeMessageId !== 'root' && !isInsideClassify && traceEntries.length === 0;
+  const classificationHeader = <ClassificationHeader isInsideClassify={isInsideClassify || isRouteScope} isRouteScope={isRouteScope} isTemporaryJoinCategory={isTemporaryJoinCategory} correctionFilterTargetId={correctionFilterTargetId} comparisonMode={comparisonMode}
+                comparisonTargetCount={comparisonViewIds?.size ?? 0} correctionCount={correctionTemporaryViewIds?.size ?? 0} temporaryJoinCount={temporaryJoinCount} classificationTitle={isRouteScope ? (scope?.title ?? '分类') : classificationTitle} classifyKindLabel={classifyKindLabel}
                 comparisonTargetId={comparisonTargetId} joinFilterTargetId={joinFilterTargetId} joinFilterDirection={joinFilterDirection} currentClassifyRelMsg={currentClassifyRelMsg}
-                classifyTargetCount={classifyTargetCount} classifyExitLabel={classifyExitLabel} onExitTemporary={comparisonMode?exitComparison:exitTemporaryCategory} onExitClassify={handleExitClassification} />;
+                classifyTargetCount={isRouteScope ? messages.filter(message => message.kind !== 'relation').length : classifyTargetCount} classifyExitLabel={classifyExitLabel} onExitTemporary={comparisonMode?exitComparison:exitTemporaryCategory} onExitClassify={isRouteScope ? () => navigate('/messages') : handleExitClassification} />;
 
   return (
     <>
@@ -2863,6 +2883,15 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         message="正在发送消息并更新关联结构，请稍候…"
         hideActions
         onConfirm={() => undefined}
+      />
+
+      <PromptModal
+        open={confirmStandaloneSend}
+        title="确认发送文本消息"
+        message="候选区、来源集合或目标集合中已有消息，但尚未选择关系类型。继续发送将只发布文本消息，不会建立关系。"
+        confirmText="仍然发送"
+        onConfirm={() => { setConfirmStandaloneSend(false); void handleSendClick(true); }}
+        onCancel={() => setConfirmStandaloneSend(false)}
       />
 
       <LeaderboardModal

@@ -21,8 +21,7 @@ export function isPendingMessage(id: string): boolean { return current?.provisio
 export function queueCommand(path: string, options: RequestInit): Message | Relation | null {
   if (!current || !/^\/(messages|relations)(\/[^/]+)?$/.test(path)) return null;
   const body = JSON.parse(String(options.body || '{}')) as Record<string, unknown>;
-  const prior = pending()?.commands[current.commands.length];
-  const id = prior?.id ?? crypto.randomUUID();
+  const id = crypto.randomUUID();
   const command: Command = { id, method: options.method || 'POST', path, body };
   current.commands.push(command);
   const user = JSON.parse(localStorage.getItem('user') || '{}') as User;
@@ -46,7 +45,25 @@ export function queueCommand(path: string, options: RequestInit): Message | Rela
 export async function runCommandBatch<T>(work: () => Promise<T>, commit: (input: CommandEnvelope) => Promise<unknown>, onCommitted?: (commandCount: number) => void): Promise<T> {
   if (current) throw new Error('上一条消息正在发送，请稍候');
   const previous = pending();
-  const batch: Batch = { requestId: previous?.requestId ?? crypto.randomUUID(), commands: [], provisional: new Map() };
+  if (previous) {
+    // Replay the exact envelope after an interrupted response. The server
+    // deduplicates by requestId; rebuilding commands would create new IDs.
+    let recovered: CommandCommit | undefined;
+    try {
+      recovered = await commit(previous) as CommandCommit | undefined;
+    } catch (error) {
+      if (error && typeof error === 'object' && 'status' in error && Number(error.status) < 500) {
+        sessionStorage.removeItem(storageKey());
+      }
+      throw error;
+    }
+    sessionStorage.removeItem(storageKey());
+    if (recovered?.snapshots?.length) window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: recovered.snapshots }));
+    else window.dispatchEvent(new Event('gonglun:reload'));
+    window.dispatchEvent(new Event('points-refresh'));
+    throw new Error('上一笔发送已确认，请查看消息后再发送');
+  }
+  const batch: Batch = { requestId: crypto.randomUUID(), commands: [], provisional: new Map() };
   current = batch;
   let result: T;
   try {
@@ -55,9 +72,6 @@ export async function runCommandBatch<T>(work: () => Promise<T>, commit: (input:
   } finally { current = null; }
   if (!batch.commands.length) return result;
   const envelope = { requestId: batch.requestId, commands: batch.commands };
-  if (previous && JSON.stringify(previous) !== JSON.stringify(envelope)) {
-    throw new Error('上一笔发送的结果尚未确认，请恢复原内容后重试，避免重复扣费');
-  }
   sessionStorage.setItem(storageKey(), JSON.stringify(envelope));
   try {
     const committed = await commit(envelope) as CommandCommit | undefined;
@@ -70,8 +84,10 @@ export async function runCommandBatch<T>(work: () => Promise<T>, commit: (input:
     return result;
   } catch (error) {
     // A definite rejection made no changes; a lost response must keep its request identity.
-    if (error && typeof error === 'object' && 'status' in error && Number(error.status) < 500) sessionStorage.removeItem(storageKey());
+    const definiteRejection = error && typeof error === 'object' && 'status' in error && Number(error.status) < 500;
+    if (definiteRejection) sessionStorage.removeItem(storageKey());
     window.dispatchEvent(new Event('gonglun:reload'));
+    if (!definiteRejection) throw new Error('发送结果尚未确认。请查看消息列表；再次发送时会先核对上一笔发送。', { cause: error });
     throw error;
   }
 }

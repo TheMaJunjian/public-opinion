@@ -96,7 +96,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
   }
   // Retry a lost write response with exactly the same request identity and signature.
-  const fetchOnce = () => fetch(url, { ...options, headers, credentials: 'same-origin' });
+  const fetchOnce = async () => {
+    // A suspended tab may never receive a response to a completed write.
+    // Bound each attempt, while keeping the same request identity for retries.
+    if (path !== '/commands') return fetch(url, { ...options, headers, credentials: 'same-origin' });
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 20000);
+    try {
+      return await fetch(url, { ...options, headers, credentials: 'same-origin', signal: controller.signal });
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
   let res: Response;
   try { res = await fetchOnce(); }
   catch (error) { if (!headers['X-Request-Id']) throw error; res = await fetchOnce(); }

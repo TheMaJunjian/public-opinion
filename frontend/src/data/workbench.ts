@@ -161,6 +161,7 @@ export function syncWorkbench(options: SyncOptions) {
       return true;
     },
     reload() { reset = true; schedule(); },
+    catchUp() { schedule(); },
     stop() { stopped = true; abort.abort(); events?.close(); if (timer) clearTimeout(timer); },
   };
 }

@@ -29,7 +29,7 @@ describe('workbench sends', () => {
     const committed = vi.fn(), commit = vi.fn();
     await runCommandBatch(async () => undefined, commit, committed);
     expect(commit).not.toHaveBeenCalled(); expect(committed).not.toHaveBeenCalled();
-    commit.mockRejectedValueOnce(new Error('服务器拒绝'));
+    commit.mockRejectedValueOnce(Object.assign(new Error('服务器拒绝'), { status: 400 }));
     await expect(runCommandBatch(async () => { add({ content: '正文' }); }, commit, committed)).rejects.toThrow('服务器拒绝');
     expect(committed).not.toHaveBeenCalled();
     commit.mockResolvedValueOnce({});
@@ -37,11 +37,13 @@ describe('workbench sends', () => {
     expect(committed).toHaveBeenCalledExactlyOnceWith(1);
   });
 
-  it('reuses both message IDs and request identity after a lost response', async () => {
+  it('replays the exact envelope after a lost response before allowing a new send', async () => {
     const commit = vi.fn().mockRejectedValueOnce(new TypeError('网络中断')).mockResolvedValueOnce({});
     const send = () => runCommandBatch(async () => { add({ content: '同一笔发送' }); }, commit);
-    await expect(send()).rejects.toThrow('网络中断');
-    await send();
+    await expect(send()).rejects.toThrow('发送结果尚未确认');
+    await expect(send()).rejects.toThrow('上一笔发送已确认');
     expect(commit.mock.calls[0][0]).toEqual(commit.mock.calls[1][0]);
+    await send();
+    expect(commit.mock.calls[2][0].requestId).not.toBe(commit.mock.calls[0][0].requestId);
   });
 });

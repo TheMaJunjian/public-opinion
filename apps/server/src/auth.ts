@@ -7,7 +7,7 @@ import type { Session } from '@gonglun/core';
 import { DomainError, id, integer, Mutation, Store } from './db.js';
 import { distribution } from './economy.js';
 
-const credentials=z.object({name:z.string().trim().min(2).max(40).regex(/^[\p{L}\p{N}_ .-]+$/u),password:z.string().min(8).max(128)}).strict();
+const credentials=z.object({name:z.string().trim().min(2).max(40).regex(/^[\p{L}\p{N}_ .-]+$/u),password:z.string().min(1)}).strict();
 const derivePassword=promisify(scrypt);
 const hash=(text:string)=>createHash('sha256').update(text).digest('hex');
 const token=()=>randomBytes(32).toString('hex');
@@ -92,7 +92,7 @@ export async function register(store:Store,input:unknown,res:Response) {
   return {session:await establish(store,userId,res,data.deviceId),change:result};
 }
 export async function login(store:Store,input:unknown,res:Response):Promise<Session> {
-  const data=credentials.extend({password:z.string().min(1).max(128),...signingFields}).parse(normalizeCredentials(input));
+  const data=credentials.extend(signingFields).parse(normalizeCredentials(input));
   const row=await store.db.prepare('SELECT id,password FROM users WHERE lower(name)=lower($1)').get(data.name) as {id:string;password:string}|undefined;
   let valid=false;
   if(row && /^\$2[aby]\$\d\d\$[./A-Za-z0-9]{53}$/.test(row.password)) {

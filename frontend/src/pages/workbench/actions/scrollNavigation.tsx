@@ -38,7 +38,7 @@ interface ShowMessagePulseDependencies {
   messagePulseRafRef: React.MutableRefObject<number | null>;
   leftPanelRef: React.MutableRefObject<HTMLDivElement | null>;
   findMessageElements: (container: HTMLElement, messageId: string) => HTMLElement[];
-  setMessagePulse: React.Dispatch<React.SetStateAction<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect; } | null>>;
+  setMessagePulse: React.Dispatch<React.SetStateAction<{ messageId: string; element: HTMLElement; rect: DOMRect; } | null>>;
 }
 
 export const MESSAGE_PULSE_DURATION_MS = 400;
@@ -74,11 +74,7 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
       const bottom = Math.max(bounds.bottom, candidateRect.bottom);
       return new DOMRect(left, top, right - left, bottom - top);
     }, pulseElement.getBoundingClientRect());
-    const visualRoot = pulseElement.hasAttribute('data-rel-overlay')
-      ? pulseElement.closest('[data-jump-canvas]') as HTMLElement | null
-      : null;
-    const visualRect = rect;
-    setMessagePulse({ element: pulseElement, rect, visualRoot, visualRect });
+    setMessagePulse({ messageId: targetId, element: pulseElement, rect });
     messagePulseTimerRef.current = setTimeout(() => {
       setMessagePulse(current => current?.element === pulseElement ? null : current);
       if (requestId === scrollRequestIdRef.current) messagePulseTimerRef.current = null;

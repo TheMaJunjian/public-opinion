@@ -4,7 +4,7 @@ import MessageWorkbenchPage from '../pages/MessageWorkbenchPage';
 import type { Message, Relation, ScopeView, User } from '../types';
 import { PART_SELECTION_EVENT } from '../utils/messageElementSelection';
 
-const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => {
+const { mockApi, mockNavigate, mockGraphView, graphRendering } = vi.hoisted(() => {
   const mockApi = {
     getScope: vi.fn(),
     getMessages: vi.fn(),
@@ -71,7 +71,7 @@ const { mockApi, mockNavigate, mockGraphView } = vi.hoisted(() => {
       sequence: 1, nextCursor: null, hasMore: false,
     };
   });
-  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn() };
+  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false } };
 });
 
 vi.mock('../api', () => ({ api: mockApi }));
@@ -97,6 +97,7 @@ vi.mock('../components/GraphView', async () => {
     ...actual,
     default: (props: any) => {
       mockGraphView(props);
+      if (graphRendering.actual) return <actual.default {...props} />;
       return <div data-testid="graph-view">{(props.comparisonPair||props.comparisonSingle)&&props.comparisonScopeHeader}</div>;
     },
   };
@@ -644,6 +645,63 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
   });
 
+  it.each([
+    ['CLASSIFY', 'graph'], ['SUMMARY', 'graph'], ['MERGE', 'graph'], ['ARRANGE', 'graph'],
+    ['CLASSIFY', 'list'], ['SUMMARY', 'list'], ['MERGE', 'list'], ['ARRANGE', 'list'],
+  ])('releases sending and input after rejecting %s in the %s view', async (type, viewMode) => {
+    localStorage.setItem('token', 'test-token');
+    const category: Relation = { ...makeRelation(), id: 'category', relationType: type, sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }], payload: { title: '分类' } };
+    const rejection: Relation = { ...makeRelation(), id: 'against-category', relationType: 'DISAGREE', sourceMessageId: null,
+      targetRefs: [{ kind: 'relation', relationId: category.id }] };
+    mockApi.getRelations.mockResolvedValue({ data: [category] });
+    mockApi.createRelation.mockResolvedValueOnce(rejection);
+    let finishCommit!: () => void;
+    mockApi.withCommandBatch.mockImplementationOnce(async (work, onCommitted) => {
+      await work();
+      await new Promise<void>(resolve => { finishCommit = resolve; });
+      onCommitted?.(1);
+    });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    graphRendering.actual = true;
+    try {
+      render(<MessageWorkbenchPage />);
+      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await waitFor(() => expect(document.querySelector('[role="dialog"][aria-label="正在绘制"]')).toBeNull());
+      const latest = () => mockGraphView.mock.lastCall![0];
+      if (viewMode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, category.id));
+      fireEvent.click(screen.getByRole('button', { name: '反对' }));
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(finishCommit).toBeDefined());
+      expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+      await act(async () => finishCommit());
+      await waitFor(() => expect(document.querySelector('[role="dialog"][aria-label="正在发送"]')).toBeNull());
+      expect(document.querySelector('[data-workbench-left-panel] [data-msgid="category"]:not([data-rel-overlay])')).toBeNull();
+      expect(document.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).not.toBeNull();
+      expect(document.body.style.overflow).not.toBe('hidden');
+      const textarea = screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      expect(textarea.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
+      expect((textarea.closest('[aria-busy]') as HTMLElement).inert).toBe(false);
+      for (const canvas of document.querySelectorAll<HTMLElement>('[data-workbench-left-panel] [data-jump-canvas]')) {
+        expect(canvas.style.visibility).not.toBe('hidden');
+      }
+      const graph = latest();
+      fireEvent.change(textarea, { target: { value: '反对后立即继续输入' } });
+      expect(textarea).toHaveValue('反对后立即继续输入');
+      expect(screen.getByRole('button', { name: '发送' })).toBeEnabled();
+      if (viewMode === 'graph') {
+        expect(latest().rejectedContainerIds.has(category.id)).toBe(true);
+        expect(latest().messages).toBe(graph.messages);
+        expect(latest().edges).toBe(graph.edges);
+        expect(latest().invalidCorrectionIds).toBe(graph.invalidCorrectionIds);
+      }
+    } finally {
+      geometry.mockRestore();
+      graphRendering.actual = false;
+    }
+  });
+
   it('keeps the left view free of height caps after sending', async () => {
     localStorage.setItem('token', 'test-token');
     mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-height-check', '新增消息'));
@@ -770,8 +828,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
   it('locates text and every relation in send order within the current classification, skipping generated JOINs', async () => {
     const displayedTargets: string[] = [];
     const transitions = new MutationObserver(() => {
-      const active = document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid][style*="visibility: hidden"]');
-      const id = active?.getAttribute('data-msgid');
+      const active = document.querySelector<HTMLElement>('[data-message-jump-overlay="true"]');
+      const id = active?.getAttribute('data-message-jump-target');
       if (id && displayedTargets[displayedTargets.length - 1] !== id) displayedTargets.push(id);
     });
     localStorage.setItem('token', 'test-token');
@@ -853,14 +911,15 @@ describe('MessageWorkbenchPage composer refresh', () => {
       // The optimistic text is present in data, but its membership has not arrived.
       await act(async () => { await new Promise(resolve => setTimeout(resolve, 1200)); });
       expect(screen.queryByText('已定位目标消息')).toBeNull();
-      expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: '正在发送' })).toBeNull();
       await act(async () => window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: [{
         scope: { messageId: 'classification-1', title: '测试分类' }, sequence: 2,
         messages: [sent, { ...makeMessage(join.id, ''), kind: 'RELATION', relationType: join.relationType,
           relSourceId: join.sourceMessageId, targetRefs: join.targetRefs }],
         relations: [join], users: [], stakes: {}, tagCounts: {}, attentionUsers: {},
       }] })));
-      await waitFor(() => expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="delayed-text"]')?.style.visibility).toBe('hidden'));
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="delayed-text"]')).not.toBeNull());
+      expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="delayed-text"]')?.style.visibility).toBe('');
       expect(screen.getByText('已定位目标消息')).toBeInTheDocument();
       expect(screen.queryByRole('dialog', { name: '正在发送' })).toBeNull();
       expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
@@ -888,15 +947,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
   });
 
   it('locates a sent message with its overlay only after a slow commit finishes', async () => {
-    let waitingForOverlay = false;
-    let uncoveredTransition = false;
-    const transitions = new MutationObserver(() => {
-      const sending = screen.queryByRole('dialog', { name: '正在发送' });
-      const located = screen.queryByText('已定位目标消息');
-      if (sending) waitingForOverlay = true;
-      if (waitingForOverlay && !sending && !located) uncoveredTransition = true;
-      if (located) waitingForOverlay = false;
-    });
+    localStorage.setItem('token', 'test-token');
     let finishCommit!: () => void;
     mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-message', '发送后定位'));
     mockApi.withCommandBatch.mockImplementationOnce(async (work, onCommitted) => {
@@ -919,7 +970,6 @@ describe('MessageWorkbenchPage composer refresh', () => {
       const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
       Object.defineProperties(panel, { clientHeight: { value: 500 }, scrollHeight: { value: 2000 } });
       fireEvent.change(textarea, { target: { value: '发送后定位' } });
-      transitions.observe(document.body, { subtree: true, childList: true, attributes: true });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => expect(finishCommit).toBeDefined());
       await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
@@ -928,11 +978,10 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(panel.scrollTop).toBe(0);
       await act(async () => finishCommit());
       await waitFor(() => expect(screen.getByText('已定位目标消息')).toBeInTheDocument());
-      expect(screen.queryByText('正在发送消息并更新关联结构，请稍候…')).toBeNull();
-      expect(uncoveredTransition).toBe(false);
+      await waitFor(() => expect(screen.queryByText('正在发送消息并更新关联结构，请稍候…')).toBeNull());
+      expect(panel.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
       expect(panel.scrollTop).toBeGreaterThan(0);
     } finally {
-      transitions.disconnect();
       geometry.mockRestore();
     }
   });

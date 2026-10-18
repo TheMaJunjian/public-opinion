@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress } from '../components/WorkbenchLoadingBoundary';
+import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress } from '../components/WorkbenchLoadingBoundary';
 
-function Content({ loading = false, error = null, count = 3, onRender = () => undefined }: {
-  loading?: boolean; error?: string | null; count?: number; onRender?: () => void;
+function Content({ loading = false, sending = false, error = null, count = 3, onRender = () => undefined }: {
+  loading?: boolean; sending?: boolean; error?: string | null; count?: number; onRender?: () => void;
 }) {
   useWorkbenchLoadingProgress(loading, error);
+  useWorkbenchSendingProgress(sending);
   onRender();
   return <div data-testid="workbench">{error ?? <>
     <input aria-label="消息输入" />
@@ -18,6 +19,36 @@ const advance = (ms: number) => act(() => { vi.advanceTimersByTime(ms); });
 describe('workbench loading through drawing', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('finishes sending after actual drawing and restores input with the dialog without rendering the workbench again', async () => {
+    const onRender = vi.fn(), keydown = vi.fn();
+    const view = render(<WorkbenchLoadingBoundary><Content onRender={onRender} /></WorkbenchLoadingBoundary>);
+    advance(200);
+    view.rerender(<WorkbenchLoadingBoundary><Content sending onRender={onRender} /></WorkbenchLoadingBoundary>);
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+    advance(6000); // Sending remains active until the request completes.
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+    view.rerender(<WorkbenchLoadingBoundary><Content count={420} onRender={onRender} /></WorkbenchLoadingBoundary>);
+    advance(96);
+    act(() => { screen.getByTestId('workbench').style.height = '800px'; });
+    await act(async () => { await Promise.resolve(); });
+    advance(96);
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+    const renderCount = onRender.mock.calls.length;
+    advance(96);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(onRender).toHaveBeenCalledTimes(renderCount);
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+    document.addEventListener('keydown', keydown);
+    try {
+      fireEvent.keyDown(screen.getByLabelText('消息输入'), { key: 'a' });
+      expect(keydown).toHaveBeenCalledOnce();
+      fireEvent.change(screen.getByLabelText('消息输入'), { target: { value: '关窗后立即输入' } });
+      expect(screen.getByLabelText('消息输入')).toHaveValue('关窗后立即输入');
+    } finally {
+      document.removeEventListener('keydown', keydown);
+    }
+  });
 
   it('keeps input inactive through measurement updates, then exposes all historical messages without rerendering them', async () => {
     const onRender = vi.fn();

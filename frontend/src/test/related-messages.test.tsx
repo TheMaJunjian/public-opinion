@@ -10,10 +10,12 @@ it('shows and selects the rejected container part on its former member',()=>{
  const view=render(<RelatedMessages rows={rows} onNavigate={navigate}/>);
  const toggle=view.getByRole('button',{name:/被反对的容器：1/});
  expect(toggle.getAttribute('aria-expanded')).toBe('false');
- expect(view.queryByText('分类 · 旧分类')).toBeNull();
+ expect(view.queryByRole('button',{name:'选择被反对的分类消息部件'})).toBeNull();
  fireEvent.click(toggle);
  expect(toggle.getAttribute('aria-expanded')).toBe('true');
- expect(view.getByText('分类 · 旧分类')).toBeTruthy();
+ expect(view.getByRole('button',{name:'选择被反对的分类消息部件'}).textContent).toBe('【分类】 category');
+ expect(view.queryByText('旧分类')).toBeNull();
+ expect(view.queryByText('claim')).toBeNull();
  fireEvent.click(view.getByRole('button',{name:'选择被反对的分类消息部件'}));
  expect(selection.mock.calls[0][0].detail.reference).toEqual({messageId:'category',revision:1,partId:'organization'});
  view.rerender(<RelatedMessages rows={rows} onNavigate={navigate} selectedUnits={[{messageId:'category',selection:{kind:'whole'},reference:{messageId:'category',revision:1,partId:'organization'}}]}/>);

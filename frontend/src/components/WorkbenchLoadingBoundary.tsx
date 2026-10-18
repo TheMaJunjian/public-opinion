@@ -1,13 +1,21 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import PromptModal from './PromptModal';
 
-type Phase = 'loading' | 'drawing' | 'ready';
+type Phase = 'loading' | 'drawing' | 'sending' | 'ready';
 const LoadingContext = createContext<(phase: Phase) => void>(() => undefined);
+const SendingContext = createContext<(sending: boolean) => void>(() => undefined);
 
 /** Keep the loading dialog outside the expensive workbench render. */
 export default function WorkbenchLoadingBoundary({ children }: { children: ReactNode }) {
-  const [phase, setPhase] = useState<Phase>('loading');
+  const [progress, setProgress] = useState<{ phase: Phase; sending: boolean; reason: 'loading' | 'sending' }>({ phase: 'loading', sending: false, reason: 'loading' });
+  const { phase, reason } = progress;
+  const reportLoading = useCallback((next: Phase) => {
+    setProgress(previous => previous.sending ? previous : { ...previous, phase: next, reason: 'loading' });
+  }, []);
+  const reportSending = useCallback((sending: boolean) => {
+    setProgress(previous => previous.sending === sending ? previous : { phase: sending ? 'sending' : 'drawing', sending, reason: 'sending' });
+  }, []);
   const content = useRef<HTMLDivElement>(null);
   const busy = phase !== 'ready';
 
@@ -44,7 +52,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       else stableFrames = 0;
       if (stableFrames >= 2) {
         // Yield once more so pending observer/measurement callbacks can run.
-        completion = setTimeout(() => setPhase('ready'), 0);
+        completion = setTimeout(() => setProgress(previous => previous.phase === 'drawing' ? { ...previous, phase: 'ready' } : previous), 0);
       } else frame = requestAnimationFrame(check);
     };
     frame = requestAnimationFrame(check);
@@ -56,7 +64,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     };
   }, [phase]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!busy) return;
     // Document-level workbench shortcuts also need to wait for drawing.
     const blockShortcut = (event: KeyboardEvent) => event.stopImmediatePropagation();
@@ -68,12 +76,12 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     };
   }, [busy]);
 
-  return <LoadingContext.Provider value={setPhase}>
+  return <LoadingContext.Provider value={reportLoading}><SendingContext.Provider value={reportSending}>
     <div ref={content} aria-busy={busy} style={{ display: 'contents' }}>{children}</div>
-    <PromptModal open={busy} title={phase === 'drawing' ? '正在绘制' : '正在加载'}
-      message={phase === 'drawing' ? '数据已收到，正在绘制消息与关系，请稍候…' : '正在加载消息数据，请稍候…'}
+    <PromptModal open={busy} title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'}
+      message={reason === 'sending' ? '正在发送消息并更新关联结构，请稍候…' : phase === 'drawing' ? '数据已收到，正在绘制消息与关系，请稍候…' : '正在加载消息数据，请稍候…'}
       hideActions onConfirm={() => undefined} />
-  </LoadingContext.Provider>;
+  </SendingContext.Provider></LoadingContext.Provider>;
 }
 
 /** Errors must release the dialog as well, so the error remains visible. */
@@ -82,4 +90,10 @@ export function useWorkbenchLoadingProgress(loading: boolean, error: string | nu
   useLayoutEffect(() => {
     report(error ? 'ready' : loading ? 'loading' : 'drawing');
   }, [report, loading, error]);
+}
+
+/** Sending finishes when the committed scene is stable, independently of navigation. */
+export function useWorkbenchSendingProgress(sending: boolean) {
+  const report = useContext(SendingContext);
+  useLayoutEffect(() => { report(sending); }, [report, sending]);
 }

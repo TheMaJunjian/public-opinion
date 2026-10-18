@@ -59,7 +59,7 @@ import { clearBrowserSelection, relationTypeName } from '../utils/graphTextSelec
 import LeaderboardModal from '../components/LeaderboardModal';
 import { MessageJumpOverlay } from '../components/PopupOverlay';
 import PromptModal from '../components/PromptModal';
-import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress } from '../components/WorkbenchLoadingBoundary';
+import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress } from '../components/WorkbenchLoadingBoundary';
 import WorkbenchActivityIndicator from '../components/WorkbenchActivityIndicator';
 import RegistrationGuideHint from '../components/RegistrationGuideHint';
 import WorkbenchPanel from '../components/WorkbenchPanel';
@@ -604,26 +604,23 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const [availablePoints, setAvailablePoints] = useState(100); // Phase 2: balance cap
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendInFlight, setSendInFlight] = useState(false);
+  useWorkbenchSendingProgress(sendInFlight);
   const sendInFlightRef = useRef(false);
   const sentMessageTargetsRef = useRef<string[]>([]);
   const [sentMessageTargets, setSentMessageTargets] = useState<string[]>([]);
-  const [awaitingSendOverlay, setAwaitingSendOverlay] = useState(false);
-  const waitingForSendOverlay = awaitingSendOverlay && sentMessageTargets.length > 0 && !loadError;
-  const handleSendOverlayReady = useCallback(() => setAwaitingSendOverlay(false), []);
   const activeSentMessageRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!waitingForSendOverlay || sendInFlight) return;
+    if (sentMessageTargets.length === 0 || sendInFlight) return;
     // A message can already be committed while its canvas placement is still
     // unavailable (for example after waking a suspended browser tab).
     const timer = window.setTimeout(() => {
       activeSentMessageRef.current = null;
-      setAwaitingSendOverlay(false);
       setSentMessageTargets([]);
       window.dispatchEvent(new Event('gonglun:catch-up'));
     }, 10000);
     return () => window.clearTimeout(timer);
-  }, [waitingForSendOverlay, sendInFlight]);
+  }, [sentMessageTargets, sendInFlight]);
 
   useEffect(() => {
     const sentMessageTarget = sentMessageTargets[0];
@@ -645,12 +642,15 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         // as soon as it is ready, without waiting for the display timer.
         if (located) advance();
         else {
+          // A rejected container no longer has a card to host this stance badge.
+          // Its record is already committed; another synchronization cannot locate it.
+          const rejectedContainerTarget = ['agree', 'disagree'].includes(target.relationType ?? '')
+            && [...target.targetRefs ?? [], ...target.declaredTargetRefs ?? []].some(ref =>
+              rejectedContainerIds.has(ref.kind === 'relation' ? ref.relationId : ref.messageId));
+          if (rejectedContainerTarget) { advance(); return; }
           // Placement JOINs can arrive in a later snapshot. Keep this target
           // queued until that render rather than silently dropping the message.
           activeSentMessageRef.current = null;
-          // A message outside a temporary or trace view may remain queued
-          // until the user returns. Release the dialog so they can navigate.
-          if (traceEntries.length > 0 || temporaryCategoryStackRef.current.length > 0) setAwaitingSendOverlay(false);
           if (messagesRef.current !== messages) setSentMessageTargets(queue => [...queue]);
         }
       },
@@ -1466,7 +1466,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     [edges, msgMap, graphHiddenTextIds, graphOwnedRelationIds]
   );
   const { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd } = useWorkbenchViewport({ comparisonReviewed, viewMode, loading });
-  const [messagePulse, setMessagePulse] = useState<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect } | null>(null);
+  const [messagePulse, setMessagePulse] = useState<{ messageId: string; element: HTMLElement; rect: DOMRect } | null>(null);
   const messagePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagePulseRafRef = useRef<number | null>(null);
   const prevTraceLenRef = useRef(0);
@@ -1866,7 +1866,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     return runHandleSendClick({ sendInFlightRef, draftUnits, sourceUnits, targetUnits, activeTextSelectId, newMessageContent, relationType, secondaryRelationType, subType, subTypeCustomLabel, relationLabel, stakeAmount, relStakeAmount, recommendationAmount, messages, edges, relations, authorStakes, stakeCounts, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, savedTextBeforeDelegationRef, delegationContentBufferRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setRecommendationAmount, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setSubType, setRelationLabel, setSubTypeCustomLabel, setStakeAmount, setRelStakeAmount, setMessages, setEdges, setRelations, messagesRef, edgesRef, relationsRef, setAuthorStakes, setStakeCounts, setSendError,
       onCommitted: () => {
         const committedTargets = [...sentMessageTargetsRef.current];
-        if (committedTargets.length > 0) setAwaitingSendOverlay(true);
         setSentMessageTargets(queue => [...queue, ...committedTargets.filter(id => !queue.includes(id))]);
       },
     });
@@ -2229,7 +2228,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   async function confirmReverseCorrection(): Promise<void> {
     return runConfirmReverseCorrection({ sendInFlightRef, comparisonPopup, scopeMessageId, setSendInFlight, createRel, msgMap, registerCreatedRelationInCurrentClassify, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setRecommendationAmount, setComparisonPopup, showAlert,
       onCreated: messageId => {
-        setAwaitingSendOverlay(true);
         setSentMessageTargets(queue => [...queue, messageId]);
       },
     });
@@ -2309,7 +2307,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     }
     if (!options?.preserveScope) {
       activeSentMessageRef.current = null;
-      setAwaitingSendOverlay(false);
       setSentMessageTargets([]);
       if (wasTemporaryCategoryActive) {
         exitAllTemporaryCategories({ restoreMessageFilter: false });
@@ -2370,19 +2367,11 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     return runToggleWholeUnit({ setDraftUnits }, msgId);
   }
 
-  if (!authLoading && !preloadedData && !user) return null;
-  if (loading) {
-    return null;
-  }
-  if (loadError) {
-    return (
-      <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
-        <pre style={{ whiteSpace: "pre-wrap", color: "#ff8080" }}>{loadError}</pre>
-      </div>
-    );
-  }
-
+  // Composer edits and progress-dialog updates do not change the graph.
+  // Keep its input arrays stable so they do not restart layout and measurement.
+  const { messagesToRenderFiltered, comparisonViewIds, correctionTemporaryViewIds,
+    rawEdgesToRender, rawEdgesToRenderClean, effectiveSuppressedRelIds, globallySuppressedRelIds,
+    temporaryEdgesToRender, suppressedRelIds, previewMessages, edgesToRender, graphMessagesFinal } = useMemo(() => {
   const messagesToRender = viewMode === "list" ? listMessagesToRender : graphMessagesToRender;
   const messagesWithCorrections = messagesToRender.map(message => {
     const correction = correctionVersions.get(message.id)?.current;
@@ -2433,7 +2422,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
           .filter((message): message is DemoMessage => Boolean(message))
           .filter(message => !msgFilter.hideJoin || message.kind !== 'join')
         : typeFilteredMessages;
-  renderedMessageIdsRef.current = new Set(messagesToRenderFiltered.map(message => message.id));
 
   const projectionEdgesToRender = [
     ...(viewMode === "list" ? listEdgesToRender : graphEdgesToRender),
@@ -2491,23 +2479,33 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   // uses the suppressed relation set as a visual projection only.
   const previewMessages=containerPreview?applyMessageFilter(containerPreview.messages,msgFilter):null;
   const edgesToRender = containerPreview?.edges??(viewMode === "list" ? temporaryEdgesToRender : filteredEdgesToRender);
-  renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
   const suppressedRelIds = comparisonSuppressedRelIds;
   const graphMessagesFinal = (previewMessages??messagesToRenderFiltered)
     .map(message => {
       const correction = correctionVersions.get(message.id)?.current;
       return correction ? withCorrectionContent(message, correction.content) : message;
     });
+  return { messagesToRenderFiltered, comparisonViewIds, correctionTemporaryViewIds,
+    rawEdgesToRender, rawEdgesToRenderClean, effectiveSuppressedRelIds, globallySuppressedRelIds,
+    temporaryEdgesToRender, suppressedRelIds, previewMessages, edgesToRender, graphMessagesFinal };
+  }, [viewMode, listMessagesToRender, graphMessagesToRender, correctionVersions, cleanVisibleIds,
+    homeFilterResult, msgFilter, joinFilterTargetId, joinFilterDirection, joinRelationsBySource,
+    joinRelationsByTarget, comparisonMode, comparisonTargets, correctionFilterTargetId, edges, msgMap,
+    listEdgesToRender, graphEdgesToRender, traceEntries.length, traceRelationMsgIds, relations,
+    effectiveJoinRelationIds, messages, displayUser?.username, comparisonReviewed, comparisonTargetId,
+    comparisonSide, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds, containerPreview]);
+  renderedMessageIdsRef.current = new Set(messagesToRenderFiltered.map(message => message.id));
+  renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
   const comparisonAgreeGraph = comparisonGraphProjections?.agree;
   const comparisonDisagreeGraph = comparisonGraphProjections?.disagree;
   const comparisonGraphMessages = comparisonAgreeGraph?.messages ?? messagesToRenderFiltered;
-  const invalidCorrectionIds = (() => {
+  const invalidCorrectionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const entry of correctionVersions.values()) {
       for (const version of entry.versions) if (!version.valid || version.conflicted) ids.add(version.correctionId);
     }
     return ids;
-  })();
+  }, [correctionVersions]);
 
   // Which agree/disagree decoration badges are currently selected (via draftUnits)
   const selectedDecorations = (() => {
@@ -2547,6 +2545,16 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   })();
   // Overridden stances: the user's previous stance messages that are no longer active.
   const overriddenStanceRelIds = computeUserOverriddenStanceRelIds(rawEdgesToRender, messages, displayUser?.username ?? null);
+  if (!authLoading && !preloadedData && !user) return null;
+  if (loading) return null;
+  if (loadError) {
+    return (
+      <div style={{ padding: 16, background: "#101010", color: "#eee", height: "100%" }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>加载失败</div>
+        <pre style={{ whiteSpace: "pre-wrap", color: "#ff8080" }}>{loadError}</pre>
+      </div>
+    );
+  }
   const relationSpringWidth = Math.max(0, effectiveContainerWidth - relationBarMinWidth);
   const isRouteScope = scopeMessageId !== 'root' && !isInsideClassify && traceEntries.length === 0;
   const classificationHeader = <ClassificationHeader isInsideClassify={isInsideClassify || isRouteScope} isRouteScope={isRouteScope} isTemporaryJoinCategory={isTemporaryJoinCategory} correctionFilterTargetId={correctionFilterTargetId} comparisonMode={comparisonMode}
@@ -2589,7 +2597,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                   if (t.closest?.("[data-msgid]") || t.closest?.("svg") || t.closest?.('[title^="relation="]') || t.closest?.("[data-rel-overlay]")) return;
                   handleCanvasBlankClick();
                 }}>
-                {messagePulse && <MessageJumpOverlay targetElement={messagePulse.element} visualRoot={messagePulse.visualRoot} targetRect={messagePulse.rect} visualRect={messagePulse.visualRect} onReady={handleSendOverlayReady} />}
+                {messagePulse && <MessageJumpOverlay messageId={messagePulse.messageId} targetElement={messagePulse.element} targetRect={messagePulse.rect} />}
                 {(previewMessages??messagesToRenderFiltered).length === 0 && !containerPreview && !comparisonReviewed ? (
                   <div style={{ padding: 48, textAlign: "center", color: "#666", fontSize: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                     <div style={{ fontSize: 36, opacity: 0.3 }}>📭</div>
@@ -2814,7 +2822,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               setRelStakeAmount={setRelStakeAmount}
               availablePoints={availablePoints}
               effectiveMinStake={effectiveMinStake}
-              singleButtonEnabled={singleButtonEnabled && !sendInFlight && !waitingForSendOverlay && !comparisonReviewed && !isPreloaded}
+              singleButtonEnabled={singleButtonEnabled && !sendInFlight && !comparisonReviewed && !isPreloaded}
               singleButtonLabel={singleButtonLabel}
               sendValidationLabel={sendValidationLabel}
               totalConsumption={totalConsumption}
@@ -2876,14 +2884,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         </div>,
         document.body,
       )}
-
-      <PromptModal
-        open={sendInFlight || waitingForSendOverlay}
-        title="正在发送"
-        message="正在发送消息并更新关联结构，请稍候…"
-        hideActions
-        onConfirm={() => undefined}
-      />
 
       <PromptModal
         open={confirmStandaloneSend}

@@ -1,10 +1,27 @@
 import { createPortal } from 'react-dom';
 import { Z_INDEX } from '../constants/zIndex';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 
 const EDGE_ARROW_COUNT = 25;
 const GUIDE_EDGE_INSET = 12;
+
+/** Copy the highlighted region without duplicating every card in a large graph. */
+function cloneHighlightRegion(source: Element, bounds: DOMRect): Element | null {
+  // SVG definitions have no visible bounds but are needed by copied paths.
+  if (['defs', 'style'].includes(source.localName)) return source.cloneNode(true) as Element;
+  const rect = source.getBoundingClientRect();
+  if ((rect.width > 0 || rect.height > 0)
+    && (rect.right < bounds.left || rect.left > bounds.right || rect.bottom < bounds.top || rect.top > bounds.bottom)) return null;
+  // Preserve card/badge layout, including children that overflow its own box.
+  if (source.matches('[data-msgid], [data-rel-overlay]')) return source.cloneNode(true) as Element;
+  const clone = source.cloneNode(false) as Element;
+  for (const child of source.childNodes) {
+    const copied = child instanceof Element ? cloneHighlightRegion(child, bounds) : child.cloneNode(false);
+    if (copied) clone.appendChild(copied);
+  }
+  return clone;
+}
 
 export function PulseGuide({ start, end, index }: { start: { x: number; y: number }; end: { x: number; y: number }; index: number }) {
   const deltaX = end.x - start.x;
@@ -27,20 +44,16 @@ export function PulseGuide({ start, end, index }: { start: { x: number; y: numbe
 }
 
 export function MessageJumpOverlay({
+  messageId,
   targetElement,
-  visualRoot,
   targetRect,
-  visualRect,
-  onReady,
 }: {
+  messageId?: string;
   targetElement: HTMLElement;
-  visualRoot?: HTMLElement | null;
   targetRect: DOMRect;
-  visualRect?: DOMRect;
-  onReady?: () => void;
 }) {
   const contentLayerRef = useRef<HTMLDivElement>(null);
-  const [cloneReady, setCloneReady] = useState(false);
+  const cloneId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
   const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
   const targetCenter = {
@@ -51,67 +64,66 @@ export function MessageJumpOverlay({
   useLayoutEffect(() => {
     const layer = contentLayerRef.current;
     if (!layer || !targetElement.isConnected) return;
-    const source = visualRoot ?? targetElement;
-    const clone = source.cloneNode(true) as HTMLElement;
+    const source = targetElement.hasAttribute('data-rel-overlay')
+      ? targetElement.closest<HTMLElement>('[data-jump-canvas]') ?? targetElement
+      : targetElement;
     const sourceRect = source.getBoundingClientRect();
-    const originalVisibility = source.style.visibility;
+    const clone = (source === targetElement ? source.cloneNode(true) : cloneHighlightRegion(source, targetRect)) as HTMLElement | null;
+    if (!clone) return;
     const frame = document.createElement('div');
-    const clipRect = visualRect ?? targetRect;
+    frame.dataset.messageJumpClone = 'true';
+    frame.inert = true;
+    const sourceStyle = getComputedStyle(source);
     Object.assign(frame.style, {
-      position: 'fixed',
-      left: `${clipRect.left}px`,
-      top: `${clipRect.top}px`,
-      width: `${clipRect.width}px`,
-      height: `${clipRect.height}px`,
-      overflow: 'hidden',
-      zIndex: '2',
-      background: '#1f1f1f',
-      pointerEvents: 'none',
+      position: 'fixed', left: `${targetRect.left}px`, top: `${targetRect.top}px`,
+      width: `${targetRect.width}px`, height: `${targetRect.height}px`,
+      overflow: 'hidden', background: '#1f1f1f', pointerEvents: 'none',
+      font: sourceStyle.font, color: sourceStyle.color, letterSpacing: sourceStyle.letterSpacing,
     });
-    Object.assign(clone.style, visualRoot ? {
-      position: 'absolute',
-      left: `${sourceRect.left - clipRect.left}px`,
-      top: `${sourceRect.top - clipRect.top}px`,
-      width: `${sourceRect.width}px`,
-      height: `${sourceRect.height}px`,
-      margin: '0',
-      transform: 'none',
-      pointerEvents: 'none',
-    } : {
-      position: 'absolute',
-      left: `${targetRect.left - clipRect.left}px`,
-      top: `${targetRect.top - clipRect.top}px`,
-      width: `${targetRect.width}px`,
-      height: `${targetRect.height}px`,
-      boxSizing: 'border-box',
-      margin: '0',
-      transform: 'none',
-      pointerEvents: 'none',
+    Object.assign(clone.style, {
+      position: 'absolute', left: `${sourceRect.left - targetRect.left}px`, top: `${sourceRect.top - targetRect.top}px`,
+      width: `${sourceRect.width}px`, height: `${sourceRect.height}px`,
+      boxSizing: 'border-box', margin: '0', transform: 'none',
     });
+    const nodes = [clone, ...clone.querySelectorAll<HTMLElement | SVGElement>('*')];
+    const ids = new Map<string, string>();
+    for (const node of nodes) {
+      node.style.setProperty('pointer-events', 'none', 'important');
+      if (node.id) {
+        const replacement = `jump-${cloneId}-${node.id}`;
+        ids.set(node.id, replacement);
+        node.id = replacement;
+      }
+    }
+    // Keep copied SVG markers local to the copy and avoid duplicate document IDs.
+    for (const node of nodes) for (const attribute of Array.from(node.attributes)) {
+      const value = attribute.value.replace(/url\((['"]?)#([^)'"\s]+)\1\)/g,
+        (match, quote: string, id: string) => ids.has(id) ? `url(${quote}#${ids.get(id)}${quote})` : match);
+      const reference = attribute.localName === 'href' && value.startsWith('#') ? ids.get(value.slice(1)) : undefined;
+      if (value !== attribute.value || reference) node.setAttribute(attribute.name, reference ? `#${reference}` : value);
+    }
     frame.appendChild(clone);
     layer.appendChild(frame);
-    source.style.visibility = 'hidden';
-    setCloneReady(true);
-    onReady?.();
-    return () => {
-      frame.remove();
-      source.style.visibility = originalVisibility;
-      setCloneReady(false);
-    };
-  }, [targetElement, visualRoot, targetRect, visualRect, onReady]);
+    // The live scene stays visible and interactive underneath this pointer-transparent copy.
+    return () => frame.remove();
+  }, [targetElement, targetRect, cloneId]);
+
+  if (!targetElement.isConnected) return null;
 
   return createPortal((
     <div
       aria-hidden="true"
+      data-message-jump-overlay="true"
+      data-message-jump-target={messageId ?? targetElement.getAttribute('data-msgid') ?? undefined}
       style={{
         position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
         width: '100dvw', height: '100dvh', minWidth: '100vw', minHeight: '100vh',
         boxSizing: 'border-box', zIndex: Z_INDEX.popup,
-        background: cloneReady ? 'rgba(0,0,0,0.42)' : 'transparent',
+        background: 'rgba(0,0,0,0.42)',
         pointerEvents: 'none',
       }}
     >
-      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
         {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
           const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
           return <PulseGuide key={`top-${index}`} index={index}
@@ -133,13 +145,14 @@ export function MessageJumpOverlay({
             start={{ x: viewportWidth - GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
         })}
       </div>
-      <div ref={contentLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 2 }} />
-      {cloneReady && <div style={{
+      <div ref={contentLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }} />
+      <div style={{
         position: 'fixed', left: '50%', top: 16, transform: 'translateX(-50%)',
+        zIndex: 3,
         padding: '6px 12px', border: '1px solid rgba(250,204,21,0.7)', borderRadius: 4,
         background: 'rgba(23,23,23,0.92)', color: '#fde68a', fontSize: 13, fontWeight: 600,
         whiteSpace: 'nowrap', boxShadow: '0 2px 10px rgba(0,0,0,0.45)', pointerEvents: 'none',
-      }}>已定位目标消息</div>}
+      }}>已定位目标消息</div>
     </div>
   ), document.body);
 }

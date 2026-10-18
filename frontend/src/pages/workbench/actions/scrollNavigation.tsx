@@ -41,7 +41,7 @@ interface ShowMessagePulseDependencies {
   setMessagePulse: React.Dispatch<React.SetStateAction<{ element: HTMLElement; rect: DOMRect; visualRoot: HTMLElement | null; visualRect: DOMRect; } | null>>;
 }
 
-export const MESSAGE_PULSE_DURATION_MS = 200;
+export const MESSAGE_PULSE_DURATION_MS = 400;
 
 export function showMessagePulse(dependencies: ShowMessagePulseDependencies, targetId: string, element: HTMLElement, requestId = dependencies.scrollRequestIdRef.current, onShown?: (shown: boolean) => void): void {
   const { scrollRequestIdRef, messagePulseTimerRef, messagePulseRafRef, leftPanelRef, findMessageElements, setMessagePulse } = dependencies;

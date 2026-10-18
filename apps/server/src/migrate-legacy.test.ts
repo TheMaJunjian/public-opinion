@@ -83,6 +83,7 @@ it('keeps Topic IDs as classification content and preserves separate topics and 
     expect(migrated).toMatchObject({relationType:'CLASSIFY',content:id,relationPayload:{title:id,legacyTitle:'同名标题',legacyBody:'原话题说明'}});
   }
   expect(root.messages.find((m:any)=>m.id==='old-class')).toMatchObject({relationType:'CLASSIFY',content:'原正文 old-class',relationPayload:{title:'原分类标题'},targetRefs:[{kind:'message',messageId:'member-a'}]});
+  expect((await agent.get('/api/ui/snapshot?parent=old-class')).body.scope.title).toBe('原分类标题');
   const a=(await agent.get('/api/ui/snapshot?parent=topic-a')).body,b=(await agent.get('/api/ui/snapshot?parent=topic-b')).body;
   expect(a.messages.map((m:any)=>m.id)).toEqual(expect.arrayContaining(['member-a','old-class']));
   expect(a.messages.map((m:any)=>m.id)).not.toContain('member-b');

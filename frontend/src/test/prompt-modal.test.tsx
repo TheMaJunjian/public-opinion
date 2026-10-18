@@ -26,4 +26,12 @@ describe('PromptModal body scroll lock', () => {
     unmount();
     expect(document.body.style.overflow).toBe('scroll');
   });
+
+  it('leaves viewport scrolling unchanged for a workbench drawing dialog', () => {
+    document.body.style.overflow = 'scroll';
+    const { rerender } = render(<PromptModal open title="正在绘制" message="请稍候" lockScroll={false} onConfirm={() => undefined} />);
+    expect(document.body.style.overflow).toBe('scroll');
+    rerender(<PromptModal open={false} title="正在绘制" message="请稍候" lockScroll={false} onConfirm={() => undefined} />);
+    expect(document.body.style.overflow).toBe('scroll');
+  });
 });

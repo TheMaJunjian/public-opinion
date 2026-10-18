@@ -1,28 +1,16 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { replayArchive } from '@gonglun/core';
 import type { ExportData } from '../api/client';
+import { validateExportForViewing } from '../utils/exportArchive';
 import PopupOverlay from './PopupOverlay';
+
+export { validateExportForViewing } from '../utils/exportArchive';
 
 const LAST_EXPORT_KEY = 'lastExportData';
 
 interface Props {
   open: boolean;
   onClose: () => void;
-}
-
-export function validateExportForViewing(input: unknown): { data: ExportData; verification: string | null } {
-  if (!input || typeof input !== 'object') throw new Error('导出文件格式无效');
-  const archive = input as ExportData & { format?: string };
-  let verification: string | null = null;
-  if (archive.format === 'gonglun-2') {
-    const replay = replayArchive(archive);
-    verification = `记录连续性及资金守恒校验通过：${replay.sequence} 次变更，${replay.messages.length} 条消息，${replay.accounts.size} 个账户。运营余额 ${replay.operating}，发行总量 ${replay.issued}。`;
-  }
-  if (!archive.scope || typeof archive.scope.title !== 'string' || !Array.isArray(archive.messages) || !Array.isArray(archive.relations)) {
-    throw new Error('格式无效：缺少分类信息、消息或关系列表');
-  }
-  return { data: archive, verification };
 }
 
 export default function ExportViewerModal({ open, onClose }: Props) {
@@ -61,10 +49,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     // Leave the current message view only after the export file is confirmed.
     window.dispatchEvent(new Event('prepare-export-viewer'));
     onClose();
-    // Navigate to home first to clear preloaded state, then to viewer.
-    // Needed when already on /viewer — same-route nav won't re-render.
-    navigate('/', { replace: true });
-    setTimeout(() => navigate('/viewer', { state: { exportData: data }, replace: true }), 0);
+    navigate('/viewer', { state: { exportData: data }, replace: true });
   };
 
   const processAndOpen = () => {

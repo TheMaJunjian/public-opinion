@@ -22,6 +22,7 @@ export interface ScopeView {
 
 export interface Message {
   id: string;
+  sequence?: number;
   revision?: number;
   parts?: Part[];
   executedStance?: ExecutedStance;
@@ -142,6 +143,7 @@ export interface RelationPayload {
 
 export interface Relation {
   id: string;
+  sequence?: number;
   revision?: number;
   parts?: Part[];
   sourceRefs?: Reference[];

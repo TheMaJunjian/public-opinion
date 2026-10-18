@@ -1,4 +1,5 @@
 import React from "react";
+import type { WorkbenchDrawingTask } from '../../../context/WorkbenchDrawingContext';
 import { type MessageFilterSettings } from "../../../components/MessageFilterPanel";
 import type { Relation } from "../../../types";
 import { operationLog } from "../../../utils/debugLog";
@@ -40,6 +41,8 @@ export function captureSnapshot(dependencies: CaptureSnapshotDependencies): Trac
 }
 
 interface RestoreSnapshotDependencies {
+  startPositioning?: () => WorkbenchDrawingTask;
+  onRestored?: () => void;
   scrollRequestIdRef: React.MutableRefObject<number>;
   setDraftUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
   setSourceUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
@@ -56,9 +59,10 @@ interface RestoreSnapshotDependencies {
   rightPanelRef: React.MutableRefObject<HTMLDivElement | null>;
 }
 
-export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: TraceSnapshot | null, opts?: { restoreSelection?: boolean }): void {
+export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; restoreScope?: boolean }): void {
   const { scrollRequestIdRef, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, setTraceDistance, setViewMode, cancelScrollRafs, scrollRafRef, scrollRaf2Ref, clampAndSetScroll, leftPanelRef, rightPanelRef } = dependencies;
   if (!s) return;
+  if (opts?.restoreScope !== false) s.restoreScope?.();
   scrollRequestIdRef.current++;
   const restoreSel = opts?.restoreSelection !== false; // 默认 true，追溯模式恢复候选区
   if (restoreSel) {
@@ -73,15 +77,23 @@ export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: Tr
   // Cancel any in-flight scroll rAF before scheduling new ones so that stale
   // callbacks never touch DOM nodes after React has reconciled them away.
   cancelScrollRafs();
-  scrollRafRef.current = requestAnimationFrame(() => {
+  const task = dependencies.startPositioning?.();
+  const restore = () => {
+    scrollRafRef.current = null;
+    scrollRaf2Ref.current = null;
+    clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
+    clampAndSetScroll(document.scrollingElement as HTMLDivElement | null, s.pageScroll?.top ?? null, s.pageScroll?.left ?? null);
+    clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
+    dependencies.onRestored?.();
+    task?.complete();
+  };
+  if (task?.afterLayout) task.afterLayout(restore);
+  else scrollRafRef.current = requestAnimationFrame(() => {
     scrollRaf2Ref.current = requestAnimationFrame(() => {
-      scrollRafRef.current = null;
-      scrollRaf2Ref.current = null;
-      clampAndSetScroll(leftPanelRef.current, s.leftScroll?.top ?? null, s.leftScroll?.left ?? null);
-      clampAndSetScroll(document.scrollingElement as HTMLDivElement | null, s.pageScroll?.top ?? null, s.pageScroll?.left ?? null);
-      clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
+      if (task) task.run(restore); else restore();
     });
   });
+  task?.onCancel(cancelScrollRafs);
 }
 
 interface EnterTemporaryCategoryDependencies {
@@ -198,13 +210,13 @@ interface EnterTraceDependencies {
   leftPanelRef: React.MutableRefObject<HTMLDivElement | null>;
 }
 
-export function enterTrace(dependencies: EnterTraceDependencies, messageId: string, options?: { replace?: boolean; mode?: "trace" | "scope"; scopeRelationMessageId?: string }): void {
+export function enterTrace(dependencies: EnterTraceDependencies, messageId: string, options?: { replace?: boolean; mode?: "trace" | "scope"; scopeRelationMessageId?: string; relatedView?: boolean }): void {
   const { captureSnapshot, classifyRelMsgId, classifyStackRef, setTraceExpandedFrameIds, setTraceEntries, setClassifyRelMsgId, setClassifyKey, cancelScrollRafs, scrollRequestIdRef, leftPanelRef } = dependencies;
   if (!messageId) return;
   operationLog(`进入${options?.mode === 'scope' ? '分类' : '追溯'}`, `message=${messageId}`);
   const snapshot = captureSnapshot();
   const entry: TraceEntry = {
-    ids: [messageId], snapshot, mode: options?.mode ?? "trace", scopeRelationMessageId: options?.scopeRelationMessageId,
+    ids: [messageId], snapshot, mode: options?.mode ?? "trace", scopeRelationMessageId: options?.scopeRelationMessageId, relatedView: options?.relatedView,
     classifyRelMsgId, classifyStack: [...classifyStackRef.current],
   };
   setTraceExpandedFrameIds(new Set());
@@ -378,7 +390,7 @@ interface ExitClassificationDependencies {
   setTargetUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
   setActiveTextSelectId: React.Dispatch<React.SetStateAction<string | null>>;
   setLastClickedMessageId: React.Dispatch<React.SetStateAction<string | null>>;
-  restoreSnapshot: (s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; }) => void;
+  restoreSnapshot: (s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; restoreScope?: boolean; }) => void;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
 }
 
@@ -405,24 +417,21 @@ export function exitClassification(dependencies: ExitClassificationDependencies,
     setLastClickedMessageId(null);
   }
   if (_options?.restoreSnapshot !== false && entry?.snapshot) {
-    restoreSnapshot(entry.snapshot, { restoreSelection: false });
+    // Classification navigation changes the current layer within the active
+    // trace/comparison view; those surrounding modes keep their own history.
+    restoreSnapshot(entry.snapshot, { restoreSelection: false, restoreScope: false });
   }
   if (_options?.preserveViewMode) setViewMode(_options.preserveViewMode);
 }
 
 interface HandleExitClassificationDependencies {
-  draftUnits: UnitSelection[];
-  lastClickedMessageId: string | null;
   exitClassification: (_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode; }) => void;
-  viewMode: ViewMode;
-  scrollMsgToCenter: (msgId: string, options?: { dependencyIds?: string[]; }) => void;
 }
 
 export function handleExitClassification(dependencies: HandleExitClassificationDependencies): void {
-  const { draftUnits, lastClickedMessageId, exitClassification, viewMode, scrollMsgToCenter } = dependencies;
-  const targetId = draftUnits[draftUnits.length - 1]?.messageId ?? lastClickedMessageId;
-  exitClassification({ preserveViewMode: viewMode });
-  if (targetId) setTimeout(() => scrollMsgToCenter(targetId), 150);
+  // The saved mode and scroll position describe the view the user left.
+  // Centering the current selection afterwards would overwrite that position.
+  dependencies.exitClassification();
 }
 
 interface ConfirmMessageIdNavigationDependencies {

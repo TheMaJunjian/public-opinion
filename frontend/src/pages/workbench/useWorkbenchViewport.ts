@@ -1,4 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useInterfaceZoom } from '../../context/InterfaceZoomContext';
+import { useWorkbenchDrawingTask } from '../../context/WorkbenchDrawingContext';
 import {
   handleLeftPanelTouchEnd as runHandleLeftPanelTouchEnd,
   handleLeftPanelTouchMove as runHandleLeftPanelTouchMove,
@@ -19,6 +21,9 @@ type FixedHorizontalScroll = { left: number; bottom: number; width: number; cont
 
 /** Owns panel sizing, scrollbars and pointer/touch gestures; selections and view history stay outside. */
 export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: WorkbenchViewportInput) {
+  const startMeasurement = useWorkbenchDrawingTask('measurement');
+  const interfaceZoom = useInterfaceZoom();
+  const [viewportWidth, setViewportWidth] = useState(() => document.documentElement.clientWidth || window.innerWidth);
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
 
   const leftPanelTouchRef = useRef<LeftPanelTouchGesture | null>(null);
@@ -54,7 +59,7 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
 
   const MOBILE_DEFAULT_WIDTH = 1240;
 
-  const getAvailableWidth = () => document.documentElement.clientWidth || window.innerWidth;
+  const getAvailableWidth = () => viewportWidth / interfaceZoom;
 
   const getMinimumContainerWidth = () => Math.max(
     getAvailableWidth(),
@@ -86,14 +91,13 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
 
   useEffect(() => { localStorage.setItem(SAVED_LEFT_FLEX_KEY, String(leftFlex)); }, [leftFlex]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const syncContainerWidth = () => {
-      setContainerWidth(currentWidth => Math.max(currentWidth, getMinimumContainerWidth()));
+      setViewportWidth(document.documentElement.clientWidth || window.innerWidth);
     };
-    const frame = requestAnimationFrame(() => requestAnimationFrame(syncContainerWidth));
+    syncContainerWidth();
     window.addEventListener('resize', syncContainerWidth);
     return () => {
-      cancelAnimationFrame(frame);
       window.removeEventListener('resize', syncContainerWidth);
     };
   }, []);
@@ -144,11 +148,16 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
       setFixedHorizontalScroll(next);
     };
     let frame: number | null = null;
+    let task: ReturnType<typeof startMeasurement> | null = null;
     const scheduleUpdate = () => {
       if (frame !== null) return;
+      task = startMeasurement();
+      const currentTask = task;
+      currentTask.onCancel(() => { if (frame !== null) cancelAnimationFrame(frame); frame = null; });
       frame = window.requestAnimationFrame(() => {
         frame = null;
-        updateFixedHorizontalScroll();
+        currentTask.run(() => { updateFixedHorizontalScroll(); currentTask.complete(); });
+        if (task === currentTask) task = null;
       });
     };
     scheduleUpdate();
@@ -169,8 +178,9 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
       observer.disconnect();
       mutationObserver.disconnect();
       if (frame !== null) window.cancelAnimationFrame(frame);
+      task?.cancel();
     };
-  }, [comparisonReviewed, viewMode, containerWidth, leftFlex, loading]);
+  }, [comparisonReviewed, viewMode, containerWidth, leftFlex, loading, interfaceZoom, viewportWidth, startMeasurement]);
 
   useEffect(() => {
     const panel = leftPanelRef.current;

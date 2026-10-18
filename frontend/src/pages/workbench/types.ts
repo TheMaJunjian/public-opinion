@@ -3,6 +3,8 @@ import type { UnitSelection } from '../../utils/modelBridge';
 export type ViewMode = "list" | "graph";
 
 export type TraceSnapshot = {
+  /** Restore the local scope history captured with this viewport, using cached records. */
+  restoreScope?: () => void;
   viewMode: ViewMode;
   leftScroll: { top: number; left: number } | null;
   pageScroll: { top: number; left: number } | null;
@@ -21,6 +23,7 @@ export type TraceEntry = {
   ids: string[];
   snapshot: TraceSnapshot | null;
   mode: "trace" | "scope";
+  relatedView?: boolean;
   scopeRelationMessageId?: string;
   classifyRelMsgId: string | null;
   classifyStack: ClassifyStackEntry[];

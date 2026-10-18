@@ -139,8 +139,8 @@ it('updates cross-category reference badges separately for the assumed sides',()
   const model=convertMessagesToDemoModel(['leaf','neighbor'].map(text),relations);
   model.messages.find(message=>message.id==='C')!.state=state('C',true);
   const comparison=compare(model,relations,'C');
-  expect(comparison.agree.context.crossClassifyRefs?.get('neighbor')?.incoming).toEqual({'引用':['R']});
-  expect(comparison.disagree.context.crossClassifyRefs?.has('neighbor')).toBe(false);
+  expect(comparison.agree.context.crossCanvasRelations?.get('neighbor')?.incoming).toEqual({'引用':['R']});
+  expect(comparison.disagree.context.crossCanvasRelations?.has('neighbor')).toBe(false);
   expect(comparison.agree.messages.map(message=>message.id)).not.toContain('leaf');
 });
 
@@ -151,13 +151,13 @@ it('keeps independently opposed and filtered references hidden in comparison sid
   const opposed=compare(model,relations,'C');
   for(const side of [opposed.agree,opposed.disagree]){
     expect(side.edges.some(edge=>edge.relationMessageId==='R')).toBe(false);
-    expect(side.context.crossClassifyRefs.size).toBe(0);
+    expect(side.context.crossCanvasRelations.size).toBe(0);
   }
   model.messages.find(message=>message.id==='R')!.state={...state('R',false),oppositionCount:0};
   const filtered=compare(model,relations,'C','A',{filterMessages:messages=>messages.filter(message=>message.id!=='R')});
   for(const side of [filtered.agree,filtered.disagree]){
     expect(side.edges.some(edge=>edge.relationMessageId==='R')).toBe(false);
-    expect(side.context.crossClassifyRefs.size).toBe(0);
+    expect(side.context.crossCanvasRelations.size).toBe(0);
   }
 });
 

@@ -59,11 +59,11 @@ interface WorkbenchPanelProps {
   setTraceDistance: (fn: (distance: number) => number) => void;
   canSetTrace: boolean;
   canExitTrace: boolean;
+  isRelatedView?: boolean;
   getSelectedWholeMessageIds: () => string[];
   lastClickedMessageId: string | null;
   enterTraceMultiple: (ids: string[], opts: { replace: boolean }) => void;
   enterTrace: (id: string, opts: { replace: boolean }) => void;
-  exitTrace: () => void;
   exitAllTrace: () => void;
   onNavigateToMessage: (messageId: string) => void;
   isInsideClassify: boolean;
@@ -294,8 +294,10 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontWeight: 600 }}>容器查看</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>
-        <button onClick={p.singleSideReview.onExit} style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#eee", cursor: "pointer" }}>退出查看</button>
       </div>}
+      {(p.singleSideReview || p.canExitTrace) && <button onClick={p.canExitTrace ? p.exitAllTrace : p.singleSideReview?.onExit}
+        style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer' }}
+        title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前容器查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
       {p.isViewerMode && <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontWeight: 600 }}>阅览操作</span>
@@ -334,10 +336,6 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.canSetTrace ? "#444" : "#333", color: p.canSetTrace ? "#fff" : "#777", cursor: p.canSetTrace ? "pointer" : "default" }}>
                 设为追溯消息
               </button>
-              {p.canExitTrace && <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={p.exitTrace} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#444", color: "#fff", cursor: "pointer" }} title="退出最近一次追溯并恢复进入该追溯前的现场">退出追溯</button>
-                <button onClick={p.exitAllTrace} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", cursor: "pointer" }} title="退出全部追溯并恢复进入第一次追溯前的现场">退出全部</button>
-              </div>}
             </div>
           </div>
         </div>

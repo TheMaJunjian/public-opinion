@@ -13,6 +13,55 @@ const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<strin
 const good=async(response:PromiseLike<request.Response>)=>{const value=await response;expect(value.status,value.text).toBe(201);return value.body;};
 
 describe('保留操作方式的消息 API',()=>{
+  it.each(['CLASSIFY','SUMMARY'])('后台补拉 %s 时，分类页标题与卡片标题一致，不使用旧操作说明',async type=>{
+    const app=await make(),user=await actor(app,'标题用户');
+    const title='公共交通讨论',description=type==='CLASSIFY'?'建立分类':'建立总结';
+    const created=await user.agent.post('/api/messages').set('x-csrf-token',user.session.csrf).send({requestId:randomUUID(),parts:[
+      {id:'body',type:'text',text:description},
+      {id:'relation',type:'relation',relation:type.toLowerCase(),roles:{}},
+      {id:'data',type:'data',value:{kind:'RELATION',uiType:type,title,legacyTopicId:'old-topic'}},
+    ]});
+    expect(created.status,created.text).toBe(201);
+    const id=created.body.message.id;
+    const root=(await user.agent.get('/api/ui/snapshot')).body;
+    expect(root.relations.find((relation:any)=>relation.id===id).payload.title).toBe(title);
+    const initial=(await user.agent.get(`/api/ui/snapshot?parent=${id}`)).body;
+    expect(initial.scope.title).toBe(title);
+    await good(post(user,'/messages',{parentMessageId:id,content:'分类里的新消息'}));
+    const resumed=(await user.agent.get(`/api/ui/snapshot?parent=${id}&after=${initial.sequence}`)).body;
+    expect(resumed.scope.title).toBe(title);
+    expect((await user.agent.get(`/api/ui/export?parent=${id}`)).body.scope.title).toBe(title);
+    expect((await user.agent.get('/api/ui/snapshot')).body.relations.find((relation:any)=>relation.id===id).payload.title).toBe(title);
+  });
+  it('导出保留当前用户和与在线快照相同的押注、标签及关注数据',async()=>{
+    const app=await make(),first=await actor(app,'首位用户'),current=await actor(app,'当前用户');
+    const message=await good(post(current,'/messages',{content:'导出与阅览应一致'}));
+    await good(post(current,'/relations',{relationType:'AGREE',targetRefs:[{kind:'message',messageId:message.id}],wager:10}));
+    await good(post(first,'/relations',{relationType:'RECOMMEND',targetRefs:[{kind:'message',messageId:message.id}],payload:{subType:'VALUABLE'}}));
+    const response=await current.agent.get('/api/ui/export');expect(response.status,response.text).toBe(200);
+    const exported=response.body,live=decodeWorkbenchSnapshot((await current.agent.get('/api/ui/snapshot')).body);
+    expect(exported.viewerUsername).toBe('当前用户');
+    expect(exported.users).toEqual(live.users);
+    expect(exported.stakes).toEqual(live.stakes);
+    expect(exported.tagCounts).toEqual(live.tagCounts);
+    expect(exported.attentionUsers).toEqual(live.attentionUsers);
+    expect(replayArchive(exported).messages.map(message=>message.id)).toContain(message.id);
+  });
+  it('按指定 ID 读取跨画布追溯消息，保留关系端点且不扩展整张画布',async()=>{
+    const app=await make(),user=await actor(app,'追溯用户');
+    const source=await good(post(user,'/messages',{content:'来源'}));
+    const target=await good(post(user,'/messages',{content:'目标'}));
+    const unrelated=await good(post(user,'/messages',{content:'无关消息'}));
+    const reference=await good(post(user,'/relations',{relationType:'REFERENCE',sourceMessageId:source.id,targetRefs:[{kind:'message',messageId:target.id}]}));
+    const response=await user.agent.get('/api/ui/message-context').query({id:[reference.id,target.id,reference.id]});
+    expect(response.status,response.text).toBe(200);
+    expect(response.body.messages.map((message:any)=>message.id).sort()).toEqual([reference.id,target.id].sort());
+    expect(response.body.relations[0].sourceMessageId).toBe(source.id);
+    expect(response.body.relations[0].targetRefs[0].messageId).toBe(target.id);
+    expect(response.body.messages.some((message:any)=>message.id===unrelated.id)).toBe(false);
+    expect((await user.agent.get('/api/ui/message-context')).status).toBe(400);
+    expect((await user.agent.get('/api/ui/message-context').query({id:Array.from({length:51},()=>source.id)})).status).toBe(400);
+  });
   it('工作台没有独立议题实体，查询上下文只引用真实消息',async()=>{
     const app=(await make()),user=await actor(app,'发起人');
     const root=(await user.agent.get('/api/ui/snapshot')).body;
@@ -50,6 +99,7 @@ describe('保留操作方式的消息 API',()=>{
     expect((await post(other,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:correction.id}]})).status).toBe(403);
     await good(post(founder,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:correction.id}]}));
     expect((await app.store.message(classification.id)).revision).toBe(2);expect((await app.store.message(classification.id,1)).parts[0]).toMatchObject({text:'是否应该试点'});
+    expect((await founder.agent.get(`/api/ui/snapshot?parent=${classification.id}`)).body.scope.title).toBe('为何应该试点');
     const reply=await good(post(other,'/relations',{relationType:'REPLY',targetRefs:[{kind:'text-fragment',messageId:classification.id,text:'是否',hash:'x',reference:fragment}],payload:{content:'讨论原来的用词'}}));expect(reply.targetRefs[0].reference).toEqual(fragment);
   });
   it('单边结算保持操作、结算消息可评价，账本与导出可追溯',async()=>{

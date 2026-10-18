@@ -1,5 +1,7 @@
 import React, {useMemo, type ComponentProps, type ReactNode } from 'react';
 import RelatedMessages from '../../../components/RelatedMessages';
+import CrossCanvasRelatedMessages from '../../../components/CrossCanvasRelatedMessages';
+import type { CrossCanvasRelationGroups } from '../../../utils/crossCanvasRelations';
 import JoinRecordBadges from '../../../components/JoinRecordBadges';
 import {indexRelatedMessages,isRejectedContainer} from '../../../utils/relatedMessages';
 import { useNavigate } from 'react-router-dom';
@@ -68,6 +70,8 @@ interface Props {
   onRemoveMember?: (joinId: string) => void;
   onNavigate: (messageId: string) => void;
   onRelatedNavigate?:(messageId:string)=>void;
+  crossCanvasRelations?:Map<string,CrossCanvasRelationGroups>;
+  onRelatedRelationView?:(messageId:string)=>void;
   standaloneMessageIds?:ReadonlySet<string>;
   onCorrectionNavigate: (messageId: string, switchToList: boolean) => void;
   renderRelation: (message: DemoMessage) => ReactNode;
@@ -189,7 +193,8 @@ export default function WorkbenchMessageList(props: Props) {
 
           return (
             <MessageCard
-              relatedMessages={<RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedNavigate??handleNavigateToMessage}/>}
+              relatedMessages={<><RelatedMessages rows={relatedByTarget.get(msg.id)} selectedUnits={draftUnits} onNavigate={props.onRelatedNavigate??handleNavigateToMessage}/>
+                <CrossCanvasRelatedMessages groups={props.crossCanvasRelations?.get(msg.id)} messages={msgMap} selectedUnits={draftUnits} onView={props.onRelatedRelationView??handleNavigateToMessage}/></>}
               selectedUnits={draftUnits}
               key={msg.id} msg={msg} ctx={ctx}
               onClick={cardHandlers.onClick}

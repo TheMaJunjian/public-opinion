@@ -192,6 +192,12 @@ export function getScope(parent = 'root') {
   return request<import('../types').ScopeView>(`/scope?parent=${encodeURIComponent(parent)}`);
 }
 
+export function getMessageContext(messageIds: string[], signal?: AbortSignal) {
+  const query = new URLSearchParams();
+  for (const id of messageIds) query.append('id', id);
+  return request<{ messages: import('../types').Message[]; relations: import('../types').Relation[] }>(`/message-context?${query}`, { signal });
+}
+
 export function getMessages(scopeMessageId: string, params?: { page?: number; limit?: number; sinceUpdatedAt?: string; sinceId?: string }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set('page', String(params.page));
@@ -458,6 +464,19 @@ export interface ExportData {
   formatVersion: number;
   exportedAt: string;
   scope: import('../types').ScopeView;
+  viewerUsername?: string | null;
+  users?: import('../types').User[];
+  stakes?: import('../data/workbench').WorkbenchSnapshot['stakes'];
+  tagCounts?: import('../data/workbench').WorkbenchSnapshot['tagCounts'];
+  attentionUsers?: import('../data/workbench').WorkbenchSnapshot['attentionUsers'];
+  view?: {
+    username: string | null;
+    mode: 'list' | 'graph';
+    messageFilter: import('../components/MessageFilterPanel').MessageFilterSettings;
+    homeFilter: import('../components/HomeFilterPanel').HomeFilterMode | null;
+    cleanFilters: import('../types').CleanFilterRule[];
+    classificationId: string | null;
+  };
   messages: Array<Partial<Pick<import('../types').Message, 'revision' | 'parts' | 'state' | 'spending' | 'executedStance'>> & {
     id: string;
     kind: string;

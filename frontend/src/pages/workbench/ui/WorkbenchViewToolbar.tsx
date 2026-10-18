@@ -7,6 +7,8 @@ import { Z_INDEX } from '../../../constants/zIndex';
 import type { Relation } from '../../../types';
 import type { DemoMessage, UnitSelection } from '../../../utils/modelBridge';
 import { resolveNavigationTargetId } from '../model/navigation';
+import { validateExportForViewing } from '../../../utils/exportArchive';
+import type { ExportData } from '../../../api/client';
 type ViewMode = 'list' | 'graph';
 interface ViewNavigation {
   viewMode: ViewMode; setViewMode: Dispatch<SetStateAction<ViewMode>>;
@@ -27,11 +29,12 @@ interface ComparisonControls {
 interface Props {
   scopeHeader?: ReactNode;
   top: number; scopeMessageId: string; exportTitle: string; showAlert: (message: string) => void;
+  exportData?: ExportData | null; exportUsername?: string | null;
   home: ComponentProps<typeof HomeFilterPanel>; clean: ComponentProps<typeof CleanFilterPanel>; filter: ComponentProps<typeof MessageFilterPanel>;
   view: ViewNavigation; comparison: ComparisonControls;
   correctionFilterTargetId: string | null; onLeaderboard: () => void;
 }
-export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, showAlert, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard }: Props) {
+export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, showAlert, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard }: Props) {
   const { viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation } = view;
   const { singleSideReview, comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison } = comparison;
   return (
@@ -47,7 +50,12 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button onClick={async () => {
             try {
-              const data = await api.exportMessages(scopeMessageId!);
+              const { data: source } = validateExportForViewing(exportData ?? await api.exportMessages(scopeMessageId!));
+              const data: ExportData = { ...source, view: {
+                username: exportUsername !== undefined ? exportUsername : source.viewerUsername ?? null, mode: viewMode,
+                messageFilter: { ...filter.settings }, homeFilter: home.mode,
+                cleanFilters: clean.filters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
+              } };
               const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a');

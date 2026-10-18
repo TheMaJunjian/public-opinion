@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import GraphView, { type GraphViewProps } from '../components/GraphView';
 import { projectGraphScene } from '../utils/graphProjection';
@@ -220,16 +220,32 @@ it('uses the same agree frame and header for single-side viewing and pair compar
   expect(single.container.querySelector('[data-comparison-view="disagree"]')).toBeNull();
 });
 
-it("renders each side's own cross-category reference badges and retains their selection handler",()=>{
-  const select=vi.fn(),neighbor=message('neighbor');
+it("renders each side's own cross-canvas relations and opens its relation trace",()=>{
+  const open=vi.fn(),neighbor=message('neighbor');
   const {container:dom}=renderScene([neighbor],[],{
-    comparisonPair:true,onCrossRefTagClick:select,
-    crossClassifyRefs:new Map(),
-    comparisonAgreeContext:{crossClassifyRefs:new Map([['neighbor',{outgoing:{},incoming:{'引用':['R']}}]])},
-    comparisonDisagreeContext:{crossClassifyRefs:new Map()},
+    comparisonPair:true,onRelatedRelationView:open,
+    crossCanvasRelations:new Map(),
+    comparisonAgreeContext:{crossCanvasRelations:new Map([['neighbor',{outgoing:{},incoming:{'引用':['R']}}]])},
+    comparisonDisagreeContext:{crossCanvasRelations:new Map()},
   });
   const agree=dom.querySelector('[data-comparison-view="agree"]')!,disagree=dom.querySelector('[data-comparison-view="disagree"]')!;
-  const badge=agree.querySelector('[title^="被引用：引用"]')!;
-  expect(badge).not.toBeNull();expect(disagree.querySelector('[title^="被引用：引用"]')).toBeNull();
-  fireEvent.click(badge);expect(select.mock.calls[0][1]).toEqual(['R']);
+  expect(disagree.querySelector('[data-cross-canvas-related-messages]')).toBeNull();
+  fireEvent.click(within(agree as HTMLElement).getByRole('button',{name:/相关消息：1/}));
+  expect(within(agree as HTMLElement).getByRole('group',{name:'指向本消息的关联'})).toHaveTextContent('【引用】 R');
+  fireEvent.click(within(agree as HTMLElement).getByRole('button',{name:'查看'}));expect(open).toHaveBeenCalledWith('R');
+});
+
+it.each(['reference','reply','annotation'] as const)('shows both endpoints of a cross-canvas %s and hides rows once its complete edge is rendered',type=>{
+  const source=message('source'),target=message('target');
+  const rel:DemoMessage={...message('relation'),kind:'relation',relationType:type};
+  const link=relation('relation',type,'source','target');
+  for(const [endpoint,direction] of [[source,'发出的关联'],[target,'指向本消息的关联']] as const){
+    const view=renderScene([endpoint],[],{relatedMessages:[source,target,rel],relatedEdges:[link]});
+    const card=within(view.container.querySelector(`[data-msgid="${endpoint.id}"]`) as HTMLElement);
+    fireEvent.click(card.getByRole('button',{name:/相关消息：1/}));
+    expect(card.getByRole('group',{name:direction})).toHaveTextContent('relation');
+    view.unmount();
+  }
+  const sameCanvas=renderScene([source,target,rel],[link],{relatedMessages:[source,target,rel],relatedEdges:[link]});
+  expect(sameCanvas.queryByRole('button',{name:/相关消息/})).toBeNull();
 });

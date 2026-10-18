@@ -53,11 +53,19 @@ export async function scopeMessages(store: Store, parent = 'root'): Promise<Mess
     return (await store.db.prepare(`${scope.cte} SELECT m.body FROM messages m WHERE ${scope.predicate} ORDER BY m."createdAt",m.id`).all(...scope.params)).map(row => JSON.parse(String(row.body)) as Message);
 }
 export async function parentOf(store: Store, messageId: string): Promise<string> { return String((await store.db.prepare("SELECT \"parentId\" FROM memberships WHERE \"memberId\"=$1").get(messageId))?.parentId ?? 'root'); }
+/** Imported organization bodies may describe the action (e.g. 建立分类).
+ * Use the same saved name for cards, scope headers, deltas and archives. */
+function organizationTitle(message: Message): string {
+    const relation = primaryRelation(message), data = dataOf(message);
+    if (relation && ['classify', 'summary'].includes(relation.relation) && data.legacyTopicId && typeof data.title === 'string')
+        return data.title;
+    return textOf(message);
+}
 export async function scopeView(store: Store, messageId: string): Promise<RecordData> {
     if (messageId === 'root')
         return { messageId: null, title: '公论' };
     const message = (await store.message(messageId));
-    return { messageId, title: textOf(message) || '消息' };
+    return { messageId, title: organizationTitle(message) || '消息' };
 }
 async function contentView(store: Store, message: Message, context?: ViewContext): Promise<string> {
     const content = textOf(message);
@@ -108,8 +116,8 @@ export async function messageView(store: Store, message: Message, parent?: strin
     delete payload.uiType;
     delete payload.kind;
     delete payload.contentType;
-    if (relation && ['classify', 'summary'].includes(relation.relation) && !(data.legacyTopicId && typeof data.title === 'string'))
-        payload.title = textOf(message);
+    if (relation && ['classify', 'summary'].includes(relation.relation))
+        payload.title = organizationTitle(message);
     if (relation?.relation === 'amend' && data.value !== undefined)
         payload.correctionContent = data.value;
     if (relation?.relation === 'delegate') {

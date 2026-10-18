@@ -3,6 +3,7 @@ import React from 'react';
 interface Props {
   children: React.ReactNode;
   fallback?: React.ReactNode;
+  onError?: (error: Error) => void;
 }
 
 interface State {
@@ -40,6 +41,8 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     // an immediate re-render that replaces the error UI before paint.
     if (error.message.includes('removeChild')) {
       this.setState({ hasError: false, error: null });
+    } else {
+      this.props.onError?.(error);
     }
   }
 

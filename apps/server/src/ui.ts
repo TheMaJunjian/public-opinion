@@ -6,7 +6,7 @@ import { DomainError, id, Store } from './db.js';
 import { dataOf } from './economy.js';
 import { executeBatch, executeCommand } from './ui-commands.js';
 import { sendSnapshot } from './snapshot-response.js';
-import { accountView, allUsers, attentionUsers, legacyType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
+import { accountView, allUsers, attentionUsers, legacyType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, tagCountsFor, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
 /** Transport views for the established interaction model. The domain contains messages only. */
 export function createUiRouter(store: Store, publish: () => Promise<void>) {
     const router = Router();
@@ -24,6 +24,14 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     catch (e) {
         next(e);
     } });
+    get('/message-context', async (req, res, next) => { try {
+        const ids = [...new Set(z.array(z.string().min(1).max(100)).min(1).max(50)
+            .parse(Array.isArray(req.query.id) ? req.query.id : [req.query.id]))];
+        const messages = await Promise.all(ids.map(id => store.message(id)));
+        const views = await viewsFor(store, messages);
+        res.json({ messages: views, relations: views.filter(view => view.relationType) });
+    }
+    catch (error) { next(error); } });
     get('/messages', async (req, res, next) => {
         try {
             let messages = (await scopeMessages(store, String(req.query.parent ?? 'root')));
@@ -62,7 +70,8 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
             // regional execution journal; never pretend a partial ledger is a full replay.
             const changes = (await store.db.prepare("SELECT body FROM changes ORDER BY sequence").all()).map(row => JSON.parse(String(row.body)));
             const ruleHistory = (await store.db.prepare("SELECT * FROM rule_versions ORDER BY version").all()).map(({ body, ...row }) => ({ ...row, rules: JSON.parse(String(body)) }));
-            res.json({ format: 'gonglun-2', formatVersion: 2, exportedAt: new Date().toISOString(), scope: (await scopeView(store, String(req.query.parent ?? 'root'))), messages: views.map(m => ({ ...m, authorId: m.createdBy.id, author: m.createdBy.username })), relations: views.filter(m => m.relationType).map(m => ({ ...m, authorId: m.createdBy.id, author: m.createdBy.username })), users: (await allUsers(store)), rules: (await store.rules()), ruleHistory, regionId: (await store.setting('region')), ledgerId: 'local', programVersion: '2.0.0', sequence: (await store.latestSequence()), auditScope: 'region', viewScope: { parent: String(req.query.parent ?? 'root') }, changes, signatures: (await store.db.prepare("SELECT * FROM signatures ORDER BY \"createdAt\",\"messageId\"").all()) });
+            const ids = messages.map(message => message.id), users = await allUsers(store);
+            res.json({ format: 'gonglun-2', formatVersion: 2, exportedAt: new Date().toISOString(), scope: (await scopeView(store, String(req.query.parent ?? 'root'))), messages: views.map(m => ({ ...m, authorId: m.createdBy.id, author: m.createdBy.username })), relations: views.filter(m => m.relationType).map(m => ({ ...m, authorId: m.createdBy.id, author: m.createdBy.username })), users, viewerUsername: (await currentSession(store, req))?.user.username ?? null, stakes: await stakesFor(store, ids, users), tagCounts: await tagCountsFor(store, ids), attentionUsers: await attentionUsers(store, ids), rules: (await store.rules()), ruleHistory, regionId: (await store.setting('region')), ledgerId: 'local', programVersion: '2.0.0', sequence: (await store.latestSequence()), auditScope: 'region', viewScope: { parent: String(req.query.parent ?? 'root') }, changes, signatures: (await store.db.prepare("SELECT * FROM signatures ORDER BY \"createdAt\",\"messageId\"").all()) });
         }
         catch (e) {
             next(e);

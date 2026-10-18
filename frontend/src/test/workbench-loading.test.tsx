@@ -1,143 +1,327 @@
+import { StrictMode, useLayoutEffect, useState } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress } from '../components/WorkbenchLoadingBoundary';
+import WorkbenchActivityIndicator from '../components/WorkbenchActivityIndicator';
+import { useWorkbenchDrawingTask, WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
+import { resetWorkbenchActivity } from '../utils/workbenchActivity';
 
-function Content({ loading = false, sending = false, error = null, count = 3, onRender = () => undefined }: {
-  loading?: boolean; sending?: boolean; error?: string | null; count?: number; onRender?: () => void;
+type Task = ReturnType<ReturnType<typeof useWorkbenchDrawingTask>>;
+type Tasks = { measurement: Task; overlays: Task; positioning: Task };
+
+function Content({ loading = false, sending = false, error = null, count = 3, onRender = () => undefined, revision, onTasks }: {
+  loading?: boolean; sending?: boolean; error?: string | null; count?: number; onRender?: () => void; revision?: unknown;
+  onTasks?: (tasks: Tasks) => void;
 }) {
-  useWorkbenchLoadingProgress(loading, error);
+  useWorkbenchLoadingProgress(loading, error, revision);
   useWorkbenchSendingProgress(sending);
+  const measure = useWorkbenchDrawingTask('measurement');
+  const overlay = useWorkbenchDrawingTask('overlays');
+  const position = useWorkbenchDrawingTask('positioning');
+  const [placed, setPlaced] = useState(false);
+  useLayoutEffect(() => {
+    if (!onTasks) return;
+    const tasks = { measurement: measure(), overlays: overlay(), positioning: position() };
+    onTasks({ ...tasks, positioning: {
+      ...tasks.positioning,
+      complete() { setPlaced(true); tasks.positioning.complete(); },
+      cancel: tasks.positioning.cancel,
+    } });
+    return () => { Object.values(tasks).forEach(task => task.cancel()); };
+  }, [onTasks, revision, measure, overlay, position]);
   onRender();
-  return <div data-testid="workbench">{error ?? <>
+  return <div data-testid="workbench" data-placed={placed}>{error ?? <>
     <input aria-label="消息输入" />
     {Array.from({ length: count }, (_, i) => <div key={i}>旧消息 {i}</div>)}
   </>}</div>;
 }
 
 const advance = (ms: number) => act(() => { vi.advanceTimersByTime(ms); });
+const finish = (tasks: Tasks) => act(() => { Object.values(tasks).forEach(task => task.complete()); });
 
-describe('workbench loading through drawing', () => {
+describe('workbench loading through registered drawing tasks', () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+  afterEach(() => { resetWorkbenchActivity(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
-  it('finishes sending after actual drawing and restores input with the dialog without rendering the workbench again', async () => {
-    const onRender = vi.fn(), keydown = vi.fn();
-    const view = render(<WorkbenchLoadingBoundary><Content onRender={onRender} /></WorkbenchLoadingBoundary>);
-    advance(200);
-    view.rerender(<WorkbenchLoadingBoundary><Content sending onRender={onRender} /></WorkbenchLoadingBoundary>);
-    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
-    advance(6000); // Sending remains active until the request completes.
-    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
-    view.rerender(<WorkbenchLoadingBoundary><Content count={420} onRender={onRender} /></WorkbenchLoadingBoundary>);
-    advance(96);
-    act(() => { screen.getByTestId('workbench').style.height = '800px'; });
-    await act(async () => { await Promise.resolve(); });
-    advance(96);
-    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
-    const renderCount = onRender.mock.calls.length;
-    advance(96);
+  it('waits for every task even through long idle gaps, then unlocks clicking, keys and scrolling with both prompts', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const click = vi.fn(), key = vi.fn();
+    render(<><WorkbenchLoadingBoundary><Content onTasks={onTasks} /><button onClick={click}>选择消息卡</button></WorkbenchLoadingBoundary><WorkbenchActivityIndicator /></>);
+    const root = screen.getByTestId('workbench').parentElement!;
+    const overflow = document.body.style.overflow;
+    advance(5000);
+    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('正在绘制');
+    act(() => tasks.measurement.complete());
+    advance(5000);
+    act(() => tasks.overlays.complete());
+    advance(5000);
+    expect(root.inert).toBe(true);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    const wheel = new WheelEvent('wheel', { cancelable: true });
+    window.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+    act(() => tasks.positioning.complete());
+    expect(screen.getByTestId('workbench')).toHaveAttribute('data-placed', 'true');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    advance(34);
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(onRender).toHaveBeenCalledTimes(renderCount);
-    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
-    document.addEventListener('keydown', keydown);
+    expect(screen.getByRole('status')).not.toHaveTextContent('正在绘制');
+    expect(root.inert).toBe(false);
+    expect(document.body.style.overflow).toBe(overflow);
+    document.addEventListener('keydown', key);
     try {
-      fireEvent.keyDown(screen.getByLabelText('消息输入'), { key: 'a' });
-      expect(keydown).toHaveBeenCalledOnce();
-      fireEvent.change(screen.getByLabelText('消息输入'), { target: { value: '关窗后立即输入' } });
-      expect(screen.getByLabelText('消息输入')).toHaveValue('关窗后立即输入');
-    } finally {
-      document.removeEventListener('keydown', keydown);
-    }
+      fireEvent.click(screen.getByRole('button', { name: '选择消息卡' }));
+      fireEvent.keyDown(document, { key: 'Enter' });
+      expect(click).toHaveBeenCalledOnce();
+      expect(key).toHaveBeenCalledOnce();
+      const availableWheel = new WheelEvent('wheel', { cancelable: true });
+      window.dispatchEvent(availableWheel);
+      expect(availableWheel.defaultPrevented).toBe(false);
+    } finally { document.removeEventListener('keydown', key); }
   });
 
-  it('keeps input inactive through measurement updates, then exposes all historical messages without rerendering them', async () => {
+  it('does not let stale completions from a replaced archive close the new drawing dialog', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const view = render(<WorkbenchLoadingBoundary><Content revision="first" onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    const first = tasks;
+    act(() => first.measurement.complete());
+    view.rerender(<WorkbenchLoadingBoundary><Content revision="second" onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    finish(first);
+    advance(10000);
+    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+    act(() => tasks.measurement.cancel());
+    act(() => tasks.overlays.complete());
+    advance(10000);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    act(() => tasks.positioning.complete());
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('reopens for new archives and keeps state changes committed before finishing', () => {
     const onRender = vi.fn();
-    const view = render(<WorkbenchLoadingBoundary><Content loading onRender={onRender} /></WorkbenchLoadingBoundary>);
-    expect(screen.getByRole('dialog', { name: '正在加载' })).toBeInTheDocument();
-    const root = screen.getByTestId('workbench').parentElement!;
-    expect(root.inert).toBe(true);
-    view.rerender(<WorkbenchLoadingBoundary><Content count={420} onRender={onRender} /></WorkbenchLoadingBoundary>);
+    const view = render(<WorkbenchLoadingBoundary><Content onRender={onRender} /></WorkbenchLoadingBoundary>);
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    view.rerender(<WorkbenchLoadingBoundary><Content revision="file" count={420} onRender={onRender} onTasks={onTasks} /></WorkbenchLoadingBoundary>);
     expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
-    advance(96);
-    // Simulate later card/edge measurement commits while the data is visible.
-    act(() => { screen.getByTestId('workbench').style.height = '800px'; });
-    // MutationObserver callbacks are microtasks, even with fake timers.
-    await act(async () => { await Promise.resolve(); });
-    advance(96);
-    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+    finish(tasks);
     const renderCount = onRender.mock.calls.length;
-    advance(96);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(root.inert).toBe(false);
-    expect(root).toHaveAttribute('aria-busy', 'false');
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getAllByText(/^旧消息 /)).toHaveLength(420);
     expect(onRender).toHaveBeenCalledTimes(renderCount);
-    fireEvent.change(screen.getByLabelText('消息输入'), { target: { value: '可以输入' } });
-    expect(screen.getByLabelText('消息输入')).toHaveValue('可以输入');
+    fireEvent.change(screen.getByLabelText('消息输入'), { target: { value: '关窗后立即输入' } });
+    expect(screen.getByLabelText('消息输入')).toHaveValue('关窗后立即输入');
   });
 
-  it('does not mistake time spent blocking the browser for finished drawing', () => {
-    let now = 0;
-    let nextFrame: FrameRequestCallback | undefined;
-    vi.spyOn(performance, 'now').mockImplementation(() => now);
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { nextFrame = callback; return 1; });
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => { nextFrame = undefined; });
-    const step = (time: number) => {
-      now = time;
-      const callback = nextFrame!;
-      nextFrame = undefined;
-      act(() => callback(time));
-    };
-    render(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
-    step(16);
-    step(2000); // A long render held the main thread for almost two seconds.
-    advance(1);
-    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
-    for (let time = 2016; nextFrame && time <= 2144; time += 16) step(time);
-    advance(1);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  });
-
-  it('blocks workbench shortcuts while drawing and restores them when ready', () => {
-    const shortcut = vi.fn();
-    render(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
-    document.addEventListener('keydown', shortcut);
-    fireEvent.keyDown(document, { key: 'Enter' });
-    expect(shortcut).not.toHaveBeenCalled();
-    advance(200);
-    fireEvent.keyDown(document, { key: 'Enter' });
-    expect(shortcut).toHaveBeenCalledOnce();
-    document.removeEventListener('keydown', shortcut);
-  });
-
-  it('finishes drawing when a mobile browser delivers animation frames only every 100ms', () => {
-    let now = 0;
-    let nextFrame: FrameRequestCallback | undefined;
-    vi.spyOn(performance, 'now').mockImplementation(() => now);
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { nextFrame = callback; return 1; });
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => { nextFrame = undefined; });
-    render(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
-    for (const time of [100, 200, 300, 400]) {
-      now = time;
-      const callback = nextFrame;
-      nextFrame = undefined;
-      if (callback) act(() => callback(time));
-      advance(1);
-    }
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  it('waits for sending and then for the committed drawing tasks', () => {
+    const view = render(<WorkbenchLoadingBoundary><Content sending /></WorkbenchLoadingBoundary>);
+    advance(6000);
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    advance(6000);
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+    finish(tasks);
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
   });
 
-  it('releases loading on failure and cleans up pending drawing on unmount', () => {
-    const view = render(<WorkbenchLoadingBoundary><Content loading /></WorkbenchLoadingBoundary>);
-    view.rerender(<WorkbenchLoadingBoundary><Content error="网络错误，请重试" /></WorkbenchLoadingBoundary>);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  it('waits for the actual font promise without using a timeout', async () => {
+    let ready!: () => void;
+    const original = Object.getOwnPropertyDescriptor(document, 'fonts');
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { status: 'loading', ready: new Promise<void>(resolve => { ready = resolve; }) } });
+    try {
+      render(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
+      advance(10000);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      await act(async () => { ready(); await Promise.resolve(); });
+      advance(34);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(document, 'fonts', original);
+      else Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
+  it('survives StrictMode setup cancellation without dropping the replacement tasks', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    render(<StrictMode><WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary></StrictMode>);
+    advance(1000);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    finish(tasks);
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('releases errors immediately and cancels unfinished tasks on unmount', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const view = render(<WorkbenchLoadingBoundary><Content loading onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    view.rerender(<WorkbenchLoadingBoundary><Content error="网络错误，请重试" onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByText('网络错误，请重试')).toBeVisible();
-    view.rerender(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
-    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+    view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
     view.unmount();
-    advance(500);
-    expect(document.body.style.overflow).not.toBe('hidden');
+    finish(tasks);
+    advance(1000);
     expect(vi.getTimerCount()).toBe(0);
+    expect(document.body.style.overflow).not.toBe('hidden');
+  });
+
+  it.each(['measurement', 'overlays', 'positioning'] as const)('releases the modal and indicator immediately when %s throws', kind => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const click = vi.fn();
+    render(<><WorkbenchLoadingBoundary><Content onTasks={onTasks} /><button onClick={click}>选择消息卡</button></WorkbenchLoadingBoundary><WorkbenchActivityIndicator /></>);
+    const cancelled = vi.fn();
+    tasks.positioning.onCancel(cancelled);
+    advance(500);
+    act(() => tasks[kind].run(() => { throw new Error('模拟任务异常'); }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('失败，已恢复操作');
+    expect(screen.queryByRole('status')).toBeNull(); // Failure is not a successful drawing duration.
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+    expect(cancelled).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: '选择消息卡' }));
+    expect(click).toHaveBeenCalledOnce();
+    const late = vi.fn();
+    act(() => tasks.overlays.run(late));
+    finish(tasks);
+    advance(34);
+    expect(late).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  it('times out abandoned tasks and starts a clean retry without accepting old callbacks', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    render(<><WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary><WorkbenchActivityIndicator /></>);
+    const old = tasks, cancelled = vi.fn(), late = vi.fn();
+    old.positioning.onCancel(cancelled);
+    advance(WORKBENCH_DRAWING_TIMEOUT_MS - 1);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('超过 30 秒');
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(cancelled).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+    act(() => old.positioning.run(late));
+    finish(old);
+    advance(34);
+    expect(late).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    finish(tasks);
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('excludes time in a hidden tab from the drawing deadline', () => {
+    let hidden = false;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+    const onTasks = () => undefined;
+    render(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    advance(20_000);
+    act(() => { hidden = true; document.dispatchEvent(new Event('visibilitychange')); });
+    advance(60_000);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    act(() => { hidden = false; document.dispatchEvent(new Event('visibilitychange')); });
+    advance(9999);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('超过 30 秒');
+  });
+
+  it('gives a new archive its own deadline and clears the prior failure', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const view = render(<WorkbenchLoadingBoundary><Content revision="first" onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    advance(29_000);
+    view.rerender(<WorkbenchLoadingBoundary><Content revision="second" onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    advance(29_000);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    advance(1000);
+    expect(screen.getByRole('alert')).toHaveTextContent('超过 30 秒');
+    view.rerender(<WorkbenchLoadingBoundary><Content revision="third" onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    finish(tasks);
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('recovers even when the browser never delivers the requested animation frames', () => {
+    vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1);
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+    render(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
+    advance(WORKBENCH_DRAWING_TIMEOUT_MS);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('超过 30 秒');
+  });
+
+  it('recovers rendering failures that happen before the drawing subscription mounts', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const suppressExpectedError = (event: ErrorEvent) => { if (event.error?.message === '场景生成异常') event.preventDefault(); };
+    window.addEventListener('error', suppressExpectedError);
+    let broken = true;
+    function BrokenScene() { if (broken) throw new Error('场景生成异常'); return <Content />; }
+    try {
+      render(<WorkbenchLoadingBoundary><BrokenScene /></WorkbenchLoadingBoundary>);
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.getByRole('alert')).toHaveTextContent('页面绘制失败');
+      broken = false;
+      fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+      advance(34);
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByLabelText('消息输入')).toBeInTheDocument();
+    } finally { window.removeEventListener('error', suppressExpectedError); }
+  });
+
+  it('releases a rejected font task and leaves a recoverable failure prompt', async () => {
+    let reject!: (error: Error) => void;
+    const original = Object.getOwnPropertyDescriptor(document, 'fonts');
+    Object.defineProperty(document, 'fonts', { configurable: true, value: {
+      status: 'loading', ready: new Promise<void>((_, failed) => { reject = failed; }),
+    } });
+    try {
+      render(<WorkbenchLoadingBoundary><Content /></WorkbenchLoadingBoundary>);
+      await act(async () => { reject(new Error('字体加载异常')); await Promise.resolve(); });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.getByRole('alert')).toHaveTextContent('字体加载失败');
+    } finally {
+      if (original) Object.defineProperty(document, 'fonts', original);
+      else Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
+  it('still releases the remaining tasks if a cancellation callback throws', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    render(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    const cancelled = vi.fn();
+    tasks.measurement.onCancel(() => { throw new Error('清理异常'); });
+    tasks.positioning.onCancel(cancelled);
+    act(() => tasks.overlays.fail(new Error('绘制异常')));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('连线绘制失败');
+    expect(cancelled).toHaveBeenCalledOnce();
   });
 });

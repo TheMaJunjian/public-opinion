@@ -1,9 +1,30 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useWorkbenchViewport } from '../pages/workbench/useWorkbenchViewport';
+import { InterfaceZoomContext } from '../context/InterfaceZoomContext';
 
 const originalResizeObserver = window.ResizeObserver;
 afterEach(() => { window.ResizeObserver = originalResizeObserver; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it('fills the viewport immediately after interface or browser zoom without saving scaled widths', () => {
+  localStorage.removeItem('workbenchWidth');
+  vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1280);
+  function Viewport() {
+    const viewport = useWorkbenchViewport({ comparisonReviewed: false, viewMode: 'graph', loading: false });
+    return <div data-testid="width">{viewport.effectiveContainerWidth}</div>;
+  }
+  const view = render(<InterfaceZoomContext.Provider value={1}><Viewport /></InterfaceZoomContext.Provider>);
+  expect(screen.getByTestId('width')).toHaveTextContent('1280');
+  view.rerender(<InterfaceZoomContext.Provider value={0.8}><Viewport /></InterfaceZoomContext.Provider>);
+  expect(screen.getByTestId('width')).toHaveTextContent('1600');
+  expect(localStorage.getItem('workbenchWidth')).toBe('1280');
+  view.rerender(<InterfaceZoomContext.Provider value={1}><Viewport /></InterfaceZoomContext.Provider>);
+  expect(screen.getByTestId('width')).toHaveTextContent('1280');
+  vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1800);
+  act(() => { window.dispatchEvent(new Event('resize')); });
+  expect(screen.getByTestId('width')).toHaveTextContent('1800');
+  localStorage.removeItem('workbenchWidth');
+});
 
 it('does not show the fixed horizontal scrollbar on a narrow mobile viewport', async () => {
   vi.spyOn(window, 'matchMedia').mockImplementation(query => ({

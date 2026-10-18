@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import PopupOverlay from './PopupOverlay';
 
@@ -15,6 +15,7 @@ interface PromptModalProps {
   cancelText?: string;
   danger?: boolean;
   hideActions?: boolean;
+  lockScroll?: boolean;
   guideSettlementConfirm?: boolean;
   onConfirm: () => void;
   onCancel?: () => void;
@@ -34,6 +35,7 @@ export default function PromptModal({
   cancelText = '取消',
   danger = false,
   hideActions = false,
+  lockScroll = true,
   guideSettlementConfirm = false,
   onConfirm,
   onCancel,
@@ -41,8 +43,8 @@ export default function PromptModal({
   const dialogRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
   const [offsetY, setOffsetY] = useState(0);
-  useEffect(() => {
-    if (!open) return;
+  useLayoutEffect(() => {
+    if (!open || !lockScroll) return;
     if (bodyScrollLockCount === 0) {
       bodyOverflowBeforeLock = document.body.style.overflow;
     }
@@ -54,7 +56,7 @@ export default function PromptModal({
         document.body.style.overflow = bodyOverflowBeforeLock;
       }
     };
-  }, [open]);
+  }, [open, lockScroll]);
 
   useEffect(() => {
     if (!open) { setOffsetY(0); return; }

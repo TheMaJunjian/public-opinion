@@ -69,7 +69,7 @@ export function deriveContainerEffect(input: {
       targetIds:[...direct.textIds,...direct.relationIds]};
   });
   const context = {
-    relatedMessages: messages, rejectedContainerIds,
+    relatedMessages: messages, relatedEdges: edges, rejectedContainerIds,
     joinStatusByMessage: new Map([...effectiveJoinIds].map(id=>[id,'valid' as const])),
   };
   return {messages,relations,edges,traceEdges,msgMap,relationById,suppressed,rejectedContainerIds,rejectedJoinRelationIds,effectiveJoinIds,ownership,memberships,projectEdges,context};

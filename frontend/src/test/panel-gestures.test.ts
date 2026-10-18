@@ -261,3 +261,22 @@ it('does not resize a maximum-width right panel when clicking the splitter or mo
   expect(dependencies.setLeftFlex).not.toHaveBeenCalled();
   expect(dependencies.setSplitterActive).toHaveBeenLastCalledWith(false);
 });
+
+it('keeps splitter dragging in layout pixels when the interface is scaled', () => {
+  const row = document.createElement('div'), splitter = document.createElement('div');
+  row.append(splitter); document.body.append(row);
+  Object.defineProperty(row, 'offsetWidth', { value: 1600 });
+  row.getBoundingClientRect = () => new DOMRect(0, 0, 1280, 800);
+  splitter.getBoundingClientRect = () => new DOMRect(720, 0, 9.6, 800);
+  splitter.setPointerCapture = vi.fn();
+  const dependencies: Parameters<typeof handleSplitterPointerDown>[0] = {
+    setSplitterActive: vi.fn(), panelContainerRef: { current: row }, splitterDragRef: { current: null },
+    MIN_LEFT_PX: 560, MIN_RIGHT_PX: 280, MAX_RIGHT_PX: 700, BASE_WIDTH: 1024,
+    getMinimumContainerWidth: () => 1600, setContainerWidth: vi.fn(), setLeftFlex: vi.fn(), TOTAL_FLEX: 4,
+  };
+  handleSplitterPointerDown(dependencies, { preventDefault: vi.fn(), currentTarget: splitter, pointerId: 1, clientX: 724 } as unknown as Parameters<typeof handleSplitterPointerDown>[1]);
+  const move = new Event('pointermove'); Object.defineProperty(move, 'clientX', { value: 804 }); document.dispatchEvent(move);
+  document.dispatchEvent(new Event('pointerup'));
+  expect(dependencies.setContainerWidth).toHaveBeenLastCalledWith(1600);
+  expect(dependencies.setLeftFlex).toHaveBeenLastCalledWith(4 * 1000 / 1588);
+});

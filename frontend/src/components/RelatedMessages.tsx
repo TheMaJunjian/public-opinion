@@ -1,16 +1,20 @@
-import {useState} from 'react';
+import {useState,type SyntheticEvent} from 'react';
 import type {RelatedMessage} from '../utils/relatedMessages';
 import {getMessageTypeLabel} from '../utils/messageDisplay';
 import MessageElement from './MessageElement';
 import {messageTypeReference,isMessageElementSelected} from '../utils/messageElementSelection';
 import type {UnitSelection} from '../utils/modelBridge';
 
+const stopControlPropagation=(event:SyntheticEvent)=>{
+ if(event.target instanceof Element&&event.target.closest('button,[data-message-reference]'))event.stopPropagation();
+};
+
 /** Rejected containers remain selectable without occupying an independent card. */
 export default function RelatedMessages({rows=[],onNavigate,selectedUnits}:{rows?:RelatedMessage[];onNavigate?:(id:string)=>void;selectedUnits?:readonly UnitSelection[]}) {
  const [limit,setLimit]=useState(5);
  const [expanded,setExpanded]=useState(false);
  if(!rows.length)return null;
- return <div data-related-rejected-containers style={{marginTop:5,fontSize:11,color:'#fca5a5'}} onClick={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}>
+ return <div data-related-rejected-containers style={{marginTop:5,fontSize:11,color:'#fca5a5'}} onClick={stopControlPropagation} onDoubleClick={stopControlPropagation} onMouseDown={stopControlPropagation} onMouseUp={stopControlPropagation}>
   <button type="button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)} style={{color:'inherit',background:'none',border:0,cursor:'pointer',padding:0,fontSize:'inherit'}}>{expanded?'▾':'▸'} 被反对的容器：{rows.length}</button>
   {expanded&&<div style={{display:'flex',flexDirection:'column',gap:4,marginTop:3}}>{rows.slice(0,limit).map(({message})=>{
    const type=getMessageTypeLabel(message);

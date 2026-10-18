@@ -1,6 +1,7 @@
 import React from "react";
 import type { Relation } from "../../../types";
 import { getPresentationSpec } from "../../../types";
+import type { WorkbenchDrawingTask } from '../../../context/WorkbenchDrawingContext';
 import type {
   DemoEdge
 } from "../../../utils/modelBridge";
@@ -21,7 +22,7 @@ interface ScheduleViewNavigationDependencies {
   scrollMsgToCenter: (msgId: string, options?: { dependencyIds?: string[]; }) => void;
 }
 
-export function scheduleViewNavigation(dependencies: ScheduleViewNavigationDependencies, targetId: string): void {
+export function scheduleViewNavigation(dependencies: ScheduleViewNavigationDependencies, targetId: string, delay = 100): void {
   const { viewNavigationTimerRef, scrollMsgToCenter } = dependencies;
   if (viewNavigationTimerRef.current !== null) {
     clearTimeout(viewNavigationTimerRef.current);
@@ -29,10 +30,11 @@ export function scheduleViewNavigation(dependencies: ScheduleViewNavigationDepen
   viewNavigationTimerRef.current = setTimeout(() => {
     viewNavigationTimerRef.current = null;
     scrollMsgToCenter(targetId);
-  }, 100);
+  }, delay);
 }
 
 interface ShowMessagePulseDependencies {
+  task?: WorkbenchDrawingTask | null;
   scrollRequestIdRef: React.MutableRefObject<number>;
   messagePulseTimerRef: React.MutableRefObject<number | null>;
   messagePulseRafRef: React.MutableRefObject<number | null>;
@@ -48,38 +50,45 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
   if (messagePulseTimerRef.current) clearTimeout(messagePulseTimerRef.current);
   if (messagePulseRafRef.current) cancelAnimationFrame(messagePulseRafRef.current);
   messagePulseRafRef.current = requestAnimationFrame(() => {
+    const show = () => {
+      messagePulseRafRef.current = null;
+      if (requestId !== scrollRequestIdRef.current) { onShown?.(false); return; }
+      let pulseElement = element;
+      if (!pulseElement.isConnected) {
+        const currentCandidates = leftPanelRef.current
+          ? findMessageElements(leftPanelRef.current, targetId)
+          : [];
+        pulseElement = currentCandidates.find(candidate =>
+          candidate.hasAttribute('data-rel-overlay') && candidate.getAttribute('data-msgid') === targetId,
+        ) ?? currentCandidates[0];
+      }
+      if (!pulseElement?.isConnected) { onShown?.(false); return; }
+      const targetElements = pulseElement.hasAttribute('data-rel-overlay')
+        ? findMessageElements(leftPanelRef.current!, targetId)
+          .filter(candidate => candidate.hasAttribute('data-rel-overlay'))
+        : findMessageElements(leftPanelRef.current!, targetId);
+      const targetRects = targetElements
+        .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
+        .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
+      const rect = targetRects.reduce((bounds, candidateRect) => {
+        const left = Math.min(bounds.left, candidateRect.left);
+        const top = Math.min(bounds.top, candidateRect.top);
+        const right = Math.max(bounds.right, candidateRect.right);
+        const bottom = Math.max(bounds.bottom, candidateRect.bottom);
+        return new DOMRect(left, top, right - left, bottom - top);
+      }, pulseElement.getBoundingClientRect());
+      setMessagePulse({ messageId: targetId, element: pulseElement, rect });
+      messagePulseTimerRef.current = setTimeout(() => {
+        setMessagePulse(current => current?.element === pulseElement ? null : current);
+        if (requestId === scrollRequestIdRef.current) messagePulseTimerRef.current = null;
+      }, MESSAGE_PULSE_DURATION_MS);
+      onShown?.(true);
+    };
+    if (dependencies.task) dependencies.task.run(show); else show();
+  });
+  dependencies.task?.onCancel(() => {
+    if (messagePulseRafRef.current !== null) cancelAnimationFrame(messagePulseRafRef.current);
     messagePulseRafRef.current = null;
-    if (requestId !== scrollRequestIdRef.current) { onShown?.(false); return; }
-    let pulseElement = element;
-    if (!pulseElement.isConnected) {
-      const currentCandidates = leftPanelRef.current
-        ? findMessageElements(leftPanelRef.current, targetId)
-        : [];
-      pulseElement = currentCandidates.find(candidate =>
-        candidate.hasAttribute('data-rel-overlay') && candidate.getAttribute('data-msgid') === targetId,
-      ) ?? currentCandidates[0];
-    }
-    if (!pulseElement?.isConnected) { onShown?.(false); return; }
-    const targetElements = pulseElement.hasAttribute('data-rel-overlay')
-      ? findMessageElements(leftPanelRef.current!, targetId)
-        .filter(candidate => candidate.hasAttribute('data-rel-overlay'))
-      : findMessageElements(leftPanelRef.current!, targetId);
-    const targetRects = targetElements
-      .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
-      .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
-    const rect = targetRects.reduce((bounds, candidateRect) => {
-      const left = Math.min(bounds.left, candidateRect.left);
-      const top = Math.min(bounds.top, candidateRect.top);
-      const right = Math.max(bounds.right, candidateRect.right);
-      const bottom = Math.max(bounds.bottom, candidateRect.bottom);
-      return new DOMRect(left, top, right - left, bottom - top);
-    }, pulseElement.getBoundingClientRect());
-    setMessagePulse({ messageId: targetId, element: pulseElement, rect });
-    messagePulseTimerRef.current = setTimeout(() => {
-      setMessagePulse(current => current?.element === pulseElement ? null : current);
-      if (requestId === scrollRequestIdRef.current) messagePulseTimerRef.current = null;
-    }, MESSAGE_PULSE_DURATION_MS);
-    onShown?.(true);
   });
 }
 
@@ -94,6 +103,7 @@ export function findMessageElements(container: HTMLElement, messageId: string): 
 }
 
 interface ScrollMsgToCenterDependencies {
+  startPositioning?: () => WorkbenchDrawingTask;
   scrollRequestIdRef: React.MutableRefObject<number>;
   pendingScrollMsgIdRef: React.MutableRefObject<string | null>;
   MAX_SCROLL_ATTEMPTS: 60;
@@ -119,18 +129,26 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
   const requestId = ++scrollRequestIdRef.current;
   pendingScrollMsgIdRef.current = targetId;
   let attempts = 0;
+  let task: WorkbenchDrawingTask | undefined;
+  const run = (work: () => void) => { if (task) task.run(work); else work(); };
+  const nextFrame = (work: () => void) => {
+    const frame = requestAnimationFrame(() => run(work));
+    task?.onCancel(() => cancelAnimationFrame(frame));
+    return frame;
+  };
+  const complete = (located: boolean) => { task?.complete(); options?.onComplete?.(located); };
   const tryScroll = () => {
     attempts++;
-    if (requestId !== scrollRequestIdRef.current) { options?.onComplete?.(false); return; }
+    if (requestId !== scrollRequestIdRef.current) { complete(false); return; }
     if (attempts > MAX_SCROLL_ATTEMPTS) {
       pendingScrollMsgIdRef.current = null;
       pendingScrollDependencyIdsRef.current = [];
-      options?.onComplete?.(false);
+      complete(false);
       return;
     }
-    if (pendingScrollMsgIdRef.current !== targetId) { options?.onComplete?.(false); return; }
+    if (pendingScrollMsgIdRef.current !== targetId) { complete(false); return; }
     const container = leftPanelRef.current;
-    if (!container) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
+    if (!container) { scrollRafRef.current = nextFrame(tryScroll); return; }
     const containerRect = container.getBoundingClientRect();
     const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
@@ -140,7 +158,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
       || containerRect.left >= viewportWidth;
     if (containerOutsideViewport) {
       container.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      scrollRafRef.current = requestAnimationFrame(tryScroll);
+      scrollRafRef.current = nextFrame(tryScroll);
       return;
     }
     const dependencyReady = dependencyIds.every(dependencyId =>
@@ -149,7 +167,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
         return rect.width > 0 && rect.height > 0;
       }),
     );
-    if (!dependencyReady) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
+    if (!dependencyReady) { scrollRafRef.current = nextFrame(tryScroll); return; }
     const targetRelation = relationsRef.current.find(relation => relation.id === targetId);
     const targetEdge = edgesRef.current.find(edge => edge.relationMessageId === targetId);
     const isDecorationTarget = targetRelation
@@ -173,10 +191,10 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
       : isDecorationTarget
         ? preferredCandidates[0] ?? null
         : preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
-    if (!el) { scrollRafRef.current = requestAnimationFrame(tryScroll); return; }
+    if (!el) { scrollRafRef.current = nextFrame(tryScroll); return; }
     const elRect = el.getBoundingClientRect();
     if (elRect.width === 0 || elRect.height === 0) {
-      scrollRafRef.current = requestAnimationFrame(tryScroll);
+      scrollRafRef.current = nextFrame(tryScroll);
       return;
     }
     pendingScrollMsgIdRef.current = null;
@@ -204,8 +222,8 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     // The left panel may itself be only partly visible in the browser viewport.
     // Re-read after the inner scroll, then move the outer page if the target is
     // still outside the actual viewport before creating the jump overlay.
-    requestAnimationFrame(() => {
-      if (requestId !== scrollRequestIdRef.current) { options?.onComplete?.(false); return; }
+    nextFrame(() => {
+      if (requestId !== scrollRequestIdRef.current) { complete(false); return; }
       let currentElement = el;
       if (!currentElement.isConnected) {
         const currentCandidates = findMessageElements(container, targetId);
@@ -215,7 +233,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
         ) ?? currentCandidates.find(candidate => isDecorationTarget && candidate.hasAttribute('data-rel-overlay'))
           ?? currentCandidates[0];
       }
-      if (!currentElement?.isConnected) { options?.onComplete?.(false); return; }
+      if (!currentElement?.isConnected) { complete(false); return; }
       const currentRect = currentElement.getBoundingClientRect();
       const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
       const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
@@ -225,20 +243,21 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
         || currentRect.left >= viewportWidth;
       if (targetOutsideViewport) {
         currentElement.scrollIntoView({ block: 'center', inline: 'nearest' });
-        requestAnimationFrame(() => {
+        nextFrame(() => {
           if (requestId === scrollRequestIdRef.current) {
-            showMessagePulse(targetId, currentElement, requestId, options?.onComplete);
-          } else options?.onComplete?.(false);
+            showMessagePulse(targetId, currentElement, requestId, complete);
+          } else complete(false);
         });
         return;
       }
-      showMessagePulse(targetId, currentElement, requestId, options?.onComplete);
+      showMessagePulse(targetId, currentElement, requestId, complete);
     });
     // The left panel handles the inner scroll; the target scrollIntoView above
     // handles the outer page when the panel itself is outside the viewport.
   };
   cancelScrollRafs();
-  scrollRafRef.current = requestAnimationFrame(tryScroll);
+  task = dependencies.startPositioning?.();
+  scrollRafRef.current = nextFrame(tryScroll);
 }
 
 export function clampAndSetScroll(container: HTMLDivElement | null, top: number | null, left: number | null): void {

@@ -22,17 +22,21 @@ export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDow
   const panelContainer = panelContainerRef.current;
   const containerRect = panelContainer?.getBoundingClientRect();
   const splitterRect = e.currentTarget.getBoundingClientRect();
-  const containerW = containerRect?.width ?? 0;
+  const scale = panelContainer && panelContainer.offsetWidth > 0 && containerRect
+    ? containerRect.width / panelContainer.offsetWidth
+    : 1;
+  const containerW = (containerRect?.width ?? 0) / scale;
   const startLeftPx = containerRect
-    ? splitterRect.left - containerRect.left
+    ? (splitterRect.left - containerRect.left) / scale
     : 0;
   splitterDragRef.current = { startX: e.clientX, startLeftPx, containerW };
   function onPointerMove(ev: PointerEvent) {
     if (!splitterDragRef.current || !panelContainerRef.current) return;
-    const dx = ev.clientX - splitterDragRef.current.startX;
+    const pointerDelta = ev.clientX - splitterDragRef.current.startX;
     // A click (including small pointer jitter) must not normalize the current
     // layout, especially while the right panel is already at its width limit.
-    if (Math.abs(dx) < 3) return;
+    if (Math.abs(pointerDelta) < 3) return;
+    const dx = pointerDelta / scale;
     const desiredLeftPx = Math.max(MIN_LEFT_PX, splitterDragRef.current.startLeftPx + dx);
     const naturalRightPx = splitterDragRef.current.containerW - 12 - desiredLeftPx;
     const nextWidth = naturalRightPx < MIN_RIGHT_PX

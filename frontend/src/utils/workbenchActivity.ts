@@ -6,6 +6,7 @@ type ActivitySnapshot = Record<ActivityKind, ActivityEntry>;
 
 const listeners = new Set<() => void>();
 const durations = new Map<ActivityKind, ReturnType<typeof setTimeout>>();
+const drawingOwners = new Set<symbol>();
 let drawQuietTimer: ReturnType<typeof setTimeout> | null = null;
 let snapshot: ActivitySnapshot = {
   sync: { active: false, startedAt: 0, lastDuration: null },
@@ -47,9 +48,34 @@ export function beginWorkbenchDrawing() {
   noteWorkbenchDrawingProgress();
 }
 
-/** Finish after layout and overlay updates have been quiet for two frames or more. */
+/** A failed scene must not leave a background timer showing successful completion. */
+export function cancelWorkbenchDrawing() {
+  if (drawQuietTimer) clearTimeout(drawQuietTimer);
+  drawQuietTimer = null;
+  const duration = durations.get('draw');
+  if (duration) clearTimeout(duration);
+  durations.delete('draw');
+  publish('draw', { active: false, startedAt: 0, lastDuration: null });
+}
+
+/** The loading boundary owns completion while the scene is blocked for layout. */
+export function manageWorkbenchDrawing() {
+  const owner = Symbol();
+  drawingOwners.add(owner);
+  if (drawQuietTimer) clearTimeout(drawQuietTimer);
+  drawQuietTimer = null;
+  begin('draw');
+  return (completed = true) => {
+    if (!drawingOwners.delete(owner) || drawingOwners.size > 0) return;
+    if (completed) finish('draw');
+    else publish('draw', { active: false, startedAt: 0, lastDuration: null });
+  };
+}
+
+/** Ordinary background redraws use a brief activity hint; blocked loads own completion explicitly. */
 export function noteWorkbenchDrawingProgress() {
   if (!snapshot.draw.active) return;
+  if (drawingOwners.size > 0) return;
   if (drawQuietTimer) clearTimeout(drawQuietTimer);
   drawQuietTimer = setTimeout(() => {
     drawQuietTimer = null;
@@ -72,6 +98,7 @@ export function useWorkbenchActivity() {
 }
 
 export function resetWorkbenchActivity() {
+  drawingOwners.clear();
   if (drawQuietTimer) clearTimeout(drawQuietTimer);
   drawQuietTimer = null;
   durations.forEach(timer => clearTimeout(timer));

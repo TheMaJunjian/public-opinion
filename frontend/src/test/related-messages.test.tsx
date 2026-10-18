@@ -5,6 +5,21 @@ import {indexRelatedMessages} from '../utils/relatedMessages';
 import {PART_SELECTION_EVENT} from '../utils/messageElementSelection';
 import type {DemoMessage} from '../utils/modelBridge';
 const source:DemoMessage={id:'category',revision:1,kind:'relation',relationType:'classify',author:'用户',createdAt:'',content:'分类',relationPayload:{title:'旧分类'},targetRefs:[],declaredTargetRefs:[{kind:'message',messageId:'claim'}],parts:[{id:'organization',type:'relation',relation:'classify',roles:{members:[{id:'member',reference:{messageId:'claim'}}]}}],state:{messageId:'category',revision:1,suppressed:true,supportCount:0,oppositionCount:1,recommendationTotal:0}};
+it('lets blank space select the owning card while keeping related controls independent',()=>{
+ const click=vi.fn(),doubleClick=vi.fn(),down=vi.fn(),up=vi.fn();
+ const view=render(<div onClick={click} onDoubleClick={doubleClick} onMouseDown={down} onMouseUp={up}><RelatedMessages rows={indexRelatedMessages([source]).get('claim')}/></div>);
+ const blank=view.container.querySelector('[data-related-rejected-containers]')!;
+ fireEvent.mouseDown(blank);fireEvent.mouseUp(blank);fireEvent.click(blank);fireEvent.doubleClick(blank);
+ expect(click).toHaveBeenCalledTimes(1);expect(doubleClick).toHaveBeenCalledTimes(1);expect(down).toHaveBeenCalledTimes(1);expect(up).toHaveBeenCalledTimes(1);
+ const toggle=view.getByRole('button',{name:/被反对的容器/});
+ fireEvent.mouseDown(toggle);fireEvent.mouseUp(toggle);fireEvent.click(toggle);fireEvent.doubleClick(toggle);
+ const related=view.getByRole('button',{name:'选择被反对的分类消息部件'});
+ fireEvent.mouseDown(related);fireEvent.mouseUp(related);fireEvent.click(related);fireEvent.doubleClick(related);
+ fireEvent.click(view.getByRole('button',{name:'查看'}));
+ expect(click).toHaveBeenCalledTimes(1);expect(doubleClick).toHaveBeenCalledTimes(1);expect(down).toHaveBeenCalledTimes(1);expect(up).toHaveBeenCalledTimes(1);
+ fireEvent.click(view.container.querySelector('[data-related-message-id="category"]')!);
+ expect(click).toHaveBeenCalledTimes(2);
+});
 it('shows and selects the rejected container part on its former member',()=>{
  const rows=indexRelatedMessages([source]).get('claim'),selection=vi.fn(),navigate=vi.fn();window.addEventListener(PART_SELECTION_EVENT,selection);
  const view=render(<RelatedMessages rows={rows} onNavigate={navigate}/>);

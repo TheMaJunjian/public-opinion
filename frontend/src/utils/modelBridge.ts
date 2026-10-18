@@ -270,6 +270,14 @@ export function convertMessagesToDemoModel(
   messages: BackendMessage[],
   relations: BackendRelation[]
 ): { messages: DemoMessage[]; edges: DemoEdge[] } {
+  const sequenceById = new Map([...relations, ...messages].map(record => [record.id, record.sequence ?? 0]));
+  const byCreation = (a: { id: string; createdAt: string }, b: { id: string; createdAt: string }) =>
+    (Date.parse(a.createdAt) - Date.parse(b.createdAt) || 0)
+    || (sequenceById.get(a.id) ?? 0) - (sequenceById.get(b.id) ?? 0) || a.id.localeCompare(b.id);
+  // API pagination and archive queries return different orders. Equal timestamps
+  // must not change card order, relation precedence, or graph layout on reopening.
+  messages = [...messages].sort(byCreation);
+  relations = [...relations].sort(byCreation);
   const msgContentMap = new Map(messages.map(m => [m.id, m.content]));
   const messageById=new Map(messages.map(message=>[message.id,message]));
   // Build a set of relation IDs to detect when sourceMessageId references a relation message.
@@ -459,11 +467,6 @@ export function convertMessagesToDemoModel(
 
     const lowerRelType = relType.toLowerCase() as RelationType;
     const relMsgId = m.id;
-  demoMessages.sort((a, b) => {
-    const createdAtOrder = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    return createdAtOrder !== 0 ? createdAtOrder : a.id.localeCompare(b.id);
-  });
-
     const relationLabel: string = lowerRelType;
 
     const seenRelationTargetIds = new Set<string>();
@@ -499,7 +502,7 @@ export function convertMessagesToDemoModel(
 
   // Sort all messages (normal + relation) by creation time so the linear view
   // shows them in send order after exit-and-reenter.
-  demoMessages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  demoMessages.sort(byCreation);
 
   return { messages: demoMessages, edges: demoEdges };
 }

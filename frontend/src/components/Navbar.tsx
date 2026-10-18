@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Z_INDEX } from '../constants/zIndex';
 import PointsBadge from './PointsBadge';
+import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 
 interface NavbarProps {
   onOpenViewer?: () => void;
@@ -17,6 +18,7 @@ interface NavbarProps {
 
 /** 顶部导航栏：展示系统名称"公论"与登录/注销入口 */
 export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, onOpenGuide, guideEnabled = false, topControlsFrozen = false, onToggleTopControls, onHeightChange }: NavbarProps) {
+  const interfaceZoom = useInterfaceZoom();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const navRef = useRef<HTMLElement>(null);
@@ -30,7 +32,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
 
     const updateLayout = () => {
       const navRect = nav.getBoundingClientRect();
-      onHeightChange?.(navRect.height);
+      onHeightChange?.(navRect.height / interfaceZoom);
       const leftControls = leftControlsRef.current;
       const rightControls = rightControlsRef.current;
       if (!leftControls || !rightControls) return;
@@ -40,7 +42,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
       const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
       // Preserve the navbar's outer padding even when the workbench is wider
       // than the viewport. CSS sticky accounts for the native scrollbar.
-      const nextRightOffset = Math.min(16, viewportWidth - (leftRect.right + 16 + rightRect.width));
+      const nextRightOffset = Math.min(16, (viewportWidth - leftRect.right - rightRect.width) / interfaceZoom - 16);
       setRightControlsRightOffset(current => current === nextRightOffset ? current : nextRightOffset);
     };
 
@@ -53,7 +55,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
       observer.disconnect();
       window.removeEventListener('resize', updateLayout);
     };
-  }, [onHeightChange]);
+  }, [onHeightChange, interfaceZoom]);
 
   async function handleLogout() {
     try {

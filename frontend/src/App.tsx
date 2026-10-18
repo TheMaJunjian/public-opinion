@@ -1,6 +1,7 @@
 import { BrowserRouter, HashRouter, Routes, Route } from 'react-router-dom';
 import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
+import { InterfaceZoomContext } from './context/InterfaceZoomContext';
 import Navbar from './components/Navbar';
 import GestureShortcutManager from './components/GestureShortcutManager';
 import { GestureDirection, ShortcutSymbol } from './utils/gestureShortcut';
@@ -96,6 +97,7 @@ function AppContent() {
 
   return (
     <Router>
+      <InterfaceZoomContext.Provider value={interfaceZoom}>
         <div
           ref={appRootRef}
           className="min-h-screen min-w-0 flex flex-col bg-[#101010]"
@@ -161,6 +163,7 @@ function AppContent() {
             </Suspense>
           )}
         </div>
+      </InterfaceZoomContext.Provider>
     </Router>
   );
 }

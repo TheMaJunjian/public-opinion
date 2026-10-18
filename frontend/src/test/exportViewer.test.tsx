@@ -34,6 +34,49 @@ describe('export viewer verification', () => {
     expect(validateExportForViewing(old).verification).toBeNull();
   });
 
+  it('normalizes historical topic exports without treating old topic IDs as message IDs', () => {
+    const { scope: _scope, format: _format, changes: _changes, ...view } = archive();
+    const old = { ...view, topic: { id: 'old-topic', title: '旧版讨论' } };
+    const result = validateExportForViewing(JSON.parse(JSON.stringify(old)));
+    expect(result.data.scope).toEqual({ messageId: null, title: '旧版讨论' });
+    expect(result.data.messages).toEqual(old.messages);
+    expect(result.data.relations).toEqual(old.relations);
+    expect(result.verification).toBeNull();
+    expect(old).not.toHaveProperty('scope');
+    expect(validateExportForViewing(JSON.parse(JSON.stringify(result.data))).data.scope.title).toBe('旧版讨论');
+  });
+
+  it('continues to reject incomplete files with specific missing-field errors', () => {
+    expect(() => validateExportForViewing({ scope: { title: '消息' }, relations: [] })).toThrow('缺少消息列表（messages）');
+    expect(() => validateExportForViewing({ topic: { title: '旧版讨论' }, messages: [] })).toThrow('缺少关系列表（relations）');
+    expect(() => validateExportForViewing({ messages: [], relations: [] })).toThrow('缺少阅览范围信息');
+    const { scope: _scope, messages: _messages, relations: _relations, ...journal } = archive();
+    expect(() => validateExportForViewing(journal)).toThrow('仅含执行记录的文件');
+    expect(() => validateExportForViewing({ ...archive(), view: { mode: 'graph' } })).toThrow('阅览设置格式无效');
+  });
+
+  it('verifies journal archives that still export topic metadata', () => {
+    const { scope: _scope, ...data } = archive();
+    const legacy = { ...data, topic: { id: 'root', title: '公论' } };
+    expect(validateExportForViewing(legacy)).toMatchObject({
+      data: { scope: { messageId: null, title: '公论' } },
+      verification: expect.stringContaining('记录连续性及资金守恒校验通过'),
+    });
+    legacy.changes[0].treasury.issued = 1;
+    expect(() => validateExportForViewing(legacy)).toThrow('资金不守恒');
+  });
+
+  it('shows the historical title when selecting an old export', async () => {
+    const { scope: _scope, format: _format, changes: _changes, ...view } = archive();
+    const old = { ...view, topic: { id: 'old-topic', title: '旧版讨论' } };
+    sessionStorage.setItem('lastExportData', JSON.stringify(old));
+    render(<MemoryRouter><ExportViewerModal open onClose={vi.fn()} /></MemoryRouter>);
+    expect(screen.getByRole('button', { name: /上次阅览：旧版讨论/ })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('选择导出文件'), { target: { files: [new File([JSON.stringify(old)], '旧版讨论.json', { type: 'application/json' })] } });
+    expect(await screen.findByRole('button', { name: '阅览此文件' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('shows verification after file selection and keeps the original open action', async () => {
     const onClose = vi.fn();
     render(<MemoryRouter><ExportViewerModal open onClose={onClose} /></MemoryRouter>);

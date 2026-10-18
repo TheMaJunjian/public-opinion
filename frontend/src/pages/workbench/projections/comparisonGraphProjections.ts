@@ -6,7 +6,7 @@ import { expandTextIdsWithSettlementResults } from '../model/navigation';
 import { deriveContainerEffect, isContainerType, type ContainerEffect } from '../model/containerEffect';
 import { projectContainerCanvas } from './containerCanvas';
 import type { TraceEntry } from '../types';
-import { deriveCrossClassifyRefs } from './crossClassifyRefs';
+import { deriveCrossCanvasRelations } from '../../../utils/crossCanvasRelations';
 import { projectGraphScene } from '../../../utils/graphProjection';
 
 export interface DeriveComparisonGraphProjectionsInput {
@@ -148,13 +148,13 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
     const scene=projectGraphScene({messages:finalMessages,edges:canvas.edges,
       traceExpandedFrameIds,isTraceWindow:traceStartIds.length>0,
       rejectedContainerIds:effect.rejectedContainerIds,hiddenMessageIds:effect.suppressed});
-    const references=effect.messages.filter(message=>message.relationType==='reference');
-    const allowedReferences=new Set((input.filterMessages?.(references)??references).map(message=>message.id));
-    const crossClassifyRefs=deriveCrossClassifyRefs({
-      edges:effect.edges.filter(edge=>edge.relationType==='reference'&&allowedReferences.has(edge.relationMessageId)),
-      msgMap:effect.msgMap,graphVisibleTextIds:new Set(scene.normalIds),
+    const allowedRelations=new Set((input.filterMessages?.(effect.messages)??effect.messages).map(message=>message.id));
+    const relatedEdges=effect.edges.filter(edge=>allowedRelations.has(edge.relationMessageId));
+    const crossCanvasRelations=deriveCrossCanvasRelations({
+      edges:relatedEdges,
+      visibleMessageIds:new Set([...scene.normalIds,...scene.frameBlocks.map(frame=>frame.relMsgId)]),renderedEdges:scene.layoutEdges,
     });
-    return {...canvas,messages:finalMessages,suppressed:effect.suppressed,context:{...effect.context,crossClassifyRefs},effect};
+    return {...canvas,messages:finalMessages,suppressed:effect.suppressed,context:{...effect.context,relatedEdges,crossCanvasRelations},effect};
 }
 
 export function deriveComparisonGraphProjections(input: DeriveComparisonGraphProjectionsInput) {

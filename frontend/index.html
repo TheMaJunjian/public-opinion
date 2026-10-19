@@ -7,7 +7,15 @@
     <title>公论 — 价值证明共识系统</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div role="dialog" aria-label="正在加载" aria-modal="true" data-app-startup="true"
+        style="position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px;background:#101010;color:#f3f4f6;font:14px/1.6 system-ui,sans-serif">
+        <div style="width:min(460px,100%);border:1px solid #374151;border-radius:12px;background:#1f2937;box-shadow:0 16px 40px #0007">
+          <div style="padding:14px 16px;border-bottom:1px solid #374151;font-size:15px;font-weight:700">正在加载</div>
+          <div style="padding:16px">正在启动公论，请稍候…</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

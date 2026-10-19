@@ -5,6 +5,7 @@ import { InterfaceZoomContext } from './context/InterfaceZoomContext';
 import Navbar from './components/Navbar';
 import AppUpdateNotice from './components/AppUpdateNotice';
 import ErrorBoundary from './components/ErrorBoundary';
+import WorkbenchStartup, { PageLoadingPrompt } from './components/WorkbenchStartup';
 import GestureShortcutManager from './components/GestureShortcutManager';
 import { GestureDirection, ShortcutSymbol } from './utils/gestureShortcut';
 
@@ -91,11 +92,7 @@ function AppContent() {
       target.scrollBy({ top, left, behavior: 'smooth' });
     }
   };
-  const routeFallback = (
-    <div className="flex h-full items-center justify-center text-sm text-gray-500">
-      加载中…
-    </div>
-  );
+  const routeFallback = <PageLoadingPrompt />;
 
   return (
     <Router>
@@ -128,9 +125,9 @@ function AppContent() {
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/" element={<HomePage />} />
-                <Route path="/messages" element={<MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
-                <Route path="/messages/:messageId" element={<MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
-                <Route path="/viewer" element={<MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} />} />
+                <Route path="/messages" element={<WorkbenchStartup><MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} /></WorkbenchStartup>} />
+                <Route path="/messages/:messageId" element={<WorkbenchStartup><MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} /></WorkbenchStartup>} />
+                <Route path="/viewer" element={<WorkbenchStartup><MessageWorkbenchPage topControlsFrozen={topControlsFrozen} topControlsOffset={navbarHeight} /></WorkbenchStartup>} />
               </Routes>
             </Suspense>
           </main>

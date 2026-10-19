@@ -49,6 +49,7 @@ try {
   }
   const entry=await request('/');
   assert.equal(entry.status,200);assert.equal(entry.headers['cache-control'],'no-store');
+  assert.ok(entry.body.includes('data-app-startup="true"'),'The initial HTML must show its own prompt before JavaScript loads');
   const version=await request('/build.json');
   assert.equal(version.status,200);assert.equal(version.headers['cache-control'],'no-store');
   assert.equal(typeof version.body.id,'string');assert.ok(version.body.id);

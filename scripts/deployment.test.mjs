@@ -40,7 +40,7 @@ test('database preflight only reads and rejects empty, legacy and non-read-only 
 });
 
 const bash = process.platform === 'win32' ? resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe') : 'bash';
-function deploy(t, flags = [], overrides = {}) {
+function deploy(t, flags = [], overrides = {}, entry = 'deploy.sh') {
   const directory = mkdtempSync(join(tmpdir(), 'gonglun-deploy-test-'));
   t.after(() => {
     assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
@@ -50,12 +50,19 @@ function deploy(t, flags = [], overrides = {}) {
   const deployment = join(directory, 'deploy'), bin = join(directory, 'bin'), log = join(directory, 'docker.log');
   mkdirSync(deployment); mkdirSync(bin);
   copyFileSync(resolve('deploy/deploy.sh'), join(deployment, 'deploy.sh'));
+  copyFileSync(resolve('deploy/update.sh'), join(deployment, 'update.sh'));
   writeFileSync(join(deployment, '.env.prod'), 'POSTGRES_PASSWORD=keep-existing-password\nGONGLUN_DATABASE_NAME=existing-final\n');
   writeFileSync(join(directory, '.env.migration'), 'MIGRATION_TARGET_DATABASE_URL=keep-existing-migrated-target\n');
+  if (overrides.MOCK_PREVIOUS_DEPLOYMENT === '1') writeFileSync(join(deployment, '.env.image'), 'GONGLUN_IMAGE=gonglun:previous\nGONGLUN_DEPLOY_MODE=production\n');
   writeFileSync(join(bin, 'docker'), `#!/usr/bin/env bash
 printf '%s\\t' "$@" >> "$DOCKER_TEST_LOG"; printf '\\n' >> "$DOCKER_TEST_LOG"
 case "$1" in
-  inspect) echo true ;;
+  inspect)
+    case "$3" in
+      '{{.State.Running}}') echo true ;;
+      '{{.Config.Image}}') if [ "$MOCK_WRONG_IMAGE" = 1 ]; then echo gonglun:previous; else printf 'gonglun:sha-%040d\\n' 0; fi ;;
+      *) if [ "$4" = "current-$MOCK_UNHEALTHY-container" ]; then echo 'running unhealthy'; elif [ "$4" = current-caddy-container ]; then echo 'running none'; else echo 'running healthy'; fi ;;
+    esac ;;
   info) echo x86_64 ;;
   load) touch "$DOCKER_TEST_LOG.loaded" ;;
   image)
@@ -64,11 +71,29 @@ case "$1" in
   compose)
     case " $* " in
       *" ps -q postgres "*) [ "$MOCK_NO_DATABASE" = 1 ] || echo original-postgres-container ;;
+      *" ps -q api "*) [ "$MOCK_MISSING_API" = 1 ] || echo current-api-container ;;
+      *" ps -q caddy "*) echo current-caddy-container ;;
       *" run "*) [ "$MOCK_BAD_TARGET" != 1 ] ;;
+      *" exec "*) [ "$MOCK_HEALTH_FAILURE" != 1 ] ;;
     esac ;;
 esac
 `, { mode: 0o755 });
-  writeFileSync(join(bin, 'git'), '#!/usr/bin/env bash\ncase " $* " in *" rev-parse HEAD "*) printf "%040d\\n" 0 ;; *) echo https://github.com/owner/repository.git ;; esac\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'git'), `#!/usr/bin/env bash
+printf 'git\\t' >> "$DOCKER_TEST_LOG"; printf '%s\\t' "$@" >> "$DOCKER_TEST_LOG"; printf '\\n' >> "$DOCKER_TEST_LOG"
+case " $* " in
+  *" symbolic-ref --quiet --short HEAD "*) [ "$MOCK_DETACHED" != 1 ] && echo main ;;
+  *" rev-parse --abbrev-ref --symbolic-full-name "*) [ "$MOCK_NO_UPSTREAM" != 1 ] && echo origin/main ;;
+  *" status --porcelain --untracked-files=no "*) if [ "$MOCK_DIRTY_CHECKOUT" = 1 ]; then echo ' M deploy/deploy.sh'; fi ;;
+  *" pull --ff-only "*)
+    [ "$MOCK_PULL_FAILURE" != 1 ] || exit 1
+    if [ "$MOCK_REWRITE_UPDATE" = 1 ]; then printf '%12000s\\nexit 99\\n' '' > deploy/update.sh; fi
+    if [ "$MOCK_REWRITE_DEPLOY" = 1 ]; then printf 'exit 37\\n' > deploy/deploy.sh; fi ;;
+  *" rev-parse @{upstream} "*) if [ "$MOCK_AHEAD" = 1 ]; then printf '%040d\\n' 1; else printf '%040d\\n' 0; fi ;;
+  *" rev-parse HEAD "*) printf '%040d\\n' 0 ;;
+  *" rev-parse --short HEAD "*) echo 0000000 ;;
+  *) echo https://github.com/owner/repository.git ;;
+esac
+`, { mode: 0o755 });
   writeFileSync(join(bin, 'curl'), `#!/usr/bin/env bash
 [ "$MOCK_MISSING_RELEASE" != 1 ] || exit 22
 while [ "$#" -gt 0 ]; do if [ "$1" = --output ]; then output="$2"; shift 2; else url="$1"; shift; fi; done
@@ -80,11 +105,12 @@ esac
   const result = spawnSync(bash, ['-c', `
 if command -v cygpath >/dev/null 2>&1; then bin=$(cygpath -u "$1"); script=$(cygpath -u "$2"); log=$(cygpath -u "$3"); else bin="$1"; script="$2"; log="$3"; fi
 shift 3; export PATH="$bin:$PATH" DOCKER_TEST_LOG="$log"; exec bash "$script" "$@"
-`, 'deployment-test', bin, join(deployment, 'deploy.sh'), log, ...flags], { encoding: 'utf8', timeout: 20000, env: { ...process.env, ...overrides } });
+`, 'deployment-test', bin, join(deployment, entry), log, ...flags], { encoding: 'utf8', timeout: 20000, env: { ...process.env, ...overrides } });
   assert.equal(readFileSync(join(deployment, '.env.prod'), 'utf8'), 'POSTGRES_PASSWORD=keep-existing-password\nGONGLUN_DATABASE_NAME=existing-final\n');
   assert.equal(readFileSync(join(directory, '.env.migration'), 'utf8'), 'MIGRATION_TARGET_DATABASE_URL=keep-existing-migrated-target\n');
   const commands = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => line.split('\t').filter(Boolean)) : [];
-  return { ...result, commands, marker: existsSync(join(deployment, '.env.image')) };
+  const marker = existsSync(join(deployment, '.env.image'));
+  return { ...result, commands, marker, markerContents: marker ? readFileSync(join(deployment, '.env.image'), 'utf8') : undefined };
 }
 
 test('download, checksum and load precede read-only preflight and detached API replacement', t => {
@@ -114,3 +140,68 @@ test('an explicit rollback reuses the retained local image without downloading o
   assert.ok(!result.commands.some(args => ['load', 'info'].includes(args[0])));
   assert.ok(result.commands.some(args => args.includes('--check')));
 });
+
+test('one-command production update pulls before deployment and verifies the running revision and health', t => {
+  const result = deploy(t, [], { MOCK_PREVIOUS_DEPLOYMENT: '1', MOCK_REWRITE_UPDATE: '1' }, 'update.sh');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const pull = result.commands.findIndex(args => args[0] === 'git' && args.includes('pull'));
+  const firstDocker = result.commands.findIndex(args => args[0] !== 'git');
+  const check = result.commands.findIndex(args => args.includes('--check'));
+  const updates = result.commands.filter(args => args.includes('up'));
+  const health = result.commands.findIndex(args => args.includes('exec') && args.some(arg => arg.includes('/api/health')));
+  assert.ok(pull >= 0 && firstDocker > pull && check > pull);
+  assert.deepEqual(updates.map(args => args.at(-1)), ['api', 'caddy']);
+  assert.ok(health > result.commands.indexOf(updates.at(-1)));
+  assert.ok(result.commands.some(args => args[0] === 'inspect' && args.includes('{{.Config.Image}}')));
+  assert.match(result.stdout, /Previous deployment:\nGONGLUN_IMAGE=gonglun:previous/);
+  assert.match(result.stdout, /Production update and checks passed/);
+  assert.equal(result.markerContents, `GONGLUN_IMAGE=gonglun:sha-${'0'.repeat(40)}\nGONGLUN_DEPLOY_MODE=production\n`);
+  assert.ok(!result.commands.some(args => args.includes('down') || args.includes('build') || args.includes('--volumes')));
+});
+
+for (const [scenario, environment] of Object.entries({
+  'detached checkout': { MOCK_DETACHED: '1' },
+  'no upstream branch': { MOCK_NO_UPSTREAM: '1' },
+  'local tracked edits': { MOCK_DIRTY_CHECKOUT: '1' },
+  'failed fast-forward pull': { MOCK_PULL_FAILURE: '1' },
+  'local commits ahead of upstream': { MOCK_AHEAD: '1' },
+})) {
+  test(`one-command update stops before deployment: ${scenario}`, t => {
+    const result = deploy(t, [], environment, 'update.sh');
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.ok(result.commands.every(args => args[0] === 'git'));
+    assert.equal(result.marker, false);
+    assert.match(result.stderr, /Production update failed during:/);
+  });
+}
+
+test('one-command update opens the newly pulled deployment script', t => {
+  const result = deploy(t, [], { MOCK_REWRITE_DEPLOY: '1' }, 'update.sh');
+  assert.equal(result.status, 37, result.stdout + result.stderr);
+  assert.ok(result.commands.every(args => args[0] === 'git'));
+  assert.match(result.stderr, /failed during: deploying production/);
+});
+
+test('one-command update preserves the previous deployment record when the image is unpublished', t => {
+  const result = deploy(t, [], { MOCK_MISSING_RELEASE: '1', MOCK_PREVIOUS_DEPLOYMENT: '1' }, 'update.sh');
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.ok(!result.commands.some(args => args.includes('up') || args.includes('exec')));
+  assert.equal(result.markerContents, 'GONGLUN_IMAGE=gonglun:previous\nGONGLUN_DEPLOY_MODE=production\n');
+  assert.match(result.stderr, /failed during: deploying production/);
+});
+
+for (const [scenario, environment] of Object.entries({
+  'missing API container': { MOCK_MISSING_API: '1' },
+  'unhealthy API': { MOCK_UNHEALTHY: 'api' },
+  'unhealthy proxy': { MOCK_UNHEALTHY: 'caddy' },
+  'wrong running image': { MOCK_WRONG_IMAGE: '1' },
+  'failed health request': { MOCK_HEALTH_FAILURE: '1' },
+})) {
+  test(`one-command update does not report success after a failed final check: ${scenario}`, t => {
+    const result = deploy(t, [], environment, 'update.sh');
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.ok(result.commands.some(args => args.includes('up')));
+    assert.match(result.stderr, /failed during: checking the deployment/);
+    assert.doesNotMatch(result.stdout, /Production update and checks passed/);
+  });
+}

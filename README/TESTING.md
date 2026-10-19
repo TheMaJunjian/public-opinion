@@ -32,3 +32,5 @@ npm run typecheck
 运行 `npm run test:production`，需要 Docker Compose 2.24.4+ 和空闲的本机 54443、54331 端口。脚本使用独立随机 Compose 项目与临时凭据，验证 PostgreSQL、API、Caddy 内部 CA 的 HTTPS、前端静态页面、首位用户保护、Secure Cookie、CSRF、消息写入、API 重启后的持久化、会话及登录；随后运行实际迁移 CLI，将合成旧 Prisma 数据转换到新 schema，重建生产 API 验证 bcrypt 登录、旧消息及余额、新版写入。结束后删除本轮测试容器和卷。内部 CA 测试不替代真实域名的 DNS 与公网证书验收，合成数据不替代真实备份演练。
 
 该验证显式合并仅供本地/CI 的 `docker-compose.build.yml`；生产 Compose 本身只有镜像引用。验证还将已迁移的数据切到镜像只读演练入口，检查错误目标不创建 schema、原 PostgreSQL 容器 ID/启动时间/数据卷不变，以及旧登录、余额、消息和禁止写入的行为。`test:deployment` 另行验证部署脚本在缺库、错误目标、镜像缺失或校验失败时不替换服务，并检查下载校验顺序、无构建更新、配置不改写及显式镜像回退。
+
+`test:deployment` 也通过模拟 Git、Docker 和下载命令运行 `deploy/update.sh`：验证先拉取再调用更新后的部署脚本、脚本自身被拉取覆盖时仍能完成流程，以及本地改动、上游异常、未发布镜像、容器状态异常、运行镜像不符和健康请求失败时的停止行为。这些流程测试不连接生产服务器，也不替代真实容器或公网 HTTPS 验收。

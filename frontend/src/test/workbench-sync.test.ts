@@ -7,6 +7,19 @@ const message = (id: string, revision = 1, content = id): Message => ({ id, revi
 const page = (sequence: number, messages: Message[] = []): WorkbenchSnapshot => ({ sequence, messages, relations: [], users: [], stakes: {}, tagCounts: {}, attentionUsers: {}, scope: { messageId: null, title: '公论' } });
 
 describe('authoritative workbench records', () => {
+  it('versions metadata with its message and removes every cached projection when it leaves scope', () => {
+    const store=new WorkbenchStore();
+    const current={...page(10,[message('a',2)]),tagCounts:{a:{new:2}},attentionUsers:{a:['u']}};
+    store.apply(current);
+    store.apply({...page(5,[message('a')]),tagCounts:{a:{old:1}},attentionUsers:{a:[]}});
+    expect(store.snapshot().tagCounts.a).toEqual({new:2});
+    expect(store.snapshot().attentionUsers.a).toEqual(['u']);
+    store.apply({...page(11),removedMessageIds:['a']});
+    expect(store.snapshot().tagCounts.a).toBeUndefined();
+    expect(store.snapshot().attentionUsers.a).toBeUndefined();
+    store.apply({...page(5,[message('a')]),tagCounts:{a:{old:1}}});
+    expect(store.snapshot().tagCounts.a).toBeUndefined();
+  });
   it('reports the network synchronization window separately from graph drawing', async () => {
     let resolveFirst!: (snapshot: WorkbenchSnapshot) => void;
     const load = vi.fn(({ after }: { after?: number }) => after === undefined

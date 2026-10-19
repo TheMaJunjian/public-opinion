@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useReducer, useRef } from 'react';
 
-export type DrawingTaskKind = 'projection' | 'measurement' | 'overlays' | 'positioning' | 'fonts';
+export type DrawingTaskKind = 'module' | 'projection' | 'measurement' | 'overlays' | 'positioning' | 'fonts';
 export type DrawingFailure = { kind: DrawingTaskKind | 'render'; reason: 'error' | 'timeout'; error?: unknown };
 export const WORKBENCH_DRAWING_TIMEOUT_MS = 30_000;
 

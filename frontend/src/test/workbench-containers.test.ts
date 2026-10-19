@@ -2,6 +2,7 @@ import {expect,it} from 'vitest';
 import type {Relation,Message} from '../types';
 import {convertMessagesToDemoModel,type DemoMessage,type DemoEdge} from '../utils/modelBridge';
 import {deriveGraphMessagesToRender} from '../pages/workbench/projections/graphMessagesToRender';
+import {filterMessageListContext} from '../pages/workbench/projections/messageListContext';
 import {projectJoinMembershipEdges} from '../pages/workbench/model/membership';
 import {projectGraphScene} from '../utils/graphProjection';
 import {deriveContainerEffect} from '../pages/workbench/model/containerEffect';
@@ -72,4 +73,54 @@ it('does not pull a parent classification into its descendant canvas because of 
   const projected=projectContainer(model.messages,model.edges,relations,'inner');
   expect(projected.graphMessagesToRender.map(m=>m.id)).toContain('leaf');
   expect(projected.graphMessagesToRender.map(m=>m.id)).not.toContain('parent');
+});
+
+it.each(['AGREE','DISAGREE','REFERENCE','REPLY','ANNOTATION'])('keeps old %s records with their folded content instead of at the beginning of the parent table',type=>{
+  const relation={...rel('old-relation',type,['target'],['AGREE','DISAGREE'].includes(type)?null:'source'),createdAt:'2026-01-02T00:00:00Z'};
+  const category={...rel('category','CLASSIFY',['source','target']),createdAt:'2026-01-03T00:00:00Z'};
+  const topic={...rel('topic','CLASSIFY'),targetRefs:[{kind:'relation',relationId:'category'},{kind:'relation',relationId:'old-relation'},{kind:'message',messageId:'visible'}] as Relation['targetRefs']};
+  const relations=[topic,category,relation];
+  const model=convertMessagesToDemoModel([text('source'),text('target'),{...text('visible'),createdAt:'2026-01-04T00:00:00Z'}],relations);
+  const outer=projectContainer(model.messages,model.edges,relations,'topic');
+  expect(outer.listMessagesToRender.map(m=>m.id)).toEqual(['category','visible']);
+  const inner=projectContainer(model.messages,model.edges,relations,'category');
+  expect(inner.listMessagesToRender.map(m=>m.id)).toEqual(['source','target','old-relation']);
+});
+
+it('keeps a cross-classification reference beside its visible source in chronological order',()=>{
+  const topic={...rel('topic','CLASSIFY'),targetRefs:[{kind:'relation',relationId:'category'},{kind:'relation',relationId:'reference'},{kind:'message',messageId:'source'}] as Relation['targetRefs']};
+  const relations=[topic,{...rel('category','CLASSIFY',['target']),createdAt:'2026-01-03T00:00:00Z'},
+    {...rel('reference','REFERENCE',['target'],'source'),createdAt:'2026-01-02T00:00:00Z'}];
+  const model=convertMessagesToDemoModel([text('source'),text('target')],relations);
+  const projected=projectContainer(model.messages,model.edges,relations,'topic');
+  expect(projected.listMessagesToRender.map(m=>m.id)).toEqual(['source','reference','category']);
+});
+
+it('folds a chain of relations when its original target is inside a nested classification',()=>{
+  const topic={...rel('topic','CLASSIFY'),targetRefs:['category','agree','agree-relation'].map(relationId=>({kind:'relation' as const,relationId}))};
+  const relations=[topic,rel('category','CLASSIFY',['target']),rel('agree','AGREE',['target']),
+    {...rel('agree-relation','AGREE'),targetRefs:[{kind:'relation' as const,relationId:'agree'}]}];
+  const model=convertMessagesToDemoModel([text('target')],relations);
+  const projected=projectContainer(model.messages,model.edges,relations,'topic');
+  expect(projected.listMessagesToRender.map(m=>m.id)).toEqual(['category']);
+});
+
+it('merges visible summary targets into the table in send order rather than appending them after relations',()=>{
+  const topic={...rel('topic','CLASSIFY'),targetRefs:[{kind:'relation',relationId:'summary'},{kind:'relation',relationId:'agree'}] as Relation['targetRefs']};
+  const relations=[topic,{...rel('summary','SUMMARY',['target']),createdAt:'2026-01-03T00:00:00Z'},
+    {...rel('agree','AGREE',['target']),createdAt:'2026-01-02T00:00:00Z'}];
+  const model=convertMessagesToDemoModel([text('target')],relations);
+  const projected=projectContainer(model.messages,model.edges,relations,'topic');
+  expect(projected.listMessagesToRender.map(m=>m.id)).toEqual(['target','agree','summary']);
+});
+
+it.each(['join','round','round_result'] as const)('folds votes on a filtered %s record while preserving a visible cross-scope reference',kind=>{
+  const relations=[{...rel('agree','AGREE',['target']),createdAt:'2026-01-02T00:00:00Z'},
+    {...rel('reference','REFERENCE',['target'],'source'),createdAt:'2026-01-03T00:00:00Z'}];
+  const model=convertMessagesToDemoModel([text('source'),text('target')],relations);
+  const messages=model.messages.map(message=>message.id==='target'?{...message,kind}:message);
+  const visible=messages.filter(message=>message.kind!==kind);
+  expect(filterMessageListContext(visible,messages,model.edges).map(m=>m.id)).toEqual(['source','reference']);
+  expect(filterMessageListContext(messages,messages,model.edges)).toEqual(messages);
+  expect(filterMessageListContext(visible,messages,model.edges,new Set(['agree'])).map(m=>m.id)).toEqual(['source','agree','reference']);
 });

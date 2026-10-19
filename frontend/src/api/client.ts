@@ -461,6 +461,7 @@ export function getMessageTagCounts(scopeMessageId: string) {
 
 export interface ExportData {
   format?: 'gonglun-2';
+  journal?: import('@gonglun/core').JournalManifest;
   formatVersion: number;
   exportedAt: string;
   scope: import('../types').ScopeView;
@@ -511,4 +512,19 @@ export interface ExportData {
 
 export function exportMessages(scopeMessageId: string) {
   return request<ExportData>(`/export?parent=${encodeURIComponent(scopeMessageId)}`);
+}
+
+export type ExportUpdateData = Omit<ExportData, 'format'> & {
+  format: 'gonglun-2-update';
+  regionId: string;
+  ledgerId: string;
+  base: import('@gonglun/core').ArchiveCheckpoint;
+  changes: import('@gonglun/core').Change[];
+  journal: import('@gonglun/core').JournalManifest;
+};
+
+export function updateExportMessages(scopeMessageId: string, base: import('@gonglun/core').ArchiveCheckpoint) {
+  const query = new URLSearchParams({ parent: scopeMessageId, after: String(base.sequence), baseCount: String(base.entryCount),
+    baseHash: base.hash, regionId: base.regionId, ledgerId: base.ledgerId });
+  return request<ExportUpdateData>(`/export?${query}`);
 }

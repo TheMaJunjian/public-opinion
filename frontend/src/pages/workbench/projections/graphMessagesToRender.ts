@@ -7,6 +7,7 @@ import type {
 import { isContentKind } from "../../../utils/modelBridge";
 import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMembership } from "../../../utils/traceProjection";
 import { collectContainerVisibleIds,collectOwnedByRelation,type ContainerOwnership } from '../model/ownership';
+import { filterMessageListContext } from './messageListContext';
 import type { TraceEntry } from "../types";
 
 interface DeriveGraphMessagesToRenderInput {
@@ -245,10 +246,10 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
       );
       nestedVisible.textIds.forEach(id => nestedSummaryTargetIds.add(id));
     }
-    const classificationListMessages = [
-      ...classificationMessages,
-      ...baseMessages.filter(message => nestedSummaryTargetIds.has(message.id) && !visibleIds.has(message.id)),
-    ];
+    const listVisibleIds = new Set([...visibleIds, ...nestedSummaryTargetIds]);
+    // Select from the original stream so summary targets keep their send order.
+    const classificationListMessages = filterMessageListContext(
+      baseMessages.filter(message => listVisibleIds.has(message.id)), baseMessages, baseEdges);
     // Include edges whose relation message is visible.  For CLASSIFY and SUMMARY
     // edges, keep them even when the target text messages are not in visibleIds —
     // this lets scope cards display correct target counts and lets SUMMARY compute

@@ -3,11 +3,13 @@ import type { Account, Change, Membership, Message, MessageState } from './types
 export interface Archive {
   format: 'gonglun-2'; regionId: string; ledgerId: string; programVersion: string;
   changes: Change[];
+  journal?: JournalManifest;
 }
+export interface JournalManifest { version: 1; entryCount: number; lastSequence: number }
 export interface Replay {
   messages: Message[]; memberships: Membership[];
   states: MessageState[]; revisions: Map<string, Message[]>;
-  accounts: Map<string, Account>; operating: number; issued: number; sequence: number;
+  accounts: Map<string, Account>; operating: number; issued: number; sequence: number; changeCount: number;
 }
 
 /** Replays committed results, never re-executes old transactions using today's rules. */
@@ -15,6 +17,10 @@ export function replayArchive(input: unknown): Replay {
   if (!input || typeof input !== 'object') throw new Error('不是公论导出文件');
   const archive = input as Archive;
   if (archive.format !== 'gonglun-2' || !Array.isArray(archive.changes)) throw new Error('导出文件格式不正确');
+  const manifest = archive.journal;
+  if (manifest !== undefined && (!manifest || manifest.version !== 1
+    || !Number.isSafeInteger(manifest.entryCount) || manifest.entryCount < 0
+    || !Number.isSafeInteger(manifest.lastSequence) || manifest.lastSequence < 0)) throw new Error('执行记录清单无效');
   const messages = new Map<string, Message>();
   const memberships = new Map<string, Membership>();
   const states = new Map<string, MessageState>();
@@ -27,7 +33,10 @@ export function replayArchive(input: unknown): Replay {
     return value;
   };
   for (const change of archive.changes) {
-    if (change.sequence !== sequence + 1) throw new Error(`记录不连续：缺少第 ${sequence + 1} 次变更`);
+    if (manifest && change.previousSequence === undefined) throw new Error('变更记录缺少前序游标');
+    const previous = change.previousSequence ?? change.sequence - 1;
+    if (!Number.isSafeInteger(change.sequence) || change.sequence <= sequence || previous !== sequence)
+      throw new Error(`记录不连续：游标 ${sequence} 之后的变更缺失或顺序错误`);
     if (!Array.isArray(change.messages) || !Array.isArray(change.ledger) || !Array.isArray(change.memberships) || !Array.isArray(change.removedMemberships) || !Array.isArray(change.states)) throw new Error('变更记录不完整');
     for (const message of change.messages) {
       if (!message || typeof message.id !== 'string' || !message.id || !Number.isSafeInteger(message.revision) || message.revision < 1 || !Array.isArray(message.parts)) throw new Error('消息版本不正确');
@@ -75,5 +84,7 @@ export function replayArchive(input: unknown): Replay {
     if (total !== BigInt(issued)) throw new Error(`第 ${change.sequence} 次变更资金不守恒`);
     sequence = change.sequence;
   }
-  return { messages: [...messages.values()], memberships: [...memberships.values()], states: [...states.values()], revisions, accounts, operating, issued, sequence };
+  if (manifest && (manifest.entryCount !== archive.changes.length || manifest.lastSequence !== sequence))
+    throw new Error('执行记录不完整：数量或末尾游标与清单不一致');
+  return { messages: [...messages.values()], memberships: [...memberships.values()], states: [...states.values()], revisions, accounts, operating, issued, sequence, changeCount: archive.changes.length };
 }

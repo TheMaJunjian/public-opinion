@@ -6,6 +6,7 @@ import { processDue, send } from './messages.js';
 import { changes, context, listMessages } from './queries.js';
 import { markedPage, notifications, personalMessages } from './personal.js';
 import { createUiRouter } from './ui.js';
+import { journalManifest } from './export-response.js';
 const query = z.object({ parent: z.string().max(100).optional(), cursor: z.string().max(1000).optional(), limit: z.coerce.number().int().min(1).max(100).optional(), q: z.string().max(200).optional(), relation: z.string().max(80).optional(), author: z.string().max(100).optional() }).strict();
 const personalQuery = query.extend({ filter: z.enum(['normal', 'follow', 'read', 'unread', 'block', 'archive']).optional(), after: z.coerce.number().int().nonnegative().optional() });
 export async function createApp(options: {
@@ -276,7 +277,7 @@ export async function createApp(options: {
                 ruleVersion: number;
             }) => message.ruleVersion)));
             const rules = (await Promise.all([...versions].map(async (version) => (await store.db.prepare("SELECT * FROM rule_versions WHERE version=$1").get(version))))).filter(Boolean).map(row => ({ ...row, body: undefined, rules: JSON.parse(row!.body as string) }));
-            res.json({ format: 'gonglun-2', regionId: (await store.setting('region')), ledgerId: 'local', programVersion: '2.0.0', rules: (await store.rules()), ruleHistory: rules, ...page });
+            res.json({ format: 'gonglun-2', regionId: (await store.setting('region')), ledgerId: 'local', programVersion: '2.0.0', rules: (await store.rules()), ruleHistory: rules, journal: await journalManifest(store), ...page });
         }
         catch (error) {
             next(error);

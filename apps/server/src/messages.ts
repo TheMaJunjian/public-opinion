@@ -177,6 +177,9 @@ export async function send(store: Store, user: User, raw: unknown, options: {
     });
 }
 export async function processDue(store: Store): Promise<Change | null> {
+    // Most ticks are idle. Recheck under the ledger lock only when work exists;
+    // concurrent workers still settle each due round exactly once.
+    if (!await store.db.prepare("SELECT 1 FROM rounds WHERE (body::jsonb #>> '{status}')='waiting' AND (body::jsonb #>> '{endsAt}')<=$1 LIMIT 1").get(now())) return null;
     return await store.transaction(async () => { const tx = new Mutation(store); if (!(await settleDue(tx)))
         return null; return await tx.commit(); });
 }

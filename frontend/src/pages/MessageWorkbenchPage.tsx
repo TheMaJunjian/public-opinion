@@ -1,9 +1,11 @@
+import { useWorkbenchComposer } from './workbench/useWorkbenchComposer';
 import { useRelationToolbar } from './workbench/useRelationToolbar';
 import { useWorkbenchViewport } from './workbench/useWorkbenchViewport';
 import { useWorkbenchData, VIEWER_USERNAME_KEY } from './workbench/useWorkbenchData';
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import DeferredWorkbench from '../components/DeferredWorkbench';
 import { createPortal } from 'react-dom';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { ApiError } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -46,18 +48,13 @@ import { deriveSingleButtonLabel } from './workbench/projections/singleButtonLab
 import { deriveTraceFrameIds } from './workbench/projections/traceFrameIds';
 import type { ClassifyStackEntry, DraftGroup, TraceEntry, TraceSnapshot, ViewMode } from './workbench/types';
 import ClassificationHeader from './workbench/ui/ClassificationHeader';
-import RelationRecordPopups from './workbench/ui/RelationRecordPopups';
 import RelationToolbar from './workbench/ui/RelationToolbar';
-import WorkbenchMessageList from './workbench/ui/WorkbenchMessageList';
 import WorkbenchViewToolbar from './workbench/ui/WorkbenchViewToolbar';
 
 import type { Json } from '@gonglun/core';
-import CorrectionComparisonPopup from '../components/CorrectionComparisonPopup';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { Z_INDEX } from '../constants/zIndex';
-import GraphView from '../components/GraphView';
 import { clearBrowserSelection, relationTypeName } from '../utils/graphTextSelection';
-import LeaderboardModal from '../components/LeaderboardModal';
 import { MessageJumpOverlay } from '../components/PopupOverlay';
 import PromptModal from '../components/PromptModal';
 import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress } from '../components/WorkbenchLoadingBoundary';
@@ -88,6 +85,11 @@ import { filterContainerEdgesByEffectiveJoins, getJoinRecoveryTargetIds, getJoin
 import { nextId, selKey, unitEquals } from './workbench/model/selection';
 
 // ========================= MessageWorkbenchPage =========================
+const GraphView = lazy(() => import('../components/GraphView'));
+const WorkbenchMessageList = lazy(() => import('./workbench/ui/WorkbenchMessageList'));
+const LeaderboardModal = lazy(() => import('../components/LeaderboardModal'));
+const CorrectionComparisonPopup = lazy(() => import('../components/CorrectionComparisonPopup'));
+const RelationRecordPopups = lazy(() => import('./workbench/ui/RelationRecordPopups'));
 
 
 
@@ -102,14 +104,24 @@ interface MessageWorkbenchPageProps {
 }
 
 export default function MessageWorkbenchPage({ topControlsFrozen = false, topControlsOffset = 68 }: MessageWorkbenchPageProps) {
+  const location = useLocation();
   useEffect(() => () => resetWorkbenchActivity(), []);
   return <>
-    <WorkbenchLoadingBoundary><MessageWorkbenchContent topControlsFrozen={topControlsFrozen} topControlsOffset={topControlsOffset} /></WorkbenchLoadingBoundary>
+    <WorkbenchLoadingBoundary key={location.pathname === '/viewer' ? location.key : 'online'}><MessageWorkbenchContent topControlsFrozen={topControlsFrozen} topControlsOffset={topControlsOffset} /></WorkbenchLoadingBoundary>
     <WorkbenchActivityIndicator />
   </>;
 }
 
 function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset = 68 }: MessageWorkbenchPageProps) {
+  const composer = useWorkbenchComposer();
+  const {
+    draftUnits, setDraftUnits, sourceUnits, setSourceUnits, targetUnits, setTargetUnits, activeTextSelectId,
+    setActiveTextSelectId, relationType, setRelationType, secondaryRelationType, setSecondaryRelationType,
+    subType, setSubType, subTypeCustomLabel, setSubTypeCustomLabel, relationLabel, setRelationLabel,
+    newMessageContent, setNewMessageContent, stakeAmount, setStakeAmount, relStakeAmount, setRelStakeAmount,
+    recommendationAmount, setRecommendationAmount, subTypeCustomBufferRef, savedTextOnTypeSwitchRef,
+    lastTagSecondaryRef, lastDelegationSecondaryRef,
+  } = composer;
   const reportDrawingFailure = useWorkbenchDrawingFailure();
   useWorkbenchDrawingCommit();
   const beginPositioning = useWorkbenchDrawingTask('positioning');
@@ -128,7 +140,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     setStakeCounts, messageBettorCounts, setMessageBettorCounts, authorStakes, setAuthorStakes,
     setLeaderboardRefreshVersion, registeredUsers, isPreloaded, viewerUser, setViewerUser,
     displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading,
-    tagCounts, setRelatedTraceContext,
+    tagCounts, setRelatedTraceContext, captureOptimisticRollback,
   } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode });
   useWorkbenchLoadingProgress(loading && !preloadedData, loadError, preloadedData);
   const { relationBarRef, relationLeftControlsRef, relationRightControlsRef, relationBarHeight, relationBarMinWidth, relationControlsRightOffset } = useRelationToolbar(loading);
@@ -267,64 +279,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       scheduleViewNavigation(msgId, 150);
     }
   }, [searchParams, setSearchParams]);
-
-  const [relationType, setRelationType] = useState<RelationType | null>(null);
-  const [secondaryRelationType, setSecondaryRelationType] = useState<string>("none");
-  const [subType, setSubType] = useState<string>(""); // SPAM|OFFTOPIC|LOWVALUE|IMPORTANT|CUSTOM or empty
-  const [subTypeCustomLabel, setSubTypeCustomLabel] = useState("");
-  const subTypeCustomBufferRef = useRef(""); // cache textarea content when switching away from CUSTOM subType
-  const savedTextOnTypeSwitchRef = useRef(""); // cache textarea content when switching to a text-less relation type
-  const savedTextBeforeDelegationRef = useRef("");
-  const lastTagSecondaryRef = useRef<string>("recommend"); // remember last TAG secondary selection
-  const lastDelegationSecondaryRef = useRef<'create' | 'fulfill'>('create');
-  const delegationContentBufferRef = useRef<Record<'create' | 'fulfill', string>>({ create: '', fulfill: '' });
-  const previousComposerModeRef = useRef<string>(`${relationType ?? 'plain'}::${secondaryRelationType}`);
-  const [relationLabel, setRelationLabel] = useState("");
-  const [newMessageContent, setNewMessageContent] = useState("");
   const [messageIdInput, setMessageIdInput] = useState("");
-  useEffect(() => {
-    if (relationType !== 'proposal') return;
-    if (secondaryRelationType === '终止结算' || secondaryRelationType === '分配收入') {
-      setNewMessageContent('');
-    } else if (secondaryRelationType === '充值分账') {
-      setNewMessageContent('充值总额=1000\n收入池分成=100\n指定与会者=user-id');
-    } else if (secondaryRelationType === '运营收入注入') {
-      setNewMessageContent('收入金额=1000\n来源=服务收入');
-    }
-  }, [relationType, secondaryRelationType]);
-  useEffect(() => {
-    const mode = `${relationType ?? 'plain'}::${secondaryRelationType}`;
-    const previousMode = previousComposerModeRef.current;
-    const wasDelegation = previousMode.startsWith('delegation::');
-    const isDelegation = relationType === 'delegation';
-    if (isDelegation && !wasDelegation) {
-      savedTextBeforeDelegationRef.current = newMessageContent;
-    }
-    if (previousMode.startsWith('delegation::')) {
-      const previousKind = previousMode.slice('delegation::'.length);
-      if (previousKind === 'create' || previousKind === 'fulfill') {
-        delegationContentBufferRef.current[previousKind] = newMessageContent;
-      }
-    }
-    if (relationType === 'delegation' && (secondaryRelationType === 'create' || secondaryRelationType === 'fulfill')) {
-      const saved = delegationContentBufferRef.current[secondaryRelationType];
-      setNewMessageContent(saved || (secondaryRelationType === 'create' ? '报酬数量=100\n委托内容=' : '完成说明='));
-    } else if (wasDelegation && !isDelegation) {
-      setNewMessageContent(savedTextBeforeDelegationRef.current);
-    }
-    previousComposerModeRef.current = mode;
-  }, [relationType, secondaryRelationType]);
-  useEffect(() => {
-    if (relationType !== 'delegation') return;
-    if (secondaryRelationType === 'create' || secondaryRelationType === 'fulfill') {
-      lastDelegationSecondaryRef.current = secondaryRelationType;
-    } else {
-      setSecondaryRelationType(lastDelegationSecondaryRef.current);
-    }
-  }, [relationType, secondaryRelationType]);
-  const [draftUnits, setDraftUnits] = useState<UnitSelection[]>([]);
-  const [sourceUnits, setSourceUnits] = useState<UnitSelection[]>([]);
-  const [targetUnits, setTargetUnits] = useState<UnitSelection[]>([]);
   useEffect(() => {
     const selectPart = (event: Event) => {
       const { reference, label } = (event as CustomEvent<PartSelectionDetail>).detail;
@@ -358,7 +313,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     }).join(',') || '空';
     operationLog('选择变化', `暂存区=${describe(draftUnits)} 来源集合=${describe(sourceUnits)} 目标集合=${describe(targetUnits)}`);
   }, [draftUnits, sourceUnits, targetUnits]);
-  const [activeTextSelectId, setActiveTextSelectId] = useState<string | null>(null);
   const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
   const [traceExpandedFrameIds, setTraceExpandedFrameIds] = useState<Set<string>>(new Set());
   // Counter incremented on every exitTrace/exitAllTrace to force GraphView
@@ -609,11 +563,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     relMsgId: string;
     x: number; y: number;
   } | null>(null);
-  // DEBUG
-  const [stakeAmount, setStakeAmount] = useState<number | ''>(0);
-  const [relStakeAmount, setRelStakeAmount] = useState<number | ''>(0);
   const [minSelfStake, setMinSelfStake] = useState(0);
-  const [recommendationAmount, setRecommendationAmount] = useState<number | ''>(0);
   const recommendationRef = useRef(0);
   recommendationRef.current = typeof recommendationAmount === 'number' ? recommendationAmount : 0;
   const selectedRelationRef = useRef(relationType);
@@ -2033,7 +1983,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       return;
     }
     sentMessageTargetsRef.current = [];
-    return runHandleSendClick({ sendInFlightRef, draftUnits, sourceUnits, targetUnits, activeTextSelectId, newMessageContent, relationType, secondaryRelationType, subType, subTypeCustomLabel, relationLabel, stakeAmount, relStakeAmount, recommendationAmount, messages, edges, relations, authorStakes, stakeCounts, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, savedTextBeforeDelegationRef, delegationContentBufferRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setRecommendationAmount, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setSubType, setRelationLabel, setSubTypeCustomLabel, setStakeAmount, setRelStakeAmount, setMessages, setEdges, setRelations, messagesRef, edgesRef, relationsRef, setAuthorStakes, setStakeCounts, setSendError,
+    return runHandleSendClick({ composer, captureOptimisticRollback, sendInFlightRef, setSendInFlight, handleQuickSendAndRelateFromDraftTargets, setSendError,
       onCommitted: () => {
         const committedTargets = [...sentMessageTargetsRef.current];
         setSentMessageTargets(queue => [...queue, ...committedTargets.filter(id => !queue.includes(id))]);
@@ -2790,6 +2740,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     )}
                   </div>
                 ) : viewMode === "list" ? (
+                  <DeferredWorkbench label="消息列表" blocksDrawing>
                   <WorkbenchMessageList
                     crossCanvasRelations={containerPreview?.context.crossCanvasRelations??crossCanvasRelations} onRelatedRelationView={viewRelatedRelation}
                     onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={comparisonViewIds??standaloneMessageIds}
@@ -2810,7 +2761,9 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     onNavigate={handleNavigateToMessage} onCorrectionNavigate={handleNavigateFromCorrectionTemporaryCategory}
                     renderRelation={renderRelationContentWithTargets} renderContent={renderMessageContentWithAnchorsForList}
                   />
+                  </DeferredWorkbench>
                 ) : (
+                  <DeferredWorkbench label="消息画布" blocksDrawing>
                   <GraphView
                     relatedEdges={containerPreview?.context.relatedEdges??relatedEdges} onRelatedRelationView={viewRelatedRelation}
                     relatedMessages={containerPreview?.allMessages??messages}
@@ -2870,6 +2823,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     joinStatusByMessage={containerPreview?new Map([...containerPreview.effectiveJoinIds].map(id=>[id,'valid' as const])):joinStatusByMessage}
                     onJoinFilterClick={handleJoinRecords}
                   />
+                  </DeferredWorkbench>
                 )}
                 <div aria-hidden="true" style={{ height: 96, flexShrink: 0 }} />
               </div>
@@ -3068,7 +3022,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         onCancel={() => setConfirmStandaloneSend(false)}
       />
 
-      <LeaderboardModal
+      {showLeaderboard && <DeferredWorkbench label="排行榜"><LeaderboardModal
         open={showLeaderboard}
         onClose={() => setShowLeaderboard(false)}
         onRefresh={() => setLeaderboardRefreshVersion(version => version + 1)}
@@ -3078,7 +3032,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         users={registeredUsers}
         stakeCounts={stakeCounts}
         messageBettorCounts={messageBettorCounts}
-      />
+      /></DeferredWorkbench>}
 
       <PromptModal
         open={alertMessage !== null}
@@ -3088,9 +3042,12 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         onConfirm={() => setAlertMessage(null)}
       />
 
-      <RelationRecordPopups messages={messages} edges={edges} decorationPopup={decorationPopup} tagPopup={tagPopup} mergeInfoPopup={mergeInfoPopup}
-        onCloseDecoration={() => setDecorationPopup(null)} onCloseTag={() => setTagPopup(null)} onCloseMerge={() => setMergeInfoPopup(null)} />
+      {(decorationPopup || tagPopup || mergeInfoPopup) && <DeferredWorkbench label="关系记录">
+        <RelationRecordPopups messages={messages} edges={edges} decorationPopup={decorationPopup} tagPopup={tagPopup} mergeInfoPopup={mergeInfoPopup}
+          onCloseDecoration={() => setDecorationPopup(null)} onCloseTag={() => setTagPopup(null)} onCloseMerge={() => setMergeInfoPopup(null)} />
+      </DeferredWorkbench>}
       {comparisonPopup && (
+        <DeferredWorkbench label="更正对比">
         <CorrectionComparisonPopup
           popup={comparisonPopup}
           messages={messages}
@@ -3108,6 +3065,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
             onConfirm: confirmReverseCorrection,
           } : undefined}
         />
+        </DeferredWorkbench>
       )}
     </>
   );

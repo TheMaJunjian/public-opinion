@@ -71,7 +71,7 @@ describe('export viewer verification', () => {
     const old = { ...view, topic: { id: 'old-topic', title: '旧版讨论' } };
     sessionStorage.setItem('lastExportData', JSON.stringify(old));
     render(<MemoryRouter><ExportViewerModal open onClose={vi.fn()} /></MemoryRouter>);
-    expect(screen.getByRole('button', { name: /上次阅览：旧版讨论/ })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: /上次阅览：旧版讨论/ })).toBeEnabled();
     fireEvent.change(screen.getByLabelText('选择导出文件'), { target: { files: [new File([JSON.stringify(old)], '旧版讨论.json', { type: 'application/json' })] } });
     expect(await screen.findByRole('button', { name: '阅览此文件' })).toBeEnabled();
     expect(screen.queryByRole('alert')).toBeNull();

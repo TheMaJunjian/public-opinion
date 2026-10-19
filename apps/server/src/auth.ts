@@ -60,13 +60,16 @@ export function checkOrigin(req:Request) {
   const origin=req.get('origin');
   if(origin){let host:string;try{host=new URL(origin).host;}catch{throw new DomainError('不允许跨站写入',403);}if(host!==req.get('host'))throw new DomainError('不允许跨站写入',403);}
 }
-async function establish(store:Store,userId:string,res:Response,deviceId?:string):Promise<Session> {
+async function createSession(store:Store,userId:string,deviceId?:string):Promise<{raw:string;session:Session}> {
   const raw=token(), csrf=token();
   await store.db.prepare('DELETE FROM sessions WHERE expires<$1').run(Date.now());
   await store.db.prepare('INSERT INTO sessions(token,"userId",csrf,expires,"deviceId") VALUES ($1,$2,$3,$4,$5)').run(hash(raw),userId,csrf,Date.now()+30*86400000,deviceId??null);
-  res.cookie('gonglun_session',raw,{httpOnly:true,sameSite:'strict',secure:res.req.secure,maxAge:30*86400000,path:'/'});
   const key=deviceId?await store.db.prepare('SELECT "publicKey" FROM signing_keys WHERE "userId"=$1 AND "deviceId"=$2').get(userId,deviceId):undefined;
-  return {user:{...await store.user(userId),...(key?{publicKey:String(key.publicKey)}:{})},account:await store.account(userId),rules:await store.rules(),csrf};
+  return {raw,session:{user:{...await store.user(userId),...(key?{publicKey:String(key.publicKey)}:{})},account:await store.account(userId),rules:await store.rules(),csrf}};
+}
+function establish(authentication:Awaited<ReturnType<typeof createSession>>,res:Response):Session {
+  res.cookie('gonglun_session',authentication.raw,{httpOnly:true,sameSite:'strict',secure:res.req.secure,maxAge:30*86400000,path:'/'});
+  return authentication.session;
 }
 export async function register(store:Store,input:unknown,res:Response) {
   const data=credentials.extend({founderKey:z.string().max(200).optional(),...signingFields}).parse(normalizeCredentials(input)),salt=token();
@@ -87,9 +90,10 @@ export async function register(store:Store,input:unknown,res:Response) {
     const message=await distribution(tx,undefined,{source:'grant',total:grant,ruleVersion:rules.version,inputs:{reason:'initial-grant'},allocations:[{userId,amount:grant,reason:'初始发放',messageIds:[]}]});
     await store.ledger(userId,message.id,grant,0,'初始发放');
     await store.set('minted',integer(await store.setting<number>('minted')+grant));
-    return tx.commit();
+    const change=await tx.commit();
+    return {authentication:await createSession(store,userId,data.deviceId),change};
   });
-  return {session:await establish(store,userId,res,data.deviceId),change:result};
+  return {session:establish(result.authentication,res),change:result.change};
 }
 export async function login(store:Store,input:unknown,res:Response):Promise<Session> {
   const data=credentials.extend(signingFields).parse(normalizeCredentials(input));
@@ -103,8 +107,11 @@ export async function login(store:Store,input:unknown,res:Response):Promise<Sess
     valid=!!row && /^[a-f0-9]{128}$/.test(encoded??'') && timingSafeEqual(computed,Buffer.from(encoded!,'hex'));
   }
   if(!valid||!row) throw new DomainError('用户名或密码错误',401);
-  await bindKey(store,row.id,data.deviceId,data.publicKey);
-  return establish(store,row.id,res,data.deviceId);
+  const authentication=await store.sessionTransaction(async()=>{
+    await bindKey(store,row.id,data.deviceId,data.publicKey);
+    return createSession(store,row.id,data.deviceId);
+  });
+  return establish(authentication,res);
 }
 export async function rotateSigningKey(store:Store,req:Request,res:Response):Promise<Session> {
   const session=await requireCsrf(store,req);

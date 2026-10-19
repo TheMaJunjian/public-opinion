@@ -1,10 +1,11 @@
+import { useWorkbenchRecords } from './useWorkbenchRecords';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, type NavigateFunction } from 'react-router-dom';
 import { api } from '../../api';
 import type { ExportData } from '../../api/client';
 import { syncWorkbench } from '../../data/workbench';
-import type { Relation, ScopeView, User } from '../../types';
-import type { DemoEdge, DemoMessage } from '../../utils/modelBridge';
+import type { User } from '../../types';
+import type { DemoEdge } from '../../utils/modelBridge';
 import type { ViewMode } from './types';
 import { computeCorrectionVersions, computeEffectiveSuppressedRelIds } from '../../utils/modelBridge';
 import { archiveToWorkbenchSnapshot, projectWorkbenchSnapshot } from '../../utils/workbenchProjection';
@@ -24,16 +25,13 @@ export interface WorkbenchDataInput {
 
 /** Owns snapshot loading, incremental synchronization and exported-data viewing. */
 export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode }: WorkbenchDataInput) {
+  const records = useWorkbenchRecords();
+  const { tagCounts, scope, messages, edges, relations, attentionUsersByTarget, stakeCounts, messageBettorCounts, authorStakes, registeredUsers, setMessages, setEdges, setRelations, setStakeCounts, setMessageBettorCounts, setAuthorStakes } = records;
   const startProjection = useWorkbenchDrawingTask('projection');
   const graphViewRef = useRef(viewMode === 'graph');
   graphViewRef.current = viewMode === 'graph';
   const [loading, setLoading] = useState(true);
-  const [tagCounts, setTagCounts] = useState<Record<string, Record<string, number>>>({});
-  const [scope, setScope] = useState<ScopeView | null>(null);
-  const [messages, setMessages] = useState<DemoMessage[]>([]);
-  const [edges, setEdges] = useState<DemoEdge[]>([]);
   const edgesRef = useRef<DemoEdge[]>([]);
-  const [relations, setRelations] = useState<Relation[]>([]);
   const [relatedTraceContext, setRelatedTraceContext] = useState<RelatedTraceContext | null>(null);
   const viewMessages = useMemo(() => relatedTraceContext
     ? [...new Map([...relatedTraceContext.messages, ...messages].map(message => [message.id, message])).values()] : messages, [messages, relatedTraceContext]);
@@ -41,16 +39,10 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     ? [...new Map([...relatedTraceContext.edges, ...edges].map(edge => [edge.id, edge])).values()] : edges, [edges, relatedTraceContext]);
   const viewRelations = useMemo(() => relatedTraceContext
     ? [...new Map([...relatedTraceContext.relations, ...relations].map(relation => [relation.id, relation])).values()] : relations, [relations, relatedTraceContext]);
-  const [attentionUsersByTarget, setAttentionUsersByTarget] = useState<Record<string, string[]>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showUnauthenticatedNotice, setShowUnauthenticatedNotice] = useState(false);
   const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
-  // Per-message stake counts, split by TRUTH/VALUE settlement type
-  const [stakeCounts, setStakeCounts] = useState<Record<string, { truth: { pro: number; con: number }; value: { pro: number; con: number } }>>({});
-  const [messageBettorCounts, setMessageBettorCounts] = useState<Record<string, number>>({});
-  const [authorStakes, setAuthorStakes] = useState<Record<string, number>>({});
   const [leaderboardRefreshVersion, setLeaderboardRefreshVersion] = useState(0);
-  const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   const [isPreloaded, setIsPreloaded] = useState(false);
   const [viewerUser, setViewerUser] = useState<User | null>(() => {
     const username = localStorage.getItem(VIEWER_USERNAME_KEY)?.trim();
@@ -92,16 +84,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
             setRelatedTraceContext(null);
             setLoadError(null);
             if (graphViewRef.current) beginWorkbenchDrawing();
-            setScope(snapshot.scope);
-            setMessages(projected.messages);
-            setEdges(projected.edges);
-            setRelations(projected.relations);
-            setRegisteredUsers(snapshot.users);
-            setAttentionUsersByTarget(snapshot.attentionUsers);
-            setTagCounts(snapshot.tagCounts);
-            setStakeCounts(projected.counts);
-            setMessageBettorCounts(projected.bettors);
-            setAuthorStakes(projected.authorAmounts);
+            records.replace(snapshot, projected);
             setLoading(false);
             setIsPreloaded(true);
             setLoadedExport(preloadedData);
@@ -139,16 +122,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
       onSnapshot(snapshot) {
         if (graphViewRef.current) beginWorkbenchDrawing();
         const projected = projectWorkbenchSnapshot(snapshot);
-        setScope(snapshot.scope);
-        setMessages(projected.messages);
-        setEdges(projected.edges);
-        setRelations(projected.relations);
-        setRegisteredUsers(snapshot.users);
-        setAttentionUsersByTarget({ ...snapshot.attentionUsers });
-        setTagCounts({ ...snapshot.tagCounts });
-        setStakeCounts(projected.counts);
-        setAuthorStakes(projected.authorAmounts);
-        setMessageBettorCounts(projected.bettors);
+        records.replace(snapshot, projected);
         setIsPreloaded(false);
         setLoading(false);
         setLoadError(null);
@@ -199,6 +173,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
 
 
   return {
+    captureOptimisticRollback: records.captureOptimisticRollback,
     scope, messages: viewMessages, setMessages, edges: viewEdges, setEdges,
     edgesRef, relations: viewRelations, setRelations, attentionUsersByTarget, loadError, setRelatedTraceContext,
     showUnauthenticatedNotice, setShowUnauthenticatedNotice, showRegistrationGuide, setShowRegistrationGuide, stakeCounts,

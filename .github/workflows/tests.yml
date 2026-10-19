@@ -20,6 +20,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run build
+      - run: npm run test:bundle
       - name: Start PostgreSQL for integration tests
         run: npm run db:up
       - run: npm test

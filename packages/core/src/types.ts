@@ -88,7 +88,10 @@ export interface MessageState {
   membershipActive?: boolean;
 }
 export interface Change {
-  sequence: number; messages: Message[]; memberships: Membership[];
+  sequence: number;
+  /** Previous committed cursor; PostgreSQL may consume sequence values on rollback. */
+  previousSequence?: number;
+  messages: Message[]; memberships: Membership[];
   removedMemberships: string[];
   states: MessageState[];
   ledger: LedgerEntry[];

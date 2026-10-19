@@ -15,6 +15,7 @@ import { messageScopePath } from '../../../utils/messageRoutes';
 import { type CorrectionVersion, type DemoEdge, type DemoMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
 import { formatCorrectionRange } from '../model/correction';
 import { collectOwnedByRelation } from '../model/ownership';
+import { filterMessageListContext } from '../projections/messageListContext';
 
 interface MessageCatalog {
   messages: DemoMessage[];
@@ -88,12 +89,17 @@ export default function WorkbenchMessageList(props: Props) {
   const { comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap, stanceEffectByRelMsgId } = props.comparison;
   const { draftUnits, activeTextSelectId, lastClickedMessageId } = props.selection;
   const relatedByTarget=useMemo(()=>indexRelatedMessages(messages,rejectedContainerIds),[messages,rejectedContainerIds]);
+  const standaloneMessageIds = props.standaloneMessageIds;
+  const listMessages = useMemo(() => filterMessageListContext(
+    messagesToRenderFiltered
+      .filter(msg => !tagSourceIdsForList.has(msg.id))
+      .filter(msg => !isRejectedContainer(msg,rejectedContainerIds) || standaloneMessageIds?.has(msg.id)),
+    messages, edges, standaloneMessageIds,
+  ), [messagesToRenderFiltered, messages, edges, tagSourceIdsForList, rejectedContainerIds, standaloneMessageIds]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      {messagesToRenderFiltered
-        .filter(msg => !tagSourceIdsForList.has(msg.id))
-        .filter(msg=>!isRejectedContainer(msg,rejectedContainerIds)||props.standaloneMessageIds?.has(msg.id))
+      {listMessages
         .map(msg => {
           const isWholeSelected = draftUnits.some(u => isWholeMessageSelection(u, msg.id));
           const isActiveText = activeTextSelectId === msg.id;

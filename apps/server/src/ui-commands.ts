@@ -51,9 +51,15 @@ export async function referenceFrom(store: Store, raw: RecordData): Promise<Refe
     return ref;
 }
 function membership(parent: string): Part[] { return parent === 'root' ? [] : [relation('member-of', { parent: [{ messageId: parent }] }, 'placement')]; }
+async function submit(context: CommandContext, parts: Part[], body: RecordData) {
+    return send(context.store, context.user, { requestId: context.requestId, parts, recommendation: number(body.recommendation), wager: number(body.wager), ...(body.selfAgree ? { selfStance: 'pro' } : {}) }, { messageId: context.messageId, signature: context.signature });
+}
 async function publish(context: CommandContext, parts: Part[], body: RecordData) {
-    const result = (await send(context.store, context.user, { requestId: context.requestId, parts, recommendation: number(body.recommendation), wager: number(body.wager), ...(body.selfAgree ? { selfStance: 'pro' } : {}) }, { messageId: context.messageId, signature: context.signature }));
-    return result.message;
+    return (await submit(context, parts, body)).message;
+}
+async function publishView(context: CommandContext, parts: Part[], body: RecordData, parent: string) {
+    const result = await submit(context, parts, body);
+    return messageView(context.store, result.message, parent, result.change.states.find(state => state.messageId === result.message.id));
 }
 async function validateParent(store: Store, parent: string) { if (parent === 'root')
     return; if (!organization((await store.message(parent))))
@@ -76,8 +82,7 @@ export async function createContent(context: CommandContext, parent: string, bod
         parts.push(relation('operations', {}));
     parts.push({ id: 'data', type: 'data', value: meta }, ...membership(parent));
     const recommendation = body.recommendation ?? (!body.selfAgree ? body.stakeAmount : 0), wager = body.wager ?? (body.selfAgree ? body.stakeAmount : 0);
-    const message = (await publish(context, parts, { ...body, recommendation, wager }));
-    return (await messageView(context.store, message, parent));
+    return publishView(context, parts, { ...body, recommendation, wager }, parent);
 }
 const names: Record<string, string> = { ATTENTION: 'follow', CORRECT: 'amend', PROPOSAL: 'proposal', CODE_CHANGE: 'code-change', JOIN: 'member-of' };
 export async function createRelation(context: CommandContext, parent: string, body: RecordData) {
@@ -154,8 +159,7 @@ export async function createRelation(context: CommandContext, parent: string, bo
     }
     const stance = name === 'agree' || name === 'disagree';
     const wager = body.wager ?? (stance ? body.stakeAmount : 0), recommendation = body.recommendation ?? (!stance ? body.stakeAmount : 0);
-    const message = (await publish(context, parts, { ...body, wager, recommendation }));
-    return (await messageView(store, message, parent));
+    return publishView(context, parts, { ...body, wager, recommendation }, parent);
 }
 export async function createRound(context: CommandContext, target: string, body: RecordData) {
     const value = body.settlementType === 'VALUE';
@@ -213,7 +217,7 @@ export async function executeBatch(store: Store, user: User, input: unknown, sig
     const body = batchSchema.parse(input), serialized = JSON.stringify(body);
     if (new Set(body.commands.map(c => c.id)).size !== body.commands.length)
         throw new DomainError('命令编号不可重复');
-    return (await store.transaction(async () => {
+    const receipt = await store.transaction(async () => {
         const before = (await store.db.prepare("SELECT input,result FROM command_requests WHERE \"userId\"=$1 AND \"requestId\"=$2").get(user.id, body.requestId));
         if (before) {
             if (before.input !== serialized)
@@ -223,13 +227,24 @@ export async function executeBatch(store: Store, user: User, input: unknown, sig
         const after = await store.latestSequence();
         // Later commands may reference messages created earlier in this batch.
         const results=[];
-        for(const command of body.commands)results.push(await executeCommand({store,user,requestId:command.id,messageId:command.id,signature},command.method,command.path,command.body));
-        // Return every committed record, including generated JOINs and membership
-        // state changes, so the sender does not have to wait for the event stream.
+        // The batch owns rollback. Individual commands need no extra savepoint
+        // around their existing send transaction; any failure aborts the batch.
+        for(const command of body.commands)results.push(await executeWithinTransaction({store,user,requestId:command.id,messageId:command.id,signature},command.method,command.path,command.body));
         const parents = new Set(body.commands.map(command => typeof command.body.parentMessageId === 'string' ? command.body.parentMessageId : 'root'));
-        const snapshots = await Promise.all([...parents].map(parent => snapshot(store, parent, { after }, user.id)));
-        const result = { results, snapshots, sequence: (await store.latestSequence()) };
+        // Persist the command outcome before doing transport-only projection work.
+        const result = { results, sequence: (await store.latestSequence()), projection: { after, parents: [...parents] } };
         (await store.db.prepare("INSERT INTO command_requests VALUES ($1,$2,$3,$4)").run(user.id, body.requestId, serialized, JSON.stringify(result)));
         return result;
-    }));
+    });
+    // Receipts written before this boundary was introduced already contain snapshots.
+    if (!receipt.projection) return receipt;
+    const { projection, ...result } = receipt;
+    try {
+        const snapshots = await store.read(() => Promise.all((projection.parents as string[])
+            .map(parent => snapshot(store, parent, { after: projection.after }, user.id))));
+        return { ...result, snapshots };
+    } catch (error) {
+        console.error('命令已提交，工作台快照将在增量同步时恢复', error);
+        return result;
+    }
 }

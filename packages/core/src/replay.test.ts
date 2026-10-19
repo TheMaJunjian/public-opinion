@@ -23,3 +23,22 @@ it('preserves historical versions and executed display state after content is ed
   expect(result.revisions.get(source.id)?.map(message => message.revision)).toEqual([1, 2]);
   expect(() => replayArchive(archive([{ ...first, messages: [{ ...source, parts: [null as never] }] }]))).toThrow('部件');
 });
+
+it('accepts rollback gaps only when the committed predecessor chain is complete', () => {
+  const start = { ...first, previousSequence: 0 };
+  const next = { ...first, sequence: 3, previousSequence: 1, messages: [], ledger: [] };
+  const last = { ...next, sequence: 5, previousSequence: 3 };
+  expect(replayArchive(archive([start, next, last])).sequence).toBe(5);
+  expect(() => replayArchive(archive([start, last]))).toThrow('不连续');
+  expect(() => replayArchive(archive([next, last]))).toThrow('不连续');
+  expect(() => replayArchive(archive([start, next, next]))).toThrow('不连续');
+});
+
+it('checks the declared journal head and count, including an omitted final page', () => {
+  const journal = { version: 1, entryCount: 2, lastSequence: 3 };
+  const start = { ...first, previousSequence: 0 };
+  const next = { ...first, sequence: 3, previousSequence: 1, messages: [], ledger: [] };
+  expect(() => replayArchive({ ...archive([start]), journal })).toThrow('不完整');
+  expect(replayArchive({ ...archive([start, next]), journal }).changeCount).toBe(2);
+  expect(() => replayArchive({ ...archive([first]), journal: { version: 1, entryCount: 1, lastSequence: 1 } })).toThrow('前序');
+});

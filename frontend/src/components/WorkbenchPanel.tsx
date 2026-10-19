@@ -1,16 +1,17 @@
 import { messageScopePath } from '../utils/messageRoutes';
-import { useMemo, useRef } from 'react';
+import { lazy, useMemo, useRef } from 'react';
+import DeferredWorkbench from './DeferredWorkbench';
 import { describeUnit as describeVisibleSelection } from '../utils/selectionLabel';
 import { isWholeMessageSelection } from '../utils/messageElementSelection';
 import type { User } from '../types';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import MessageRelationsView from './MessageRelationsView';
-import StanceHistoryPanel from './StanceHistoryPanel';
-import AuditLogView from './AuditLogView';
 import OperationLogView from './OperationLogView';
-import RevenuePanel from './RevenuePanel';
 import StagedMessageLabel from './StagedMessageLabel';
 import { useNavigate } from 'react-router-dom';
+const StanceHistoryPanel = lazy(() => import('./StanceHistoryPanel'));
+const AuditLogView = lazy(() => import('./AuditLogView'));
+const RevenuePanel = lazy(() => import('./RevenuePanel'));
 
 interface DraftGroup {
   messageId: string;
@@ -597,7 +598,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </button>
         </div>
         {p.showStanceHistory && p.user && (
-          <div style={{ marginTop: 8 }}><StanceHistoryPanel userId={p.user.id} scopeMessageId={p.scopeMessageId} /></div>
+          <div style={{ marginTop: 8 }}><DeferredWorkbench label="表态历史"><StanceHistoryPanel userId={p.user.id} scopeMessageId={p.scopeMessageId} /></DeferredWorkbench></div>
         )}
       </div>
 
@@ -611,7 +612,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </button>
         </div>
         {p.showAuditLog && (
-          <div style={{ marginTop: 8 }}><AuditLogView scopeMessageId={p.scopeMessageId} /></div>
+          <div style={{ marginTop: 8 }}><DeferredWorkbench label="执行历史"><AuditLogView scopeMessageId={p.scopeMessageId} /></DeferredWorkbench></div>
         )}
       </div>
 
@@ -625,7 +626,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           </button>
         </div>
         {p.showRevenue && (
-          <div style={{ marginTop: 8 }}><RevenuePanel /></div>
+          <div style={{ marginTop: 8 }}><DeferredWorkbench label="收入记录"><RevenuePanel /></DeferredWorkbench></div>
         )}
       </div>
 

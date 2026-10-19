@@ -1,0 +1,240 @@
+{
+  "createdAt": "2026-10-19T10:11:44.000Z",
+  "sourceSha256": {
+    "postgres.ts": "beb7d8fc996c36e0bd0852f2478e3e4e4d693caa3f7136345aec104f878a93ac",
+    "db.ts": "6479fa419f074499a29cb5c5a218c3bbbd36b10f9af2ea4a2e11da2ad8d7084c",
+    "auth.ts": "1fd1b2281ebec54d55e41bc7221699e06fdc9a3e62390d98e04639f26f1fc340",
+    "messages.ts": "0db487455fa6ed737c2af3759b66a0a6b08cdb707378aa1533abdd5340937c27"
+  },
+  "environment": {
+    "node": "v24.14.1",
+    "platform": "win32",
+    "cpu": "Intel(R) Core(TM) i7-14700F",
+    "logicalCpus": 28,
+    "postgres": "16.13"
+  },
+  "workload": {
+    "processes": 2,
+    "users": 8,
+    "repetitions": 3,
+    "concurrency": [
+      1,
+      8,
+      24
+    ],
+    "requestsPerPhase": 192,
+    "writePercent": 75,
+    "transport": "localhost HTTP, UI command batches + incremental snapshots",
+    "settlementTickMs": 1000
+  },
+  "phases": [
+    {
+      "repetition": 1,
+      "concurrency": 1,
+      "requests": 192,
+      "durationMs": 11890,
+      "requestsPerSecond": 16.15,
+      "reads": {
+        "count": 48,
+        "p50Ms": 3.17,
+        "p95Ms": 7.67,
+        "p99Ms": 15.44
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 75.12,
+        "p95Ms": 119.5,
+        "p99Ms": 147.28
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 1,
+      "maxConnections": 4
+    },
+    {
+      "repetition": 1,
+      "concurrency": 8,
+      "requests": 192,
+      "durationMs": 8982,
+      "requestsPerSecond": 21.38,
+      "reads": {
+        "count": 48,
+        "p50Ms": 2.69,
+        "p95Ms": 18.04,
+        "p99Ms": 28.74
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 451.61,
+        "p95Ms": 838.09,
+        "p99Ms": 1061.86
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 9,
+      "maxConnections": 11
+    },
+    {
+      "repetition": 1,
+      "concurrency": 24,
+      "requests": 192,
+      "durationMs": 6198,
+      "requestsPerSecond": 30.98,
+      "reads": {
+        "count": 48,
+        "p50Ms": 13.17,
+        "p95Ms": 44.9,
+        "p99Ms": 57.37
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 1092.12,
+        "p95Ms": 1365.73,
+        "p99Ms": 1424.65
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 17,
+      "maxConnections": 20
+    },
+    {
+      "repetition": 2,
+      "concurrency": 1,
+      "requests": 192,
+      "durationMs": 11505,
+      "requestsPerSecond": 16.69,
+      "reads": {
+        "count": 48,
+        "p50Ms": 3.14,
+        "p95Ms": 7.55,
+        "p99Ms": 12.28
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 69.41,
+        "p95Ms": 135.7,
+        "p99Ms": 249.97
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 1,
+      "maxConnections": 20
+    },
+    {
+      "repetition": 2,
+      "concurrency": 8,
+      "requests": 192,
+      "durationMs": 6637,
+      "requestsPerSecond": 28.93,
+      "reads": {
+        "count": 48,
+        "p50Ms": 2.25,
+        "p95Ms": 6.26,
+        "p99Ms": 9.07
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 356.48,
+        "p95Ms": 520.49,
+        "p99Ms": 591.85
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 9,
+      "maxConnections": 20
+    },
+    {
+      "repetition": 2,
+      "concurrency": 24,
+      "requests": 192,
+      "durationMs": 8459,
+      "requestsPerSecond": 22.7,
+      "reads": {
+        "count": 48,
+        "p50Ms": 13.95,
+        "p95Ms": 27.96,
+        "p99Ms": 50.89
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 1281.6,
+        "p95Ms": 2265.39,
+        "p99Ms": 2307.19
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 17,
+      "maxConnections": 20
+    },
+    {
+      "repetition": 3,
+      "concurrency": 1,
+      "requests": 192,
+      "durationMs": 12455,
+      "requestsPerSecond": 15.42,
+      "reads": {
+        "count": 48,
+        "p50Ms": 2.71,
+        "p95Ms": 8.39,
+        "p99Ms": 9.92
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 76.36,
+        "p95Ms": 151.05,
+        "p99Ms": 209.66
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 2,
+      "maxConnections": 19
+    },
+    {
+      "repetition": 3,
+      "concurrency": 8,
+      "requests": 192,
+      "durationMs": 6206,
+      "requestsPerSecond": 30.94,
+      "reads": {
+        "count": 48,
+        "p50Ms": 2.01,
+        "p95Ms": 7.23,
+        "p99Ms": 13.61
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 335.44,
+        "p95Ms": 526.43,
+        "p99Ms": 566.57
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 9,
+      "maxConnections": 19
+    },
+    {
+      "repetition": 3,
+      "concurrency": 24,
+      "requests": 192,
+      "durationMs": 6166,
+      "requestsPerSecond": 31.14,
+      "reads": {
+        "count": 48,
+        "p50Ms": 12.22,
+        "p95Ms": 32.7,
+        "p99Ms": 48
+      },
+      "writes": {
+        "count": 144,
+        "p50Ms": 966.85,
+        "p95Ms": 1829.62,
+        "p99Ms": 2008.78
+      },
+      "errors": [],
+      "maxAdvisoryWaiters": 17,
+      "maxConnections": 19
+    }
+  ],
+  "integrity": {
+    "concurrentRetries": 32,
+    "retryCommits": 1,
+    "overspendAttempts": 24,
+    "overspendCommits": 1,
+    "committedWrites": 1314,
+    "journalEntries": 1322,
+    "accountsReplayed": 8,
+    "passed": true
+  }
+}

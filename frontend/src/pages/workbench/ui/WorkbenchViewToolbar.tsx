@@ -1,4 +1,4 @@
-import type { ComponentProps, Dispatch, MutableRefObject, ReactNode, RefObject, SetStateAction } from 'react';
+import { lazy, useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { api } from '../../../api';
 import CleanFilterPanel from '../../../components/CleanFilterPanel';
 import HomeFilterPanel from '../../../components/HomeFilterPanel';
@@ -9,6 +9,10 @@ import type { DemoMessage, UnitSelection } from '../../../utils/modelBridge';
 import { resolveNavigationTargetId } from '../model/navigation';
 import { validateExportForViewing } from '../../../utils/exportArchive';
 import type { ExportData } from '../../../api/client';
+import { downloadExport } from '../../../utils/saveExport';
+import DeferredWorkbench from '../../../components/DeferredWorkbench';
+
+const UpdateExportModal = lazy(() => import('../../../components/UpdateExportModal'));
 type ViewMode = 'list' | 'graph';
 interface ViewNavigation {
   viewMode: ViewMode; setViewMode: Dispatch<SetStateAction<ViewMode>>;
@@ -35,6 +39,7 @@ interface Props {
   correctionFilterTargetId: string | null; onLeaderboard: () => void;
 }
 export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, showAlert, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard }: Props) {
+  const [updatingExport, setUpdatingExport] = useState(false);
   const { viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation } = view;
   const { singleSideReview, comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison } = comparison;
   return (
@@ -56,18 +61,16 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
                 messageFilter: { ...filter.settings }, homeFilter: home.mode,
                 cleanFilters: clean.filters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
               } };
-              const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `${exportTitle}.json`;
-              a.click();
-              URL.revokeObjectURL(url);
+              downloadExport(data, `${exportTitle}.json`);
             } catch (e: unknown) {
               showAlert(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
             }
           }} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
             导出
+          </button>
+          <button onClick={() => setUpdatingExport(true)} title="补入新增记录，更新已有的导出文件"
+            style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #4a9eff', background: '#1a3a5c', color: '#4a9eff', fontSize: 12, cursor: 'pointer' }}>
+            更新导出
           </button>
           <HomeFilterPanel {...home} />
           <CleanFilterPanel {...clean} />
@@ -130,6 +133,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
       </div>
       </div>
       {scopeHeader}
+      {updatingExport && <DeferredWorkbench label="导出窗口"><UpdateExportModal onClose={() => setUpdatingExport(false)} /></DeferredWorkbench>}
     </div>
 
   );

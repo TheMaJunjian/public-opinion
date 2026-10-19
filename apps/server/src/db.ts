@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_RULES, type Account, type Change, type LedgerEntry, type Membership, type Message, type Rules, type User } from '@gonglun/core';
-import { initializeProjections, statesFor } from './projections.js';
-import { initializePersonal } from './personal-actions.js';
+import { type Account, type Change, type LedgerEntry, type Membership, type Message, type Rules, type User } from '@gonglun/core';
+import { statesFor } from './projections.js';
 import { Postgres } from './postgres.js';
-import { schemaSql } from './schema.js';
-import { initializeOrganizationMemberships } from './organizations.js';
+import { migrationsFor, runMigrations } from './migrations.js';
 
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();
@@ -24,28 +22,27 @@ export class Store {
         await store.db.exec(`CREATE SCHEMA IF NOT EXISTS "${store.db.schema}"`);
         const legacy = await store.db.prepare(`SELECT to_regclass('"User"') AS users, to_regclass('"Message"') AS messages`).get();
         if (legacy?.users || legacy?.messages) throw new Error('检测到旧 Prisma 数据库；请先完成 PostgreSQL 业务数据迁移，禁止自动初始化新版表');
-        await store.db.exec(schemaSql);
-        for (const [key, value] of Object.entries({ rules: DEFAULT_RULES, operating: 0, region: id(), minted: 0 })) {
-          await store.db.prepare('INSERT INTO settings VALUES ($1,$2) ON CONFLICT(key) DO NOTHING').run(key, JSON.stringify(value));
-        }
-        await store.db.prepare('INSERT INTO rule_versions VALUES ($1,$2,NULL,$3) ON CONFLICT(version) DO NOTHING').run(DEFAULT_RULES.version, JSON.stringify(DEFAULT_RULES), now());
-        await initializeProjections(store);
-        await initializePersonal(store);
-        await initializeOrganizationMemberships(store);
+        await runMigrations(store.db, migrationsFor(store));
       });
       return store;
     } catch (error) { await store.close(); throw error; }
   }
 
   transaction<T>(fn: () => T | Promise<T>): Promise<T> { return this.db.transaction(fn); }
+  sessionTransaction<T>(fn: () => T | Promise<T>): Promise<T> { return this.db.session(fn); }
   read<T>(fn: () => T | Promise<T>): Promise<T> { return this.db.read(fn); }
   async setting<T>(key: string): Promise<T> {
-    const row = await this.db.prepare('SELECT value FROM settings WHERE key=$1').get(key);
-    if (!row) throw new DomainError('设置不存在');
-    return JSON.parse(row.value) as T;
+    const value = await this.db.cachedSetting(key, async () => {
+      const row = await this.db.prepare('SELECT value FROM settings WHERE key=$1').get(key);
+      if (!row) throw new DomainError('设置不存在');
+      return String(row.value);
+    });
+    return JSON.parse(value) as T;
   }
   async set(key: string, value: unknown): Promise<void> {
-    await this.db.prepare('INSERT INTO settings VALUES ($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
+    const serialized = JSON.stringify(value);
+    await this.db.prepare('INSERT INTO settings VALUES ($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, serialized);
+    this.db.rememberSetting(key, serialized);
   }
   rules(): Promise<Rules> { return this.setting<Rules>('rules'); }
   async account(userId: string): Promise<Account> {
@@ -120,11 +117,26 @@ export class Mutation {
     return message;
   }
   async commit(): Promise<Change> {
+    const previousSequence = await this.store.latestSequence();
     const row = await this.store.db.prepare('INSERT INTO changes(body) VALUES ($1) RETURNING sequence').get('{}');
     const sequence = row!.sequence;
-    for (const message of this.messages.values()) { message.sequence = sequence; await this.put(message); }
+    // put() already persisted content and reference indexes. Publishing only
+    // changes the cursor; update current/revision bodies together in bounded batches.
+    const messages = [...this.messages.values()];
+    for (let offset = 0; offset < messages.length; offset += 200) {
+      const updates = messages.slice(offset, offset + 200).map(message => {
+        message.sequence = sequence;
+        return { id: message.id, revision: message.revision, body: JSON.stringify(message) };
+      });
+      await this.store.db.prepare(`WITH input AS (
+        SELECT * FROM jsonb_to_recordset($1::jsonb) AS row(id text,revision integer,body text)
+      ), current_messages AS (
+        UPDATE messages m SET sequence=$2,body=i.body FROM input i WHERE m.id=i.id RETURNING m.id
+      ) UPDATE revisions r SET body=i.body FROM input i WHERE r."messageId"=i.id AND r.revision=i.revision`)
+        .run(JSON.stringify(updates), sequence);
+    }
     const ledger = this.store.db.ledger.slice(this.ledgerStart);
-    const change: Change = { sequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:await statesFor(this.store,[...this.affected]),ledger,treasury:{operating:await this.store.setting<number>('operating'),issued:await this.store.setting<number>('minted')} };
+    const change: Change = { sequence,previousSequence,messages:[...this.messages.values()],memberships:[...this.memberships.values()],removedMemberships:[...this.removed],states:await statesFor(this.store,[...this.affected]),ledger,treasury:{operating:await this.store.setting<number>('operating'),issued:await this.store.setting<number>('minted')} };
     await this.store.db.prepare('UPDATE changes SET body=$1 WHERE sequence=$2').run(JSON.stringify(change),sequence);
     return change;
   }

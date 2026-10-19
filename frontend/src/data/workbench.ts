@@ -1,19 +1,6 @@
+import type { WorkbenchSnapshot } from '@gonglun/core';
+export type { WorkbenchSnapshot } from '@gonglun/core';
 import type { Message, Relation, ScopeView, User, MessageStakes } from '../types';
-
-export interface WorkbenchSnapshot {
-  scope: ScopeView;
-  messages: Message[];
-  relations: Relation[];
-  users: User[];
-  stakes: Record<string, MessageStakes>;
-  tagCounts: Record<string, Record<string, number>>;
-  attentionUsers: Record<string, string[]>;
-  sequence: number;
-  nextCursor?: string | null;
-  hasMore?: boolean;
-  removedMessageIds?: string[];
-  removedMemberships?: string[];
-}
 export interface SnapshotQuery { parent: string; after?: number; cursor?: string; signal?: AbortSignal }
 
 /** The authoritative records are stored once; workbench models are derived from them. */
@@ -23,6 +10,7 @@ export class WorkbenchStore {
   private users = new Map<string, User>();
   private versions = new Map<string, number>();
   private scope?: ScopeView;
+  private scopeSequence = 0;
   private stakes: Record<string, MessageStakes> = {};
   private tagCounts: WorkbenchSnapshot['tagCounts'] = {};
   private attentionUsers: WorkbenchSnapshot['attentionUsers'] = {};
@@ -31,17 +19,20 @@ export class WorkbenchStore {
   apply(page: WorkbenchSnapshot, replace = false) {
     if (replace) {
       this.messages.clear(); this.relations.clear(); this.users.clear(); this.versions.clear();
-      this.stakes = {}; this.tagCounts = {}; this.attentionUsers = {}; this.sequence = 0;
+      this.stakes = {}; this.tagCounts = {}; this.attentionUsers = {}; this.sequence = 0; this.scopeSequence = 0;
     }
-    this.scope = page.scope;
+    if (page.sequence >= this.scopeSequence) { this.scope = page.scope; this.scopeSequence = page.sequence; }
+    const rejected = new Set<string>();
     for (const id of page.removedMessageIds ?? []) {
       if (page.sequence < (this.versions.get(id) ?? 0)) continue;
       this.messages.delete(id); this.relations.delete(id); delete this.stakes[id];
+      delete this.tagCounts[id]; delete this.attentionUsers[id];
       this.versions.set(id, page.sequence);
+      rejected.add(id);
     }
     for (const message of page.messages) {
       const current = this.messages.get(message.id);
-      if (page.sequence < (this.versions.get(message.id) ?? 0) || (current?.revision ?? 0) > (message.revision ?? 0)) continue;
+      if (page.sequence < (this.versions.get(message.id) ?? 0) || (current?.revision ?? 0) > (message.revision ?? 0)) { rejected.add(message.id); continue; }
       this.messages.set(message.id, message); this.versions.set(message.id, page.sequence);
     }
     for (const relation of page.relations) {
@@ -50,17 +41,24 @@ export class WorkbenchStore {
       this.relations.set(relation.id, relation);
     }
     for (const user of page.users) this.users.set(user.id, user);
-    Object.assign(this.stakes, page.stakes);
-    Object.assign(this.tagCounts, page.tagCounts);
-    Object.assign(this.attentionUsers, page.attentionUsers);
+    const merge = <T,>(target: Record<string, T>, incoming: Record<string, T>) => {
+      for (const [id, value] of Object.entries(incoming)) {
+        if (rejected.has(id) || page.sequence < (this.versions.get(id) ?? 0)) continue;
+        target[id] = value;
+        this.versions.set(id, page.sequence);
+      }
+    };
+    merge(this.stakes, page.stakes);
+    merge(this.tagCounts, page.tagCounts);
+    merge(this.attentionUsers, page.attentionUsers);
     this.sequence = Math.max(this.sequence, page.sequence);
   }
   snapshot(): WorkbenchSnapshot {
     if (!this.scope) throw new Error('尚未载入讨论');
     return {
       scope: this.scope, messages: [...this.messages.values()], relations: [...this.relations.values()],
-      users: [...this.users.values()], stakes: this.stakes, tagCounts: this.tagCounts,
-      attentionUsers: this.attentionUsers, sequence: this.sequence,
+      users: [...this.users.values()], stakes: { ...this.stakes }, tagCounts: { ...this.tagCounts },
+      attentionUsers: { ...this.attentionUsers }, sequence: this.sequence,
     };
   }
 }

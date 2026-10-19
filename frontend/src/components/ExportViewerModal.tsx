@@ -1,12 +1,12 @@
-import { useState, useRef, useMemo, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ExportData } from '../api/client';
 import { validateExportForViewing } from '../utils/exportArchive';
+import { loadLastExport, saveLastExport } from '../utils/exportViewerCache';
 import PopupOverlay from './PopupOverlay';
+import PromptModal from './PromptModal';
 
 export { validateExportForViewing } from '../utils/exportArchive';
-
-const LAST_EXPORT_KEY = 'lastExportData';
 
 interface Props {
   open: boolean;
@@ -19,7 +19,10 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   const [processing, setProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [prepared, setPrepared] = useState<ReturnType<typeof validateExportForViewing> | null>(null);
+  const [lastExport, setLastExport] = useState<ReturnType<typeof validateExportForViewing> | null>(null);
+  const [opening, setOpening] = useState(false);
   const readingGeneration = useRef(0);
+  const openingFrame = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -27,34 +30,54 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   // Reset state on every open
   useEffect(() => {
     readingGeneration.current += 1;
+    let frame = 0;
+    let cancelled = false;
     if (open) {
       setSelectedFile(null);
       setProcessing(false);
       setError(null);
       setPrepared(null);
+      setOpening(false);
+      setLastExport(null);
+      // Display the chooser before loading and verifying a large cached archive.
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
+          void loadLastExport().then(cached => {
+            if (cancelled || !cached) return;
+            try { setLastExport(validateExportForViewing(cached)); }
+            catch { /* Invalid historical caches cannot be reopened. */ }
+          });
+        });
+      });
     }
-    return () => { readingGeneration.current += 1; };
+    return () => { cancelled = true; cancelAnimationFrame(frame); cancelAnimationFrame(openingFrame.current); readingGeneration.current += 1; };
   }, [open]);
 
-  const lastExport = useMemo(() => {
-    try {
-      const raw = sessionStorage.getItem(LAST_EXPORT_KEY);
-      if (!raw) return null;
-      const result = validateExportForViewing(JSON.parse(raw));
-      return { ...result, title: result.data.scope.title };
-    } catch { return null; }
-  }, []);
-
   const openData = (data: ExportData) => {
-    // Leave the current message view only after the export file is confirmed.
-    window.dispatchEvent(new Event('prepare-export-viewer'));
-    onClose();
-    navigate('/viewer', { state: { exportData: data }, replace: true });
+    if (opening) return;
+    const generation = ++readingGeneration.current;
+    setOpening(true);
+    // Paint the prompt before serialization, storage and route preparation can
+    // occupy the main thread. File selection and cache reopening share this path.
+    openingFrame.current = requestAnimationFrame(() => {
+      openingFrame.current = requestAnimationFrame(() => {
+        if (generation !== readingGeneration.current) return;
+        void saveLastExport(data).then(() => {
+          if (generation !== readingGeneration.current) return;
+          window.dispatchEvent(new Event('prepare-export-viewer'));
+          navigate('/viewer', { state: { exportData: data }, replace: true });
+          onClose();
+        }).catch(error => {
+          if (generation !== readingGeneration.current) return;
+          setError(`打开阅览文件失败：${error instanceof Error ? error.message : String(error)}`);
+          setOpening(false);
+        });
+      });
+    });
   };
 
   const processAndOpen = () => {
     if (!prepared) return;
-    try { sessionStorage.setItem(LAST_EXPORT_KEY, JSON.stringify(prepared.data)); } catch { /* Large archives can still be read without caching. */ }
     openData(prepared.data);
   };
 
@@ -101,7 +124,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
   if (!open) return null;
 
   return (
-    <PopupOverlay
+    <><PopupOverlay
       contentRef={dialogRef}
       zIndex={1000}
       background="rgba(0,0,0,0.85)"
@@ -138,7 +161,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
               color: '#4a9eff', fontSize: 13, cursor: 'pointer',
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
-              <span>📋 上次阅览：{lastExport.title}</span>
+              <span>📋 上次阅览：{lastExport.data.scope.title}</span>
               <span style={{ fontSize: 11, opacity: 0.7 }}>点击打开</span>
             </button>
           )}
@@ -208,5 +231,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
         </div>
       </div>
     </PopupOverlay>
+    <PromptModal open={opening} title="正在加载" message="正在打开阅览文件，请稍候…" hideActions lockScroll={false} onConfirm={() => undefined} />
+    </>
   );
 }

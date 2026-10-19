@@ -73,7 +73,7 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
       sequence: 1, nextCursor: null, hasMore: false,
     };
   });
-  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false }, viewerRoute: { archive: null as ExportData | null } };
+  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false }, viewerRoute: { archive: null as ExportData | null, key: '' } };
 });
 
 vi.mock('../api', () => ({ api: mockApi }));
@@ -89,7 +89,7 @@ vi.mock('react-router-dom', async () => {
     ...actual,
     useParams: () => viewerRoute.archive ? {} : ({ messageId: 'classification-1' }),
     useNavigate: () => mockNavigate,
-    useLocation: () => ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive } : null, key: '', search: '', hash: '' }),
+    useLocation: () => ({ pathname: viewerRoute.archive ? '/viewer' : '/messages/classification-1', state: viewerRoute.archive ? { exportData: viewerRoute.archive } : null, key: viewerRoute.key, search: '', hash: '' }),
     useSearchParams: () => [new URLSearchParams(), vi.fn()] as const,
   };
 });
@@ -241,8 +241,10 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
       await act(async()=>latest().onMessageDoubleClick(event(),scope));
       if(viewMode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
-      const card=within(document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${side}"]`)!);
-      const toggle=card.getByRole('button',{name:/相关消息：1/});
+      const {card,toggle}=await waitFor(()=>{
+        const card=within(document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${side}"]`)!);
+        return {card,toggle:card.getByRole('button',{name:/相关消息：1/})};
+      });
       expect(toggle).toHaveAttribute('aria-expanded','false');
       fireEvent.click(toggle);
       const group=within(card.getByRole('group',{name:side==='source'?'发出的关联':'指向本消息的关联'}));
@@ -3053,6 +3055,34 @@ describe('MessageWorkbenchPage nested classification and summary view history', 
   ].flatMap(types => (['graph', 'list'] as const).map(mode => ({ types, mode, path: types.join(' / ') })));
 
   beforeEach(() => { vi.clearAllMocks(); });
+
+  it('reopens the same archive with its original view and no selections from the previous visit', async () => {
+    viewerRoute.archive = {
+      formatVersion: 1, exportedAt: '', scope: { messageId: null, title: '重新阅览' },
+      messages: [{ ...makeMessage('saved', '原文件的正文'), authorId: 'user-1', author: 'tester' }],
+      relations: [], view: { username: 'tester', mode: 'graph', classificationId: null,
+        messageFilter: { hideJoin: true, hideSettlement: true }, homeFilter: null, cleanFilters: [] },
+    };
+    viewerRoute.key = 'first-visit';
+    const latest = () => mockGraphView.mock.lastCall?.[0];
+    try {
+      const view = render(<MessageWorkbenchPage />);
+      await waitFor(() => expect(latest()?.messages.map((message: Message) => message.id)).toEqual(['saved']));
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'saved'));
+      expect(latest().draftUnits).toHaveLength(1);
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      expect(screen.getByRole('button', { name: '切换为消息图' })).toBeInTheDocument();
+      viewerRoute.key = 'second-visit';
+      view.rerender(<MessageWorkbenchPage />);
+      expect(screen.getByRole('dialog', { name: '正在绘制' })).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole('button', { name: '切换为消息表' })).toBeInTheDocument());
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      expect(latest().draftUnits).toEqual([]);
+      expect(latest().messages.map((message: Message) => message.id)).toEqual(['saved']);
+      expect(mockApi.getWorkbenchSnapshot).not.toHaveBeenCalled();
+    } finally { viewerRoute.archive = null; viewerRoute.key = ''; }
+  });
 
   it.each(['CLASSIFY', 'SUMMARY'].flatMap(type => (['graph', 'list'] as const).map(mode => ({ type, mode }))))('returns to the exported starting $type in $mode after leaving its child', async ({ type, mode }) => {
     const relations: Relation[] = ['outer', 'inner'].map(id => ({

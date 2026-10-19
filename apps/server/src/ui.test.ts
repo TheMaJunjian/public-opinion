@@ -4,6 +4,7 @@ import { randomUUID, generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { createApp } from './app.js';
 import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
 import { replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
+import * as projections from './ui-projections.js';
 
 const apps:Awaited<ReturnType<typeof createApp>>[]=[];
 const make=async ()=>{const app=(await createTestApp());apps.push(app);return app;};
@@ -11,6 +12,45 @@ afterEach(async ()=>{vi.restoreAllMocks();for(const app of apps.splice(0))(await
 async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:Record<string,unknown>={}) {const agent=request.agent(app);const response=await agent.post('/api/register').send({username,password:'a-test-password',...extra});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
 const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<string,unknown>={})=>user.agent.post(`/api/ui${path}`).set('x-csrf-token',user.session.csrf).set('x-request-id',(body as {requestId?:string}).requestId??randomUUID()).send(body);
 const good=async(response:PromiseLike<request.Response>)=>{const value=await response;expect(value.status,value.text).toBe(201);return value.body;};
+
+it('builds batch snapshots after commit and can recover a failed projection without charging again', async () => {
+  const app=await make(),user=await actor(app,'提交边界');
+  const batch={requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/messages',body:{content:'已经提交'}}]};
+  const original=projections.snapshot;
+  const projectionModes: unknown[]=[];
+  const spy=vi.spyOn(projections,'snapshot').mockImplementation(async (...args)=>{
+    const mode=await args[0].db.prepare('SHOW transaction_read_only').get();
+    projectionModes.push(mode?.transaction_read_only);
+    throw new Error('模拟读取快照失败');
+  });
+  const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const committed=await good(post(user,'/commands',batch));
+  expect(committed.results[0].id).toBe(batch.commands[0].id);
+  expect(committed.snapshots).toBeUndefined();
+  expect(spy).toHaveBeenCalledOnce();
+  expect(projectionModes).toEqual(['on']);
+  const account=await app.store.account(user.session.user.id);
+  spy.mockImplementation(original);
+  const recovered=await good(post(user,'/commands',batch));
+  expect(recovered.results).toEqual(committed.results);
+  expect(recovered.snapshots[0].messages.some((m:{id:string})=>m.id===batch.commands[0].id)).toBe(true);
+  expect(await app.store.account(user.session.user.id)).toEqual(account);
+  log.mockRestore();
+});
+
+it('keeps empty deltas bounded and explicitly clears the last follower', async () => {
+  const app=await make(),user=await actor(app,'增量用户');
+  await actor(app,'无关用户');
+  const message=await good(post(user,'/messages',{content:'关注目标'}));
+  await good(post(user,'/relations',{relationType:'ATTENTION',targetRefs:[{kind:'message',messageId:message.id}]}));
+  const before=(await user.agent.get('/api/ui/snapshot')).body;
+  const idle=(await user.agent.get(`/api/ui/snapshot?after=${before.sequence}`)).body;
+  expect(idle.users).toEqual([]);
+  await good(post(user,'/relations',{relationType:'UNFOLLOW',targetRefs:[{kind:'message',messageId:message.id}]}));
+  const delta=(await user.agent.get(`/api/ui/snapshot?after=${before.sequence}`)).body;
+  expect(delta.attentionUsers[message.id]).toEqual([]);
+  expect(delta.users.map((u:{username:string})=>u.username)).not.toContain('无关用户');
+});
 
 describe('保留操作方式的消息 API',()=>{
   it.each(['CLASSIFY','SUMMARY'])('后台补拉 %s 时，分类页标题与卡片标题一致，不使用旧操作说明',async type=>{
@@ -46,6 +86,8 @@ describe('保留操作方式的消息 API',()=>{
     expect(exported.tagCounts).toEqual(live.tagCounts);
     expect(exported.attentionUsers).toEqual(live.attentionUsers);
     expect(replayArchive(exported).messages.map(message=>message.id)).toContain(message.id);
+    expect(exported.journal.entryCount).toBe(exported.changes.length);
+    expect(() => replayArchive({...exported,changes:exported.changes.slice(0,-1)})).toThrow('不完整');
   });
   it('按指定 ID 读取跨画布追溯消息，保留关系端点且不扩展整张画布',async()=>{
     const app=await make(),user=await actor(app,'追溯用户');

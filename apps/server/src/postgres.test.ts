@@ -3,7 +3,7 @@ import request from 'supertest';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import type { Part, Session } from '@gonglun/core';
+import { replayArchive, type Part, type Session } from '@gonglun/core';
 import { Mutation } from './db.js';
 import { processDue, send } from './messages.js';
 import { changes, listMessages } from './queries.js';
@@ -75,6 +75,9 @@ describe('PostgreSQL transactions across API instances', () => {
     expect(await app.store.account(actor.session.user.id)).toMatchObject({available:999});
     const page=await changes(app.store,before);
     expect(page.changes.map(change=>change.sequence)).toEqual([result.sequence]);
+    const journal=await changes(app.store,0);
+    const replay=replayArchive({format:'gonglun-2',changes:journal.changes});
+    expect(replay.accounts.get(actor.session.user.id)).toEqual(await app.store.account(actor.session.user.id));
   });
 
   it('keeps page content and its cursor on one snapshot while another instance commits', async () => {

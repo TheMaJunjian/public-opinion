@@ -8,7 +8,7 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext, WORKBENCH_DRAWING
 type Phase = 'loading' | 'drawing' | 'sending' | 'ready';
 const LoadingContext = createContext<(phase: Phase, resetFailure?: boolean) => void>(() => undefined);
 const SendingContext = createContext<(sending: boolean) => void>(() => undefined);
-const taskNames = { projection: '消息整理', measurement: '尺寸测量', overlays: '连线绘制', positioning: '消息定位', fonts: '字体加载', render: '页面绘制' };
+const taskNames = { module: '界面加载', projection: '消息整理', measurement: '尺寸测量', overlays: '连线绘制', positioning: '消息定位', fonts: '字体加载', render: '页面绘制' };
 
 /** Keep the loading dialog outside the expensive workbench render. */
 export default function WorkbenchLoadingBoundary({ children }: { children: ReactNode }) {

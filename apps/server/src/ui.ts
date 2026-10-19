@@ -1,3 +1,4 @@
+import { sendExport } from './export-response.js';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { relations, textOf, type Message } from '@gonglun/core';
 import { z } from 'zod';
@@ -65,13 +66,15 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
     } });
     get('/export', async (req, res, next) => {
         try {
-            const messages = (await scopeMessages(store, String(req.query.parent ?? 'root'))), views = (await viewsFor(store, messages, String(req.query.parent ?? 'root')));
-            // A local discussion is the viewing scope. Conservation requires the continuous
-            // regional execution journal; never pretend a partial ledger is a full replay.
-            const changes = (await store.db.prepare("SELECT body FROM changes ORDER BY sequence").all()).map(row => JSON.parse(String(row.body)));
-            const ruleHistory = (await store.db.prepare("SELECT * FROM rule_versions ORDER BY version").all()).map(({ body, ...row }) => ({ ...row, rules: JSON.parse(String(body)) }));
-            const ids = messages.map(message => message.id), users = await allUsers(store);
-            res.json({ format: 'gonglun-2', formatVersion: 2, exportedAt: new Date().toISOString(), scope: (await scopeView(store, String(req.query.parent ?? 'root'))), messages: views.map(m => ({ ...m, authorId: m.createdBy.id, author: m.createdBy.username })), relations: views.filter(m => m.relationType).map(m => ({ ...m, authorId: m.createdBy.id, author: m.createdBy.username })), users, viewerUsername: (await currentSession(store, req))?.user.username ?? null, stakes: await stakesFor(store, ids, users), tagCounts: await tagCountsFor(store, ids), attentionUsers: await attentionUsers(store, ids), rules: (await store.rules()), ruleHistory, regionId: (await store.setting('region')), ledgerId: 'local', programVersion: '2.0.0', sequence: (await store.latestSequence()), auditScope: 'region', viewScope: { parent: String(req.query.parent ?? 'root') }, changes, signatures: (await store.db.prepare("SELECT * FROM signatures ORDER BY \"createdAt\",\"messageId\"").all()) });
+            const parent = z.string().min(1).max(100).parse(req.query.parent ?? 'root');
+            const base = req.query.after === undefined ? undefined : {
+                sequence: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).parse(req.query.after),
+                entryCount: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).parse(req.query.baseCount),
+                hash: z.string().regex(/^[a-f0-9]{64}$/).parse(req.query.baseHash),
+                regionId: z.string().min(1).max(100).parse(req.query.regionId),
+                ledgerId: z.string().min(1).max(100).parse(req.query.ledgerId),
+            };
+            await sendExport(store, req, res, parent, base);
         }
         catch (e) {
             next(e);
@@ -101,9 +104,9 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
             for (const message of rows) {
                 const view = (await messageView(store, message)), parent = (await parentOf(store, message.id)), scope = (await scopeView(store, parent)), targets = view.targetRefs.map((r: RecordData) => r.reference.messageId), target = targets[0] ? (await store.message(targets[0])) : null;
                 const base = { id: message.id, relationMessageId: message.id, scopeMessageId: parent === 'root' ? null : parent, scopeTitle: scope.title, createdAt: message.createdAt, amount: message.spending.wager, targetMessageId: target?.id ?? null, content: target ? textOf(target) : textOf(message) };
-                if (['AGREE', 'DISAGREE'].includes(view.relationType))
+                if (['AGREE', 'DISAGREE'].includes(view.relationType ?? ''))
                     stanceRows.push({ ...base, kind: 'relation', type: view.relationType, messageKind: target ? (await messageView(store, target)).kind : 'TEXT', targetRelationType: target ? legacyType(target) : null });
-                if (['TAG', 'RECOMMEND', 'ARCHIVE'].includes(view.relationType))
+                if (['TAG', 'RECOMMEND', 'ARCHIVE'].includes(view.relationType ?? ''))
                     tagRows.push({ ...base, kind: 'tag', relationType: view.relationType, label: view.payload.label ?? view.payload.title ?? view.relationType, subType: view.payload.subType ?? null, customLabel: view.payload.customLabel ?? null, amount: message.spending.recommendation });
                 if (message.spending.wager)
                     stakeRows.push({ ...base, kind: 'stake', messageId: target?.id ?? message.id, messageKind: target ? (await messageView(store, target)).kind : view.kind });

@@ -1,0 +1,983 @@
+{
+  "createdAt": "2026-10-19T10:10:02.336Z",
+  "node": "v24.14.1",
+  "route": "assets/MessageWorkbenchPage-CopEEO57.js",
+  "routeBytes": 343829,
+  "routeGzipBytes": 105172,
+  "staticClosureBytes": 585234,
+  "staticClosureGzipBytes": 185229,
+  "graphViewBytes": 718802,
+  "graphViewGzipBytes": 223307,
+  "chunks": [
+    {
+      "file": "assets/MessageWorkbenchPage-CopEEO57.js",
+      "bytes": 343829,
+      "gzipBytes": 105172,
+      "initial": true,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/exportArchive-Ce8lmTRU.js",
+        "assets/PopupOverlay-BZLpZWp0.js"
+      ],
+      "dynamicImports": [
+        "assets/StanceHistoryPanel-CFry2Ru5.js",
+        "assets/AuditLogView-DlUOGtVW.js",
+        "assets/RevenuePanel-Co0o9dCs.js",
+        "assets/GraphView-CuOSdK2u.js",
+        "assets/WorkbenchMessageList-BhVyS3kM.js",
+        "assets/LeaderboardModal-3aWh7NMK.js",
+        "assets/CorrectionComparisonPopup-CxhaR_Im.js",
+        "assets/RelationRecordPopups-DgFtxApG.js"
+      ],
+      "modules": [
+        {
+          "path": "frontend/src/pages/MessageWorkbenchPage.tsx",
+          "bytes": 153343
+        },
+        {
+          "path": "frontend/src/components/WorkbenchPanel.tsx",
+          "bytes": 37537
+        },
+        {
+          "path": "frontend/src/utils/modelBridge.ts",
+          "bytes": 32875
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/graphMessagesToRender.ts",
+          "bytes": 18812
+        },
+        {
+          "path": "frontend/src/components/CleanFilterPanel.tsx",
+          "bytes": 18196
+        },
+        {
+          "path": "frontend/src/utils/graphColumnRules.ts",
+          "bytes": 16803
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/targetResolution.tsx",
+          "bytes": 15969
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendRelation.tsx",
+          "bytes": 14366
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/scrollNavigation.tsx",
+          "bytes": 12295
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/cardSelection.tsx",
+          "bytes": 11896
+        },
+        {
+          "path": "frontend/src/utils/traceProjection.ts",
+          "bytes": 11856
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/viewHistory.tsx",
+          "bytes": 11495
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/relationActions.tsx",
+          "bytes": 10468
+        },
+        {
+          "path": "frontend/src/pages/workbench/useWorkbenchViewport.ts",
+          "bytes": 10285
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/comparisonGraphProjections.ts",
+          "bytes": 9656
+        },
+        {
+          "path": "frontend/src/pages/workbench/useWorkbenchData.ts",
+          "bytes": 8753
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/ownership.ts",
+          "bytes": 8563
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendDraft.tsx",
+          "bytes": 8531
+        },
+        {
+          "path": "frontend/src/components/MessageRelationsView.tsx",
+          "bytes": 8473
+        },
+        {
+          "path": "frontend/src/components/WorkbenchLoadingBoundary.tsx",
+          "bytes": 8124
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/relationComposition.ts",
+          "bytes": 7282
+        },
+        {
+          "path": "frontend/src/context/WorkbenchDrawingContext.ts",
+          "bytes": 7096
+        },
+        {
+          "path": "frontend/src/pages/workbench/ui/WorkbenchViewToolbar.tsx",
+          "bytes": 6513
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendGovernanceDraft.tsx",
+          "bytes": 6476
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/panelGestures.tsx",
+          "bytes": 6461
+        },
+        {
+          "path": "frontend/src/data/workbench.ts",
+          "bytes": 6014
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/membership.ts",
+          "bytes": 5977
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/singleButtonLabel.ts",
+          "bytes": 5448
+        },
+        {
+          "path": "frontend/src/pages/workbench/ui/RelationToolbar.tsx",
+          "bytes": 5435
+        },
+        {
+          "path": "frontend/src/utils/graphProjection.ts",
+          "bytes": 5356
+        },
+        {
+          "path": "frontend/src/utils/graphTextSelection.tsx",
+          "bytes": 5206
+        },
+        {
+          "path": "frontend/src/components/PromptModal.tsx",
+          "bytes": 5064
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendAnnotationDraft.tsx",
+          "bytes": 5058
+        },
+        {
+          "path": "frontend/src/components/HomeFilterPanel.tsx",
+          "bytes": 4972
+        },
+        {
+          "path": "frontend/src/components/MessageFilterPanel.tsx",
+          "bytes": 4892
+        },
+        {
+          "path": "frontend/src/pages/workbench/useWorkbenchComposer.ts",
+          "bytes": 4861
+        },
+        {
+          "path": "frontend/src/utils/graphOrganizations.ts",
+          "bytes": 4839
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/filters.ts",
+          "bytes": 4830
+        },
+        {
+          "path": "frontend/src/utils/graphPresentationGeometry.ts",
+          "bytes": 4775
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendClassificationDraft.tsx",
+          "bytes": 4619
+        },
+        {
+          "path": "packages/core/src/model.ts",
+          "bytes": 4558
+        },
+        {
+          "path": "frontend/src/hooks/useCleanView.ts",
+          "bytes": 4461
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/correction.ts",
+          "bytes": 4413
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendArrangementDraft.tsx",
+          "bytes": 4367
+        },
+        {
+          "path": "frontend/src/pages/workbench/ui/ClassificationHeader.tsx",
+          "bytes": 4298
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/singleButtonEnabled.ts",
+          "bytes": 4088
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/messageRendering.tsx",
+          "bytes": 4005
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendCorrectionDraft.tsx",
+          "bytes": 3875
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/containerEffect.ts",
+          "bytes": 3800
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendSummaryDraft.tsx",
+          "bytes": 3633
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendText.tsx",
+          "bytes": 3612
+        },
+        {
+          "path": "frontend/src/types/index.ts",
+          "bytes": 3478
+        },
+        {
+          "path": "frontend/src/utils/workbenchActivity.ts",
+          "bytes": 3230
+        },
+        {
+          "path": "frontend/src/components/RegistrationGuideHint.tsx",
+          "bytes": 3170
+        },
+        {
+          "path": "frontend/src/hooks/useStakeCalculation.ts",
+          "bytes": 3170
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendMergeDraft.tsx",
+          "bytes": 3141
+        },
+        {
+          "path": "frontend/src/pages/workbench/useRelationToolbar.ts",
+          "bytes": 3133
+        },
+        {
+          "path": "frontend/src/utils/messageDisplay.ts",
+          "bytes": 2892
+        },
+        {
+          "path": "frontend/src/utils/layout.ts",
+          "bytes": 2869
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendDelegationDraft.tsx",
+          "bytes": 2594
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/sendValidationLabel.ts",
+          "bytes": 2583
+        },
+        {
+          "path": "frontend/src/utils/relatedMessages.ts",
+          "bytes": 2575
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendOrganizationJoin.tsx",
+          "bytes": 2426
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/containerCanvas.ts",
+          "bytes": 2395
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/normalGraphProjection.ts",
+          "bytes": 2239
+        },
+        {
+          "path": "frontend/src/components/OperationLogView.tsx",
+          "bytes": 2235
+        },
+        {
+          "path": "frontend/src/utils/workbenchProjection.ts",
+          "bytes": 2223
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendStanceDraft.tsx",
+          "bytes": 2130
+        },
+        {
+          "path": "frontend/src/utils/attachedRelationLabels.ts",
+          "bytes": 2103
+        },
+        {
+          "path": "frontend/src/components/StagedMessageLabel.tsx",
+          "bytes": 2081
+        },
+        {
+          "path": "frontend/src/pages/workbench/useWorkbenchRecords.ts",
+          "bytes": 1985
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/homeFilterResult.ts",
+          "bytes": 1955
+        },
+        {
+          "path": "frontend/src/components/ErrorBoundary.tsx",
+          "bytes": 1938
+        },
+        {
+          "path": "packages/core/src/membership.ts",
+          "bytes": 1831
+        },
+        {
+          "path": "frontend/src/utils/crossCanvasRelations.ts",
+          "bytes": 1699
+        },
+        {
+          "path": "frontend/src/utils/relatedTraceContext.ts",
+          "bytes": 1692
+        },
+        {
+          "path": "frontend/src/utils/selectionLabel.ts",
+          "bytes": 1631
+        },
+        {
+          "path": "frontend/src/utils/partSelection.ts",
+          "bytes": 1621
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/navigation.ts",
+          "bytes": 1590
+        },
+        {
+          "path": "frontend/src/utils/partCorrection.ts",
+          "bytes": 1472
+        },
+        {
+          "path": "frontend/src/utils/messageElementSelection.ts",
+          "bytes": 1345
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/authentication.tsx",
+          "bytes": 1276
+        },
+        {
+          "path": "frontend/src/components/WorkbenchActivityIndicator.tsx",
+          "bytes": 1264
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/reclassificationJoinCount.ts",
+          "bytes": 1120
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/messagesToShow.ts",
+          "bytes": 1105
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/traceFrameIds.ts",
+          "bytes": 1053
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendTransaction.tsx",
+          "bytes": 1036
+        },
+        {
+          "path": "frontend/src/pages/workbench/projections/hiddenInGraphView.ts",
+          "bytes": 1003
+        },
+        {
+          "path": "frontend/src/pages/workbench/model/selection.ts",
+          "bytes": 974
+        },
+        {
+          "path": "frontend/src/components/DeferredWorkbench.tsx",
+          "bytes": 863
+        },
+        {
+          "path": "frontend/src/utils/stanceLayout.ts",
+          "bytes": 849
+        },
+        {
+          "path": "frontend/src/utils/debugLog.ts",
+          "bytes": 642
+        },
+        {
+          "path": "frontend/src/pages/workbench/actions/sendErrors.ts",
+          "bytes": 101
+        }
+      ]
+    },
+    {
+      "file": "assets/index-DKSyr8JV.js",
+      "bytes": 229031,
+      "gzipBytes": 75217,
+      "initial": true,
+      "imports": [],
+      "dynamicImports": [
+        "assets/LoginPage-CJTfE262.js",
+        "assets/RegisterPage-lSFIrxey.js",
+        "assets/HomePage-DGHbslq8.js",
+        "assets/MessageWorkbenchPage-CopEEO57.js",
+        "assets/ExportViewerModal-Ecuarpmu.js",
+        "assets/TutorialModal-m4nTUvw-.js",
+        "assets/WelfareModal-CenL4u-5.js",
+        "assets/GuideOverlay-BS6bVyoc.js"
+      ],
+      "modules": [
+        {
+          "path": "node_modules/react-dom/cjs/react-dom.production.min.js",
+          "bytes": 133838
+        },
+        {
+          "path": "node_modules/react-router/dist/development/chunk-OB3PAWPO.mjs",
+          "bytes": 87400
+        },
+        {
+          "path": "frontend/src/components/GestureShortcutManager.tsx",
+          "bytes": 29715
+        },
+        {
+          "path": "frontend/src/api/client.ts",
+          "bytes": 12727
+        },
+        {
+          "path": "frontend/src/components/PointsBadge.tsx",
+          "bytes": 10987
+        },
+        {
+          "path": "frontend/src/App.tsx",
+          "bytes": 8737
+        },
+        {
+          "path": "frontend/src/utils/gestureShortcut.ts",
+          "bytes": 7816
+        },
+        {
+          "path": "node_modules/react/cjs/react.production.min.js",
+          "bytes": 7672
+        },
+        {
+          "path": "frontend/src/components/Navbar.tsx",
+          "bytes": 6733
+        },
+        {
+          "path": "node_modules/scheduler/cjs/scheduler.production.min.js",
+          "bytes": 4616
+        },
+        {
+          "path": "frontend/src/api/commandBatch.ts",
+          "bytes": 3746
+        },
+        {
+          "path": "frontend/src/context/AuthContext.tsx",
+          "bytes": 3134
+        },
+        {
+          "path": "\u0000vite/preload-helper.js",
+          "bytes": 2135
+        },
+        {
+          "path": "frontend/src/utils/signature.ts",
+          "bytes": 2006
+        },
+        {
+          "path": "node_modules/react/cjs/react-jsx-runtime.production.min.js",
+          "bytes": 1201
+        },
+        {
+          "path": "\u0000vite/modulepreload-polyfill.js",
+          "bytes": 1168
+        },
+        {
+          "path": "packages/core/src/snapshot-transport.ts",
+          "bytes": 596
+        },
+        {
+          "path": "node_modules/react-dom/index.js",
+          "bytes": 524
+        },
+        {
+          "path": "frontend/src/constants/zIndex.ts",
+          "bytes": 315
+        },
+        {
+          "path": "node_modules/react/jsx-runtime.js",
+          "bytes": 243
+        },
+        {
+          "path": "node_modules/react-dom/client.js",
+          "bytes": 242
+        },
+        {
+          "path": "node_modules/scheduler/index.js",
+          "bytes": 230
+        },
+        {
+          "path": "node_modules/react/index.js",
+          "bytes": 198
+        },
+        {
+          "path": "frontend/src/main.tsx",
+          "bytes": 183
+        },
+        {
+          "path": "frontend/src/utils/messageRoutes.ts",
+          "bytes": 145
+        },
+        {
+          "path": "\u0000commonjsHelpers.js",
+          "bytes": 140
+        },
+        {
+          "path": "frontend/src/context/InterfaceZoomContext.ts",
+          "bytes": 137
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react-dom/client.js?commonjs-es-import",
+          "bytes": 106
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react/index.js?commonjs-es-import",
+          "bytes": 100
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react/jsx-runtime.js?commonjs-es-import",
+          "bytes": 44
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react/cjs/react-jsx-runtime.production.min.js?commonjs-exports",
+          "bytes": 40
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react-dom/index.js?commonjs-es-import",
+          "bytes": 40
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/scheduler/cjs/scheduler.production.min.js?commonjs-exports",
+          "bytes": 34
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react-dom/cjs/react-dom.production.min.js?commonjs-exports",
+          "bytes": 33
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react/jsx-runtime.js?commonjs-module",
+          "bytes": 31
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react/cjs/react.production.min.js?commonjs-exports",
+          "bytes": 30
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/scheduler/index.js?commonjs-module",
+          "bytes": 30
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react-dom/index.js?commonjs-module",
+          "bytes": 29
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react/index.js?commonjs-module",
+          "bytes": 26
+        },
+        {
+          "path": "frontend/src/api/index.ts",
+          "bytes": 20
+        },
+        {
+          "path": "\u0000D:/Projects/public-opinion/node_modules/react-dom/client.js?commonjs-exports",
+          "bytes": 16
+        },
+        {
+          "path": "frontend/src/index.css",
+          "bytes": 0
+        },
+        {
+          "path": "frontend/index.html",
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "file": "assets/GraphView-CuOSdK2u.js",
+      "bytes": 95652,
+      "gzipBytes": 26528,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/MessageWorkbenchPage-CopEEO57.js",
+        "assets/CrossCanvasRelatedMessages-CiUpYsz2.js",
+        "assets/exportArchive-Ce8lmTRU.js",
+        "assets/PopupOverlay-BZLpZWp0.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/GraphView.tsx",
+          "bytes": 132917
+        },
+        {
+          "path": "frontend/src/utils/graphEdgeRouting.ts",
+          "bytes": 19045
+        },
+        {
+          "path": "frontend/src/utils/graphOverlays.ts",
+          "bytes": 17698
+        },
+        {
+          "path": "frontend/src/utils/frameLayout.ts",
+          "bytes": 9578
+        },
+        {
+          "path": "frontend/src/components/graph/ClassificationCard.tsx",
+          "bytes": 5785
+        },
+        {
+          "path": "frontend/src/utils/graphEdgeGeometry.ts",
+          "bytes": 3500
+        },
+        {
+          "path": "frontend/src/hooks/useCardMeasurements.ts",
+          "bytes": 3464
+        },
+        {
+          "path": "frontend/src/components/graph/OrganizationFrameHeader.tsx",
+          "bytes": 3122
+        },
+        {
+          "path": "frontend/src/hooks/useGraphOverlays.ts",
+          "bytes": 3069
+        },
+        {
+          "path": "frontend/src/components/MessageSettlementActions.tsx",
+          "bytes": 2213
+        },
+        {
+          "path": "frontend/src/components/ComparisonPane.tsx",
+          "bytes": 848
+        }
+      ]
+    },
+    {
+      "file": "assets/CrossCanvasRelatedMessages-CiUpYsz2.js",
+      "bytes": 37916,
+      "gzipBytes": 11550,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/MessageWorkbenchPage-CopEEO57.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/SettlementPanel.tsx",
+          "bytes": 43958
+        },
+        {
+          "path": "frontend/src/components/RoundHistory.tsx",
+          "bytes": 14221
+        },
+        {
+          "path": "frontend/src/components/CrossCanvasRelatedMessages.tsx",
+          "bytes": 3977
+        },
+        {
+          "path": "frontend/src/components/RelatedMessages.tsx",
+          "bytes": 2611
+        },
+        {
+          "path": "frontend/src/components/JoinRecordBadges.tsx",
+          "bytes": 2054
+        },
+        {
+          "path": "frontend/src/components/MessageTextPart.tsx",
+          "bytes": 1217
+        },
+        {
+          "path": "frontend/src/components/MessageElement.tsx",
+          "bytes": 1043
+        }
+      ]
+    },
+    {
+      "file": "assets/GuideOverlay-BS6bVyoc.js",
+      "bytes": 27876,
+      "gzipBytes": 6968,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/GuideOverlay.tsx",
+          "bytes": 39804
+        }
+      ]
+    },
+    {
+      "file": "assets/WorkbenchMessageList-BhVyS3kM.js",
+      "bytes": 20293,
+      "gzipBytes": 7004,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/CrossCanvasRelatedMessages-CiUpYsz2.js",
+        "assets/MessageWorkbenchPage-CopEEO57.js",
+        "assets/exportArchive-Ce8lmTRU.js",
+        "assets/PopupOverlay-BZLpZWp0.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/pages/workbench/ui/WorkbenchMessageList.tsx",
+          "bytes": 25536
+        },
+        {
+          "path": "frontend/src/components/MessageCard.tsx",
+          "bytes": 13178
+        }
+      ]
+    },
+    {
+      "file": "assets/LeaderboardModal-3aWh7NMK.js",
+      "bytes": 17206,
+      "gzipBytes": 4074,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/MessageWorkbenchPage-CopEEO57.js",
+        "assets/PopupOverlay-BZLpZWp0.js",
+        "assets/exportArchive-Ce8lmTRU.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/LeaderboardModal.tsx",
+          "bytes": 32862
+        }
+      ]
+    },
+    {
+      "file": "assets/CorrectionComparisonPopup-CxhaR_Im.js",
+      "bytes": 12894,
+      "gzipBytes": 3871,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/MessageWorkbenchPage-CopEEO57.js",
+        "assets/PopupOverlay-BZLpZWp0.js",
+        "assets/exportArchive-Ce8lmTRU.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/CorrectionComparisonPopup.tsx",
+          "bytes": 23113
+        },
+        {
+          "path": "frontend/src/components/CharDiffText.tsx",
+          "bytes": 1929
+        }
+      ]
+    },
+    {
+      "file": "assets/PopupOverlay-BZLpZWp0.js",
+      "bytes": 7287,
+      "gzipBytes": 2665,
+      "initial": true,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/PopupOverlay.tsx",
+          "bytes": 14245
+        }
+      ]
+    },
+    {
+      "file": "assets/TutorialModal-m4nTUvw-.js",
+      "bytes": 5416,
+      "gzipBytes": 1862,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/PopupOverlay-BZLpZWp0.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/TutorialModal.tsx",
+          "bytes": 8130
+        }
+      ]
+    },
+    {
+      "file": "assets/RelationRecordPopups-DgFtxApG.js",
+      "bytes": 5154,
+      "gzipBytes": 1651,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/MessageWorkbenchPage-CopEEO57.js",
+        "assets/exportArchive-Ce8lmTRU.js",
+        "assets/PopupOverlay-BZLpZWp0.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/pages/workbench/ui/RelationRecordPopups.tsx",
+          "bytes": 9271
+        }
+      ]
+    },
+    {
+      "file": "assets/StanceHistoryPanel-CFry2Ru5.js",
+      "bytes": 5154,
+      "gzipBytes": 2276,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/StanceHistoryPanel.tsx",
+          "bytes": 8564
+        }
+      ]
+    },
+    {
+      "file": "assets/exportArchive-Ce8lmTRU.js",
+      "bytes": 5087,
+      "gzipBytes": 2175,
+      "initial": true,
+      "imports": [],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "packages/core/src/replay.ts",
+          "bytes": 5229
+        },
+        {
+          "path": "frontend/src/utils/exportArchive.ts",
+          "bytes": 1695
+        }
+      ]
+    },
+    {
+      "file": "assets/ExportViewerModal-Ecuarpmu.js",
+      "bytes": 4798,
+      "gzipBytes": 2013,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/exportArchive-Ce8lmTRU.js",
+        "assets/PopupOverlay-BZLpZWp0.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/ExportViewerModal.tsx",
+          "bytes": 9223
+        }
+      ]
+    },
+    {
+      "file": "assets/AuditLogView-DlUOGtVW.js",
+      "bytes": 4714,
+      "gzipBytes": 2161,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/AuditLogView.tsx",
+          "bytes": 7549
+        }
+      ]
+    },
+    {
+      "file": "assets/RegisterPage-lSFIrxey.js",
+      "bytes": 3364,
+      "gzipBytes": 1541,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/pages/RegisterPage.tsx",
+          "bytes": 5475
+        }
+      ]
+    },
+    {
+      "file": "assets/LoginPage-CJTfE262.js",
+      "bytes": 2401,
+      "gzipBytes": 1072,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/pages/LoginPage.tsx",
+          "bytes": 3865
+        }
+      ]
+    },
+    {
+      "file": "assets/RevenuePanel-Co0o9dCs.js",
+      "bytes": 2250,
+      "gzipBytes": 986,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/RevenuePanel.tsx",
+          "bytes": 3382
+        }
+      ]
+    },
+    {
+      "file": "assets/WelfareModal-CenL4u-5.js",
+      "bytes": 1797,
+      "gzipBytes": 996,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js",
+        "assets/PopupOverlay-BZLpZWp0.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/components/WelfareModal.tsx",
+          "bytes": 3130
+        }
+      ]
+    },
+    {
+      "file": "assets/HomePage-DGHbslq8.js",
+      "bytes": 298,
+      "gzipBytes": 271,
+      "initial": false,
+      "imports": [
+        "assets/index-DKSyr8JV.js"
+      ],
+      "dynamicImports": [],
+      "modules": [
+        {
+          "path": "frontend/src/pages/HomePage.tsx",
+          "bytes": 379
+        }
+      ]
+    }
+  ]
+}

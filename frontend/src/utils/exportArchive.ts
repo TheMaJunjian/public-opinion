@@ -1,5 +1,5 @@
-import { replayArchive } from '@gonglun/core';
-import type { ExportData } from '../api/client';
+import { archiveChangeFingerprint, normalizeArchiveChange, replayArchive, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
+import type { ExportData, ExportUpdateData } from '../api/client';
 
 /** Normalize historical view metadata at the file boundary, keeping replay checks intact. */
 export function validateExportForViewing(input: unknown): { data: ExportData; verification: string | null } {
@@ -8,7 +8,7 @@ export function validateExportForViewing(input: unknown): { data: ExportData; ve
   let verification: string | null = null;
   if (archive.format === 'gonglun-2') {
     const replay = replayArchive(archive);
-    verification = `记录连续性及资金守恒校验通过：${replay.sequence} 次变更，${replay.messages.length} 条消息，${replay.accounts.size} 个账户。运营余额 ${replay.operating}，发行总量 ${replay.issued}。`;
+    verification = `记录连续性及资金守恒校验通过：${replay.changeCount} 次变更，${replay.messages.length} 条消息，${replay.accounts.size} 个账户。运营余额 ${replay.operating}，发行总量 ${replay.issued}。`;
   }
   // Historical topic IDs are not message IDs and must not become navigation targets.
   const data = archive.scope == null && typeof archive.topic?.title === 'string'
@@ -32,4 +32,39 @@ export function validateExportForViewing(input: unknown): { data: ExportData; ve
     throw new Error('阅览设置格式无效');
   }
   return { data, verification };
+}
+
+export type UpdatableExportData = ExportData & Archive;
+
+/** Verify the selected file locally; send only a digest and cursor to the server. */
+export async function prepareExportUpdate(input: unknown): Promise<{ data: UpdatableExportData; checkpoint: ArchiveCheckpoint }> {
+  const { data } = validateExportForViewing(input);
+  if (data.format !== 'gonglun-2') throw new Error('此旧版文件不含完整执行记录，请先完整导出一次');
+  const archive = data as UpdatableExportData;
+  if (typeof archive.regionId !== 'string' || !archive.regionId || typeof archive.ledgerId !== 'string' || !archive.ledgerId) {
+    throw new Error('文件缺少数据来源信息，请先完整导出一次');
+  }
+  const bytes = new TextEncoder().encode(archive.changes.map(archiveChangeFingerprint).join(''));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return { data: archive, checkpoint: {
+    regionId: archive.regionId, ledgerId: archive.ledgerId, sequence: archive.changes.at(-1)?.sequence ?? 0,
+    entryCount: archive.changes.length, hash: Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join(''),
+  } };
+}
+
+/** Replace current projections, append history once, and verify the complete result before saving. */
+export function mergeExportUpdate(original: UpdatableExportData, checkpoint: ArchiveCheckpoint, update: ExportUpdateData): UpdatableExportData {
+  if (update.format !== 'gonglun-2-update' || !update.base || update.regionId !== checkpoint.regionId || update.ledgerId !== checkpoint.ledgerId
+    || update.base.hash !== checkpoint.hash || update.base.sequence !== checkpoint.sequence || update.base.entryCount !== checkpoint.entryCount
+    || update.base.regionId !== checkpoint.regionId || update.base.ledgerId !== checkpoint.ledgerId || !update.journal || !Array.isArray(update.changes)) {
+    throw new Error('增量记录与所选文件不匹配');
+  }
+  if ((update.scope?.messageId ?? null) !== (original.scope.messageId ?? null)) throw new Error('增量记录的阅览范围不一致');
+  const { base: _base, ...fresh } = update;
+  const merged: UpdatableExportData = { ...original, ...fresh, format: 'gonglun-2',
+    changes: [...original.changes.map(normalizeArchiveChange), ...update.changes],
+    viewerUsername: original.viewerUsername, view: original.view,
+  };
+  validateExportForViewing(merged);
+  return merged;
 }

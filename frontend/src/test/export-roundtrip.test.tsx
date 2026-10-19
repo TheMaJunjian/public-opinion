@@ -6,8 +6,11 @@ import type { WorkbenchSnapshot } from '../data/workbench';
 import type { Message, Relation } from '../types';
 import WorkbenchViewToolbar from '../pages/workbench/ui/WorkbenchViewToolbar';
 import { archiveToWorkbenchSnapshot, projectWorkbenchSnapshot } from '../utils/workbenchProjection';
+import { startArchiveExport } from '../utils/exportWorker';
+import { prepareArchiveExport } from '../utils/exportTask';
 
 vi.mock('../api', () => ({ api: { exportMessages: vi.fn() } }));
+vi.mock('../utils/exportWorker', () => ({ startArchiveExport: vi.fn() }));
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const user = { id: 'u2', username: '当前用户', createdAt: '' };
@@ -41,6 +44,7 @@ it('preserves messages, pinned references, relation states, order and display co
 });
 
 it('re-exports the open archive with the current viewer and filters without fetching newer online messages', async () => {
+  vi.mocked(startArchiveExport).mockImplementation(task => ({ result: prepareArchiveExport({ task, apiUrl: '/api/ui' }, () => {}), cancel: vi.fn() }));
   let downloaded: Blob | undefined;
   vi.stubGlobal('URL', class extends URL {
     static createObjectURL(blob: Blob) { downloaded = blob; return 'blob:export'; }
@@ -61,6 +65,10 @@ it('re-exports the open archive with the current viewer and filters without fetc
   };
   render(<WorkbenchViewToolbar {...props} />);
   fireEvent.click(screen.getByRole('button', { name: '导出' }));
+  expect(screen.getByRole('dialog', { name: '导出' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '更新导出' })).toBeNull();
+  expect(startArchiveExport).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '导出文件' }));
   await waitFor(() => expect(downloaded).toBeDefined());
   const text = await new Promise<string>(resolve => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsText(downloaded!); });
   const reopened = JSON.parse(text) as ExportData;

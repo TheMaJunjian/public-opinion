@@ -5,6 +5,14 @@ import type { ExportData } from '../api/client';
 const data: ExportData = { formatVersion: 1, exportedAt: '', scope: { messageId: null, title: '公论' }, messages: [], relations: [] };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it('writes the worker Blob directly without serializing the archive again', async () => {
+  const blob = new Blob(['{"format":"gonglun-2"}'], { type: 'application/json' });
+  const stream = { write: vi.fn().mockResolvedValue(undefined), close: vi.fn().mockResolvedValue(undefined) };
+  vi.stubGlobal('showSaveFilePicker', vi.fn().mockResolvedValue({ createWritable: vi.fn().mockResolvedValue(stream) }));
+  await saveUpdatedExport(blob, '公论.json');
+  expect(stream.write).toHaveBeenCalledWith(blob);
+});
+
 it('writes the complete JSON to the selected file and commits only after the write succeeds', async () => {
   const stream = { write: vi.fn().mockResolvedValue(undefined), close: vi.fn().mockResolvedValue(undefined), abort: vi.fn() };
   const picker = vi.fn().mockResolvedValue({ createWritable: vi.fn().mockResolvedValue(stream) });

@@ -1,12 +1,11 @@
-import express from 'express';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createApp } from './app.js';
+import { webAssets } from './web.js';
 const app = (await createApp());
 const web = resolve('frontend/dist');
 if (existsSync(web)) {
-    app.use(express.static(web));
-    app.get('*', (_req, res) => res.sendFile(resolve(web, 'index.html')));
+    app.use(webAssets(web));
 }
 const port = Number(process.env.PORT ?? 3000);
 const server = app.listen(port, process.env.HOST ?? '127.0.0.1', () => console.log(`公论 http://localhost:${port}`));

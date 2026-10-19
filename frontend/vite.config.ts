@@ -1,9 +1,19 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import { randomUUID } from 'node:crypto'
+
+const buildId = randomUUID()
 
 export default defineConfig({
   base: './',
-  plugins: [react()],
+  define: { __APP_BUILD_ID__: JSON.stringify(buildId) },
+  plugins: [react(), {
+    name: 'app-build-version',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'build.json', source: JSON.stringify({ id: buildId }) })
+    },
+  }],
   server: {
     port: 5173,
     strictPort: true,

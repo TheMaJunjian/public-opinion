@@ -47,7 +47,16 @@ try {
     try { assert.equal((await request('/api/health')).status,200); break; }
     catch(error) { if(attempt >= 20) throw error; await new Promise(r=>setTimeout(r,500)); }
   }
-  assert.equal((await request('/')).status,200);
+  const entry=await request('/');
+  assert.equal(entry.status,200);assert.equal(entry.headers['cache-control'],'no-store');
+  const version=await request('/build.json');
+  assert.equal(version.status,200);assert.equal(version.headers['cache-control'],'no-store');
+  assert.equal(typeof version.body.id,'string');assert.ok(version.body.id);
+  const entryModule=entry.body.match(/<script[^>]*src="([^"]+)"/)[1].replace(/^\.\//,'/');
+  const client=await request(entryModule);
+  assert.equal(client.status,200);assert.ok(client.headers['cache-control'].includes('immutable'));
+  assert.ok(client.body.includes(version.body.id),'Client and deployment manifest must identify the same build');
+  assert.equal((await request('/assets/missing.js')).status,404);
   assert.equal((await request('/api/setup')).body.founderKeyRequired,true);
   assert.equal((await request('/api/register','POST',{name:'smoke-user',password:'smoke-password'})).status,403);
   const registered=await request('/api/register','POST',{name:'smoke-user',password:'smoke-password',founderKey:founder});

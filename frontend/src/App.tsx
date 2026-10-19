@@ -3,6 +3,8 @@ import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 're
 import { AuthProvider } from './context/AuthContext';
 import { InterfaceZoomContext } from './context/InterfaceZoomContext';
 import Navbar from './components/Navbar';
+import AppUpdateNotice from './components/AppUpdateNotice';
+import ErrorBoundary from './components/ErrorBoundary';
 import GestureShortcutManager from './components/GestureShortcutManager';
 import { GestureDirection, ShortcutSymbol } from './utils/gestureShortcut';
 
@@ -171,7 +173,13 @@ function AppContent() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <AppUpdateNotice />
+      <ErrorBoundary fallback={<div role="alert" style={{ padding: 24, color: '#eee' }}>
+        <p>页面加载失败，请检查网络后刷新页面。</p>
+        <button onClick={() => window.location.reload()}>刷新页面</button>
+      </div>}>
+        <AppContent />
+      </ErrorBoundary>
     </AuthProvider>
   );
 }

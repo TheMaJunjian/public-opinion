@@ -83,9 +83,16 @@ const catalogHarness = vi.hoisted(() => ({ callbacks: null as any, data: null as
   progress: { ready: false, count: 0, syncing: true }, prioritize: vi.fn(), filters: vi.fn() }));
 vi.mock('../data/catalogClient', async () => {
   const { deriveCleanVisibleIds } = await import('../utils/cleanProjection');
+  const { deriveHomeFilterResult } = await import('../pages/workbench/projections/homeFilterResult');
+  const { deriveContainerEffect } = await import('../pages/workbench/model/containerEffect');
+  const { getLatestUserReadStatusByMessageId } = await import('../pages/workbench/model/filters');
   catalogHarness.filters.mockImplementation(async (query: any) => ({
     clean: deriveCleanVisibleIds({ ...catalogHarness.data.projected, stakeCounts: catalogHarness.data.projected.counts,
-      tagCounts: catalogHarness.data.snapshot.tagCounts }, query.rules), home: null,
+      tagCounts: catalogHarness.data.snapshot.tagCounts }, query.rules),
+    home: query.home ? deriveHomeFilterResult({ ...catalogHarness.data.projected, displayUser: query.user, homeFilterMode: query.home,
+      msgMap: new Map(catalogHarness.data.projected.messages.map((message: Message) => [message.id, message])),
+      traceContainerMemberships: deriveContainerEffect({ ...catalogHarness.data.projected, username: query.user?.username ?? null }).memberships,
+      readStatusByMessageId: getLatestUserReadStatusByMessageId(catalogHarness.data.projected.relations, relation => relation.createdBy.id === query.user?.id) }) : null,
   }));
   return { createCatalogClient: (_user: string, _scope: string, callbacks: any) => {
     catalogHarness.callbacks = callbacks;
@@ -151,6 +158,15 @@ function makeRelation(): Relation {
 
 describe('rejected child container boundaries and single-side comparison',()=>{
   const latest=()=>mockGraphView.mock.lastCall![0];
+  const visibleGraphMessages = () => latest().messages.filter((message: Message) => !latest().visibleMessageIds || latest().visibleMessageIds.has(message.id));
+  const scrollToNextStructure = async () => {
+    const boundary = document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-message-window-boundary]')
+      ?? screen.getByText(/^当前已显示/);
+    const geometry = vi.spyOn(boundary, 'getBoundingClientRect').mockReturnValueOnce(new DOMRect(0, 100, 1, 1));
+    fireEvent.scroll(document);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 80)); });
+    geometry.mockRestore();
+  };
   const event=()=>({button:0,stopPropagation:vi.fn()});
   function fixture(type='CLASSIFY',joinOnly=false){
     const relation=(id:string,relationType:string,ids:string[]=[],sourceMessageId:string|null=null):Relation=>({id,relationType,sourceMessageId,targetRefs:ids.map(messageId=>({kind:'message',messageId})),payload:{title:id,targetLayout:'single-row'},createdAt:'2024-01-01T00:00:00Z',createdBy:makeUser()});
@@ -159,7 +175,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     mockApi.getRelations.mockResolvedValue({data:[relation('A','CLASSIFY',['C']),relation('C',type,joinOnly?[]:['B']),...(joinOnly?[relation('join-B','JOIN',['B'],'C')]:[]),relation('against-C','DISAGREE',['C'])]});
   }
   beforeEach(()=>{vi.clearAllMocks();HTMLElement.prototype.scrollIntoView=vi.fn();});
-  it('首次只加载一页，点击查看更多或跳转未加载编号时才请求对应消息', async () => {
+  it('does not draw an incomplete raw window before its organization model is complete', async () => {
     const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
     const snapshot = (records: Message[], nextCursor: string | null = null) => ({ windowed: true, regionId: 'region',
       scope: { messageId: 'classification-1', title: '按需讨论' }, sequence: 10, messages: records,
@@ -169,24 +185,28 @@ describe('rejected child container boundaries and single-side comparison',()=>{
         : cursor ? snapshot([makeMessage('older', '下一页消息')]) : snapshot([makeMessage('first', '首屏消息')], 'older-cursor'));
     const view = render(<MessageWorkbenchPage />);
     try {
-      const more = await screen.findByRole('button', { name: '加载更多消息' });
+      await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+      expect(screen.queryByTestId('graph-view')).toBeNull();
+      expect(mockGraphView).not.toHaveBeenCalled();
       expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.cursor)).toBe(false);
-      fireEvent.click(more);
-      await waitFor(() => expect(latest().messages.some((message: { id: string }) => message.id === 'older')).toBe(true));
-      expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.cursor === 'older-cursor')).toBe(true);
-      await waitFor(() => expect(screen.queryByRole('button', { name: '加载更多消息' })).toBeNull());
-      fireEvent.change(screen.getByRole('textbox', { name: '消息 ID' }), { target: { value: 'remote' } });
-      fireEvent.click(screen.getByRole('button', { name: '确认' }));
-      await waitFor(() => expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.ids?.includes('remote'))).toBe(true));
-      await waitFor(() => expect(latest().messages.some((message: { id: string }) => message.id === 'remote')).toBe(true));
-    } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); }
+      expect(catalogHarness.prioritize).toHaveBeenCalled();
+      act(() => catalogHarness.callbacks.onProgress({ ready: false, count: 1, syncing: false, error: '完整结构同步失败' }));
+      expect(await screen.findByText('完整结构同步失败')).toBeInTheDocument();
+      expect(mockGraphView).not.toHaveBeenCalled();
+      const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+      const full = { ...snapshot([makeMessage('first', '首屏消息'), makeMessage('older', '下一页消息')]), windowed: false };
+      act(() => catalogHarness.callbacks.onReady({ snapshot: full, projected: projectWorkbenchSnapshot(full), rows: { userRows: [], messageRows: [] } }));
+      await waitFor(() => expect(latest()?.messages).toHaveLength(2));
+      expect(screen.queryByRole('button', { name: '加载更多消息' })).toBeNull();
+    } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
   });
 
-  it('全局数据未齐时等待排行榜，补齐后用全量统计并只挂载一页消息，编号跳转可显示后续页', async () => {
+  it('waits for a complete model, keeps leaderboard statistics global and pins a later structure on navigation', async () => {
     const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
     const first = makeMessage('first-global', '首屏');
     const remoteUser = { id: 'remote-user', username: '远端用户', createdAt: '' };
-    const remote = Array.from({ length: 52 }, (_, index) => ({ ...makeMessage(`remote-${index}`, `后续消息${index}`), createdBy: remoteUser }));
+    const remote = Array.from({ length: 52 }, (_, index) => ({ ...makeMessage(`remote-${index}`, `后续消息${index}`), createdBy: remoteUser,
+      createdAt: new Date(Date.parse(first.createdAt) + (index + 1) * 1000).toISOString() }));
     const snapshot = { windowed: true, regionId: 'region', scope: { messageId: 'classification-1', title: '全局讨论' },
       sequence: 10, messages: [first], relations: [], users: [makeUser(), remoteUser], stakes: {}, tagCounts: {}, attentionUsers: {}, nextCursor: null };
     mockApi.getWorkbenchSnapshot.mockImplementation(async ({ after }: { after?: number }) => ({ ...snapshot, messages: after === undefined ? [first] : [] }));
@@ -197,30 +217,33 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     const rows = buildLeaderboardRows(leaderboardMetrics.buildLeaderboardMetrics(projected.messages, projected.edges, projected.relations, full.users), full.users, projected.counts, projected.bettors);
     const view = render(<MessageWorkbenchPage />);
     try {
-      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === first.id)).toBe(true));
       await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
-      fireEvent.click(screen.getByRole('button', { name: '排行榜' }));
-      await screen.findByText('正在准备全局排行榜…');
+      expect(screen.queryByTestId('graph-view')).toBeNull();
       expect(screen.queryByRole('dialog', { name: '排行榜' })).toBeNull();
       act(() => catalogHarness.callbacks.onReady({ snapshot: { ...full, sequence: 9 }, projected, rows }));
-      expect(latest().messages).toHaveLength(1);
+      expect(screen.queryByTestId('graph-view')).toBeNull();
       expect(screen.queryByRole('dialog', { name: '排行榜' })).toBeNull();
       act(() => {
         catalogHarness.data = { snapshot: full, projected, rows };
         catalogHarness.progress = { ready: true, count: 53, syncing: false };
         catalogHarness.callbacks.onReady(catalogHarness.data);
       });
+      fireEvent.click(await screen.findByRole('button', { name: '排行榜' }));
       const dialog = await screen.findByRole('dialog', { name: '排行榜' });
       const row = within(dialog).getByText(remoteUser.username).closest('tr')!;
       expect(row.children[4]).toHaveTextContent('52');
       fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
-      expect(latest().messages).toHaveLength(50);
+      expect(latest().messages).toHaveLength(53);
+      expect(visibleGraphMessages()).toHaveLength(50);
+      act(() => catalogHarness.callbacks.onProgress({ ready: false, count: 0, syncing: true }));
+      expect(visibleGraphMessages()).toHaveLength(50);
+      act(() => catalogHarness.callbacks.onReady(catalogHarness.data));
       fireEvent.change(screen.getByRole('textbox', { name: '消息 ID' }), { target: { value: 'remote-51' } });
       fireEvent.click(screen.getByRole('button', { name: '确认' }));
-      await waitFor(() => expect(latest().messages.some((message: Message) => message.id === 'remote-51')).toBe(true));
+      await waitFor(() => expect(visibleGraphMessages().some((message: Message) => message.id === 'remote-51')).toBe(true));
       expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.ids?.includes('remote-51'))).toBe(false);
-      fireEvent.click(screen.getByRole('button', { name: '加载更多消息' }));
-      await waitFor(() => expect(latest().messages).toHaveLength(53));
+      expect(visibleGraphMessages()).toHaveLength(53);
+      expect(screen.queryByRole('button', { name: '加载更多消息' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: '过滤' }));
       fireEvent.click(screen.getByRole('button', { name: '按发送者' }));
       const input = screen.getByPlaceholderText('例如: 张三');
@@ -231,6 +254,100 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(latest().messages.some((message: Message) => message.id === first.id)).toBe(false);
       expect(catalogHarness.prioritize).toHaveBeenCalled();
     } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
+  });
+
+  it('keeps whole organizations in both presentations and restores the table page after entering a classification', async () => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const peers = Array.from({ length: 150 }, (_, index) => makeMessage(`peer-${index}`, `同层 ${index}`));
+    const children = Array.from({ length: 65 }, (_, index) => makeMessage(`child-${index}`, `分类内部 ${index}`));
+    const organization = (id: string, type: string, ids: string[]): Relation => ({
+      id, relationType: type, sourceMessageId: null, targetRefs: ids.map(messageId => ({ kind: 'message', messageId })),
+      payload: { title: id, targetLayout: 'single-row' }, createdAt: peers[0].createdAt, createdBy: makeUser(),
+    });
+    const organizations = [organization('A', 'CLASSIFY', children.map(message => message.id)), organization('frame', 'ARRANGE', ['peer-0', 'peer-149'])];
+    const relationMessages: Message[] = organizations.map(relation => ({
+      id: relation.id, kind: 'RELATION', contentType: 'TEXT', content: relation.id, relationType: relation.relationType,
+      targetRefs: relation.targetRefs, relationPayload: relation.payload, createdAt: relation.createdAt, createdBy: relation.createdBy,
+    }));
+    const full = { regionId: 'region', scope: { messageId: 'classification-1', title: '结构分页' }, sequence: 10,
+      messages: [...peers, ...children, ...relationMessages], relations: organizations, users: [makeUser()],
+      stakes: {}, tagCounts: {}, attentionUsers: {} };
+    mockApi.getWorkbenchSnapshot.mockImplementation(async () => ({ ...full, windowed: true, messages: [], relations: [] }));
+    const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+      act(() => catalogHarness.callbacks.onReady({ snapshot: full, projected: projectWorkbenchSnapshot(full), rows: { userRows: [], messageRows: [] } }));
+      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'frame')).toBe(true));
+      const graphIds = visibleGraphMessages().map((message: Message) => message.id);
+      expect(graphIds).toEqual(expect.arrayContaining(['frame', 'peer-0', 'peer-149', 'A']));
+      expect(graphIds.some((id: string) => id.startsWith('child-'))).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      const row = (id: string) => document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]`);
+      await waitFor(() => expect(row('frame')).not.toBeNull());
+      expect(row('peer-0')).not.toBeNull(); expect(row('peer-149')).not.toBeNull();
+      expect(row('child-0')).toBeNull();
+      await scrollToNextStructure();
+      const visibleIds = () => [...document.querySelectorAll('[data-workbench-left-panel] [data-msgid]')].map(element => element.getAttribute('data-msgid'));
+      const parentIds = visibleIds();
+      expect(parentIds.length).toBeGreaterThan(graphIds.length);
+      fireEvent.doubleClick(row('A')!);
+      await waitFor(() => expect(row('child-0')).not.toBeNull());
+      expect(visibleIds().filter(id => id?.startsWith('child-'))).toHaveLength(50);
+      expect(row('peer-0')).toBeNull();
+      await scrollToNextStructure();
+      await waitFor(() => expect(visibleIds().filter(id => id?.startsWith('child-'))).toHaveLength(65));
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' }));
+      await waitFor(() => expect(visibleIds()).toEqual(parentIds));
+    } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
+  });
+
+  it('finds unread messages outside the mounted prefix and opens their cross-classification context without truncating the trace', async () => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const other = { ...makeUser(), id: 'other', username: '其他议事人' };
+    const peers = Array.from({ length: 75 }, (_, index) => ({ ...makeMessage(`unread-${index}`, `消息 ${index}`), createdBy: other,
+      createdAt: new Date(Date.parse('2024-01-01') + index * 1000).toISOString() }));
+    const hidden = { ...makeMessage('hidden-related', '另一分类中的相关正文'), createdBy: other };
+    const relation = (id: string, type: string, ids: string[], source: string | null = null): Relation => ({ id, relationType: type,
+      sourceMessageId: source, targetRefs: ids.map(messageId => ({ kind: 'message', messageId })), payload: { title: id },
+      createdAt: '2024-01-02', createdBy: makeUser() });
+    const relations = [relation('other-category', 'CLASSIFY', [hidden.id]), { ...relation('cross-unread', 'REFERENCE', ['unread-74'], hidden.id), createdBy: other },
+      ...peers.slice(0, 74).map(message => relation(`read-${message.id}`, 'READ', [message.id]))];
+    const relationMessages: Message[] = relations.map(item => ({ ...makeMessage(item.id, ''), kind: 'RELATION', relationType: item.relationType,
+      relSourceId: item.sourceMessageId, targetRefs: item.targetRefs, relationPayload: item.payload, createdAt: item.createdAt, createdBy: item.createdBy }));
+    const full = { regionId: 'region', scope: { messageId: 'classification-1', title: '未读与相关分页' }, sequence: 10,
+      messages: [...peers, hidden, ...relationMessages], relations, users: [makeUser(), other], stakes: {}, tagCounts: {}, attentionUsers: {} };
+    mockApi.getWorkbenchSnapshot.mockImplementation(async () => ({ ...full, windowed: true, messages: [], relations: [] }));
+    const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+      act(() => {
+        catalogHarness.data = { snapshot: full, projected: projectWorkbenchSnapshot(full), rows: { userRows: [], messageRows: [] } };
+        catalogHarness.callbacks.onReady(catalogHarness.data);
+      });
+      const card = (id: string) => document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]`);
+      await waitFor(() => expect(card('unread-0')).not.toBeNull());
+      expect(card('unread-74')).toBeNull(); expect(card(hidden.id)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: '主页' }));
+      fireEvent.click(screen.getByRole('radio', { name: /未读 · 其他/ }));
+      await waitFor(() => expect(catalogHarness.filters).toHaveBeenCalledWith(expect.objectContaining({ home: 'unread-other' })));
+      const filtered = await catalogHarness.filters.mock.results.at(-1)!.value;
+      expect([...filtered.home.matchIds]).toContain('unread-74');
+      await waitFor(() => expect(card('unread-74')).not.toBeNull());
+      expect(card('unread-0')).toBeNull(); expect(card(hidden.id)).toBeNull();
+      const target = within(card('unread-74')!);
+      fireEvent.click(target.getByRole('button', { name: /相关消息：1/ }));
+      await act(async () => fireEvent.click(target.getByRole('button', { name: '查看' })));
+      await waitFor(() => expect(card(hidden.id)).not.toBeNull());
+      expect(card('unread-74')).not.toBeNull();
+      expect(screen.getByText('追溯距离：1')).toBeInTheDocument();
+      expect(latest().visibleMessageIds).toBeUndefined();
+      fireEvent.click(screen.getByRole('button', { name: '退出查看' }));
+      await waitFor(() => expect(card(hidden.id)).toBeNull());
+      expect(card('unread-74')).not.toBeNull();
+    } finally { view.unmount(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
   });
 
   it('排行榜关闭重开复用统计与显示状态，不重新请求数据或读写设置，主动刷新仍可用', async () => {

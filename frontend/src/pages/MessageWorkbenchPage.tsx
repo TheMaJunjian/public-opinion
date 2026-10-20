@@ -146,7 +146,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
     displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading,
     tagCounts, setRelatedTraceContext, captureOptimisticRollback,
-    onDemand, messagePages, loadMoreMessages, loadMessageScope, ensureMessages,
+    onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent, globalRows,
   } = useWorkbenchData({ user, authLoading, scopeMessageId, navigate, viewMode });
   useWorkbenchLoadingProgress(loading && !preloadedData, loadError, preloadedData);
@@ -1256,7 +1256,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       : relation.createdBy.id === currentUserId);
   }, [displayUser?.username, isPreloaded, relations, user?.id]);
 
-  const homeFilterResult = useMemo(() => workerFilters ? globalFilters.result?.home ?? null : deriveHomeFilterResult({ displayUser, homeFilterMode, msgMap, messages, readStatusByMessageId, edges, traceContainerMemberships }), [workerFilters, globalFilters.result, displayUser?.username, edges, effectiveSuppressedRelIdsForLayout, homeFilterMode, isPreloaded, messages, msgMap, readStatusByMessageId, relations, traceContainerMemberships, user?.id]);
+  const isRelatedView = traceEntries.some(entry => entry.relatedView);
+  // The unread/home filter describes the view we came from. An explicit related
+  // view must retain both endpoints, including already-read context messages.
+  const homeFilterResult = useMemo(() => isRelatedView ? null : workerFilters ? globalFilters.result?.home ?? null : deriveHomeFilterResult({ displayUser, homeFilterMode, msgMap, messages, readStatusByMessageId, edges, traceContainerMemberships }), [isRelatedView, workerFilters, globalFilters.result, displayUser?.username, edges, effectiveSuppressedRelIdsForLayout, homeFilterMode, isPreloaded, messages, msgMap, readStatusByMessageId, relations, traceContainerMemberships, user?.id]);
 
   const homeDisplayRoleByMessageId = useMemo(() => {
     const roles = new Map<string, 'source' | 'target' | 'source-target'>();
@@ -2505,14 +2508,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }, [loading, isPreloaded, onDemand, searchParams, handleNavigateToMessage]);
 
   const activePageParent = joinFilterTargetId ? `related:${joinFilterTargetId}` : correctionFilterTargetId ? `related:${correctionFilterTargetId}` : containerPreviewId ?? currentClassifyRelMsgId ?? scopeMessageId;
-  const previousPageParent = useRef({ scope: scopeMessageId, parent: scopeMessageId });
-  useEffect(() => {
-    if (loading || isPreloaded || !onDemand || catalogReady) return;
-    if (previousPageParent.current.scope !== scopeMessageId) { previousPageParent.current = { scope: scopeMessageId, parent: scopeMessageId }; }
-    if (previousPageParent.current.parent === activePageParent) return;
-    previousPageParent.current.parent = activePageParent;
-    void loadMessageScope(activePageParent).catch(error => showAlert(error.message));
-  }, [activePageParent, scopeMessageId, loading, isPreloaded, onDemand, catalogReady, loadMessageScope, showAlert]);
 
   function confirmMessageIdNavigation(): void {
     const id = messageIdInput.trim();
@@ -2668,9 +2663,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     comparisonSide, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds, containerPreview]);
   const messageWindow = useMessageWindow(
     viewMode === 'list' ? previewMessages ?? messagesToRenderFiltered : graphMessagesFinal,
-    edgesToRender, onDemand && catalogReady && !isPreloaded && !comparisonReviewed && !containerPreview && traceEntries.length === 0,
+    edgesToRender, onDemand && !isPreloaded && !comparisonReviewed && !containerPreview && traceEntries.length === 0,
     JSON.stringify([scopeMessageId, activePageParent, viewMode, cleanFilters, homeFilterMode, msgFilter, comparisonMode]),
-    [lastClickedMessageId ?? '', ...draftUnits.map(unit => unit.messageId), ...sourceUnits.map(unit => unit.messageId), ...targetUnits.map(unit => unit.messageId)], onDemand && !catalogReady && !isPreloaded);
+    [lastClickedMessageId ?? '', ...draftUnits.map(unit => unit.messageId), ...sourceUnits.map(unit => unit.messageId), ...targetUnits.map(unit => unit.messageId)],
+    !comparisonReviewed && !containerPreview && traceEntries.length === 0);
   renderedMessageIdsRef.current = new Set(messageWindow.messages.map(message => message.id));
   renderedRelationIdsRef.current = new Set(edgesToRender.map(edge => edge.relationMessageId));
   const comparisonAgreeGraph = comparisonGraphProjections?.agree;
@@ -2834,7 +2830,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     onRelatedMessageNavigate={viewRelatedContainer}
                     standaloneMessageIds={standaloneMessageIds}
                     key={`gv-${classifyKey}-${traceKey}-${containerPreviewId??'base'}-${comparisonReviewed ? `comparison-${comparisonTargetId ?? 'none'}` : 'normal'}`}
-                    messages={!containerPreview&&comparisonReviewed ? comparisonGraphMessages : messageWindow.messages} edges={!containerPreview&&comparisonReviewed ? (comparisonAgreeGraph?.edges ?? temporaryEdgesToRender) : messageWindow.edges} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
+                    messages={!containerPreview&&comparisonReviewed ? comparisonGraphMessages : graphMessagesFinal} edges={!containerPreview&&comparisonReviewed ? (comparisonAgreeGraph?.edges ?? temporaryEdgesToRender) : edgesToRender} invalidCorrectionIds={invalidCorrectionIds} draftUnits={draftUnits}
+                    visibleMessageIds={messageWindow.enabled ? messageWindow.visibleIds : undefined}
+                    visibleEdgeIds={messageWindow.enabled ? messageWindow.edgeIds : undefined}
+                    structureOrder={messageWindow.enabled ? messageWindow.structureOrder : undefined}
                     comparisonPair={!containerPreview&&comparisonReviewed} comparisonTargetId={containerPreview?containerPreviewId:comparisonTargetId} comparisonRecommendedDisplay={comparisonRecommendedDisplay}
                     comparisonAgreeMessages={comparisonAgreeGraph?.messages} comparisonAgreeEdges={comparisonAgreeGraph?.edges}
                     comparisonAgreeContext={comparisonAgreeGraph?.context}
@@ -2887,9 +2886,8 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                 {!isPreloaded && onDemand && <React.Suspense fallback={null}>
                   {catalog && <CatalogStatus client={catalog} />}
                   {!globalFilterPending && <MessagePagination parent={activePageParent} loadedCount={messageWindow.messages.length}
-                    prefetch={!catalogReady} hasMore={catalogReady ? messageWindow.hasMore : !!messagePages[activePageParent]?.hasMore}
-                    loading={!catalogReady && !!messagePages[activePageParent]?.loading}
-                    panelRef={leftPanelRef} onMore={catalogReady ? messageWindow.more : loadMoreMessages} onError={showAlert} />}
+                    hasMore={messageWindow.hasMore} loading={messageWindow.loading}
+                    panelRef={leftPanelRef} onMore={messageWindow.more} onError={showAlert} />}
                 </React.Suspense>}
                 <div aria-hidden="true" style={{ height: 96, flexShrink: 0 }} />
               </div>
@@ -2965,7 +2963,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               setTraceDistance={changeTraceDistance}
               canSetTrace={canSetTrace}
               canExitTrace={canExitTrace}
-              isRelatedView={traceEntries.some(entry => entry.relatedView)}
+              isRelatedView={isRelatedView}
               getSelectedWholeMessageIds={getSelectedWholeMessageIds}
               lastClickedMessageId={lastClickedMessageId}
               enterTraceMultiple={enterTraceMultiple}

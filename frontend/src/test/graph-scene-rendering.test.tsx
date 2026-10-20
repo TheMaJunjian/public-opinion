@@ -6,6 +6,7 @@ import { withCorrectionContent, type DemoEdge, type DemoMessage } from '../utils
 import MessageCard from '../components/MessageCard';
 import { GRID_TOP } from '../utils/layout';
 import type { Relation } from '../types';
+import { planMessageStructures } from '../utils/messageStructurePlan';
 
 const message = (id: string): DemoMessage => ({ id, author: 'tester', content: id, kind: 'normal', createdAt: '2026-01-01T00:00:00Z' });
 const relation = (id: string, type: DemoEdge['relationType'], source: string, target: string): DemoEdge => ({
@@ -23,6 +24,40 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it.each([false, true])('preserves mounted card positions when later structures with different heights are revealed (edge-only frame=%s)', edgeOnlyFrame => {
+    const records = Array.from({ length: 120 }, (_, index) => ({ ...message(`m-${index}`), createdAt: new Date(index * 1000).toISOString() }));
+    const edges: DemoEdge[] = edgeOnlyFrame ? [
+      { ...relation('virtual-frame', 'arrange', 'anon:virtual-frame', 'm-0'), id: 'virtual-0' },
+      { ...relation('virtual-frame', 'arrange', 'anon:virtual-frame', 'm-119'), id: 'virtual-119' },
+    ] : [];
+    const plan = planMessageStructures({ messages: records, edges });
+    const visible = (limit: number) => {
+      const units = new Set(plan.units.slice(0, limit));
+      return new Set(plan.order.filter(id => units.has(plan.byId.get(id)!)));
+    };
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      const index = Number(this.dataset.msgid?.slice(2));
+      return Number.isFinite(index) ? 100 + (index % 7) * 50 : 36;
+    });
+    try {
+      const props: GraphViewProps = { messages: records, edges, structureOrder: plan.order, visibleMessageIds: visible(50), draftUnits: [],
+        activeTextSelectId: null, lastClickedMessageId: null, voteStats: {}, onMessageClick: vi.fn(), onMessageDoubleClick: vi.fn(),
+        onTextMouseUp: vi.fn(), onEdgeLabelSingleClick: vi.fn(), onEdgeLabelDoubleClick: vi.fn(), onFragmentAnchorClick: vi.fn(), isFragmentSelected: () => false };
+      const view = render(<GraphView {...props} />);
+      const positions = () => [...view.container.querySelectorAll<HTMLElement>('[data-msgid]')].filter(element => visible(50).has(element.dataset.msgid!))
+        .map(element => [element.dataset.msgid, element.style.left, element.style.top]);
+      const before = positions();
+      const canvasHeightBefore = parseFloat(view.container.querySelector<HTMLElement>('[data-jump-canvas]')!.style.height);
+      expect(before).toHaveLength(edgeOnlyFrame ? 51 : 50);
+      view.rerender(<GraphView {...props} visibleMessageIds={visible(100)} />);
+      expect(new Set([...view.container.querySelectorAll<HTMLElement>('[data-msgid]')]
+        .map(element => element.dataset.msgid).filter(id => plan.byId.has(id!) && id !== 'virtual-frame')).size).toBe(edgeOnlyFrame ? 101 : 100);
+      expect(positions()).toEqual(before);
+      expect(parseFloat(view.container.querySelector<HTMLElement>('[data-jump-canvas]')!.style.height)).toBeGreaterThan(canvasHeightBefore);
+      view.rerender(<GraphView {...props} visibleMessageIds={visible(120)} />);
+      expect(positions()).toEqual(before);
+    } finally { height.mockRestore(); }
+  });
   it('renders corrected part text in both graph and list cards while retaining the original stored text',()=>{
     const original:DemoMessage={...message('corrected-target'),content:'好玩吗？',parts:[{id:'body',type:'text',text:'好玩吗？'}]};
     const corrected=withCorrectionContent(original,'好玩1111');

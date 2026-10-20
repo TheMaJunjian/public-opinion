@@ -29,7 +29,7 @@ export default function OrganizationFrameHeader({ message, messageId, kind, memb
   const typeRef = message && messageTypeReference(message);
   const membersRef = message && messageMembersReference(message);
   return <>
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, height: kind === 'merge' ? '100%' : undefined }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: '#f3f4f6', flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
         {message ? <MessageTextPart message={message} activeText={activeText} onMouseUp={onTextMouseUp}>{content}</MessageTextPart> : content}
       </div>

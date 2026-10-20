@@ -3,6 +3,12 @@ import type { RefObject } from 'react';
 import { MIN_CARD_H } from '../utils/layout';
 import { useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
 
+function measuredHeight(element: HTMLElement, height: number): number {
+  const configured = Number(element.dataset.measureMinHeight);
+  const minimum = Number.isFinite(configured) && configured > 0 ? configured : MIN_CARD_H;
+  return Math.max(minimum, Number.isFinite(height) ? Math.ceil(height) : minimum);
+}
+
 /** Keep one observer while positions change; observe only mounted/replaced cards. */
 export function useCardMeasurements(
   canvas: RefObject<HTMLDivElement>,
@@ -34,7 +40,7 @@ export function useCardMeasurements(
           if (!id) continue;
           // offsetHeight is in canvas CSS pixels, independent of zoom transforms.
           const height = entry.borderBoxSize?.[0]?.blockSize ?? element.offsetHeight;
-          pending.current[id] = Math.max(MIN_CARD_H, Math.ceil(height));
+          pending.current[id] = measuredHeight(element, height);
         }
         if (scheduled.current !== null) return;
         scheduled.current = requestAnimationFrame(() => {
@@ -89,7 +95,7 @@ export function useCardMeasurements(
         setHeights(previous => {
           const next = { ...previous };
           for (const element of added) if (element.dataset.msgid) {
-            next[element.dataset.msgid] = Math.max(MIN_CARD_H, Math.ceil(element.offsetHeight));
+            next[element.dataset.msgid] = measuredHeight(element, element.offsetHeight);
           }
           return next;
         });

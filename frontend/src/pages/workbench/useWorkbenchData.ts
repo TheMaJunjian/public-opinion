@@ -45,7 +45,6 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const [showUnauthenticatedNotice, setShowUnauthenticatedNotice] = useState(false);
   const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
   const syncRef = useRef<ReturnType<typeof syncWorkbench> | null>(null);
-  const [messagePages, setMessagePages] = useState<Record<string, { hasMore: boolean; loading: boolean }>>({});
   const [onDemand, setOnDemand] = useState(false);
   const [catalog, setCatalog] = useState<CatalogClient | null>(null);
   const catalogRef = useRef<CatalogClient | null>(null);
@@ -60,8 +59,6 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     && messages === publishedCatalog.current.projected.messages && edges === publishedCatalog.current.projected.edges
     && relations === publishedCatalog.current.projected.relations && stakeCounts === publishedCatalog.current.projected.counts
     && messageBettorCounts === publishedCatalog.current.projected.bettors;
-  const loadMoreMessages = useCallback((parent: string) => syncRef.current?.loadMore(parent) ?? Promise.reject(new Error('讨论尚未载入')), []);
-  const loadMessageScope = useCallback((parent: string) => syncRef.current?.loadScope(parent) ?? Promise.reject(new Error('讨论尚未载入')), []);
   const ensureMessages = useCallback((ids: string[]) => syncRef.current?.ensureMessages(ids) ?? Promise.reject(new Error('讨论尚未载入')), []);
   const [isPreloaded, setIsPreloaded] = useState(false);
   const [viewerUser, setViewerUser] = useState<User | null>(() => {
@@ -90,7 +87,6 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     if (!preloadedData || preloadedLoaded.current === preloadedData) return;
     const task = startProjection();
     setLoadError(null);
-    setMessagePages({});
     // Let the drawing dialog paint before converting and laying out a large file.
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
@@ -139,7 +135,6 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     if (!scopeMessageId || preloadedData || authLoading || !user) return;
     setLoading(true);
     setLoadError(null);
-    setMessagePages({});
     catalogReadyRef.current = false;
     publishedCatalog.current = null;
     windowVersion.current = { regionId: undefined, sequence: 0 };
@@ -162,13 +157,23 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
             publishedCatalog.current = { snapshot, projected, rows };
             records.replace(snapshot, projected); setGlobalRows(rows);
             setCatalogVersion(version => version + 1);
+            setIsPreloaded(false); setLoading(false); setLoadError(null);
           },
           onProgress(progress) {
             if (cancelled || progress.ready) return;
             catalogReadyRef.current = false; setCatalogReady(false);
+            if (progress.error) { setLoadError(progress.error); setLoading(false); }
           },
         }, regionId);
         catalogRef.current = client; setCatalog(client);
+        // The first visible model needs all organization and stance records.
+        // Do not wait for idle budgets while the workbench is still loading.
+        client.prioritize();
+      }).catch(error => {
+        if (cancelled) return;
+        catalogStarting = false;
+        setLoadError(error instanceof Error ? error.message : String(error));
+        setLoading(false);
       });
     };
     void Promise.all([import('../../data/workbench'), import('../../data/workbenchCache')]).then(([{ syncWorkbench }, { createWorkbenchCache }]) => {
@@ -178,13 +183,17 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
         cache: createWorkbenchCache(user.id, scopeMessageId),
         load: api.getWorkbenchSnapshot,
         events: api.subscribeChanges,
-        onPages: pages => setMessagePages(previous => Object.keys(previous).length === Object.keys(pages).length
-          && Object.entries(pages).every(([parent, page]) => previous[parent]?.hasMore === page.hasMore && previous[parent]?.loading === page.loading) ? previous : pages),
         onSyncState: active => { if (active) beginWorkbenchSync(); else finishWorkbenchSync(); },
         onSnapshot(snapshot) {
           windowVersion.current = { regionId: snapshot.regionId, sequence: snapshot.sequence };
           setOnDemand(!!snapshot.windowed);
-          if (snapshot.windowed) startCatalog(snapshot.regionId);
+          if (snapshot.windowed) {
+            startCatalog(snapshot.regionId);
+            catalogRef.current?.catchUp();
+            // A raw record window cannot establish membership, suppression or
+            // correction chains. Publish only the complete catalog projection.
+            return;
+          }
           catalogRef.current?.catchUp();
           if (!catalogReadyRef.current) {
             if (graphViewRef.current) beginWorkbenchDrawing();
@@ -258,7 +267,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
     refreshLeaderboard, registeredUsers, isPreloaded, viewerUser, setViewerUser,
     displayUser, correctionVersions, preloadedData, loadedExport, viewerUsers, loading,
     tagCounts,
-    onDemand, messagePages, loadMoreMessages, loadMessageScope, ensureMessages,
+    onDemand, ensureMessages,
     catalog, catalogReady, catalogVersion, catalogComputationsCurrent,
     globalRows: catalogComputationsCurrent ? globalRows : undefined,
   };

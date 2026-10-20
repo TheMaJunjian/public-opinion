@@ -1,12 +1,12 @@
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
-import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
+import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import { computeCorrectionVersions, isCardMessage } from '../utils/modelBridge';
-import { computeSceneLayout } from '../utils/frameLayout';
+import { useSceneComputation } from '../hooks/useSceneComputation';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { getMessageProminence, getOrganizationTitle, needsSeparateStanceCard } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
@@ -25,7 +25,7 @@ import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
 import JoinRecordBadges from './JoinRecordBadges';
 import ComparisonPane, { COMPARISON_HEADER_HEIGHT } from './ComparisonPane';
 import {indexRelatedMessages,isRejectedContainer} from '../utils/relatedMessages';
-import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD } from '../utils/layout';
+import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H } from '../utils/layout';
 import type { Relation } from '../types';
 import { noteWorkbenchDrawingProgress, reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
 import { useWorkbenchDrawingCommit, useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
@@ -39,6 +39,9 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 export interface GraphViewProps {
   messages: DemoMessage[];
+  visibleMessageIds?: ReadonlySet<string>;
+  visibleEdgeIds?: ReadonlySet<string>;
+  structureOrder?: string[];
   relatedMessages?:DemoMessage[];
   relatedEdges?:DemoEdge[];
   onRelatedRelationView?:(id:string)=>void;
@@ -150,6 +153,7 @@ export interface GraphViewProps {
 }
 
 const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
+const EMPTY_SCENE_LAYOUT = { layout: {} as Record<string, LayoutBox>, frameRects: {} as Record<string, LayoutBox>, colOf: {} as Record<string, number>, canvasHeight: 0 };
 
 const COMPARISON_CANVAS_EXTRA_RIGHT_PAD = 96;
 
@@ -433,7 +437,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const headerRefs = useRef<Record<string,HTMLDivElement|null>>({});
   const textRefs = useRef<Record<string,SVGTextElement|null>>({});
 
-  const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals, normalIds,
+  const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId, frameBlocks, frameDepthMap,
     correctedEdgeIdsByRelMsg, pipelineCol, pipelineMaxCol } = useMemo(() => projectGraphScene({
       messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,hiddenMessageIds:effectiveHideMessageIds,
@@ -499,15 +503,28 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   // Organizations are measured bottom-up once. Their measured dimensions are
   // known before placing the outer scene, so no correction/avoidance passes run.
-  const { layout, frameRects: finalFrameRects, colOf, canvasHeight } = useMemo(
-    () => computeSceneLayout({
+  const layoutJob = useMemo(
+    () => ({ kind: 'layout' as const, input: {
       normals, colOf: pipelineCol, measuredHeights, measuredWidths,
       maxCol: pipelineMaxCol, correctedTargetIds: hiddenTargetIds,
       frameBlocks, allMessages: messages, edges: layoutEdges, traceMode: isTraceWindow,
-    }),
+      structureOrder: props.structureOrder,
+    } }),
     [normals, pipelineCol, pipelineMaxCol, measuredHeights, measuredWidths,
-      hiddenTargetIds, frameBlocks, messages, layoutEdges, isTraceWindow],
+      hiddenTargetIds, frameBlocks, messages, layoutEdges, isTraceWindow, props.structureOrder],
   );
+  const sceneLayout = useSceneComputation(layoutJob, true);
+  const { layout, frameRects: finalFrameRects, colOf, canvasHeight } = sceneLayout ?? EMPTY_SCENE_LAYOUT;
+  const visibleNormals = useMemo(() => props.visibleMessageIds ? normals.filter(message => props.visibleMessageIds!.has(message.id)) : normals, [normals, props.visibleMessageIds]);
+  const visibleNormalIds = useMemo(() => visibleNormals.map(message => message.id), [visibleNormals]);
+  const visibleEdges = useMemo(() => props.visibleEdgeIds ? edges.filter(edge => props.visibleEdgeIds!.has(edge.id)) : edges, [edges, props.visibleEdgeIds]);
+  const visibleBottom = useMemo(() => {
+    let bottom = 0;
+    for (const [id, box] of [...Object.entries(layout), ...Object.entries(finalFrameRects)]) {
+      if (!props.visibleMessageIds || props.visibleMessageIds.has(id)) bottom = Math.max(bottom, box.y + box.height);
+    }
+    return bottom;
+  }, [layout, finalFrameRects, props.visibleMessageIds]);
   const actualCanvasWidth = useMemo(() => {
     let w = canvasWidth;
     for (const box of Object.values(layout)) w = Math.max(w, box.x + box.width + canvasRightPad);
@@ -515,11 +532,14 @@ function GraphViewCanvas(props: GraphViewProps) {
     return w;
   }, [canvasWidth, canvasRightPad, layout, finalFrameRects]);
   const actualCanvasHeight = useMemo(() => {
+    // Reserve geometry in the layout model, not empty scrollable DOM space.
+    // End/scrollbar navigation must reach the mounted boundary and load onward.
+    if (props.visibleMessageIds) return visibleBottom + CANVAS_BOTTOM_PAD;
     let h = canvasHeight;
     for (const box of Object.values(layout)) h = Math.max(h, box.y + box.height + CANVAS_BOTTOM_PAD);
     for (const r of Object.values(finalFrameRects)) h = Math.max(h, r.y + r.height + CANVAS_BOTTOM_PAD);
     return h;
-  }, [canvasHeight, layout, finalFrameRects]);
+  }, [canvasHeight, layout, finalFrameRects, props.visibleMessageIds, visibleBottom]);
   const anonCorrectedRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
@@ -533,7 +553,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [edges, msgMap]);
 
   const { positionedEdges, labelBboxes, decorationRectsState, decorationsByMsgState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, relDecByRelMsgState, tagsByRelMsgState } = useGraphOverlays({
-    canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
+    canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
   });
 
   useLayoutEffect(() => {
@@ -555,11 +575,11 @@ function GraphViewCanvas(props: GraphViewProps) {
   const relatedCatalog = useMemo(() => new Map((props.relatedMessages ?? messages).map(message => [message.id, message])), [props.relatedMessages, messages]);
   const relatedConnections = useMemo(() => props.relatedEdges ? deriveCrossCanvasRelations({
     edges: props.relatedEdges,
-    visibleMessageIds: new Set([...normalIds.filter(id => !effectiveHideMessageIds.has(id)),
+    visibleMessageIds: new Set([...visibleNormalIds.filter(id => !effectiveHideMessageIds.has(id)),
       ...visibleGroupFrames.map(frame => frame.relMsgId), ...visibleArrangeFrames.map(frame => frame.relMsgId),
       ...positionedEdges.map(positioned => positioned.edge.relationMessageId)]),
     renderedEdges: positionedEdges.map(positioned => positioned.edge),
-  }) : crossCanvasRelations, [props.relatedEdges, normalIds, effectiveHideMessageIds, visibleGroupFrames, visibleArrangeFrames, positionedEdges, crossCanvasRelations]);
+  }) : crossCanvasRelations, [props.relatedEdges, visibleNormalIds, effectiveHideMessageIds, visibleGroupFrames, visibleArrangeFrames, positionedEdges, crossCanvasRelations]);
   const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={relatedConnections?.get(messageId)}
     messages={relatedCatalog} selectedUnits={draftUnits} onView={props.onRelatedRelationView ?? onNavigateToMessage} />;
 
@@ -714,8 +734,9 @@ function GraphViewCanvas(props: GraphViewProps) {
   return (
     <div ref={canvasRef} data-jump-canvas="true" style={{position:"relative",width:actualCanvasWidth,height:actualCanvasHeight,zIndex:0}}
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
+      {props.visibleMessageIds && <div data-message-window-boundary="true" aria-hidden="true" style={{ position: 'absolute', top: visibleBottom, left: 0, height: 1, width: 1 }} />}
       <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
-        {normals.map(msg=>{
+        {visibleNormals.map(msg=>{
           const box=layout[msg.id]; if(!box) return null;
           const prominence = getMessageProminence(msg);
           if (effectiveHideMessageIds.has(msg.id) || traceExpandedFrameIds.has(msg.id)) return null;
@@ -1518,6 +1539,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             })()}
             {(gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
               <div data-msgid={gf.relMsgId} data-rel-overlay="true"
+                data-measure-min-height={gf.relType === 'merge' ? MERGE_CARD_H : GROUP_HEADER_HEIGHT}
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}
                 role="group" tabIndex={0} aria-label={`组织消息 ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
                 onClick={handleClick}
@@ -1545,7 +1567,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                         left: groupHeaderRect.x,
                         top: groupHeaderRect.y,
                         width: groupHeaderRect.width,
-                        minHeight: groupHeaderRect.height,
+                        minHeight: GROUP_HEADER_HEIGHT,
                         background: isRelWholeSel(gf.relMsgId) ? "#5b4100" : isSummaryHeader ? "rgba(52,211,153,0.08)" : "#1f1f1f",
                         color: "#f5f5f5",
                         borderRadius: 6,

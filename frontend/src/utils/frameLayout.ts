@@ -24,6 +24,8 @@ export interface SceneLayoutInput {
   activeTextSelectId?: string | null;
   traceMode?: boolean;
   edges?: DemoEdge[];
+  /** Keep complete loading units contiguous even when relation records have no card. */
+  structureOrder?: string[];
 }
 interface Item {
   id: string;
@@ -118,7 +120,7 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     item.column = columns[0] ?? item.column;
     item.time = children.length ? Math.min(item.time, ...children.map(child => child.time)) : item.time;
     item.header = frame.hasGroupHeader ? Math.max(56, input.measuredHeights[id] ?? 56) : 0;
-    const insideHeader = frame.isMerge ? MERGE_CARD_H + 8 : 0;
+    const insideHeader = frame.isMerge ? Math.max(MERGE_CARD_H, input.measuredHeights[id] ?? MERGE_CARD_H) + 8 : 0;
     const top = item.header + FRAME_PAD + insideHeader;
     const frontier = new Frontier();
     let right = GRID_LEFT + CARD_W;
@@ -163,7 +165,9 @@ export function computeSceneLayout(input: SceneLayoutInput) {
   const layout: Record<string, Box> = {};
   const frameRects: Record<string, Box> = {};
   const colOf = { ...input.colOf };
+  const placementOrder: string[] = [];
   const emit = (item: Item, x: number, y: number) => {
+    placementOrder.push(item.id);
     colOf[item.id] = Math.round((x - GRID_LEFT) / (CARD_W + COL_GAP));
     if (item.frame) {
       frameRects[item.id] = { x, y: y + item.header, width: item.width, height: item.height - item.header };
@@ -195,7 +199,17 @@ export function computeSceneLayout(input: SceneLayoutInput) {
   }
   let bottom = GRID_TOP;
   const occupied = new Frontier();
-  for (const component of components.values()) {
+  const orderedComponents = [...components.values()];
+  if (input.structureOrder) {
+    const ranks = new Map(input.structureOrder.map((id, index) => [id, index]));
+    const rootRanks = new Map<string, number>();
+    for (const [id, root] of rootByMember) {
+      rootRanks.set(root.id, Math.min(rootRanks.get(root.id) ?? Infinity, ranks.get(id) ?? Infinity));
+    }
+    const rank = (component: Item[]) => component.reduce((minimum, item) => Math.min(minimum, rootRanks.get(item.id) ?? Infinity), Infinity);
+    orderedComponents.sort((a, b) => rank(a) - rank(b));
+  }
+  for (const component of orderedComponents) {
     // Column numbers express ordering, not reserved empty screen space. Each
     // discussion starts at the left and occupies only its visible columns.
     const columns = [...new Set(component.map(root => root.column))].sort((a, b) => a - b);
@@ -242,5 +256,5 @@ export function computeSceneLayout(input: SceneLayoutInput) {
       bottom = Math.max(bottom, y + root.height);
     }
   }
-  return { layout, frameRects, colOf, canvasHeight: bottom + CANVAS_BOTTOM_PAD, measuredFrames };
+  return { layout, frameRects, colOf, canvasHeight: bottom + CANVAS_BOTTOM_PAD, measuredFrames, placementOrder };
 }

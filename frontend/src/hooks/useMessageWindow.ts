@@ -1,26 +1,76 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
+import { useSceneComputation } from './useSceneComputation';
+import { WorkbenchDrawingContext, useWorkbenchDrawingTask, type WorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
 
-/** Limit mounted cards only; all semantic projections keep the complete catalog. */
-export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], enabled: boolean, key: string, pinned: string[], retain = false) {
-  const [page, setPage] = useState({ key, limit: 50 });
-  useEffect(() => {
-    if (retain) setPage(previous => previous.key === key && previous.limit >= messages.length ? previous
-      : { key, limit: Math.max(50, messages.length) });
-  }, [retain, key, messages.length]);
-  const limit = page.key === key ? page.limit : 50;
+/** Reveal complete structures in the graph's placement order, in either presentation. */
+export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], enabled: boolean, key: string, pinned: string[], organize = enabled) {
+  const [limits, setLimits] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const [loading, setLoading] = useState(false);
+  const startTask = useWorkbenchDrawingTask('positioning');
+  const tasks = useContext(WorkbenchDrawingContext);
+  const request = useRef<{ key: string; limit: number; task: WorkbenchDrawingTask; promise: Promise<void>; finish(): void; started?: boolean } | null>(null);
+  const job = useMemo(() => organize ? { kind: 'structures' as const, input: { messages, edges } } : null, [messages, edges, organize]);
+  const structure = useSceneComputation(job);
+  const limit = limits.get(key) ?? 50;
   const pinnedKey = pinned.join('\0');
+  const effectiveLimit = useMemo(() => {
+    let next = limit;
+    if (structure) for (const id of pinned) {
+      const unit = structure.byId.get(id);
+      // Navigation reveals the preceding prefix too, so later mounting cannot
+      // insert an unmeasured structure above the selected target.
+      if (unit) next = Math.max(next, structure.units.indexOf(unit) + 1);
+    }
+    return next;
+  }, [structure, limit, pinnedKey]);
   const visible = useMemo(() => {
-    if (!enabled || messages.length <= limit) return messages;
-    const pins = new Set(pinned);
-    return messages.filter((message, index) => index < limit || pins.has(message.id));
-  }, [messages, enabled, limit, pinnedKey]);
-  const visibleEdges = useMemo(() => {
-    if (visible === messages) return edges;
-    const ids = new Set(visible.map(message => message.id));
-    return edges.filter(edge => ids.has(edge.relationMessageId)
-      || (ids.has(edge.to.messageId) && (ids.has(edge.from.messageId) || edge.from.messageId.startsWith('anon:'))));
-  }, [edges, messages, visible]);
-  const more = useCallback(async () => { setPage(previous => ({ key, limit: (previous.key === key ? previous.limit : 50) + 50 })); }, [key]);
-  return { messages: visible, edges: visibleEdges, hasMore: visible.length < messages.length, more };
+    if (!organize) return messages;
+    if (!structure) return [];
+    const selected = new Set(structure.units.slice(0, enabled ? effectiveLimit : undefined));
+    const records = new Map(messages.map(message => [message.id, message]));
+    return structure.order.filter(id => selected.has(structure.byId.get(id)!)).map(id => records.get(id)!);
+  }, [messages, structure, effectiveLimit, enabled, organize]);
+  const visibleIds = useMemo(() => new Set(visible.map(message => message.id)), [visible]);
+  const visibleEdges = useMemo(() => enabled ? edges.filter(edge => visibleIds.has(edge.relationMessageId)
+    || visibleIds.has(edge.from.messageId) || visibleIds.has(edge.to.messageId)) : edges, [edges, visibleIds, enabled]);
+  const edgeIds = useMemo(() => new Set(visibleEdges.map(edge => edge.id)), [visibleEdges]);
+  const hasMore = enabled && !!structure && effectiveLimit < structure.units.length;
+  useLayoutEffect(() => {
+    if (enabled && effectiveLimit > limit) setLimits(previous => new Map(previous).set(key, effectiveLimit));
+  }, [enabled, effectiveLimit, limit, key]);
+  useLayoutEffect(() => {
+    const current = request.current;
+    if (!current) return;
+    if (current.key !== key || !enabled) { current.task.cancel(); current.finish(); return; }
+    if (limit < current.limit || current.started) return;
+    current.started = true;
+    if (current.task.afterLayout) current.task.afterLayout(() => { current.task.complete(); current.finish(); });
+    else {
+      let second = 0;
+      const first = requestAnimationFrame(() => { second = requestAnimationFrame(() => { current.task.complete(); current.finish(); }); });
+      const cancel = current.task.cancel;
+      current.task.cancel = () => { cancelAnimationFrame(first); cancelAnimationFrame(second); cancel(); };
+    }
+  }, [key, limit, enabled]);
+  useLayoutEffect(() => () => { const current = request.current; if (current) { current.task.cancel(); current.finish(); } }, []);
+  const more = useCallback((): Promise<void> => {
+    if (request.current) return request.current.promise;
+    if (!hasMore || !structure || tasks?.failure) return Promise.resolve();
+    const task = startTask();
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    const nextLimit = Math.min(structure.units.length, effectiveLimit + 50);
+    const current = { key, limit: nextLimit, task, promise, finish() {
+      if (request.current === current) { request.current = null; setLoading(false); }
+      resolve();
+    } };
+    request.current = current;
+    task.onCancel(current.finish);
+    setLoading(true);
+    setLimits(previous => new Map(previous).set(key, nextLimit));
+    return promise;
+  }, [key, structure, effectiveLimit, hasMore, startTask, tasks]);
+  return { messages: visible, edges: visibleEdges, visibleIds, edgeIds, structureOrder: structure?.order,
+    hasMore, more, loading: loading || (organize && !structure), enabled };
 }

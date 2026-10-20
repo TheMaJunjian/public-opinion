@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { render } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
 
@@ -37,5 +37,29 @@ describe('canvas size observation', () => {
     expect(unobserve).toHaveBeenCalledTimes(1);
     view.unmount();
     expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+  it('measures a compact merge header at its own minimum and allows a long header to shrink', async () => {
+    let notify!: ResizeObserverCallback;
+    let naturalHeight = 400;
+    window.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) { notify = callback; }
+      observe() {} unobserve() {} disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const offset = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.msgid === 'merge' ? naturalHeight : 0;
+    });
+    function Header() {
+      const canvas = useRef<HTMLDivElement>(null), cards = useRef<Record<string, HTMLDivElement | null>>({});
+      const heights = useCardMeasurements(canvas, cards);
+      return <div ref={canvas}><div data-msgid="merge" data-measure-min-height="36" ref={element => { cards.current.merge = element; }} />
+        <output>{heights.merge}</output></div>;
+    }
+    try {
+      const view = render(<Header />);
+      expect(view.getByRole('status')).toHaveTextContent('400');
+      naturalHeight = 36;
+      act(() => notify([{ target: view.container.querySelector('[data-msgid]')! } as ResizeObserverEntry], {} as ResizeObserver));
+      await waitFor(() => expect(view.getByRole('status')).toHaveTextContent('36'));
+    } finally { offset.mockRestore(); }
   });
 });

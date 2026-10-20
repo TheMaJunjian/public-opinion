@@ -11,6 +11,17 @@ const edge = (id: string, source: string, target: string): DemoEdge => ({ id, re
 const frame = (id: string, members: string[], children: string[] = []): FrameBlock => ({ relMsgId: id, cardIds: new Set([...members, ...children]), directCardIds: new Set(members), childRelMsgIds: children, isMerge: false, hasGroupHeader: true });
 
 describe('scene layout', () => {
+  it('reserves the measured merge header above members and shrinks when that header becomes shorter', () => {
+    const normals = ['a', 'b'].map(message);
+    const merge = { ...frame('merge', ['a', 'b']), isMerge: true, hasGroupHeader: false };
+    const layout = (height: number) => computeSceneLayout({ normals, allMessages: normals, colOf: {}, maxCol: 0,
+      measuredHeights: { merge: height }, measuredWidths: {}, frameBlocks: [merge] });
+    const tall = layout(360), short = layout(36);
+    expect(tall.layout.a.y).toBeGreaterThanOrEqual(tall.frameRects.merge.y + 8 + 360);
+    expect(tall.frameRects.merge.height - short.frameRects.merge.height).toBe(324);
+    expect(tall.layout.a.y - short.layout.a.y).toBe(324);
+  });
+
   it('removes covered cards before packing instead of reserving one empty row per hidden message', () => {
     const normals = ['a', 'b', 'c', 'summary'].map(message);
     const result = computeSceneLayout({ normals, allMessages: normals, edges: [], colOf: {}, maxCol: 0,

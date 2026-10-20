@@ -27,7 +27,7 @@ describe('addressed send commands', () => {
       { messageId: target.id, selection: { kind: 'whole' }, reference: { messageId: target.id, revision: 3, partId: 'body' } },
       { messageId: target.id, selection: { kind: 'edge', edgeId: 'edge' }, reference: { messageId: target.id, revision: 3, partId: 'stance' } },
     ];
-    const createRel = vi.fn(async (_scope: string, _data: Parameters<typeof api.createRelation>[1]) => relationResult);
+    const createRel = vi.fn<(scope: string, data: Parameters<typeof api.createRelation>[1]) => Promise<Relation>>(async () => relationResult);
     await handleCreateRelationWithSourcesAndTargets({
       requireAuth: () => true, scopeMessageId: 'root', relationType: 'agree', msgMap: new Map([[source.id, source], [target.id, target]]),
       newMessageContent: '', createRel, registerCreatedRelationInCurrentClassify: vi.fn(async () => null), showAlert: vi.fn(),

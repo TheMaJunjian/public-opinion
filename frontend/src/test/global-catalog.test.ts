@@ -60,7 +60,7 @@ it('resumes incomplete pagination after reload and keeps its original replay bou
 it('restores a complete catalog, reads only changes on refresh, and leaves unchanged projections stable', async () => {
   const cache = memoryCache({ snapshot: page(10, ['all-cached']), boundary: 5, after: 10,
     nextCursor: null, phase: 'changes', complete: true, pages: 3 });
-  const load = vi.fn(async (_query: SnapshotQuery) => page(10));
+  const load = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(async () => page(10));
   const { sync, onReady } = start(load, cache);
   await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
   await expect(sync.refresh()).resolves.toBe(false);
@@ -71,7 +71,7 @@ it('restores a complete catalog, reads only changes on refresh, and leaves uncha
 it('does not complete a failed page, and manual refresh waits through all remaining pages', async () => {
   const cache = memoryCache({ snapshot: page(10, ['old']), boundary: 10, after: 10,
     nextCursor: 'remaining', phase: 'pages', complete: false, pages: 1 });
-  const load = vi.fn(async (_q: SnapshotQuery) => page(12)).mockRejectedValueOnce(new Error('离线'));
+  const load = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(async () => page(12)).mockRejectedValueOnce(new Error('离线'));
   const { sync, onReady, onProgress } = start(load, cache);
   await vi.waitFor(() => expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ error: '离线', ready: false })));
   expect(onReady).not.toHaveBeenCalled();
@@ -85,7 +85,7 @@ it('does not complete a failed page, and manual refresh waits through all remain
 it('rebuilds after region reset without completing a partial catalog or stranding refresh waiters', async () => {
   const cache = memoryCache({ snapshot: page(10, ['obsolete']), boundary: 10, after: 10,
     nextCursor: 'old-region', phase: 'pages', complete: false, pages: 1 });
-  const load = vi.fn(async (_q: SnapshotQuery) => ({ ...page(2, ['rebuilt']), regionId: 'new-region' }))
+  const load = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(async () => ({ ...page(2, ['rebuilt']), regionId: 'new-region' }))
     .mockRejectedValueOnce(Object.assign(new Error('讨论区已重建'), { status: 409 }));
   const { sync, onReady } = start(load, cache);
   await expect(sync.refresh()).resolves.toBe(true);
@@ -96,7 +96,7 @@ it('rebuilds after region reset without completing a partial catalog or strandin
 
 it('cancels idle work and rejects refreshes on scope or account change', async () => {
   let release!: () => void;
-  const load = vi.fn(async (_query: SnapshotQuery) => page(1));
+  const load = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(async () => page(1));
   const { sync, onReady } = start(load, memoryCache(), () => new Promise<void>(resolve => { release = resolve; }));
   await vi.waitFor(() => expect(release).toBeTypeOf('function'));
   const pending = sync.refresh(); sync.stop(); release();

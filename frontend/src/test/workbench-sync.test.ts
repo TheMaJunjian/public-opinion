@@ -30,7 +30,7 @@ describe('authoritative workbench records', () => {
   });
 
   it('manual refresh requested during synchronization waits for its own incremental check', async () => {
-    const load = vi.fn(async (_query: { after?: number }) => page(10));
+    const load = vi.fn<(query: { after?: number }) => Promise<WorkbenchSnapshot>>(async () => page(10));
     const events = vi.fn(() => ({ close() {} }) as EventSource);
     const sync = syncWorkbench({ parent: 'root', load, events, onSnapshot: vi.fn(), onError: vi.fn() });
     try {
@@ -49,7 +49,7 @@ describe('authoritative workbench records', () => {
   });
 
   it('manual refresh reports request failures and releases pending refreshes when stopped', async () => {
-    const load = vi.fn(async (_query: { after?: number }) => page(10));
+    const load = vi.fn<(query: { after?: number }) => Promise<WorkbenchSnapshot>>(async () => page(10));
     const events = vi.fn(() => ({ close() {} }) as EventSource);
     const onError = vi.fn();
     const sync = syncWorkbench({ parent: 'root', load, events, onSnapshot: vi.fn(), onError });
@@ -91,7 +91,7 @@ describe('authoritative workbench records', () => {
   });
 
   it('shows generated JOIN records from the send response without waiting for SSE or a reload', async () => {
-    const load = vi.fn(async (_query: { after?: number }) => page(10, [message('member')]));
+    const load = vi.fn<(query: { after?: number }) => Promise<WorkbenchSnapshot>>(async () => page(10, [message('member')]));
     const source = { close: vi.fn() } as unknown as EventSource;
     const updated = vi.fn();
     const sync = syncWorkbench({ parent: 'root', load, events: () => source, onSnapshot: updated, onError: error => { throw error; } });

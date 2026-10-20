@@ -54,13 +54,13 @@ export async function prepareExportUpdate(input: unknown): Promise<{ data: Updat
 
 /** Replace current projections, append history once, and verify the complete result before saving. */
 export function mergeExportUpdate(original: UpdatableExportData, checkpoint: ArchiveCheckpoint, update: ExportUpdateData): UpdatableExportData {
-  if (update.format !== 'gonglun-2-update' || !update.base || update.regionId !== checkpoint.regionId || update.ledgerId !== checkpoint.ledgerId
-    || update.base.hash !== checkpoint.hash || update.base.sequence !== checkpoint.sequence || update.base.entryCount !== checkpoint.entryCount
-    || update.base.regionId !== checkpoint.regionId || update.base.ledgerId !== checkpoint.ledgerId || !update.journal || !Array.isArray(update.changes)) {
+  const { base, ...fresh } = update;
+  if (update.format !== 'gonglun-2-update' || !base || update.regionId !== checkpoint.regionId || update.ledgerId !== checkpoint.ledgerId
+    || base.hash !== checkpoint.hash || base.sequence !== checkpoint.sequence || base.entryCount !== checkpoint.entryCount
+    || base.regionId !== checkpoint.regionId || base.ledgerId !== checkpoint.ledgerId || !update.journal || !Array.isArray(update.changes)) {
     throw new Error('增量记录与所选文件不匹配');
   }
   if ((update.scope?.messageId ?? null) !== (original.scope.messageId ?? null)) throw new Error('增量记录的阅览范围不一致');
-  const { base: _base, ...fresh } = update;
   const merged: UpdatableExportData = { ...original, ...fresh, format: 'gonglun-2',
     changes: [...original.changes.map(normalizeArchiveChange), ...update.changes],
     viewerUsername: original.viewerUsername, view: original.view,

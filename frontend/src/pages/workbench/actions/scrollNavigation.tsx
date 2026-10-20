@@ -129,7 +129,6 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
   const requestId = ++scrollRequestIdRef.current;
   pendingScrollMsgIdRef.current = targetId;
   let attempts = 0;
-  let task: WorkbenchDrawingTask | undefined;
   const run = (work: () => void) => { if (task) task.run(work); else work(); };
   const nextFrame = (work: () => void) => {
     const frame = requestAnimationFrame(() => run(work));
@@ -256,7 +255,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     // handles the outer page when the panel itself is outside the viewport.
   };
   cancelScrollRafs();
-  task = dependencies.startPositioning?.();
+  const task = dependencies.startPositioning?.();
   scrollRafRef.current = nextFrame(tryScroll);
 }
 

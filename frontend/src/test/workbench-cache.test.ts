@@ -18,7 +18,7 @@ afterEach(() => { running.splice(0).forEach(sync => sync.stop()); vi.unstubAllGl
 it('restores every record after a browser reload and fetches only paged changes, including edits and removals', async () => {
   const cache = createWorkbenchCache('u', 'root');
   const original = { ...page(10, ['old', 'moved']), tagCounts: { old: { 标签: 2 } }, attentionUsers: { old: ['u'] } };
-  const firstLoad = vi.fn(async (_query: SnapshotQuery) => original);
+  const firstLoad = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(async () => original);
   const initial = start({ parent: 'root', cache, load: firstLoad, events, onSnapshot: vi.fn(), onError: vi.fn() });
   await vi.waitFor(async () => expect((await cache.load())?.sequence).toBe(10));
   initial.stop();
@@ -43,7 +43,7 @@ it('restores every record after a browser reload and fetches only paged changes,
 it('keeps unchanged refreshes incremental and still publishes the restored complete graph once', async () => {
   const cache = createWorkbenchCache('u', 'root');
   await cache.save(page(10, ['old']));
-  const updated = vi.fn(), load = vi.fn(async (_query: SnapshotQuery) => page(10));
+  const updated = vi.fn(), load = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(async () => page(10));
   const sync = start({ parent: 'root', cache, load, events, onSnapshot: updated, onError: vi.fn() });
   await vi.waitFor(() => expect(updated).toHaveBeenCalledOnce());
   await expect(sync.refresh()).resolves.toBe(false);
@@ -86,7 +86,7 @@ it('caches a loaded page with its continuation and does not cache an unfinished 
 it('retries a transient network failure from the cache cursor without restarting a full download', async () => {
   const cache = createWorkbenchCache('u', 'root');
   await cache.save(page(10, ['old']));
-  const load = vi.fn(async (_query: SnapshotQuery) => page(11, ['new']));
+  const load = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(async () => page(11, ['new']));
   load.mockRejectedValueOnce(new Error('离线'));
   const updated = vi.fn(), onError = vi.fn();
   const sync = start({ parent: 'root', cache, load, events, onSnapshot: updated, onError });
@@ -113,7 +113,7 @@ it('never stores the higher command-response cursor before replaying unrelated c
   const cache = createWorkbenchCache('u', 'root');
   await cache.save(page(10, ['old']));
   let finish!: (snapshot: WorkbenchSnapshot) => void;
-  const load = vi.fn((_query: SnapshotQuery) => new Promise<WorkbenchSnapshot>(resolve => { finish = resolve; }));
+  const load = vi.fn<(query: SnapshotQuery) => Promise<WorkbenchSnapshot>>(() => new Promise(resolve => { finish = resolve; }));
   const sync = start({ parent: 'root', cache, load, events, onSnapshot: vi.fn(), onError: vi.fn() });
   await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
   sync.applyCommitted(page(12, ['acknowledged']));

@@ -54,6 +54,7 @@ it('refuses duplicate, omitted, mismatched or unbalanced updates before they can
 });
 
 it('requires a full export for files without execution history', async () => {
-  const { format: _format, ...old } = originalArchive();
+  const old: Partial<UpdatableExportData> = { ...originalArchive() };
+  delete old.format;
   await expect(prepareExportUpdate(old)).rejects.toThrow('请先完整导出一次');
 });

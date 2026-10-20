@@ -9,6 +9,12 @@ const archive = () => ({
   changes: [{ sequence: 1, messages: [], states: [], memberships: [], removedMemberships: [], ledger: [], treasury: { operating: 0, issued: 0 } }],
 });
 
+function archiveWithout<K extends keyof ReturnType<typeof archive>>(...keys: K[]): Omit<ReturnType<typeof archive>, K> {
+  const data = archive();
+  for (const key of keys) Reflect.deleteProperty(data, key);
+  return data;
+}
+
 afterEach(() => { cleanup(); sessionStorage.clear(); });
 
 describe('export viewer verification', () => {
@@ -30,12 +36,12 @@ describe('export viewer verification', () => {
   });
 
   it('keeps existing exported views readable without claiming replay verification', () => {
-    const { format: _format, changes: _changes, ...old } = archive();
+    const old = archiveWithout('format', 'changes');
     expect(validateExportForViewing(old).verification).toBeNull();
   });
 
   it('normalizes historical topic exports without treating old topic IDs as message IDs', () => {
-    const { scope: _scope, format: _format, changes: _changes, ...view } = archive();
+    const view = archiveWithout('scope', 'format', 'changes');
     const old = { ...view, topic: { id: 'old-topic', title: '旧版讨论' } };
     const result = validateExportForViewing(JSON.parse(JSON.stringify(old)));
     expect(result.data.scope).toEqual({ messageId: null, title: '旧版讨论' });
@@ -50,13 +56,13 @@ describe('export viewer verification', () => {
     expect(() => validateExportForViewing({ scope: { title: '消息' }, relations: [] })).toThrow('缺少消息列表（messages）');
     expect(() => validateExportForViewing({ topic: { title: '旧版讨论' }, messages: [] })).toThrow('缺少关系列表（relations）');
     expect(() => validateExportForViewing({ messages: [], relations: [] })).toThrow('缺少阅览范围信息');
-    const { scope: _scope, messages: _messages, relations: _relations, ...journal } = archive();
+    const journal = archiveWithout('scope', 'messages', 'relations');
     expect(() => validateExportForViewing(journal)).toThrow('仅含执行记录的文件');
     expect(() => validateExportForViewing({ ...archive(), view: { mode: 'graph' } })).toThrow('阅览设置格式无效');
   });
 
   it('verifies journal archives that still export topic metadata', () => {
-    const { scope: _scope, ...data } = archive();
+    const data = archiveWithout('scope');
     const legacy = { ...data, topic: { id: 'root', title: '公论' } };
     expect(validateExportForViewing(legacy)).toMatchObject({
       data: { scope: { messageId: null, title: '公论' } },
@@ -67,7 +73,7 @@ describe('export viewer verification', () => {
   });
 
   it('shows the historical title when selecting an old export', async () => {
-    const { scope: _scope, format: _format, changes: _changes, ...view } = archive();
+    const view = archiveWithout('scope', 'format', 'changes');
     const old = { ...view, topic: { id: 'old-topic', title: '旧版讨论' } };
     sessionStorage.setItem('lastExportData', JSON.stringify(old));
     render(<MemoryRouter><ExportViewerModal open onClose={vi.fn()} /></MemoryRouter>);

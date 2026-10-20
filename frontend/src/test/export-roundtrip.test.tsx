@@ -35,7 +35,11 @@ it('preserves messages, pinned references, relation states, order and display co
     stakes: snapshot.stakes, tagCounts: snapshot.tagCounts, attentionUsers: snapshot.attentionUsers,
   };
   const reopened = archiveToWorkbenchSnapshot(JSON.parse(JSON.stringify(archive)));
-  const display = ({ relations: _records, ...view }: ReturnType<typeof projectWorkbenchSnapshot>) => view;
+  const display = (projection: ReturnType<typeof projectWorkbenchSnapshot>) => {
+    const view: Partial<typeof projection> = { ...projection };
+    delete view.relations;
+    return view;
+  };
   expect(display(projectWorkbenchSnapshot(reopened))).toEqual(display(projectWorkbenchSnapshot(snapshot)));
   expect(projectWorkbenchSnapshot(reopened).messages.map(message => message.id)).toEqual(['a', 'b', 'relation']);
   expect(projectWorkbenchSnapshot(reopened).authorAmounts.a).toBe(10);

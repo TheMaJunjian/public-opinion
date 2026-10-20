@@ -2,6 +2,7 @@ import React from "react";
 import type { Relation } from "../../../types";
 import { getPresentationSpec } from "../../../types";
 import type { WorkbenchDrawingTask } from '../../../context/WorkbenchDrawingContext';
+import { REVEAL_VIRTUAL_MESSAGE } from '../../../hooks/useVirtualMessageMounts';
 import type {
   DemoEdge
 } from "../../../utils/modelBridge";
@@ -135,7 +136,10 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     task?.onCancel(() => cancelAnimationFrame(frame));
     return frame;
   };
-  const complete = (located: boolean) => { task?.complete(); options?.onComplete?.(located); };
+  const complete = (located: boolean) => {
+    if (requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
+    task?.complete(); options?.onComplete?.(located);
+  };
   const tryScroll = () => {
     attempts++;
     if (requestId !== scrollRequestIdRef.current) { complete(false); return; }
@@ -148,6 +152,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     if (pendingScrollMsgIdRef.current !== targetId) { complete(false); return; }
     const container = leftPanelRef.current;
     if (!container) { scrollRafRef.current = nextFrame(tryScroll); return; }
+    container.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [targetId, ...dependencyIds] } }));
     const containerRect = container.getBoundingClientRect();
     const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
@@ -256,6 +261,9 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
   };
   cancelScrollRafs();
   const task = dependencies.startPositioning?.();
+  task?.onCancel(() => {
+    if (requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
+  });
   scrollRafRef.current = nextFrame(tryScroll);
 }
 

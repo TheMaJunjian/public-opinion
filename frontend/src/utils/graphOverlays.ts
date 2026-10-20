@@ -11,6 +11,7 @@ import type { Box } from './frameLayout';
 import type { Point } from './graphEdgeGeometry';
 import { getRelKind, isArrangeFrameRel, isAnyFrameRel, getRelationBoundsFromLayout, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_RIGHT_GAP, TAG_MAX_LABEL_CHARS, MERGE_CONTENT_TOP_GAP } from './graphPresentationGeometry';
 import { quadAt } from './graphEdgeGeometry';
+import { moveAnchor, type GraphAnchorCache } from './graphAnchorCache';
 type LabelBbox = Rect;
 export type PositionedEdge = {
   drawId: string;
@@ -34,6 +35,8 @@ function isValidTagLabel(label: string | undefined): label is string {
 }
 
 export interface GraphOverlayInput {
+  anchorCache?: GraphAnchorCache;
+  skipRouting?: boolean;
   canvasRef: MutableRefObject<HTMLDivElement | null>;
   normalIds: string[];
   msgMap: Map<string, DemoMessage>;
@@ -108,6 +111,8 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
 
     const globalForbiddenRects: Rect[] = [];
     for (const m of normals) {
+      const cached = input.anchorCache?.get(m.id), box = layout[m.id];
+      if (cached && box) { globalForbiddenRects.push(...cached.obstacles.map(rect => moveAnchor(rect, box))); continue; }
       const header=headerRefs.current[m.id], content=contentRefs.current[m.id];
       if (!header||!content) {
         const el=cardRefs.current[m.id];
@@ -119,6 +124,8 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
     }
 
     function getMessageRects(messageId: string): Rect[] {
+      const cached = input.anchorCache?.get(messageId), box = layout[messageId];
+      if (cached && box) return [...cached.obstacles.map(rect => moveAnchor(rect, box)), box];
       const res: Rect[] = [];
       const header=headerRefs.current[messageId], content=contentRefs.current[messageId];
       for (const el of [header,content].filter(Boolean) as HTMLElement[])
@@ -464,7 +471,12 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
     }
     const inlineBadgesByMsg = (newInlineBadgesByMsg);
 
-    const positionedEdges = routeGraphEdges({ newTagDecorationsByMsg, edgesByRelMsg, endpointBoxForNormal, layout, relationCardMsgIds, frameByRelMsgId, groupFrameByRelMsgId, msgMap, labelBboxes, relDecByRelMsgId, decorationRects, edges, comparisonSuppressedRelIds, colOf, correctedEdgeIdsByRelMsg, normalSet, contentRefs, toCanvasRect, getMessageRects, sampleQuad, penScore, globalForbiddenRects });
+    const positionedEdges = input.skipRouting ? [] : routeGraphEdges({ newTagDecorationsByMsg, edgesByRelMsg, endpointBoxForNormal, layout, relationCardMsgIds, frameByRelMsgId, groupFrameByRelMsgId, msgMap, labelBboxes, relDecByRelMsgId, decorationRects, edges, comparisonSuppressedRelIds, colOf, correctedEdgeIdsByRelMsg, normalSet, contentRefs, toCanvasRect, getMessageRects, sampleQuad, penScore, globalForbiddenRects,
+      getCachedFragment(messageId, key) {
+        const rect = input.anchorCache?.get(messageId)?.fragments[key], box = layout[messageId];
+        return rect && box ? moveAnchor(rect, box) : undefined;
+      },
+    });
     const decorationRectsState = (decorationRects);
     const decorationsByMsgState = (decorationsByMsg);
 

@@ -16,6 +16,7 @@ import { type CorrectionVersion, type DemoEdge, type DemoMessage, isContentKind,
 import { formatCorrectionRange } from '../model/correction';
 import { collectOwnedByRelation } from '../model/ownership';
 import { filterMessageListContext } from '../projections/messageListContext';
+import VirtualMessageList from '../../../components/VirtualMessageList';
 
 interface MessageCatalog {
   messages: DemoMessage[];
@@ -97,10 +98,14 @@ export default function WorkbenchMessageList(props: Props) {
     messages, edges, standaloneMessageIds,
   ), [messagesToRenderFiltered, messages, edges, tagSourceIdsForList, rejectedContainerIds, standaloneMessageIds]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
+  const rowIds = useMemo(() => listMessages.map(message => message.id), [listMessages]);
+  const rowMap = useMemo(() => new Map(listMessages.map(message => [message.id, message])), [listMessages]);
+  const pins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId].filter((id): id is string => !!id)),
+    [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId]);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      {listMessages
-        .map(msg => {
+    <VirtualMessageList ids={rowIds} pinned={pins}>
+      {id => {
+          const msg = rowMap.get(id)!;
           const isWholeSelected = draftUnits.some(u => isWholeMessageSelection(u, msg.id));
           const isActiveText = activeTextSelectId === msg.id;
           const relType = msg.kind === "relation" ? relationTypeByRelMsgId.get(msg.id) : null;
@@ -416,8 +421,8 @@ export default function WorkbenchMessageList(props: Props) {
                 : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
             </MessageCard>
           );
-        })}
-    </div>
+        }}
+    </VirtualMessageList>
 
   );
 }

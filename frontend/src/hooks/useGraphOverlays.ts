@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import { emptyGraphOverlays, measureGraphOverlays } from '../utils/graphOverlays';
 import type { GraphOverlayInput } from '../utils/graphOverlays';
@@ -6,28 +6,53 @@ import type { Rect } from '../utils/layout';
 import { LABEL_BBOX_STABILITY_THRESHOLD } from '../utils/graphPresentationGeometry';
 import { reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
 import { useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
+import type { GraphAnchorCache } from '../utils/graphAnchorCache';
 type LabelBbox = Rect;
 
 export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> & {
   textRefs: MutableRefObject<Record<string, SVGTextElement | null>>;
   actualCanvasWidth: number;
   actualCanvasHeight: number;
+  pendingMeasurements?: boolean;
 }) {
   const startOverlays = useWorkbenchDrawingTask('overlays');
   const { canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight } = input;
   const [overlays, setOverlays] = useState(emptyGraphOverlays);
   const [labelBboxes, setLabelBboxes] = useState<Record<string, LabelBbox>>({});
+  const anchorCache = useRef<GraphAnchorCache>(new Map());
+  // Capture only mounted cards, but retain fragment/collision anchors for their
+  // offscreen counterparts. Routing must not depend on the current DOM window.
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const bounds = canvas.getBoundingClientRect();
+    const scaleX = canvas.offsetWidth ? bounds.width / canvas.offsetWidth || 1 : 1;
+    const scaleY = canvas.offsetHeight ? bounds.height / canvas.offsetHeight || 1 : 1;
+    for (const [id, card] of Object.entries(cardRefs.current)) {
+      if (!card || !canvas.contains(card)) continue;
+      const origin = card.getBoundingClientRect();
+      if (origin.width <= 1 || origin.height <= 1) continue;
+      const relative = (rect: DOMRect): Rect => ({ x: (rect.left - origin.left) / scaleX, y: (rect.top - origin.top) / scaleY,
+        width: rect.width / scaleX, height: rect.height / scaleY });
+      const elements = [headerRefs.current[id], contentRefs.current[id]].filter((element): element is HTMLDivElement => !!element);
+      const obstacles = (elements.length ? elements : [card]).flatMap(element => Array.from(element.getClientRects(), relative));
+      const fragments = Object.fromEntries(Array.from(contentRefs.current[id]?.querySelectorAll<HTMLElement>('[data-rel-anchor]') ?? [],
+        element => [element.dataset.relAnchor!, relative(element.getBoundingClientRect())]));
+      anchorCache.current.set(id, { obstacles, fragments });
+    }
+    for (const id of anchorCache.current.keys()) if (!msgMap.has(id)) anchorCache.current.delete(id);
+  });
   const { positionedEdges } = overlays;
   useLayoutEffect(() => {
     const task = startOverlays();
     task.run(() => {
       const startedAt = performance.now();
-      const measured = measureGraphOverlays({ canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg });
+      const measured = measureGraphOverlays({ canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, anchorCache: anchorCache.current, skipRouting: input.pendingMeasurements });
       reportWorkbenchDrawingDuration(performance.now() - startedAt);
       if (measured) setOverlays(measured);
       task.complete();
     });
-  }, [canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg]);
+  }, [canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, input.pendingMeasurements]);
   useLayoutEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
     const task = startOverlays();

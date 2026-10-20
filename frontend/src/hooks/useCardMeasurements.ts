@@ -36,7 +36,8 @@ export function useCardMeasurements(
       task.run(() => {
         for (const entry of entries) {
           const element = entry.target as HTMLElement;
-          const id = element.dataset.msgid;
+          if (!observed.current.has(element) || !canvas.current?.contains(element)) continue;
+          const id = element.dataset.measureId ?? element.dataset.msgid;
           if (!id) continue;
           // offsetHeight is in canvas CSS pixels, independent of zoom transforms.
           const height = entry.borderBoxSize?.[0]?.blockSize ?? element.offsetHeight;
@@ -52,7 +53,7 @@ export function useCardMeasurements(
               let changed = false;
               const next = { ...previous };
               for (const [id, height] of Object.entries(updates)) {
-                if (Math.abs((previous[id] ?? 0) - height) > 1) { next[id] = height; changed = true; }
+                if (previous[id] === undefined || Math.abs(previous[id] - height) > 1) { next[id] = height; changed = true; }
               }
               return changed ? next : previous;
             });
@@ -93,9 +94,14 @@ export function useCardMeasurements(
       const task = startMeasurement();
       task.run(() => {
         setHeights(previous => {
-          const next = { ...previous };
-          for (const element of added) if (element.dataset.msgid) {
-            next[element.dataset.msgid] = measuredHeight(element, element.offsetHeight);
+          let next = previous;
+          for (const element of added) {
+            const id = element.dataset.measureId ?? element.dataset.msgid;
+            if (!id) continue;
+            const height = measuredHeight(element, element.offsetHeight);
+            if (previous[id] !== undefined && Math.abs(previous[id] - height) <= 1) continue;
+            if (next === previous) next = { ...previous };
+            next[id] = height;
           }
           return next;
         });

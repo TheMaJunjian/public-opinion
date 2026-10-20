@@ -8,6 +8,8 @@ import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import { computeCorrectionVersions, isCardMessage } from '../utils/modelBridge';
 import { useSceneComputation } from '../hooks/useSceneComputation';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
+import { useVirtualMessageMounts } from '../hooks/useVirtualMessageMounts';
+import { intersectsViewport } from '../hooks/useCanvasViewport';
 import { getMessageProminence, getOrganizationTitle, needsSeparateStanceCard } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import MessageTextPart from './MessageTextPart';
@@ -518,6 +520,25 @@ function GraphViewCanvas(props: GraphViewProps) {
   const visibleNormals = useMemo(() => props.visibleMessageIds ? normals.filter(message => props.visibleMessageIds!.has(message.id)) : normals, [normals, props.visibleMessageIds]);
   const visibleNormalIds = useMemo(() => visibleNormals.map(message => message.id), [visibleNormals]);
   const visibleEdges = useMemo(() => props.visibleEdgeIds ? edges.filter(edge => props.visibleEdgeIds!.has(edge.id)) : edges, [edges, props.visibleEdgeIds]);
+  const measuredIds = useMemo(() => {
+    const frameIds = new Set(visibleEdges.map(edge => edge.relationMessageId));
+    return [...visibleNormals.map(message => message.id), ...frameBlocks.filter(frame => (frame.isMerge || frame.hasGroupHeader)
+      && (!props.visibleMessageIds || props.visibleMessageIds.has(frame.relMsgId) || frameIds.has(frame.relMsgId))).map(frame => frame.relMsgId)];
+  }, [visibleNormals, visibleEdges, frameBlocks, props.visibleMessageIds]);
+  const virtualBoxes = useMemo(() => {
+    const boxes = { ...layout };
+    for (const frame of frameBlocks) {
+      const rect = finalFrameRects[frame.relMsgId];
+      if (!rect) continue;
+      if (frame.isMerge) boxes[frame.relMsgId] = { ...getMergeCardHeaderRect(rect), height: measuredHeights[frame.relMsgId] ?? MERGE_CARD_H };
+      else if (frame.hasGroupHeader) boxes[frame.relMsgId] = getGroupHeaderRect(rect, getGroupHeaderHeight(measuredHeights, frame.relMsgId));
+    }
+    return boxes;
+  }, [layout, finalFrameRects, frameBlocks, measuredHeights]);
+  const virtualPins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]
+    .filter((id): id is string => !!id)), [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]);
+  const virtual = useVirtualMessageMounts(canvasRef, measuredIds, virtualBoxes, measuredHeights, virtualPins);
+  const mountedNormals = useMemo(() => visibleNormals.filter(message => virtual.mounted.has(message.id)), [visibleNormals, virtual.mounted]);
   const visibleBottom = useMemo(() => {
     let bottom = 0;
     for (const [id, box] of [...Object.entries(layout), ...Object.entries(finalFrameRects)]) {
@@ -552,9 +573,34 @@ function GraphViewCanvas(props: GraphViewProps) {
     return ids;
   }, [edges, msgMap]);
 
-  const { positionedEdges, labelBboxes, decorationRectsState, decorationsByMsgState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, relDecByRelMsgState, tagsByRelMsgState } = useGraphOverlays({
+  const overlays = useGraphOverlays({
+    pendingMeasurements: virtual.pending,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
   });
+  const { labelBboxes, decorationsByMsgState, relDecByRelMsgState, tagsByRelMsgState } = overlays;
+  const overlayRetained = useMemo(() => {
+    const retained = new Set(virtual.retained);
+    // A vote/tag is drawn beside its target. Reveal that decoration even when
+    // the relation itself has no card; cached geometry avoids mounting members.
+    for (const id of virtual.retained) for (const edge of edgesByRelMsg.get(id) ?? []) {
+      retained.add(edge.from.messageId); retained.add(edge.to.messageId);
+    }
+    return retained;
+  }, [virtual.retained, edgesByRelMsg]);
+  const { positionedEdges, decorationRectsState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg } = useMemo(() => {
+    const keep = (id: string, rect: Rect) => overlayRetained.has(id) || virtual.mounted.has(id) || intersectsViewport(rect, virtual.viewport, 100);
+    return {
+      positionedEdges: overlays.positionedEdges.filter(edge => keep(edge.edge.relationMessageId, {
+        x: Math.min(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX), y: Math.min(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY),
+        width: Math.max(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX) - Math.min(edge.start.x, edge.ctrl.x, edge.end.x, edge.labelX),
+        height: Math.max(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY) - Math.min(edge.start.y, edge.ctrl.y, edge.end.y, edge.labelY) })),
+      decorationRectsState: overlays.decorationRectsState && Object.fromEntries(Object.entries(overlays.decorationRectsState).filter(([, value]) => keep(value.messageId, value.rect))),
+      tagDecorationsByMsg: Object.fromEntries(Object.entries(overlays.tagDecorationsByMsg).map(([id, groups]) => [id, groups.filter(group => keep(id, group.rect))])),
+      arrangeFrames: overlays.arrangeFrames.map(frame => ({ ...frame, rect: finalFrameRects[frame.relMsgId] ?? frame.rect })).filter(frame => keep(frame.relMsgId, frame.rect)),
+      groupFrames: overlays.groupFrames.filter(frame => keep(frame.relMsgId, finalFrameRects[frame.relMsgId] ?? frame.rect)),
+      inlineBadgesByMsg: new Map([...overlays.inlineBadgesByMsg].map(([id, badges]) => [id, badges.filter(badge => keep(id, badge.rect))])),
+    };
+  }, [overlays, overlayRetained, virtual.mounted, virtual.viewport, finalFrameRects]);
 
   useLayoutEffect(() => {
     reportWorkbenchDrawingDuration(performance.now() - renderStartedAt);
@@ -576,10 +622,12 @@ function GraphViewCanvas(props: GraphViewProps) {
   const relatedConnections = useMemo(() => props.relatedEdges ? deriveCrossCanvasRelations({
     edges: props.relatedEdges,
     visibleMessageIds: new Set([...visibleNormalIds.filter(id => !effectiveHideMessageIds.has(id)),
-      ...visibleGroupFrames.map(frame => frame.relMsgId), ...visibleArrangeFrames.map(frame => frame.relMsgId),
-      ...positionedEdges.map(positioned => positioned.edge.relationMessageId)]),
-    renderedEdges: positionedEdges.map(positioned => positioned.edge),
-  }) : crossCanvasRelations, [props.relatedEdges, visibleNormalIds, effectiveHideMessageIds, visibleGroupFrames, visibleArrangeFrames, positionedEdges, crossCanvasRelations]);
+      ...overlays.groupFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId)
+        && (!isTraceWindow || !['classify', 'summary'].includes(frame.relType) || traceExpandedFrameIds.has(frame.relMsgId))).map(frame => frame.relMsgId),
+      ...overlays.arrangeFrames.filter(frame => !effectiveHideMessageIds.has(frame.relMsgId)).map(frame => frame.relMsgId),
+      ...overlays.positionedEdges.map(positioned => positioned.edge.relationMessageId)]),
+    renderedEdges: overlays.positionedEdges.map(positioned => positioned.edge),
+  }) : crossCanvasRelations, [props.relatedEdges, visibleNormalIds, effectiveHideMessageIds, overlays, isTraceWindow, traceExpandedFrameIds, crossCanvasRelations]);
   const renderRelatedConnections = (messageId: string) => <CrossCanvasRelatedMessages groups={relatedConnections?.get(messageId)}
     messages={relatedCatalog} selectedUnits={draftUnits} onView={props.onRelatedRelationView ?? onNavigateToMessage} />;
 
@@ -736,7 +784,8 @@ function GraphViewCanvas(props: GraphViewProps) {
       onDoubleClick={e=>{const t=e.target as HTMLElement;if(!canvasRef.current)return;if(t.closest&&(t.closest("[data-msgid]")||t.closest("svg")||t.closest('[title^="relation="]')||t.closest("[data-rel-overlay]")))return;onCanvasBlankClick?.();}}>
       {props.visibleMessageIds && <div data-message-window-boundary="true" aria-hidden="true" style={{ position: 'absolute', top: visibleBottom, left: 0, height: 1, width: 1 }} />}
       <div style={{position:"absolute",left:0,top:0,width:actualCanvasWidth,height:actualCanvasHeight,zIndex:1}}>
-        {visibleNormals.map(msg=>{
+        {mountedNormals.map(msg=><div key={msg.id} aria-hidden={!virtual.isOnscreen(msg.id) || undefined}
+          style={{ visibility: virtual.isOnscreen(msg.id) ? undefined : 'hidden', pointerEvents: virtual.isOnscreen(msg.id) ? undefined : 'none' }}>{(() => {
           const box=layout[msg.id]; if(!box) return null;
           const prominence = getMessageProminence(msg);
           if (effectiveHideMessageIds.has(msg.id) || traceExpandedFrameIds.has(msg.id)) return null;
@@ -1078,7 +1127,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               })()}
             </div>
           );
-        })}
+        })()}</div>)}
       </div>
       {SHOW_SELECTED_ACTUAL_RECTS && Object.entries(selectedActualRects).map(([messageId, rect]) => (
         <div
@@ -1537,7 +1586,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </div>
               );
             })()}
-            {(gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
+            {virtual.mounted.has(gf.relMsgId) && (gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
               <div data-msgid={gf.relMsgId} data-rel-overlay="true"
                 data-measure-min-height={gf.relType === 'merge' ? MERGE_CARD_H : GROUP_HEADER_HEIGHT}
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}

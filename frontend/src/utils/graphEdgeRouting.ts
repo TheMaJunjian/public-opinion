@@ -11,6 +11,7 @@ import { quadAt, rayRectIntersectionFirst, samplePerimeterCandidates, computeLab
 import type { PositionedEdge } from './graphOverlays';
 
 export interface GraphRoutingInput {
+  getCachedFragment?: (messageId: string, key: string) => Rect | undefined;
   newTagDecorationsByMsg: Record<string, { label: string; relMsgIds: string[]; rect: Rect; relAgreeCount: number; relDisagreeCount: number; relAgreeMsgIds: string[]; relDisagreeMsgIds: string[]; }[]>;
   edgesByRelMsg: Map<string, DemoEdge[]>;
   endpointBoxForNormal: (id: string) => { box: LayoutBox; col: number; } | null;
@@ -318,12 +319,14 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const toEp=endpointBoxForNormal(toId); if (!toEp) continue;
       let fragRectCanvas: DOMRect|null=null;
 
-      if ((e.relationType==="annotation"||e.relationType==="reference") && selectionIsText(e.to.selection) && contentRefs.current[toId]) {
-        const container=contentRefs.current[toId]!;
+      if ((e.relationType==="annotation"||e.relationType==="reference") && selectionIsText(e.to.selection)) {
+        const container=contentRefs.current[toId];
         const start=e.to.selection.start, end=start+e.to.selection.len;
-        const span=container.querySelector(`[data-rel-anchor="${e.relationType}::${start}:${end}"]`) as HTMLSpanElement|null;
-        if (span) {
-          const r = toCanvasRect(span.getBoundingClientRect());
+        const key = `${e.relationType}::${start}:${end}`;
+        const span=container?.querySelector(`[data-rel-anchor="${key}"]`) as HTMLSpanElement|null;
+        const cached = input.getCachedFragment?.(toId, key);
+        if (cached || span) {
+          const r = cached ?? toCanvasRect(span!.getBoundingClientRect());
           fragRectCanvas = new DOMRect(r.x, r.y, r.width, r.height);
         }
       }

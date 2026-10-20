@@ -62,4 +62,35 @@ describe('canvas size observation', () => {
       await waitFor(() => expect(view.getByRole('status')).toHaveTextContent('36'));
     } finally { offset.mockRestore(); }
   });
+  it('retains cached heights when an unmounted card delivers a late observer notification', async () => {
+    let notify!: ResizeObserverCallback;
+    window.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) { notify = callback; }
+      observe() {} unobserve() {} disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    const offset = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(240);
+    function Card({ shown }: { shown: boolean }) {
+      const canvas = useRef<HTMLDivElement>(null), cards = useRef<Record<string, HTMLDivElement | null>>({});
+      const heights = useCardMeasurements(canvas, cards);
+      return <div ref={canvas}>{shown && <div data-msgid="card" ref={element => { cards.current.card = element; }} />}<output>{heights.card}</output></div>;
+    }
+    try {
+      const view = render(<Card shown />), card = view.container.querySelector('[data-msgid]')!;
+      expect(view.getByRole('status')).toHaveTextContent('240');
+      view.rerender(<Card shown={false} />);
+      act(() => notify([{ target: card, borderBoxSize: [{ blockSize: 0 }] } as unknown as ResizeObserverEntry], {} as ResizeObserver));
+      await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
+      expect(view.getByRole('status')).toHaveTextContent('240');
+    } finally { offset.mockRestore(); }
+  });
+  it('records the first one-pixel measurement so an empty list row can finish preparation', () => {
+    function EmptyRow() {
+      const canvas = useRef<HTMLDivElement>(null), cards = useRef<Record<string, HTMLDivElement | null>>({});
+      const heights = useCardMeasurements(canvas, cards);
+      return <div ref={canvas}><div data-measure-id="empty" data-measure-min-height="1" ref={element => { cards.current.empty = element; }} />
+        <output>{heights.empty ?? 'pending'}</output></div>;
+    }
+    const view = render(<EmptyRow />);
+    expect(view.getByRole('status')).toHaveTextContent('1');
+  });
 });

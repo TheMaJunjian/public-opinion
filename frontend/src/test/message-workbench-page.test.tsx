@@ -160,11 +160,15 @@ describe('rejected child container boundaries and single-side comparison',()=>{
   const latest=()=>mockGraphView.mock.lastCall![0];
   const visibleGraphMessages = () => latest().messages.filter((message: Message) => !latest().visibleMessageIds || latest().visibleMessageIds.has(message.id));
   const scrollToNextStructure = async () => {
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+    const count = () => Number(screen.getByText(/^当前已显示/).textContent?.match(/\d+/)?.[0]);
+    const before = count();
     const boundary = document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-message-window-boundary]')
       ?? screen.getByText(/^当前已显示/);
     const geometry = vi.spyOn(boundary, 'getBoundingClientRect').mockReturnValueOnce(new DOMRect(0, 100, 1, 1));
     fireEvent.scroll(document);
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 80)); });
+    await waitFor(() => expect(count()).toBeGreaterThan(before));
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
     geometry.mockRestore();
   };
   const event=()=>({button:0,stopPropagation:vi.fn()});
@@ -233,6 +237,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const row = within(dialog).getByText(remoteUser.username).closest('tr')!;
       expect(row.children[4]).toHaveTextContent('52');
       fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
       expect(latest().messages).toHaveLength(53);
       expect(visibleGraphMessages()).toHaveLength(50);
       act(() => catalogHarness.callbacks.onProgress({ ready: false, count: 0, syncing: true }));

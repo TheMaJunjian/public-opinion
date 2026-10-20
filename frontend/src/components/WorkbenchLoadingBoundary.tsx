@@ -8,6 +8,7 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext, WORKBENCH_DRAWING
 type Phase = 'loading' | 'drawing' | 'sending' | 'ready';
 const LoadingContext = createContext<(phase: Phase, resetFailure?: boolean) => void>(() => undefined);
 const SendingContext = createContext<(sending: boolean) => void>(() => undefined);
+const DrawingPreparationContext = createContext<((work: () => void) => () => void) | null>(null);
 export const WORKBENCH_REQUEST_WAIT_MS = 60_000;
 const taskNames = { module: '界面加载', projection: '消息整理', measurement: '尺寸测量', overlays: '连线绘制', positioning: '消息定位', fonts: '字体加载', render: '页面绘制' };
 
@@ -36,7 +37,34 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const content = useRef<HTMLDivElement>(null);
   const finishDrawing = useRef<((completed?: boolean) => void) | null>(null);
   const drawingWait = useRef<{ tasks: typeof tasks; cycle: number; remaining: number } | null>(null);
+  const preparations = useRef(new Set<{ schedule(): void; cancel(): void }>());
+  const prepareDrawing = useCallback((work: () => void) => {
+    let frame = 0, paintFrame = 0, scheduled = false;
+    const preparation = {
+      schedule() {
+        if (scheduled) return;
+        scheduled = true;
+        frame = requestAnimationFrame(() => { paintFrame = requestAnimationFrame(() => {
+          preparations.current.delete(preparation);
+          work();
+        }); });
+      },
+      cancel() { preparations.current.delete(preparation); cancelAnimationFrame(frame); cancelAnimationFrame(paintFrame); },
+    };
+    preparations.current.add(preparation);
+    tasks.committed(); tasks.setBlocking(true);
+    setHidden(false); setWaitNotice(null); setCycle(value => value + 1);
+    setProgress(previous => ({ ...previous, phase: previous.phase === 'sending' ? 'sending' : 'drawing',
+      reason: previous.phase === 'sending' ? 'sending' : 'loading', drawingRevision: undefined }));
+    return preparation.cancel;
+  }, [tasks]);
   const busy = phase !== 'ready';
+
+  useLayoutEffect(() => {
+    // Start the paint fence only after the progress portal has committed.
+    if (phase === 'drawing' && !hidden && !tasks.failure) for (const preparation of preparations.current) preparation.schedule();
+  }, [phase, hidden, cycle, tasks]);
+  useLayoutEffect(() => () => { for (const preparation of preparations.current) preparation.cancel(); }, []);
 
   useEffect(() => { setHidden(false); setWaitNotice(null); }, [cycle, attempt.key]);
   useLayoutEffect(() => { if (hidden && busy) reopen.current?.focus(); }, [hidden, busy]);
@@ -162,7 +190,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     };
   }, [busy]);
 
-  return <WorkbenchDrawingContext.Provider value={tasks}><LoadingContext.Provider value={reportLoading}><SendingContext.Provider value={reportSending}>
+  return <WorkbenchDrawingContext.Provider value={tasks}><LoadingContext.Provider value={reportLoading}><SendingContext.Provider value={reportSending}><DrawingPreparationContext.Provider value={prepareDrawing}>
     {waitNotice && <div role="alert" style={{ padding: 12, background: '#3b2616', color: '#fde68a' }}>{waitNotice}</div>}
     {failure && <div role="alert" style={{ padding: 12, background: '#3b2616', color: '#fde68a' }}>
       {failure.reason === 'timeout' ? '绘制等待超过 30 秒，已停止等待并恢复操作。' : `${taskNames[failure.kind]}失败，已恢复操作。`}
@@ -186,7 +214,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
       <span>仍在{phase === 'sending' ? '等待发送确认' : phase === 'drawing' ? '绘制消息' : '加载消息'}，工作区暂不可操作。</span>
       <button ref={reopen} type="button" onClick={() => setHidden(false)}>显示进度</button>
     </div>}
-  </SendingContext.Provider></LoadingContext.Provider></WorkbenchDrawingContext.Provider>;
+  </DrawingPreparationContext.Provider></SendingContext.Provider></LoadingContext.Provider></WorkbenchDrawingContext.Provider>;
 }
 
 /** Errors must release the dialog as well, so the error remains visible. */
@@ -198,6 +226,15 @@ export function useWorkbenchLoadingProgress(loading: boolean, error: string | nu
     previous.current = { loading, revision };
     report(error ? 'ready' : loading ? 'loading' : 'drawing', resetFailure);
   }, [report, loading, error, revision]);
+}
+
+/** Paint progress before committing DOM work that can prevent the browser responding. */
+export function useWorkbenchDrawingPreparation() {
+  const prepare = useContext(DrawingPreparationContext);
+  return useCallback((work: () => void) => {
+    if (prepare) return prepare(work);
+    work(); return () => {};
+  }, [prepare]);
 }
 
 /** After sending, wait for drawing, measurement and positioning to commit together. */

@@ -2,14 +2,16 @@ import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } f
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
 import { useSceneComputation } from './useSceneComputation';
 import { WorkbenchDrawingContext, useWorkbenchDrawingTask, type WorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
+import { useWorkbenchDrawingPreparation } from '../components/WorkbenchLoadingBoundary';
 
 /** Reveal complete structures in the graph's placement order, in either presentation. */
 export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], enabled: boolean, key: string, pinned: string[], organize = enabled) {
   const [limits, setLimits] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [loading, setLoading] = useState(false);
   const startTask = useWorkbenchDrawingTask('positioning');
+  const prepareDrawing = useWorkbenchDrawingPreparation();
   const tasks = useContext(WorkbenchDrawingContext);
-  const request = useRef<{ key: string; limit: number; task: WorkbenchDrawingTask; promise: Promise<void>; finish(): void; started?: boolean } | null>(null);
+  const request = useRef<{ key: string; limit: number; task: WorkbenchDrawingTask; promise: Promise<void>; finish(): void; cancelPreparation(): void; started?: boolean } | null>(null);
   const job = useMemo(() => organize ? { kind: 'structures' as const, input: { messages, edges } } : null, [messages, edges, organize]);
   const structure = useSceneComputation(job);
   const limit = limits.get(key) ?? 50;
@@ -56,21 +58,24 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
   useLayoutEffect(() => () => { const current = request.current; if (current) { current.task.cancel(); current.finish(); } }, []);
   const more = useCallback((): Promise<void> => {
     if (request.current) return request.current.promise;
-    if (!hasMore || !structure || tasks?.failure) return Promise.resolve();
+    if (!hasMore || !structure || tasks?.failure || tasks?.blocking) return Promise.resolve();
     const task = startTask();
     let resolve!: () => void;
     const promise = new Promise<void>(done => { resolve = done; });
     const nextLimit = Math.min(structure.units.length, effectiveLimit + 50);
-    const current = { key, limit: nextLimit, task, promise, finish() {
+    const current = { key, limit: nextLimit, task, promise, cancelPreparation() {}, finish() {
+      current.cancelPreparation();
       if (request.current === current) { request.current = null; setLoading(false); }
       resolve();
     } };
     request.current = current;
     task.onCancel(current.finish);
-    setLoading(true);
-    setLimits(previous => new Map(previous).set(key, nextLimit));
+    current.cancelPreparation = prepareDrawing(() => task.run(() => {
+      setLoading(true);
+      setLimits(previous => new Map(previous).set(key, nextLimit));
+    }));
     return promise;
-  }, [key, structure, effectiveLimit, hasMore, startTask, tasks]);
+  }, [key, structure, effectiveLimit, hasMore, startTask, tasks, prepareDrawing]);
   return { messages: visible, edges: visibleEdges, visibleIds, edgeIds, structureOrder: structure?.order,
     hasMore, more, loading: loading || (organize && !structure), enabled };
 }

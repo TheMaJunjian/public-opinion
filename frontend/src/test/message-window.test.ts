@@ -109,3 +109,18 @@ it('keeps navigation ranges after deselection, and leaves trace/preview projecti
   expect(result.current.edges).toBe(edges);
   expect(result.current.hasMore).toBe(false);
 });
+
+it('does not start automatic DOM work while another workbench operation is blocking interaction', async () => {
+  const tasks = createWorkbenchDrawingTasks();
+  const edges: DemoEdge[] = [];
+  const { result } = renderHook(() => useMessageWindow(messages, edges, true, 'root', []), {
+    wrapper: ({ children }: { children: ReactNode }) => createElement(WorkbenchDrawingContext.Provider, { value: tasks }, children),
+  });
+  await act(() => result.current.more());
+  expect(result.current.messages).toHaveLength(50);
+  expect(tasks.pending).toBe(0);
+  tasks.setBlocking(false);
+  act(() => { void result.current.more(); });
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  expect(result.current.messages).toHaveLength(100);
+});

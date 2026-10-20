@@ -88,6 +88,7 @@ export default function PromptModal({
         alignItems: 'center',
         justifyContent: 'center',
         padding: 16,
+        boxSizing: 'border-box',
       }}
       onClick={() => onCancel?.()}
     >

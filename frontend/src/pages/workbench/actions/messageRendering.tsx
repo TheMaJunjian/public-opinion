@@ -53,11 +53,20 @@ interface RenderMessageContentWithAnchorsForListDependencies {
   handleFragmentAnchorClick: (messageId: string, start: number, len: number, text: string) => void;
 }
 
+function readableParts(message: DemoMessage) {
+  return message.parts?.filter(part => part.type === 'text' || part.type === 'code' || part.type === 'web') ?? [];
+}
+
+function partText(part: ReturnType<typeof readableParts>[number]): string {
+  return part.type === 'text' ? part.text : part.type === 'code' ? part.source : part.excerpt || part.url;
+}
+
 export function renderMessageContentWithAnchorsForList(dependencies: RenderMessageContentWithAnchorsForListDependencies, message: DemoMessage): React.JSX.Element {
   const { edges, isFragmentSelected, handleFragmentAnchorClick } = dependencies;
   const targets = extractTextTargetsForMessage(message.id, edges);
-  if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
-  const text = message.content;
+  const parts = readableParts(message);
+  const text = parts.length ? parts.map(partText).join('\n') : message.content;
+  if (targets.length === 0) return <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{text}</pre>;
   const validItems = targets
     .filter(t => t.start >= 0 && t.start + t.len <= text.length && t.len > 0)
     .map(t => ({ start: t.start, end: t.start + t.len, relationType: t.relationType, edgeId: t.edgeId }));
@@ -73,13 +82,20 @@ interface RenderRelationContentWithTargetsDependencies {
 export function renderRelationContentWithTargets(dependencies: RenderRelationContentWithTargetsDependencies, message: DemoMessage): React.JSX.Element {
   const { handleNavigateToMessage } = dependencies;
   const targetRefs = message.targetRefs ?? [];
+  const parts = readableParts(message);
+  const nativeContent = parts.length ? <div>{parts.map(part => <pre key={part.id}
+    data-message-part-id={part.id} data-message-revision={message.revision ?? 1}
+    style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>
+    {partText(part)}
+  </pre>)}</div> : undefined;
   if (targetRefs.length === 0) {
-    return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
+    return nativeContent ?? <pre style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: "Menlo, Monaco, Consolas, 'Courier New', monospace", fontSize: 13 }}>{message.content}</pre>;
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {nativeContent}
       <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-        {message.content.split(/目标：/u)[0]}
+        {!nativeContent && message.content.split(/目标：/u)[0]}
         <span>目标：</span>
         {targetRefs.map((target, index) => {
           const targetId = target.kind === 'relation' ? target.relationId : target.messageId;

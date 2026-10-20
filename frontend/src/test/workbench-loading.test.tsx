@@ -1,7 +1,7 @@
 import { StrictMode, useLayoutEffect, useState } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress } from '../components/WorkbenchLoadingBoundary';
+import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress, WORKBENCH_REQUEST_WAIT_MS } from '../components/WorkbenchLoadingBoundary';
 import WorkbenchActivityIndicator from '../components/WorkbenchActivityIndicator';
 import { useWorkbenchDrawingTask, WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
 import { resetWorkbenchActivity } from '../utils/workbenchActivity';
@@ -42,6 +42,33 @@ const finish = (tasks: Tasks) => act(() => { Object.values(tasks).forEach(task =
 describe('workbench loading through registered drawing tasks', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => { resetWorkbenchActivity(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('allows keyboard dismissal and reopening while preserving drawing ownership and background guards', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    render(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    const root = screen.getByTestId('workbench').parentElement!;
+    const hide = screen.getByRole('button', { name: '收起进度' });
+    expect(hide).toHaveFocus();
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    hide.dispatchEvent(tab); expect(tab.defaultPrevented).toBe(true);
+    fireEvent.keyDown(hide, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull(); expect(root.inert).toBe(true);
+    const reopen = screen.getByRole('button', { name: '显示进度' }); expect(reopen).toHaveFocus();
+    fireEvent.click(reopen); expect(screen.getByRole('dialog')).toBeInTheDocument();
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true });
+    screen.getByRole('button', { name: '收起进度' }).dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(false);
+    finish(tasks); advance(34); expect(root.inert).toBe(false);
+  });
+
+  it('releases an abandoned sending wait without claiming that the write completed', () => {
+    render(<WorkbenchLoadingBoundary><Content sending /></WorkbenchLoadingBoundary>);
+    advance(WORKBENCH_REQUEST_WAIT_MS);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('发送结果尚未确认');
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+  });
 
   it('waits for every task even through long idle gaps, then unlocks clicking, keys and scrolling with both prompts', () => {
     let tasks!: Tasks;

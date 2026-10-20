@@ -66,8 +66,8 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
   }
 
   return (
-    <nav ref={navRef} className="relative bg-indigo-700 text-white pl-6 pr-4 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
-      <div ref={leftControlsRef} className="relative flex shrink-0 items-center gap-4">
+    <nav ref={navRef} className="app-navbar relative bg-indigo-700 text-white pl-6 pr-4 py-3 flex items-center shadow-md" style={topControlsFrozen ? { position: 'sticky', top: 0, zIndex: Z_INDEX.freezeButton } : undefined}>
+      <div ref={leftControlsRef} className="app-navbar-primary relative flex shrink-0 items-center gap-4">
         <Link to="/" className="flex flex-col leading-tight hover:opacity-90 transition-opacity">
           <span className="text-xl font-bold tracking-widest">公论</span>
           <span className="text-xs text-indigo-300 tracking-wide">一切记录在案，是非自有公论</span>
@@ -119,7 +119,7 @@ export default function Navbar({ onOpenViewer, onOpenTutorial, onOpenWelfare, on
         </button>
       </div>
       <div aria-hidden="true" className="min-w-0 flex-1" />
-      <div ref={rightControlsRef} className="sticky flex shrink-0 items-center gap-4 bg-indigo-700 pl-2" style={{ right: `${rightControlsRightOffset}px`, zIndex: Z_INDEX.popup }}>
+      <div ref={rightControlsRef} className="app-navbar-account sticky flex shrink-0 items-center gap-4 bg-indigo-700 pl-2" style={{ right: `${rightControlsRightOffset}px`, zIndex: Z_INDEX.popup }}>
         {user ? (
           <>
             <button

@@ -9,6 +9,7 @@ import { computeCorrectionVersions, isCardMessage } from '../utils/modelBridge';
 import { computeSceneLayout } from '../utils/frameLayout';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { getMessageProminence, getOrganizationTitle, needsSeparateStanceCard } from '../utils/messageDisplay';
+import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import MessageTextPart from './MessageTextPart';
 import { describeUnit } from '../utils/selectionLabel';
 import { PART_SELECTION_EVENT, isMessageElementSelected, isWholeMessageSelection, messageTypeReference } from '../utils/messageElementSelection';
@@ -831,6 +832,8 @@ function GraphViewCanvas(props: GraphViewProps) {
 
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
+              role="group" tabIndex={0} aria-label={`消息 ${msg.id}，${isWhole ? '已选中' : '未选中'}`}
+              aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
               onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
               onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,boxSizing:"border-box",backgroundColor:isWhole?"#5b4100":stanceBg||kindBg||"#1f1f1f",backgroundImage:isWhole?undefined:prominence.backgroundImage,borderRadius:6,borderTop:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderRight:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderBottom:stanceBorder||(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444"),borderLeft:kindBorder||(stanceBorder?undefined:(isText?"2px dashed #0b84ff":isWhole?"2px solid #fbbf24":"1px solid #444")),padding:"12px 16px",boxShadow:stanceShadow||(isText?"0 6px 18px rgba(11,132,255,0.06)":isWhole?"0 4px 18px rgba(251,191,36,0.45)":prominence.boxShadow||"0 4px 10px rgba(0,0,0,0.5)"),display:"flex",flexDirection:"column",gap:8,cursor:"pointer",outline:isWhole?"none":lastClickedMessageId===msg.id?"1px dashed #0b84ff":"none",userSelect:activeTextSelectId===msg.id?"text":"auto"}}>
@@ -1205,7 +1208,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft,height:bb.height+padY*2};
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
-            <div key={`hit-${pe.drawId}`} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
+            <div key={`hit-${pe.drawId}`} role="group" tabIndex={0} aria-label={`关系消息 ${relId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:isWhole||isFrag?"rgba(91,65,0,0.35)":"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(251,191,36,0.95)":"1px solid transparent",boxShadow:isWhole||isFrag?"0 1px 4px rgba(251,191,36,0.35)":"none"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
               {showCorrBadge&&(()=>{
@@ -1516,6 +1519,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             {(gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
               <div data-msgid={gf.relMsgId} data-rel-overlay="true"
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}
+                role="group" tabIndex={0} aria-label={`组织消息 ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
                 title={title}

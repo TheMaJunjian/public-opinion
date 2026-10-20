@@ -1321,13 +1321,13 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => expect(finishCommit).toBeDefined());
       await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
-      expect(screen.getByText('正在发送消息并更新关联结构，请稍候…')).toBeInTheDocument();
+      expect(screen.getByText('正在等待服务器确认发送，请勿重复提交。')).toBeInTheDocument();
       expect(screen.queryByText('已定位目标消息')).toBeNull();
       expect(panel.scrollTop).toBe(0);
       await act(async () => finishCommit());
       await waitFor(() => expect(screen.getByText('已定位目标消息')).toBeInTheDocument());
-      await waitFor(() => expect(screen.queryByText('正在发送消息并更新关联结构，请稍候…')).toBeNull());
-      expect(panel.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
+      await waitFor(() => expect(screen.queryByText('正在等待服务器确认发送，请勿重复提交。')).toBeNull());
+      await waitFor(() => expect(panel.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false'));
       expect(panel.scrollTop).toBeGreaterThan(0);
     } finally {
       geometry.mockRestore();

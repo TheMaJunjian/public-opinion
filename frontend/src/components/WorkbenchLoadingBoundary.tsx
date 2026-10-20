@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import PromptModal from './PromptModal';
+import { OperationProgressDialog } from './OperationFeedback';
 import ErrorBoundary from './ErrorBoundary';
 import { cancelWorkbenchDrawing, manageWorkbenchDrawing } from '../utils/workbenchActivity';
 import { createWorkbenchDrawingTasks, WorkbenchDrawingContext, WORKBENCH_DRAWING_TIMEOUT_MS, watchWorkbenchDrawingDeadline, type DrawingFailure } from '../context/WorkbenchDrawingContext';
@@ -8,6 +8,7 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext, WORKBENCH_DRAWING
 type Phase = 'loading' | 'drawing' | 'sending' | 'ready';
 const LoadingContext = createContext<(phase: Phase, resetFailure?: boolean) => void>(() => undefined);
 const SendingContext = createContext<(sending: boolean) => void>(() => undefined);
+export const WORKBENCH_REQUEST_WAIT_MS = 60_000;
 const taskNames = { module: '界面加载', projection: '消息整理', measurement: '尺寸测量', overlays: '连线绘制', positioning: '消息定位', fonts: '字体加载', render: '页面绘制' };
 
 /** Keep the loading dialog outside the expensive workbench render. */
@@ -16,6 +17,9 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const { tasks } = attempt;
   const [failure, setFailure] = useState<DrawingFailure | null>(null);
   const [cycle, setCycle] = useState(0);
+  const [hidden, setHidden] = useState(false);
+  const [waitNotice, setWaitNotice] = useState<string | null>(null);
+  const reopen = useRef<HTMLButtonElement>(null);
   const [progress, setProgress] = useState<{ phase: Phase; sending: boolean; reason: 'loading' | 'sending'; drawingRevision?: number }>({ phase: 'loading', sending: false, reason: 'loading' });
   const { phase, reason, drawingRevision } = progress;
   const reportLoading = useCallback((next: Phase, resetFailure = false) => {
@@ -33,6 +37,20 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const finishDrawing = useRef<((completed?: boolean) => void) | null>(null);
   const drawingWait = useRef<{ tasks: typeof tasks; cycle: number; remaining: number } | null>(null);
   const busy = phase !== 'ready';
+
+  useEffect(() => { setHidden(false); setWaitNotice(null); }, [cycle, attempt.key]);
+  useLayoutEffect(() => { if (hidden && busy) reopen.current?.focus(); }, [hidden, busy]);
+  useEffect(() => {
+    if (phase !== 'loading' && phase !== 'sending') return;
+    const timer = setTimeout(() => {
+      setWaitNotice(phase === 'sending'
+        ? '等待已超过 60 秒，发送结果尚未确认。已恢复界面；请先核对记录，不要重复提交。'
+        : '加载等待已超过 60 秒，已恢复界面；数据尚未准备完成，可稍后重试。');
+      // This releases presentation only. The write and its duplicate guard keep their owner.
+      setProgress(previous => previous.phase === phase ? { ...previous, phase: 'ready' } : previous);
+    }, WORKBENCH_REQUEST_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [phase, cycle]);
 
   useLayoutEffect(() => {
     const failed = () => {
@@ -127,10 +145,11 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   useLayoutEffect(() => {
     if (!busy) return;
     // Document-level workbench shortcuts also need to wait for drawing.
-    const blockShortcut = (event: KeyboardEvent) => event.stopImmediatePropagation();
+    const isProgressControl = (event: Event) => event.target instanceof Element && !!event.target.closest('[data-operation-progress="true"]');
+    const blockShortcut = (event: KeyboardEvent) => { if (!isProgressControl(event)) event.stopImmediatePropagation(); };
     // Keep the viewport width unchanged while blocking scroll. Toggling body
     // overflow on close would resize the scene after the dialog had disappeared.
-    const blockScroll = (event: Event) => event.preventDefault();
+    const blockScroll = (event: Event) => { if (!isProgressControl(event)) event.preventDefault(); };
     window.addEventListener('keydown', blockShortcut, true);
     window.addEventListener('keyup', blockShortcut, true);
     window.addEventListener('wheel', blockScroll, { capture: true, passive: false });
@@ -144,6 +163,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   }, [busy]);
 
   return <WorkbenchDrawingContext.Provider value={tasks}><LoadingContext.Provider value={reportLoading}><SendingContext.Provider value={reportSending}>
+    {waitNotice && <div role="alert" style={{ padding: 12, background: '#3b2616', color: '#fde68a' }}>{waitNotice}</div>}
     {failure && <div role="alert" style={{ padding: 12, background: '#3b2616', color: '#fde68a' }}>
       {failure.reason === 'timeout' ? '绘制等待超过 30 秒，已停止等待并恢复操作。' : `${taskNames[failure.kind]}失败，已恢复操作。`}
       页面可能显示不完整，请重新加载。
@@ -156,9 +176,16 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     <div key={attempt.key} ref={content} aria-busy={busy} style={{ display: 'contents' }}>
       <ErrorBoundary onError={error => tasks.abort({ kind: 'render', reason: 'error', error })}>{children}</ErrorBoundary>
     </div>
-    <PromptModal open={busy} title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'}
-      message={reason === 'sending' ? '正在发送消息并更新关联结构，请稍候…' : phase === 'drawing' ? '数据已收到，正在绘制消息与关系，请稍候…' : '正在加载消息数据，请稍候…'}
-      hideActions lockScroll={false} onConfirm={() => undefined} />
+    {busy && !hidden && <OperationProgressDialog title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'} onHide={() => setHidden(true)}>
+      <div data-workbench-progress-active="true">
+        {phase === 'sending' ? '正在等待服务器确认发送，请勿重复提交。' : phase === 'drawing' ? '正在更新消息与关系，等待绘制和定位完成。' : '正在加载消息数据，请稍候。'}
+        <p>可以收起进度；收起不会取消请求，工作区会在准备好后恢复操作。</p>
+      </div>
+    </OperationProgressDialog>}
+    {busy && hidden && <div className="operation-feedback" data-operation-progress="true" data-workbench-progress-active="true" data-gesture-disabled="true" role="status">
+      <span>仍在{phase === 'sending' ? '等待发送确认' : phase === 'drawing' ? '绘制消息' : '加载消息'}，工作区暂不可操作。</span>
+      <button ref={reopen} type="button" onClick={() => setHidden(false)}>显示进度</button>
+    </div>}
   </SendingContext.Provider></LoadingContext.Provider></WorkbenchDrawingContext.Provider>;
 }
 

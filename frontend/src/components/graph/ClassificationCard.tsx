@@ -4,6 +4,7 @@ import type { Relation } from '../../types';
 import type { GraphViewProps } from '../GraphView';
 import { getMessageProminence } from '../../utils/messageDisplay';
 import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../../utils/messageElementSelection';
+import { activateMessageFromKeyboard } from '../../utils/messageKeyboard';
 import MessageTextPart from '../MessageTextPart';
 import MessageElement from '../MessageElement';
 import MessageSettlementActions from '../MessageSettlementActions';
@@ -41,6 +42,8 @@ export default function ClassificationCard({
   const prominence = getMessageProminence(msg);
   return (
               <div key={msg.id} data-msgid={msg.id} ref={cardRef}
+                role="group" tabIndex={0} aria-label={`分类 ${msg.id}，${isWhole ? '已选中' : '未选中'}`}
+                aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
                 onClick={e=>onMessageClick(e,msg.id)} onDoubleClick={e=>onMessageDoubleClick(e,msg.id)}
                 onMouseDown={e=>onMessageMouseDown?.(e,msg.id)} onMouseUp={e=>onMessageMouseUp?.(e,msg.id)}
                 style={{position:"absolute",left:box.x,top:box.y,width:box.width,boxSizing:"border-box",backgroundColor:isStanceTarget?"#2a2410":isWhole?"#4a3510":"#1f1f1f",borderRadius:6,

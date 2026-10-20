@@ -22,7 +22,7 @@ export default function RelationToolbar({ barRef: relationBarRef, leftControlsRe
   top, springWidth: relationSpringWidth, rightOffset: relationControlsRightOffset, viewer: isPreloaded, messageIdInput, onMessageIdChange: setMessageIdInput, onJump: confirmMessageIdNavigation, composer }: Props) {
   const { relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef } = composer;
   return (
-    <div ref={relationBarRef} style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", flexWrap: "wrap", rowGap: 8, alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top, zIndex: Z_INDEX.popover }}>
+    <div ref={relationBarRef} className="workbench-relation-toolbar" style={{ padding: "8px 16px", borderBottom: "1px solid #333", background: "#181818", display: "flex", flexWrap: "wrap", rowGap: 8, alignItems: "center", fontSize: 14, flexShrink: 0, position: "sticky", top, zIndex: Z_INDEX.popover }}>
       <div ref={relationLeftControlsRef} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, padding: "3px 8px", border: "1px solid #334155", borderRadius: 6, background: "#111827", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)" }}>
           <span style={{ color: "#94a3b8", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>跳转消息</span>

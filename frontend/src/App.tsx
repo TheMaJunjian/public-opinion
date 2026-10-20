@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import { InterfaceZoomContext } from './context/InterfaceZoomContext';
 import Navbar from './components/Navbar';
 import AppUpdateNotice from './components/AppUpdateNotice';
+import OperationFeedback from './components/OperationFeedback';
 import ErrorBoundary from './components/ErrorBoundary';
 import WorkbenchStartup, { PageLoadingPrompt } from './components/WorkbenchStartup';
 import GestureShortcutManager from './components/GestureShortcutManager';
@@ -55,6 +56,11 @@ function AppContent() {
   }, []);
 
   const handleGestureConfirm = (direction: GestureDirection, target: HTMLElement | null, symbol: ShortcutSymbol) => {
+    const progress = document.querySelector<HTMLElement>('[data-workbench-progress-active="true"]');
+    if (progress) {
+      if (symbol === 'cancel') progress.closest('[data-operation-progress="true"]')?.querySelector<HTMLButtonElement>('button')?.click();
+      return;
+    }
     if (symbol === 'zoom-in' || symbol === 'zoom-out') {
       setInterfaceZoom(currentZoom => {
         const nextZoom = symbol === 'zoom-in'
@@ -99,11 +105,11 @@ function AppContent() {
       <InterfaceZoomContext.Provider value={interfaceZoom}>
         <div
           ref={appRootRef}
-          className="min-h-screen min-w-0 flex flex-col bg-[#101010]"
+          className="app-shell min-h-screen min-w-0 flex flex-col bg-[#101010]"
           style={{
             transform: interfaceZoom === 1 ? 'none' : `scale(${interfaceZoom})`,
             transformOrigin: 'top left',
-            width: 'max-content',
+            width: `${100 / interfaceZoom}%`,
             minWidth: `${100 / interfaceZoom}%`,
             minHeight: `${100 / interfaceZoom}vh`,
           }}
@@ -119,7 +125,7 @@ function AppContent() {
             onToggleTopControls={() => setTopControlsFrozen(!topControlsFrozen)}
             onHeightChange={setNavbarHeight}
           />
-          <main className="flex-1 flex flex-col">
+          <main className="flex-1 flex flex-col min-w-0">
             <Suspense fallback={routeFallback}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
@@ -171,6 +177,7 @@ export default function App() {
   return (
     <AuthProvider>
       <AppUpdateNotice />
+      <OperationFeedback />
       <ErrorBoundary fallback={<div role="alert" style={{ padding: 24, color: '#eee' }}>
         <p>页面加载失败，请检查网络后刷新页面。</p>
         <button onClick={() => window.location.reload()}>刷新页面</button>

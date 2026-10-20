@@ -492,4 +492,74 @@ describe('SettlementPanel voting', () => {
       resolveVote?.({ voteId: 'vote-1', vote: 'TRUE', amount: 1 });
     });
   });
+
+  it('guards two vote events in one React batch before disabled state commits', async () => {
+    let finish!: (value: unknown) => void;
+    mockApi.castVote.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
+    const button = await screen.findByRole('button', { name: '投票' });
+    act(() => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(mockApi.castVote).toHaveBeenCalledOnce();
+    await act(async () => finish({ id: 'vote-1' }));
+  });
+
+  it('guards two round creation events in one React batch', async () => {
+    let finish!: (value: unknown) => void;
+    mockApi.getMessageRounds.mockResolvedValue({ data: [] });
+    mockApi.createRound.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
+    const button = await screen.findByRole('button', { name: '发起结算' });
+    act(() => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(mockApi.createRound).toHaveBeenCalledOnce();
+    await act(async () => finish({ id: 'new-round', settlementType: 'TRUTH' }));
+  });
+
+  it('guards two confirmation events in one React batch', async () => {
+    let finish!: (value: unknown) => void;
+    mockApi.getRoundDetail.mockResolvedValue({ id: 'round-1', status: 'VOTING', settlementType: 'TRUTH', weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 }, votes: [] });
+    mockApi.closeAndSettle.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: '结算' }));
+    const button = await screen.findByRole('button', { name: '确认结算' });
+    act(() => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(mockApi.closeAndSettle).toHaveBeenCalledOnce();
+    await act(async () => finish({ status: 'VOTING', result: null, endsAt: new Date(Date.now() + 60000).toISOString(), weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 } }));
+  });
+
+  it('keeps a confirmed vote distinct from a failed follow-up detail read', async () => {
+    render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" />);
+    const button = await screen.findByRole('button', { name: '投票' });
+    const dispatch = window.dispatchEvent.bind(window);
+    const spy = vi.spyOn(window, 'dispatchEvent').mockImplementation(event => event.type === 'stakes-refresh' ? true : dispatch(event));
+    try {
+      mockApi.castVote.mockResolvedValue({ id: 'vote-1' });
+      mockApi.getRoundDetail.mockRejectedValueOnce(new Error('detail offline'));
+      fireEvent.click(button);
+      expect(await screen.findByText('投票已获服务器确认，但最新数据读取失败。请刷新查看，勿重复投票。')).toBeInTheDocument();
+      expect(screen.queryByText('detail offline')).toBeNull();
+      expect(mockApi.castVote).toHaveBeenCalledOnce();
+    } finally { spy.mockRestore(); }
+  });
+
+  it('does not fabricate a result message when settlement confirms without returning its record', async () => {
+    mockApi.getRoundDetail.mockResolvedValue({ id: 'round-1', status: 'VOTING', settlementType: 'TRUTH', weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 }, votes: [] });
+    mockApi.closeAndSettle.mockResolvedValue({ status: 'SETTLED', result: 'TRUE', weights: { TRUE: 2, FALSE: 0, UNKNOWN: 0 } });
+    const created = vi.fn(), spy = vi.spyOn(window, 'dispatchEvent');
+    try {
+      render(<SettlementPanel messageId="message-1" scopeMessageId="classification-1" onMessageCreated={created} />);
+      fireEvent.click(await screen.findByRole('button', { name: '结算' }));
+      fireEvent.click(await screen.findByRole('button', { name: '确认结算' }));
+      await waitFor(() => expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: 'gonglun:catch-up' })));
+      expect(created).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
 });

@@ -62,7 +62,7 @@ import PromptModal from '../components/PromptModal';
 import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress } from '../components/WorkbenchLoadingBoundary';
 import WorkbenchActivityIndicator from '../components/WorkbenchActivityIndicator';
 import { useWorkbenchDrawingCommit, useWorkbenchDrawingFailure, useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
-import WorkbenchPanel from '../components/WorkbenchPanel';
+const WorkbenchPanel = lazy(() => import('../components/WorkbenchPanel'));
 import useStakeCalculation from '../hooks/useStakeCalculation';
 import type { MessageStakes, Relation, TargetRef } from '../types';
 import { getPresentationSpec, getRelationTitle } from '../types';
@@ -2742,14 +2742,18 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   return (
     <>
       <ErrorBoundary onError={reportDrawingFailure}>
-        <div style={{ flex: "1 0 auto", width: effectiveContainerWidth, maxWidth: "100%", minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
+        <div className="workbench-shell" style={{ flex: "1 0 auto", width: effectiveContainerWidth, maxWidth: "100%", minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
           <RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
             top={topControlsFrozen ? topControlsOffset : 0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded}
             messageIdInput={messageIdInput} onMessageIdChange={setMessageIdInput} onJump={confirmMessageIdNavigation}
             composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />
 
-          <div ref={panelContainerRef} style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
-            <div style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
+          <nav className="workbench-mobile-navigation" aria-label="工作区导航">
+            <button type="button" onClick={() => leftPanelRef.current?.scrollIntoView({ block: 'start' })}>查看消息图与列表</button>
+            <button type="button" onClick={() => { rightPanelRef.current?.scrollIntoView({ block: 'start' }); rightPanelRef.current?.focus({ preventScroll: true }); }}>发言与关系操作</button>
+          </nav>
+          <div ref={panelContainerRef} className="workbench-panels" style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
+            <div className="workbench-message-pane" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
               <WorkbenchViewToolbar top={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
                 scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
@@ -2893,6 +2897,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
 
             {/* Draggable splitter — 12px wide with visible grip handle */}
             <div
+              className="workbench-splitter"
               onPointerDown={handleSplitterPointerDown}
               style={{
                 width: 12, flexShrink: 0,
@@ -2918,7 +2923,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
             </div>
 
 
-            <WorkbenchPanel
+            <DeferredWorkbench label="发言操作" blocksDrawing><WorkbenchPanel
               rightPanelRef={rightPanelRef}
               leftPanelRef={leftPanelRef}
               TOTAL_FLEX={TOTAL_FLEX}
@@ -3048,7 +3053,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               onComparisonVote={handleComparisonVote}
               onReturnToComparisonCategory={() => { restoreComparisonScope(); setComparisonReviewed(false); setComparisonMode(true); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); setViewMode('list'); }}
               onExitComparison={exitComparison}
-            />
+            /></DeferredWorkbench>
           </div>
         </div>
       </ErrorBoundary>

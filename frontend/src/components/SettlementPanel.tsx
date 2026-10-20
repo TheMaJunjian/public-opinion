@@ -45,6 +45,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
   const [latestPersonalSettlement, setLatestPersonalSettlement] = useState<PersonalSettlement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creatingRound, setCreatingRound] = useState(false);
+  const creatingRoundRef = useRef(false);
 
   // Vote form state — removed (now per-round inside ActiveRoundCard)
   const [expandedSettledRound, setExpandedSettledRound] = useState<string | null>(null);
@@ -127,7 +128,8 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
   }, [entryHighlight, rounds]);
 
   async function handleCreateRound() {
-    if (creatingRound) return;
+    if (creatingRoundRef.current) return;
+    creatingRoundRef.current = true;
     try {
       setError(null);
       setCreatingRound(true);
@@ -153,6 +155,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
     } catch (e: unknown) {
       setError((e as Error)?.message ?? '创建轮次失败');
     } finally {
+      creatingRoundRef.current = false;
       setCreatingRound(false);
     }
   }
@@ -383,6 +386,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   const [settleError, setSettleError] = useState<string | null>(null);
   const [settleNotice, setSettleNotice] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const mutationPending = useRef(false);
   const isWaiting = !!localRound.endsAt && localRound.status !== 'SETTLED';
 
   useEffect(() => { setLocalRound(round); }, [round]);
@@ -431,13 +435,15 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   }, [rounds, localRound.settlementType]);
 
   async function handleVote() {
-    if (voting || settling) return;
+    if (mutationPending.current) return;
     if (typeof voteAmount !== 'number' || !Number.isInteger(voteAmount) || voteAmount <= 0) {
       setSettleError('投票押注必须是大于 0 的整数');
       return;
     }
+    mutationPending.current = true;
     try {
       setSettleError(null);
+      setSettleNotice(null);
       setVoting(true);
       const result = await api.castVote(localRound.id, { vote: voteDirection, amount: voteAmount });
       operationLog('投票', `round=${localRound.id} vote=${voteDirection} amount=${voteAmount}`);
@@ -445,17 +451,22 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       window.dispatchEvent(new Event('points-refresh'));
       window.dispatchEvent(new CustomEvent('stakes-refresh', { detail: { messageId } }));
       window.dispatchEvent(new CustomEvent('relation-created', { detail: result }));
-      const updated = await api.getRoundDetail(localRound.id);
-      setLocalRound(updated);
+      try {
+        const updated = await api.getRoundDetail(localRound.id);
+        setLocalRound(updated);
+      } catch {
+        setSettleNotice('投票已获服务器确认，但最新数据读取失败。请刷新查看，勿重复投票。');
+      }
     } catch (e: unknown) {
       setSettleError((e as Error)?.message ?? '投票失败');
     } finally {
+      mutationPending.current = false;
       setVoting(false);
     }
   }
 
   async function handleSettle() {
-    if (voting || settling || isWaiting) return;
+    if (mutationPending.current || isWaiting) return;
     setConfirmOpen(true);
   }
 
@@ -510,7 +521,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   const settlementPrompt = `本轮押注：${totalStake} 点（PRO ${weights.TRUE}，CON ${weights.FALSE}）。\n总押注：${totalRoundStake} 点（PRO ${totalRoundPro}，CON ${totalRoundCon}）。\n结算结果：${settlementResult === 'TRUE' ? '赞同胜出' : settlementResult === 'FALSE' ? '反对胜出' : 'UNKNOWN 平局'}。\n总收益池：${profitPool} 点；\n胜方每点押注收益：${settlementResult === 'UNKNOWN' ? '无（平局，双方贡献点全部返还）' : `${winnerRate} 点`}。\n当前与会者贡献结算：${personalSettlementPrompt}`;
 
   async function handleSettleConfirmed() {
-    if (voting || settling) return;
+    if (mutationPending.current) return;
+    mutationPending.current = true;
     try {
       setSettleError(null);
       setSettling(true);
@@ -529,11 +541,11 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       const resultContent = result.resultContent
         ?? `${settlementLabel}完成：目标消息 ${messageId.slice(-8)}；结果：${resultLabel}（${result.result}）；TRUE 权重 ${result.weights.TRUE}，FALSE 权重 ${result.weights.FALSE}`;
 
-      const resultMsgId = result.resultMessage?.id ?? `settle-${localRound.id}`;
-      const resultCreatedAt = result.resultMessage?.createdAt ?? new Date().toISOString();
+      const resultMsgId = result.resultMessage?.id;
+      const resultCreatedAt = result.resultMessage?.createdAt;
       const resultAuthor = result.resultMessage?.createdBy?.username ?? '';
 
-      if (onMessageCreated) {
+      if (onMessageCreated && resultMsgId && resultCreatedAt) {
         onMessageCreated({
           id: resultMsgId,
           content: resultContent,
@@ -545,6 +557,10 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
           roundPayload: { roundId: localRound.id, result: result.result, settlementType: localRound.settlementType },
         });
       }
+      if (!resultMsgId || !resultCreatedAt) {
+        // A confirmed result is not permission to invent an authoritative record.
+        window.dispatchEvent(new Event('gonglun:catch-up'));
+      }
       window.dispatchEvent(new CustomEvent('guide-settlement-confirmed', { detail: { roundId: localRound.id } }));
       onSettled(localRound.id);
       window.dispatchEvent(new Event('points-refresh'));
@@ -554,6 +570,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
     } catch (e: unknown) {
       setSettleError((e as Error)?.message ?? '结算失败');
     } finally {
+      mutationPending.current = false;
       setSettling(false);
       setConfirmOpen(false);
     }

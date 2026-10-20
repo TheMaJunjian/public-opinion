@@ -6,7 +6,7 @@ import { syncWorkbench, type WorkbenchSnapshot } from '../data/workbench';
 afterEach(() => vi.unstubAllGlobals());
 
 it('sends bounded window queries and loaded IDs without fetching or signing a write session', async () => {
-  const fetcher = vi.fn(async (_url: string, _options?: RequestInit) => new Response(JSON.stringify(page(10, 'target'))));
+  const fetcher = vi.fn<(url: string, options?: RequestInit) => Promise<Response>>(async () => new Response(JSON.stringify(page(10, 'target'))));
   vi.stubGlobal('fetch', fetcher);
   const query = { parent: 'root', mode: 'window' as const, limit: 50, after: 9, knownIds: ['target'], regionId: 'region' };
   await getWorkbenchSnapshot(query);
@@ -34,7 +34,8 @@ it('requests bounded batches and restores compact relations for initial, continu
     expect(params.get('format')).toBe('compact-v1');
     expect(params.get('batch')).toBe('after' in query ? null : '4');
     expect(params.get('regionId')).toBe('regionId' in query ? query.regionId : null);
-    expect(options.signal).toBe(controller.signal);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.signal?.aborted).toBe(false);
   }
 });
 

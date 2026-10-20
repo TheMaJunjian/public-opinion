@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import App from '../App';
 
 const { mounted } = vi.hoisted(() => ({ mounted: vi.fn() }));
-vi.mock('../context/AuthContext', () => ({ AuthProvider: ({ children }: { children: ReactNode }) => children }));
+vi.mock('../context/AuthContext', () => ({ AuthProvider: ({ children }: { children: ReactNode }) => children, useOptionalAuth: () => null }));
 vi.mock('../components/Navbar', () => ({ default: () => <nav /> }));
 vi.mock('../components/GestureShortcutManager', () => ({ default: () => null }));
 vi.mock('../pages/MessageWorkbenchPage', () => ({ default: function Workbench() {

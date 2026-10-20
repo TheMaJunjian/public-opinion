@@ -10,6 +10,7 @@ import { deriveContainerEffect } from '../pages/workbench/model/containerEffect'
 import { getLatestUserReadStatusByMessageId } from '../pages/workbench/model/filters';
 import type { CleanFilterRule, User } from '../types';
 import type { HomeFilterMode } from '../components/HomeFilterPanel';
+import { fetchJsonWithDeadline } from '../utils/requestLifecycle';
 
 export interface CatalogOptions { parent: string; key: string; baseUrl: string; deviceId: string; regionId?: string }
 export interface CatalogData {
@@ -35,14 +36,14 @@ export function createCatalogEngine(options: CatalogOptions, callbacks: {
     async load({ signal, ...query }) {
       const params = new URLSearchParams({ format: 'compact-v1' });
       for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
-      const response = await fetch(`${options.baseUrl}/ui/snapshot?${params}`, {
+      const { response, data } = await fetchJsonWithDeadline<WorkbenchSnapshot | CompactSnapshot<WorkbenchSnapshot> & { error?: string }>(`${options.baseUrl}/ui/snapshot?${params}`, {
         credentials: 'same-origin', headers: { 'X-Device-Id': options.deviceId }, signal,
       });
       if (!response.ok) {
-        const body = await response.json().catch(() => ({})) as { error?: string };
+        const body = data as { error?: string };
         throw Object.assign(new Error(body.error || '全局消息同步失败'), { status: response.status });
       }
-      return decodeWorkbenchSnapshot<WorkbenchSnapshot>(await response.json() as WorkbenchSnapshot | CompactSnapshot<WorkbenchSnapshot>);
+      return decodeWorkbenchSnapshot<WorkbenchSnapshot>(data);
     },
     onProgress: callbacks.onProgress,
     onReady(snapshot) {

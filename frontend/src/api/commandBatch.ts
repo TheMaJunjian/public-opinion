@@ -4,13 +4,57 @@ import type { WorkbenchSnapshot } from '../data/workbench';
 export interface Command { id: string; method: string; path: string; body: Record<string, unknown> }
 export interface CommandEnvelope { requestId: string; commands: Command[] }
 export interface CommandCommit { snapshots?: WorkbenchSnapshot[] }
-type Batch = CommandEnvelope & { failure?: Error; provisional: Map<string, Message | Relation> };
-function storageKey() { return `gonglun:pending-send:${JSON.parse(localStorage.getItem('user') || '{}').id || 'anonymous'}`; }
+export interface CommandBatchContext { apiBase: string }
+interface CapturedContext { owner: string; api: string; key: string; user: User; legacyKey?: string }
+type Batch = CommandEnvelope & { context: CapturedContext; previous: CommandEnvelope | null; failure?: Error; provisional: Map<string, Message | Relation> };
 let current: Batch | null = null;
+let active = false;
 
-function pending(): CommandEnvelope | null {
-  try { return JSON.parse(sessionStorage.getItem(storageKey()) || 'null') as CommandEnvelope | null; }
-  catch { return null; }
+function currentUser(): User {
+  try { return JSON.parse(localStorage.getItem('user') || '{}') as User; }
+  catch { return {} as User; }
+}
+function captureContext(options?: CommandBatchContext): CapturedContext {
+  const user = currentUser(), owner = String(user.id || 'anonymous');
+  const page = typeof location === 'undefined' ? 'http://localhost/' : location.href;
+  const api = new URL(options?.apiBase ?? import.meta.env.VITE_API_BASE_URL ?? '/api', page).href.replace(/\/$/, '');
+  const sameOriginDefault = new URL('/api', page).href;
+  return { owner, api, user, key: `gonglun:pending-send:v2:${JSON.stringify([api, owner])}`,
+    // The old user-only record can be recovered on its original same-origin API.
+    // Never replay an unbound legacy envelope against another API endpoint.
+    ...(api === sameOriginDefault ? { legacyKey: `gonglun:pending-send:${owner}` } : {}) };
+}
+function assertOwner(context: CapturedContext) {
+  if (String(currentUser().id || 'anonymous') !== context.owner) throw new DOMException('账户已切换，请重新操作', 'AbortError');
+}
+function pending(context: CapturedContext): CommandEnvelope | null {
+  const raw = sessionStorage.getItem(context.key) ?? (context.legacyKey ? sessionStorage.getItem(context.legacyKey) : null);
+  if (!raw) return null;
+  const value = JSON.parse(raw) as CommandEnvelope;
+  if (!value || typeof value.requestId !== 'string' || !Array.isArray(value.commands) || !value.commands.length)
+    throw new Error('待确认的发送记录无效，请先核对已有消息');
+  sessionStorage.setItem(context.key, raw);
+  if (context.legacyKey) sessionStorage.removeItem(context.legacyKey);
+  return value;
+}
+function definiteRejection(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if ('unknownOutcome' in error && error.unknownOutcome === true || 'name' in error && error.name === 'UncertainRequestError') return false;
+  const status = 'status' in error ? Number(error.status) : 0;
+  return status >= 400 && status < 500;
+}
+function semanticJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+}
+function sameIntent(a: CommandEnvelope, b: CommandEnvelope): boolean {
+  const intent = (value: CommandEnvelope) => value.commands.map(({ method, path, body }) => ({ method, path, body }));
+  return semanticJson(intent(a)) === semanticJson(intent(b));
+}
+function publishCommit(committed?: CommandCommit) {
+  if (committed?.snapshots?.length) window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: committed.snapshots }));
+  else window.dispatchEvent(new Event('gonglun:reload'));
+  window.dispatchEvent(new Event('points-refresh'));
 }
 export function cancelCommandBatch(error: unknown) {
   if (current) current.failure = error instanceof Error ? error : new Error(String(error));
@@ -20,11 +64,14 @@ export function isPendingMessage(id: string): boolean { return current?.provisio
 /** The workbench keeps its interaction order; the resulting messages commit together. */
 export function queueCommand(path: string, options: RequestInit): Message | Relation | null {
   if (!current || !/^\/(messages|relations)(\/[^/]+)?$/.test(path)) return null;
+  assertOwner(current.context);
   const body = JSON.parse(String(options.body || '{}')) as Record<string, unknown>;
-  const id = crypto.randomUUID();
-  const command: Command = { id, method: options.method || 'POST', path, body };
+  const method = options.method || 'POST', previous = current.previous?.commands[current.commands.length];
+  // References created later in this preparation must point to the original IDs.
+  const id = previous?.method === method && previous.path === path ? previous.id : crypto.randomUUID();
+  const command: Command = { id, method, path, body };
   current.commands.push(command);
-  const user = JSON.parse(localStorage.getItem('user') || '{}') as User;
+  const user = current.context.user;
   const stamp = new Date().toISOString();
   const relationType = typeof body.relationType === 'string' ? body.relationType : undefined;
   const content = typeof body.content === 'string' ? body.content : '';
@@ -42,52 +89,41 @@ export function queueCommand(path: string, options: RequestInit): Message | Rela
   return response;
 }
 
-export async function runCommandBatch<T>(work: () => Promise<T>, commit: (input: CommandEnvelope) => Promise<unknown>, onCommitted?: (commandCount: number) => void): Promise<T> {
-  if (current) throw new Error('上一条消息正在发送，请稍候');
-  const previous = pending();
-  if (previous) {
-    // Replay the exact envelope after an interrupted response. The server
-    // deduplicates by requestId; rebuilding commands would create new IDs.
-    let recovered: CommandCommit | undefined;
-    try {
-      recovered = await commit(previous) as CommandCommit | undefined;
-    } catch (error) {
-      if (error && typeof error === 'object' && 'status' in error && Number(error.status) < 500) {
-        sessionStorage.removeItem(storageKey());
+export async function runCommandBatch<T>(work: () => Promise<T>, commit: (input: CommandEnvelope) => Promise<unknown>, onCommitted?: (commandCount: number) => void, options?: CommandBatchContext): Promise<T> {
+  if (active) throw new Error('上一条消息正在发送，请稍候');
+  active = true;
+  try {
+    const context = captureContext(options), previous = pending(context);
+    const batch: Batch = { requestId: previous?.requestId ?? crypto.randomUUID(), commands: [], provisional: new Map(), context, previous };
+    current = batch;
+    let result!: T, preparationError: unknown;
+    try { result = await work(); if (batch.failure) throw batch.failure; }
+    catch (error) { preparationError = error; }
+    finally { current = null; }
+    assertOwner(context);
+    if (!previous && preparationError) throw preparationError;
+    if (!previous && !batch.commands.length) return result;
+    const envelope = previous ?? { requestId: batch.requestId, commands: batch.commands };
+    const matching = !preparationError && sameIntent(batch, envelope);
+    sessionStorage.setItem(context.key, JSON.stringify(envelope));
+    let committed: CommandCommit | undefined;
+    try { committed = await commit(envelope) as CommandCommit | undefined; }
+    catch (error) {
+      const definite = definiteRejection(error);
+      if (definite) sessionStorage.removeItem(context.key);
+      if (String(currentUser().id || 'anonymous') === context.owner) window.dispatchEvent(new Event('gonglun:reload'));
+      if (!definite) {
+        const uncertain = new Error('发送结果尚未确认。请查看消息列表；再次发送时会先核对同一笔发送。', { cause: error });
+        throw Object.assign(uncertain, { unknownOutcome: true, requestId: envelope.requestId });
       }
       throw error;
     }
-    sessionStorage.removeItem(storageKey());
-    if (recovered?.snapshots?.length) window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: recovered.snapshots }));
-    else window.dispatchEvent(new Event('gonglun:reload'));
-    window.dispatchEvent(new Event('points-refresh'));
-    throw new Error('上一笔发送已确认，请查看消息后再发送');
-  }
-  const batch: Batch = { requestId: crypto.randomUUID(), commands: [], provisional: new Map() };
-  current = batch;
-  let result: T;
-  try {
-    result = await work();
-    if (batch.failure) throw batch.failure;
-  } finally { current = null; }
-  if (!batch.commands.length) return result;
-  const envelope = { requestId: batch.requestId, commands: batch.commands };
-  sessionStorage.setItem(storageKey(), JSON.stringify(envelope));
-  try {
-    const committed = await commit(envelope) as CommandCommit | undefined;
-    sessionStorage.removeItem(storageKey());
-    onCommitted?.(batch.commands.length);
-    if (committed?.snapshots?.length) {
-      window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: committed.snapshots }));
-    } else window.dispatchEvent(new Event('gonglun:reload'));
-    window.dispatchEvent(new Event('points-refresh'));
+    // Always clear the captured owner's record, even if an account switch occurred.
+    sessionStorage.removeItem(context.key);
+    assertOwner(context);
+    publishCommit(committed);
+    if (previous && !matching) throw new Error('上一笔发送已确认；当前输入与上一笔不同，已保留，请检查后再发送');
+    onCommitted?.(envelope.commands.length);
     return result;
-  } catch (error) {
-    // A definite rejection made no changes; a lost response must keep its request identity.
-    const definiteRejection = error && typeof error === 'object' && 'status' in error && Number(error.status) < 500;
-    if (definiteRejection) sessionStorage.removeItem(storageKey());
-    window.dispatchEvent(new Event('gonglun:reload'));
-    if (!definiteRejection) throw new Error('发送结果尚未确认。请查看消息列表；再次发送时会先核对上一笔发送。', { cause: error });
-    throw error;
-  }
+  } finally { current = null; active = false; }
 }

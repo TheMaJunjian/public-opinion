@@ -47,7 +47,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
             {viewMode === "list" ? "按线性结构查看消息。" : "按非线性结构查看消息。"}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <div className="workbench-view-actions" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <button onClick={() => setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
             导出
           </button>

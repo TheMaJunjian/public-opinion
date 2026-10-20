@@ -2,6 +2,7 @@ import { signPayloadWithPrivateJwk } from '../utils/signature';
 import type { Session, Reference } from '@gonglun/core';
 import { decodeWorkbenchSnapshot, type CompactSnapshot } from '@gonglun/core';
 import { cancelCommandBatch, isPendingMessage, queueCommand, runCommandBatch } from './commandBatch';
+import { beginRequestOperation, clearWriteRequestIdentity, fetchJsonWithDeadline, requestOwner, singleRequest, UncertainRequestError, writeRequestIdentity } from '../utils/requestLifecycle';
 
 const CORE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 const BASE_URL = `${CORE_URL}/ui`;
@@ -64,6 +65,35 @@ export function getPrivateKeyForUser(username: string): string | null {
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const queued = options.method && options.method !== 'GET' ? queueCommand(path, options) : null;
   if (queued) return queued as T;
+  const writes = !!options.method && options.method !== 'GET' && path.split('?')[0] !== '/snapshot/query';
+  let explicitRead = path.split('?')[0] === '/message-context' && new URLSearchParams(path.split('?')[1]).has('id');
+  if (path.split('?')[0] === '/snapshot/query') {
+    try { const ids = JSON.parse(String(options.body ?? '{}')).ids; explicitRead = Array.isArray(ids) && ids.length > 0; }
+    catch { /* An invalid query is handled by the server, without opening foreground feedback. */ }
+  }
+  if (!writes && !explicitRead) return requestCore<T>(path, options);
+  const owner = requestOwner();
+  const label = explicitRead ? '加载消息' : path === '/commands' ? '发送消息' : path.endsWith('/close-and-settle') ? '提交截止请求'
+    : path.endsWith('/votes') ? '提交投票' : path.endsWith('/rounds') ? '发起仲裁'
+      : path === '/login' ? '登录' : path === '/register' ? '注册' : path === '/logout' ? '退出登录' : '提交操作';
+  const operationKey = JSON.stringify([owner, path, options.method, options.body]);
+  const perform = async () => {
+    const operation = beginRequestOperation(label, path === '/commands', owner, operationKey);
+    try {
+      const result = await requestCore<T>(path, options, owner);
+      operation.finish('confirmed', explicitRead ? '消息数据已返回' : undefined); return result;
+    } catch (error) {
+      const cancelled = options.signal?.aborted || (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError');
+      operation.finish(error instanceof UncertainRequestError ? 'uncertain' : cancelled ? 'cancelled' : 'failed', error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  };
+  // Reads belong to each navigation's AbortSignal; only writes share a result.
+  return writes ? singleRequest(operationKey, perform) : perform();
+}
+
+async function requestCore<T>(path: string, options: RequestInit, owner = requestOwner()): Promise<T> {
+  options.signal?.throwIfAborted();
   const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path);
   const url = `${core ? CORE_URL : BASE_URL}${path}`;
   const headers: Record<string, string> = {
@@ -73,6 +103,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   headers['X-Device-Id'] = getDeviceId();
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
   const readOnlySnapshot = path.split('?')[0] === '/snapshot/query';
+  let identityKey: string | undefined;
+  const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
   if (path === '/auth/signing-key' || path === '/logout') {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
@@ -81,14 +113,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
     const body = JSON.parse(typeof options.body === 'string' ? options.body : '{}');
-    const requestId = body.requestId || crypto.randomUUID();
-    headers['X-Request-Id'] = requestId;
     try {
+      checkOwner();
       const rawKey = getPrivateKeyForCurrentUser();
       if (!rawKey) throw new Error('本设备缺少签名密钥，请重新登录以绑定当前设备');
       const keyData = JSON.parse(rawKey) as JsonWebKey;
       const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(body)));
       const bodyHash = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+      identityKey = JSON.stringify([owner, url, options.method, bodyHash]);
+      const requestId = writeRequestIdentity(identityKey, body.requestId);
+      headers['X-Request-Id'] = requestId;
       const signed = JSON.stringify({ method: options.method, path: new URL(url, location.href).pathname, bodyHash, requestId });
       headers['X-Signed-Payload'] = btoa(String.fromCharCode(...new TextEncoder().encode(signed)));
       headers['X-Signature'] = await signPayloadWithPrivateJwk(signed, keyData);
@@ -96,24 +130,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       throw error instanceof Error ? error : new Error('签名失败，请重新登录以绑定当前设备');
     }
   }
-  // Retry a lost write response with exactly the same request identity and signature.
-  const fetchOnce = async () => {
-    // A suspended tab may never receive a response to a completed write.
-    // Bound each attempt, while keeping the same request identity for retries.
-    if (path !== '/commands') return fetch(url, { ...options, headers, credentials: 'same-origin' });
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 20000);
+  // Both attempts consume the body within the deadline and reuse the exact signature.
+  let received!: { response: Response; data: unknown };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey) checkOwner(); }
     try {
-      return await fetch(url, { ...options, headers, credentials: 'same-origin', signal: controller.signal });
-    } finally {
-      window.clearTimeout(timer);
+      options.signal?.throwIfAborted();
+      if (identityKey) checkOwner();
+      received = await fetchJsonWithDeadline(url, { ...options, headers, credentials: 'same-origin' });
+      break;
+    } catch (error) {
+      if (!headers['X-Request-Id']) throw error;
+      if (options.signal?.aborted || attempt === 1) throw new UncertainRequestError(error, headers['X-Request-Id']);
     }
-  };
-  let res: Response;
-  try { res = await fetchOnce(); }
-  catch (error) { if (!headers['X-Request-Id']) throw error; res = await fetchOnce(); }
+  }
+  const { response: res, data } = received;
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText })) as { error?: string; message?: string; code?: string; details?: unknown };
+    const err = (data ?? {}) as { error?: string; message?: string; code?: string; details?: unknown };
     const details = Array.isArray(err.details)
       ? err.details
           .map((d: { field?: string; message?: string }) => (d.field ? `${d.field}: ${d.message}` : d.message))
@@ -121,14 +154,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
           .join('；')
       : '';
     const message = err.error && details ? `${err.error}（${details}）` : err.error || details || err.message || res.statusText;
-    throw new ApiError(err.code ? `${message} [${err.code}]` : message, {
+    const error = new ApiError(err.code ? `${message} [${err.code}]` : message, {
       status: res.status,
       code: err.code,
       path,
     });
+    if (identityKey && res.status >= 500) throw new UncertainRequestError(error, headers['X-Request-Id']);
+    if (identityKey) clearWriteRequestIdentity(identityKey);
+    throw error;
   }
-  const data = await res.json();
-  return data;
+  if (identityKey) clearWriteRequestIdentity(identityKey);
+  return data as T;
 }
 
 type UiSession = Session & { user: Session['user'] & import('../types').User & { publicKey?: string | null } };
@@ -173,7 +209,7 @@ export function logout() {
 
 export { cancelCommandBatch };
 export function withCommandBatch<T>(work: () => Promise<T>, onCommitted?: (commandCount: number) => void): Promise<T> {
-  return runCommandBatch(work, body => request('/commands', { method: 'POST', body: JSON.stringify(body) }), onCommitted);
+  return runCommandBatch(work, body => request('/commands', { method: 'POST', body: JSON.stringify(body) }), onCommitted, { apiBase: CORE_URL });
 }
 
 export async function getWorkbenchSnapshot({ signal, ...query }: import('../data/workbench').SnapshotQuery) {

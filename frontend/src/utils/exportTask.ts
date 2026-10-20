@@ -1,5 +1,6 @@
 import type { ExportData, ExportUpdateData } from '../api/client';
 import { mergeExportUpdate, prepareExportUpdate, validateExportForViewing } from './exportArchive';
+import { fetchJsonWithDeadline } from './requestLifecycle';
 
 export type ExportTask = { kind: 'full'; scopeMessageId: string; source?: ExportData | null; view: NonNullable<ExportData['view']> }
   | { kind: 'update'; file: Blob };
@@ -14,9 +15,11 @@ export async function prepareArchiveExport({ task, apiUrl }: ExportWorkerRequest
     const query = new URLSearchParams({ parent });
     if (base) Object.entries({ after: base.sequence, baseCount: base.entryCount, baseHash: base.hash,
       regionId: base.regionId, ledgerId: base.ledgerId }).forEach(([key, value]) => query.set(key, String(value)));
-    const response = await fetch(`${apiUrl}/export?${query}`, { credentials: 'same-origin', cache: 'no-store' });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || data.message || response.statusText);
+    const { response, data } = await fetchJsonWithDeadline<ExportData | ExportUpdateData | { error?: string; message?: string }>(`${apiUrl}/export?${query}`, { credentials: 'same-origin', cache: 'no-store' });
+    if (!response.ok) {
+      const error = data as { error?: string; message?: string };
+      throw new Error(error.error || error.message || response.statusText);
+    }
     return data;
   }
   let data: ExportData;

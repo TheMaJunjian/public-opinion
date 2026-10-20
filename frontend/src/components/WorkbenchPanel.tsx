@@ -292,7 +292,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   );
 
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" style={panelStyle}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" style={panelStyle}>
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontWeight: 600 }}>容器查看</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>

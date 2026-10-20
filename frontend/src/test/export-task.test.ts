@@ -27,7 +27,9 @@ it('sends a checkpoint only and generates a complete verified update as a Blob',
   const result = await prepareArchiveExport({ task: { kind: 'update', file: oldFile() }, apiUrl: 'https://example.com/api/ui' }, progress);
   expect(JSON.parse(await read(result.blob))).toEqual({ ...archive, journal: { version: 1, entryCount: 0, lastSequence: 0 } });
   expect(progress).toHaveBeenCalledWith('正在生成文件…');
-  expect(fetchMock).toHaveBeenCalledWith(expect.any(String), { credentials: 'same-origin', cache: 'no-store' });
+  expect(fetchMock).toHaveBeenCalledWith(expect.any(String), {
+    credentials: 'same-origin', cache: 'no-store', signal: expect.any(AbortSignal),
+  });
 });
 
 it('stops before networking when an old file is invalid', async () => {

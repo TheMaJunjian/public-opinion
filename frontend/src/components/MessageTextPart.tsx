@@ -18,6 +18,7 @@ export default function MessageTextPart({ message, partId, children, activeText 
     data-message-revision={message.revision ?? 1}
     data-gesture-disabled={selectable ? 'true' : undefined}
     onMouseUp={event => { if (selectable && event.detail < 2) onMouseUp?.(event, message.id); }}
-    style={{ userSelect: selectable ? 'text' : 'none', cursor: activeText ? 'text' : 'inherit', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0 }}
+    style={{ userSelect: selectable ? 'text' : 'none', cursor: activeText ? 'text' : 'inherit', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minWidth: 0,
+      fontFamily: part?.type === 'code' ? 'Menlo, Monaco, Consolas, monospace' : 'inherit', fontSize: 'inherit', fontWeight: 'inherit' }}
   >{children ?? text}</div>;
 }

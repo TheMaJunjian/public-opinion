@@ -6,6 +6,7 @@ import MessageTextPart from './MessageTextPart';
 import MessageElement from './MessageElement';
 import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../utils/messageElementSelection';
 import { getMessageProminence } from '../utils/messageDisplay';
+import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 
 export interface MessageCardContext {
   isWholeSelected?: boolean;
@@ -131,6 +132,11 @@ export default function MessageCard({
     <div
       key={msg.id}
       data-msgid={msg.id}
+      role="group"
+      tabIndex={0}
+      aria-label={`消息 ${msg.id}，${isWholeSelected ? '已选中' : '未选中'}`}
+      aria-keyshortcuts="Enter Space Shift+Enter"
+      onKeyDown={activateMessageFromKeyboard}
       onClick={e => onClick?.(e, msg.id)}
       onDoubleClick={e => onDoubleClick?.(e, msg.id)}
       onMouseDown={e => onMouseDown?.(e, msg.id)}

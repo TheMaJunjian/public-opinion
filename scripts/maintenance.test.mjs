@@ -50,7 +50,7 @@ case "$1" in
         if [ "$MOCK_REHEARSAL" = 1 ]; then printf 'verified_rehearsal\tbusiness\trehearsal\n'; else printf 'actual_final\tpublic\tproduction\n'; fi ;;
       *" pg_dump "*) printf archive-data; [ "$MOCK_DUMP_FAIL" != 1 ] ;;
       *" pg_restore --list "*) cat >/dev/null; [ "$MOCK_ARCHIVE_FAIL" != 1 ] ;;
-      *" pg_restore "*) cat >/dev/null; [ "$MOCK_RESTORE_FAIL" != 1 ] ;;
+      *" pg_restore "*) cat > "$MOCK_LOG.restored"; [ "$MOCK_RESTORE_FAIL" != 1 ] ;;
       *" SELECT 1 FROM pg_database "*) if [ "$MOCK_EXISTING" = 1 ]; then echo 1; fi ;;
       *" SELECT current_database()"*) echo 'restored|15' ;;
     esac ;;
@@ -122,6 +122,82 @@ test('restore works with offline API and uses a new database and one atomic tran
   assert.ok(result.commands[create].includes('template0'));
   assert.match(result.stdout, /尚未切换网站/);
   assert.match(result.stdout, /GONGLUN_DATABASE_NAME 设置为 restored_target/);
+});
+
+function backupFixture(deployment, path, contents = 'archive-data') {
+  const file = join(deployment, path);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, contents);
+  return file;
+}
+
+test('restore lists nested backups by number, excludes incomplete exports and restores the selected file', t => {
+  const result = maintain(t, 'restore', '\n2\nnumbered_target\n', {}, (_, deployment) => {
+    backupFixture(deployment, 'backups/01 old/database.dump', 'old-archive');
+    const chosen = backupFixture(deployment, 'backups/02 new/数据库.dump', 'chosen-archive');
+    writeFileSync(join(dirname(chosen), 'SHA256SUMS'), `${createHash('sha256').update('chosen-archive').digest('hex')}  数据库.dump\n`);
+    backupFixture(deployment, 'backups/03.partial.failed/database.dump', 'incomplete');
+    backupFixture(deployment, 'backups/04/note.txt', 'not-a-backup');
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /1\).*01 old\/database.dump/);
+  assert.match(result.stdout, /2\).*02 new\/数据库.dump/);
+  assert.match(result.stdout, /已选择备份：.*02 new\/数据库.dump/);
+  assert.doesNotMatch(result.stdout, /03.partial.failed|note.txt/);
+  assert.equal(readFileSync(join(result.directory, 'commands.log.restored'), 'utf8'), 'chosen-archive');
+});
+
+test('restore includes legacy dump files directly in the deployment directory', t => {
+  const result = maintain(t, 'restore', '\n1\nlegacy_target\n', {}, (_, deployment) => {
+    backupFixture(deployment, 'gonglun.dump', 'legacy-archive');
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /1\).*\/deploy\/gonglun.dump/);
+  assert.equal(readFileSync(join(result.directory, 'commands.log.restored'), 'utf8'), 'legacy-archive');
+});
+
+test('restore can change the backup directory and choose a numbered file', t => {
+  const result = maintain(t, 'restore', '\nd\nother backups\n1\ncustom_target\n', {}, directory => {
+    const folder = join(directory, 'other backups');
+    mkdirSync(folder);
+    writeFileSync(join(folder, 'custom.dump'), 'custom-archive');
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /未找到 .dump 备份/);
+  assert.match(result.stdout, /1\).*other backups\/custom.dump/);
+  assert.equal(readFileSync(join(result.directory, 'commands.log.restored'), 'utf8'), 'custom-archive');
+});
+
+test('restore retains an explicit manual path option for external backups', t => {
+  const result = maintain(t, 'restore', '\nm\nbackup.dump\nmanual_target\n');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(readFileSync(join(result.directory, 'commands.log.restored'), 'utf8'), 'archive-data');
+});
+
+for (const selection of ['2', '01', '-1', '1 2', '1;echo', '9999999999999999999999999999']) {
+  test(`invalid backup selection never creates a database: ${selection}`, t => {
+    const result = maintain(t, 'restore', `\n${selection}\nnew_target\n`, {}, (_, deployment) => {
+      backupFixture(deployment, 'backups/one/database.dump');
+    });
+    assert.notEqual(result.status, 0);
+    assert.ok(!result.commands.some(args => args.includes('createdb') || args.includes('pg_restore')));
+  });
+}
+
+for (const answers of ['\n\n', '\n0\n', '\nm\n\n']) {
+  test(`restore selection can be cancelled: ${JSON.stringify(answers)}`, t => {
+    const result = maintain(t, 'restore', answers);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /已取消恢复/);
+    assert.ok(!result.commands.some(args => args.includes('createdb') || args.includes('pg_restore')));
+  });
+}
+
+test('a missing custom backup directory stops without creating a database', t => {
+  const result = maintain(t, 'restore', '\nd\nmissing-directory\n');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /备份目录不存在/);
+  assert.ok(!result.commands.some(args => args.includes('createdb') || args.includes('pg_restore')));
 });
 
 for (const [name, env, target] of [

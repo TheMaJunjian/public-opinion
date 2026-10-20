@@ -140,10 +140,55 @@ if [ "$action" = backup ]; then
   exit 0
 fi
 
-ask dump_file '备份文件路径（pg_dump -Fc 生成的 .dump）' ''
+backup_search_dir="$SCRIPT_DIR/backups"
+include_legacy=1
+while true; do
+  printf '\n已有备份（目录：%s）：\n' "$backup_search_dir"
+  # Shell globbing preserves spaces and Unicode in paths without parsing ls output.
+  shopt -s nullglob globstar
+  candidates=("$backup_search_dir"/**/*.dump)
+  if [ "$include_legacy" = 1 ]; then candidates+=("$SCRIPT_DIR"/*.dump); fi
+  shopt -u nullglob globstar
+  backup_files=()
+  for candidate in "${candidates[@]}"; do
+    [ -f "$candidate" ] || continue
+    case "$candidate" in */*.partial.*/*) continue ;; esac
+    backup_files+=("$candidate")
+    printf '%s) %s\n' "${#backup_files[@]}" "$candidate"
+  done
+  backup_count="${#backup_files[@]}"
+  [ "$backup_count" -gt 0 ] || echo '未找到 .dump 备份；可更换备份目录或手动输入文件路径。'
+  ask dump_selection '输入备份序号；d 更换目录；m 手动输入路径；回车或 0 取消' ''
+  case "$dump_selection" in
+    ''|0) echo '已取消恢复。'; exit 0 ;;
+    d|D)
+      ask backup_search_dir '备份目录路径' "$backup_search_dir"
+      [ -d "$backup_search_dir" ] || fail "备份目录不存在：$backup_search_dir"
+      backup_search_dir="$(cd "$backup_search_dir" && pwd)"
+      include_legacy=0
+      continue ;;
+    m|M)
+      ask dump_file '备份文件路径（pg_dump -Fc 生成的 .dump）' ''
+      [ -n "$dump_file" ] || { echo '已取消恢复。'; exit 0; }
+      break ;;
+    *)
+      if [[ "$dump_selection" =~ ^[0-9]+$ ]]; then
+        [[ "$dump_selection" =~ ^[1-9][0-9]*$ ]] && [ "${#dump_selection}" -le "${#backup_count}" ] \
+          || fail "无效备份序号：$dump_selection"
+        [ "$dump_selection" -le "$backup_count" ] || fail "备份序号超出范围：$dump_selection"
+        dump_file="${backup_files[dump_selection-1]}"
+      else
+        # Keep accepting a direct path for existing command transcripts.
+        [ -f "$dump_selection" ] || fail "无效备份序号或路径：$dump_selection"
+        dump_file="$dump_selection"
+      fi
+      break ;;
+  esac
+done
 [ -f "$dump_file" ] || fail "备份文件不存在：$dump_file"
 dump_dir="$(cd "$(dirname "$dump_file")" && pwd)"
 dump_file="$dump_dir/$(basename "$dump_file")"
+printf '已选择备份：%s\n' "$dump_file"
 # Support both this script's directory and the earlier single-file commands.
 if [ -f "${dump_file}.sha256" ]; then
   # Earlier commands recorded an absolute path; the archive may since have moved.

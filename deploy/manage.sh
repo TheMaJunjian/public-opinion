@@ -59,22 +59,53 @@ if [ -z "$detected_db" ]; then
 fi
 
 if [ "$action" = images ]; then
-  docker image ls gonglun --format 'table {{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}'
+  image_rows="$(docker image ls gonglun --format '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}')"
+  images=()
+  printf '序号  镜像名  大小\n'
+  while IFS=$'\t' read -r image image_id image_size; do
+    [[ "$image" =~ ^gonglun:sha-[0-9a-f]{40}$ ]] || continue
+    images+=("$image")
+    printf '%s) %s  %s' "${#images[@]}" "$image" "$image_size"
+    if [ "$image" = "$current_image" ]; then printf '  [当前应用使用，禁止删除]'; fi
+    printf '\n'
+  done <<< "$image_rows"
+  count="${#images[@]}"
+  [ "$count" -gt 0 ] || { echo '没有找到可列出的 gonglun:sha-版本镜像。'; exit 0; }
   echo '建议保留最近一个正常版本用于回退。'
-  ask image '输入要删除的完整镜像名；回车取消' ''
-  [ -n "$image" ] || exit 0
-  [[ "$image" =~ ^gonglun:sha-[0-9a-f]{40}$ ]] || fail '只允许删除 gonglun:sha-完整40位提交SHA。'
-  [ "$image" != "$current_image" ] || fail '这是实际 API 容器使用的镜像，拒绝删除。'
-  if [ -f "$SCRIPT_DIR/.env.image" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-      [ "${line%$'\r'}" != "GONGLUN_IMAGE=$image" ] || fail '这是部署记录中的当前镜像，拒绝删除。'
-    done < "$SCRIPT_DIR/.env.image"
-  fi
-  containers="$(docker ps -aq --filter "ancestor=$image")"
-  [ -z "$containers" ] || fail '该镜像仍有关联容器（包括已停止容器），拒绝删除。'
-  ask confirmation '再次输入完整镜像名确认删除' ''
-  [ "$confirmation" = "$image" ] || fail '确认不匹配，操作取消。'
-  docker image rm "$image"
+  ask selection '输入要删除的序号，多个用空格或逗号分隔，例如 1 3 5；回车或 0 取消' ''
+  [ -n "$selection" ] && [ "$selection" != 0 ] || exit 0
+  selection="${selection//，/ }"
+  IFS=$' \t' read -r -a requested <<< "${selection//,/ }"
+  selected=()
+  selected_indices=()
+  for index in "${requested[@]}"; do
+    [[ "$index" =~ ^[1-9][0-9]*$ ]] && [ "${#index}" -le "${#count}" ] || fail "无效序号：$index"
+    [ "$index" -le "$count" ] || fail "序号超出范围：$index"
+    if [ "${selected_indices[index]:-}" != 1 ]; then
+      selected+=("${images[index-1]}")
+      selected_indices[index]=1
+    fi
+  done
+  [ "${#selected[@]}" -gt 0 ] || fail '没有选择任何镜像。'
+  ensure_image_unused() {
+    local image="$1" line containers
+    [ "$image" != "$current_image" ] || fail "当前应用使用的镜像禁止删除：$image"
+    if [ -f "$SCRIPT_DIR/.env.image" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        [ "${line%$'\r'}" != "GONGLUN_IMAGE=$image" ] || fail "部署记录中的当前镜像禁止删除：$image"
+      done < "$SCRIPT_DIR/.env.image"
+    fi
+    containers="$(docker ps -aq --filter "ancestor=$image")"
+    [ -z "$containers" ] || fail "镜像仍有关联容器（包括已停止容器），禁止删除：$image"
+  }
+  # Check the whole selection before deleting anything, and recheck after confirmation.
+  for image in "${selected[@]}"; do ensure_image_unused "$image"; done
+  printf '\n即将删除以下 %s 个镜像：\n' "${#selected[@]}"
+  printf '  %s\n' "${selected[@]}"
+  ask confirmation '确认删除以上镜像？输入 y 确认，回车取消' N
+  case "$confirmation" in y|Y|yes|YES) ;; *) echo '已取消删除。'; exit 0 ;; esac
+  for image in "${selected[@]}"; do ensure_image_unused "$image"; done
+  docker image rm "${selected[@]}"
   exit 0
 fi
 

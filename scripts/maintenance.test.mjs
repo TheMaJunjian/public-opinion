@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 
 const bash = process.platform === 'win32' ? resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe') : 'bash';
 const oldImage = `gonglun:sha-${'1'.repeat(40)}`;
+const otherImage = `gonglun:sha-${'3'.repeat(40)}`;
 function maintain(t, action, answers, env = {}, prepare = () => {}) {
   const directory = mkdtempSync(join(tmpdir(), 'gonglun-maintenance-test-'));
   t.after(() => {
@@ -25,8 +26,21 @@ function maintain(t, action, answers, env = {}, prepare = () => {}) {
 printf '%s\t' "$@" >> "$MOCK_LOG"; printf '\n' >> "$MOCK_LOG"
 case "$1" in
   inspect) if [ "$3" = '{{.Config.Image}}' ]; then printf 'gonglun:sha-%040d\n' 2; else echo true; fi ;;
-  ps) [ "$MOCK_USED_IMAGE" != 1 ] || echo current-container ;;
-  image) ;;
+  ps)
+    if [ "$MOCK_USED_IMAGE" = 1 ] || [[ "$*" = *"$MOCK_USED_TAG"* && -n "$MOCK_USED_TAG" ]]; then echo current-container; fi
+    if [ "$MOCK_USED_AFTER_CONFIRM" = 1 ]; then
+      if [ -f "$MOCK_LOG.checked" ]; then echo new-container; else touch "$MOCK_LOG.checked"; fi
+    fi ;;
+  image)
+    if [ "$2" = ls ]; then
+      [ "$MOCK_LIST_FAIL" != 1 ] || exit 1
+      if [ "$MOCK_NO_IMAGES" != 1 ]; then
+        printf '%s\told-id\t100MB\n' '${oldImage}'
+        printf 'gonglun:sha-%040d\tcurrent-id\t101MB\n' 2
+        printf '%s\tother-id\t99MB\n' '${otherImage}'
+        printf 'gonglun:latest\tother-tag\t99MB\n'
+      fi
+    fi ;;
   compose)
     case " $* " in
       *" ps -q postgres "*) [ "$MOCK_NO_DB" = 1 ] || echo postgres-container ;;
@@ -145,22 +159,71 @@ for (const manifest of ['single', 'directory', 'corrupt', 'unrelated']) {
   });
 }
 
-test('image cleanup only removes the explicitly confirmed unused application tag', t => {
-  const result = maintain(t, 'images', `\n${oldImage}\n${oldImage}\n`);
+test('image cleanup selects a numbered image and confirms once', t => {
+  const result = maintain(t, 'images', '\n1\ny\n');
   assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, new RegExp(`1\\) ${oldImage}`));
+  assert.match(result.stdout, /2\).*当前应用使用，禁止删除/);
+  assert.match(result.stdout, /即将删除以下 1 个镜像/);
+  assert.doesNotMatch(result.stdout, /4\) gonglun:latest/);
   assert.deepEqual(result.commands.find(args => args[0] === 'image' && args[1] === 'rm'), ['image', 'rm', oldImage]);
 });
 
-for (const scenario of ['used', 'recorded', 'current', 'invalid', 'unconfirmed']) {
+for (const selection of ['3 1 3', '3,1,3', '3，1，3']) {
+  test(`image cleanup previews the whole batch and removes duplicates: ${selection}`, t => {
+    const result = maintain(t, 'images', `\n${selection}\ny\n`);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /即将删除以下 2 个镜像/);
+    const preview = result.stdout.slice(result.stdout.indexOf('即将删除以下'));
+    assert.ok(preview.includes(oldImage) && preview.includes(otherImage));
+    assert.deepEqual(result.commands.filter(args => args[0] === 'image' && args[1] === 'rm'), [['image', 'rm', otherImage, oldImage]]);
+  });
+}
+
+for (const scenario of ['used', 'recorded', 'current', 'newly used']) {
   test(`image cleanup refuses ${scenario} image`, t => {
-    const selected = scenario === 'invalid' ? 'postgres:16-alpine' : scenario === 'current' ? `gonglun:sha-${'0'.repeat(39)}2` : oldImage;
-    const result = maintain(t, 'images', `\n${selected}\nwrong\n`,
-      scenario === 'used' ? { MOCK_USED_IMAGE: '1' } : {},
+    const selected = scenario === 'current' ? '1 2' : '1';
+    const result = maintain(t, 'images', `\n${selected}\ny\n`,
+      scenario === 'used' ? { MOCK_USED_IMAGE: '1' } : scenario === 'newly used' ? { MOCK_USED_AFTER_CONFIRM: '1' } : {},
       (_, deployment) => { if (scenario === 'recorded') writeFileSync(join(deployment, '.env.image'), `GONGLUN_IMAGE=${oldImage}\r\n`); });
     assert.notEqual(result.status, 0);
     assert.ok(!result.commands.some(args => args[0] === 'image' && args[1] === 'rm'));
   });
 }
+
+test('a protected image anywhere in the batch prevents every deletion', t => {
+  const result = maintain(t, 'images', '\n1 3\ny\n', { MOCK_USED_TAG: otherImage });
+  assert.notEqual(result.status, 0);
+  assert.ok(!result.commands.some(args => args[0] === 'image' && args[1] === 'rm'));
+});
+
+for (const selection of ['4', '1 999', '-1', '1;echo', '01', '9999999999999999999999999999', ',,,']) {
+  test(`invalid image selection never deletes a partial batch: ${selection}`, t => {
+    const result = maintain(t, 'images', `\n${selection}\ny\n`);
+    assert.notEqual(result.status, 0);
+    assert.ok(!result.commands.some(args => args[0] === 'image' && args[1] === 'rm'));
+  });
+}
+
+for (const answers of ['\n\n', '\n0\n', '\n1\n\n', '\n1 3\nn\n']) {
+  test(`image deletion can be cancelled: ${JSON.stringify(answers)}`, t => {
+    const result = maintain(t, 'images', answers);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.ok(!result.commands.some(args => args[0] === 'image' && args[1] === 'rm'));
+  });
+}
+
+test('empty image list exits without prompting for selection', t => {
+  const result = maintain(t, 'images', '\n', { MOCK_NO_IMAGES: '1' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /没有找到可列出/);
+});
+
+test('a failed image listing cannot lead to deletion', t => {
+  const result = maintain(t, 'images', '\n1\ny\n', { MOCK_LIST_FAIL: '1' });
+  assert.notEqual(result.status, 0);
+  assert.ok(!result.commands.some(args => args[0] === 'image' && args[1] === 'rm'));
+});
 
 test('menu cancellation needs no Docker or configuration', t => {
   const result = maintain(t, '', '\n');

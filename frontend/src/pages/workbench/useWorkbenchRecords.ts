@@ -28,7 +28,7 @@ export function useWorkbenchRecords() {
     return {
       setMessages: field('messages'), setEdges: field('edges'), setRelations: field('relations'),
       setStakeCounts: field('stakeCounts'), setMessageBettorCounts: field('messageBettorCounts'), setAuthorStakes: field('authorStakes'),
-      replace(snapshot: WorkbenchSnapshot, projected: Projection) {
+      replace(snapshot: Pick<WorkbenchSnapshot, 'scope' | 'users' | 'attentionUsers' | 'tagCounts'>, projected: Projection) {
         generation.current++;
         const next: Records = { scope: snapshot.scope, messages: projected.messages, edges: projected.edges,
           relations: projected.relations, registeredUsers: snapshot.users,

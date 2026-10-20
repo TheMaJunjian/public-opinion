@@ -14,6 +14,7 @@ interface CleanFilterPanelProps {
   matchCount: number;
   /** 总消息数 */
   totalCount: number;
+  pending?: boolean;
   /** 添加规则 */
   onAdd: (rule: CleanFilterRule) => void;
   /** 移除规则 */
@@ -53,6 +54,7 @@ export default function CleanFilterPanel({
   filters,
   matchCount,
   totalCount,
+  pending,
   onAdd,
   onRemove,
   onClear,
@@ -234,7 +236,7 @@ export default function CleanFilterPanel({
                 color: '#86efac',
               }}
             >
-              匹配 {matchCount} 条 / 共 {totalCount} 条内容消息
+              {pending ? '正在准备全局筛选结果…' : `匹配 ${matchCount} 条 / 共 ${totalCount} 条内容消息`}
             </div>
           )}
         </div>

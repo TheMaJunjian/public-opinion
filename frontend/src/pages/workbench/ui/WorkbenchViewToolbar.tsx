@@ -1,4 +1,4 @@
-import { useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { lazy, Suspense, useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import CleanFilterPanel from '../../../components/CleanFilterPanel';
 import HomeFilterPanel from '../../../components/HomeFilterPanel';
 import MessageFilterPanel from '../../../components/MessageFilterPanel';
@@ -7,7 +7,7 @@ import type { Relation } from '../../../types';
 import type { DemoMessage, UnitSelection } from '../../../utils/modelBridge';
 import { resolveNavigationTargetId } from '../model/navigation';
 import type { ExportData } from '../../../api/client';
-import ExportModal from '../../../components/ExportModal';
+const ExportModal = lazy(() => import('../../../components/ExportModal'));
 type ViewMode = 'list' | 'graph';
 interface ViewNavigation {
   viewMode: ViewMode; setViewMode: Dispatch<SetStateAction<ViewMode>>;
@@ -112,12 +112,12 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
       </div>
       </div>
       {scopeHeader}
-      {exportOpen && <ExportModal onClose={() => setExportOpen(false)} scopeMessageId={scopeMessageId}
+      {exportOpen && <Suspense fallback={<div role="status">正在打开导出…</div>}><ExportModal onClose={() => setExportOpen(false)} scopeMessageId={scopeMessageId}
         filename={`${exportTitle}.json`} source={exportData} view={{
           username: exportUsername !== undefined ? exportUsername : exportData?.viewerUsername ?? null, mode: viewMode,
           messageFilter: { ...filter.settings }, homeFilter: home.mode,
           cleanFilters: clean.filters.map(rule => ({ ...rule })), classificationId: currentClassifyRelMsgId,
-        }} />}
+        }} /></Suspense>}
     </div>
 
   );

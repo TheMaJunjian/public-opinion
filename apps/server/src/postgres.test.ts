@@ -122,6 +122,8 @@ describe('PostgreSQL transactions across API instances', () => {
       const response=await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/events?after=${after}`,{signal:controller.signal});
       expect(response.status).toBe(200);
       const stream=response.body!.getReader();
+      const cursorResponse=await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/events?after=${after}&mode=cursor`,{signal:controller.signal});
+      const cursorStream=cursorResponse.body!.getReader();
       const message=(await send(writer.store,actor.session.user,{requestId:randomUUID(),parts:[text('跨实例同步')]})).message;
       let output='';
       while(!output.includes(message.id)){
@@ -130,6 +132,17 @@ describe('PostgreSQL transactions across API instances', () => {
         output+=new TextDecoder().decode(value);
       }
       expect(output).toContain(message.id);
+      let cursorOutput='';
+      while(!cursorOutput.includes('data: ')) {
+        const {value,done}=await cursorStream.read();
+        if(done)break;
+        cursorOutput+=new TextDecoder().decode(value);
+      }
+      const cursorData=cursorOutput.split('\n').find(line=>line.startsWith('data: '))!;
+      expect(JSON.parse(cursorData.slice(6))).toEqual({sequence:message.sequence});
+      expect(cursorOutput).not.toContain(message.id);
+      expect(cursorOutput).not.toContain('跨实例同步');
+      await cursorStream.cancel();
       await stream.cancel();
     } finally {
       clearTimeout(timeout);controller.abort();server.closeAllConnections();

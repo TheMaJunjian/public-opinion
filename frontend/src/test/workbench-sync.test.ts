@@ -7,6 +7,61 @@ const message = (id: string, revision = 1, content = id): Message => ({ id, revi
 const page = (sequence: number, messages: Message[] = []): WorkbenchSnapshot => ({ sequence, messages, relations: [], users: [], stakes: {}, tagCounts: {}, attentionUsers: {}, scope: { messageId: null, title: '公论' } });
 
 describe('authoritative workbench records', () => {
+  it('manual refresh reuses the incremental cursor and connection, skips unchanged projections, and waits for every delta page', async () => {
+    let changes = false;
+    const load = vi.fn(async ({ after }: { after?: number }) => after === undefined ? page(10, [message('old')])
+      : !changes ? page(10) : after === 10 ? { ...page(11, [message('new')]), hasMore: true } : page(12, [message('last')]));
+    const updated = vi.fn();
+    const events = vi.fn(() => ({ close() {} }) as EventSource);
+    const sync = syncWorkbench({ parent: 'root', load, events, onSnapshot: updated, onError: vi.fn() });
+    try {
+      await vi.waitFor(() => expect(updated).toHaveBeenCalledOnce());
+      await expect(sync.refresh()).resolves.toBe(false);
+      expect(load.mock.calls.at(-1)?.[0]).toMatchObject({ after: 10 });
+      expect(updated).toHaveBeenCalledOnce();
+      changes = true;
+      await expect(sync.refresh()).resolves.toBe(true);
+      expect(load.mock.calls.slice(-2).map(([query]) => query.after)).toEqual([10, 11]);
+      expect(updated).toHaveBeenCalledTimes(2);
+      expect(updated.mock.lastCall?.[0].messages.map((record: Message) => record.id)).toEqual(['old', 'new', 'last']);
+      expect(load.mock.calls.filter(([query]) => query.after === undefined)).toHaveLength(1);
+      expect(events).toHaveBeenCalledOnce();
+    } finally { sync.stop(); }
+  });
+
+  it('manual refresh requested during synchronization waits for its own incremental check', async () => {
+    const load = vi.fn(async (_query: { after?: number }) => page(10));
+    const events = vi.fn(() => ({ close() {} }) as EventSource);
+    const sync = syncWorkbench({ parent: 'root', load, events, onSnapshot: vi.fn(), onError: vi.fn() });
+    try {
+      await vi.waitFor(() => expect(events).toHaveBeenCalledOnce());
+      let finish!: (snapshot: WorkbenchSnapshot) => void;
+      load.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      sync.catchUp();
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+      const refreshed = sync.refresh();
+      load.mockResolvedValue(page(11));
+      finish(page(11, [message('incoming')]));
+      await expect(refreshed).resolves.toBe(false);
+      expect(load).toHaveBeenCalledTimes(4);
+      expect(load.mock.calls.at(-1)?.[0]).toMatchObject({ after: 11 });
+    } finally { sync.stop(); }
+  });
+
+  it('manual refresh reports request failures and releases pending refreshes when stopped', async () => {
+    const load = vi.fn(async (_query: { after?: number }) => page(10));
+    const events = vi.fn(() => ({ close() {} }) as EventSource);
+    const onError = vi.fn();
+    const sync = syncWorkbench({ parent: 'root', load, events, onSnapshot: vi.fn(), onError });
+    await vi.waitFor(() => expect(events).toHaveBeenCalledOnce());
+    load.mockRejectedValueOnce(new Error('离线'));
+    await expect(sync.refresh()).rejects.toThrow('离线');
+    expect(onError).toHaveBeenCalledOnce();
+    const pending = sync.refresh();
+    sync.stop();
+    await expect(pending).rejects.toThrow('同步已停止');
+  });
+
   it('versions metadata with its message and removes every cached projection when it leaves scope', () => {
     const store=new WorkbenchStore();
     const current={...page(10,[message('a',2)]),tagCounts:{a:{new:2}},attentionUsers:{a:['u']}};
@@ -95,7 +150,7 @@ describe('authoritative workbench records', () => {
     expect(store.snapshot().messages.map(m => m.id)).toEqual(['a']);
   });
 
-  it('replays from the first page boundary so changes during pagination are not lost', async () => {
+  it('loads one page initially and catches up across changes while an explicit next page is loaded', async () => {
     const load = vi.fn(async ({ after, cursor }: { after?: number; cursor?: string }) => {
       if (after !== undefined) return page(12, [message('a', 2, '分页期间修改')]);
       if (cursor) return page(12, [message('b')]);
@@ -105,7 +160,11 @@ describe('authoritative workbench records', () => {
     const updated = vi.fn();
     const sync = syncWorkbench({ parent: 'root', load, events: () => source, onSnapshot: updated, onError: error => { throw error; } });
     await vi.waitFor(() => expect(updated).toHaveBeenCalledTimes(1));
-    expect(load.mock.calls[2][0].after).toBe(10);
+    expect(load.mock.calls).toHaveLength(2);
+    expect(load.mock.calls[1][0].after).toBe(10);
+    expect(updated.mock.lastCall?.[0].messages.map((m: Message) => m.id)).toEqual(['a']);
+    await sync.loadMore();
+    expect(load.mock.calls[2][0]).toMatchObject({ cursor: 'older' });
     expect(updated.mock.lastCall?.[0].messages.map((m: Message) => m.content)).toEqual(['分页期间修改', 'b']);
     sync.stop();
     expect(source.close).toHaveBeenCalledOnce();

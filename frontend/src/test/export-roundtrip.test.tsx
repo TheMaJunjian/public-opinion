@@ -65,7 +65,7 @@ it('re-exports the open archive with the current viewer and filters without fetc
   };
   render(<WorkbenchViewToolbar {...props} />);
   fireEvent.click(screen.getByRole('button', { name: '导出' }));
-  expect(screen.getByRole('dialog', { name: '导出' })).toBeVisible();
+  expect(await screen.findByRole('dialog', { name: '导出' })).toBeVisible();
   expect(screen.queryByRole('button', { name: '更新导出' })).toBeNull();
   expect(startArchiveExport).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: '导出文件' }));

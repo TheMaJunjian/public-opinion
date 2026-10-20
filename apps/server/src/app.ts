@@ -20,7 +20,7 @@ export async function createApp(options: {
     const migrationRow=await store.db.prepare("SELECT value FROM settings WHERE key='migration'").get();
     const readOnlyRehearsal=migrationRow&&JSON.parse(String(migrationRow.value)).mode==='read-only-rehearsal';
     if(readOnlyRehearsal) app.use((req,res,next)=>{
-        if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!['/api/login','/api/logout'].includes(req.path)) {
+        if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!['/api/login','/api/logout','/api/ui/snapshot/query'].includes(req.path)) {
             res.status(503).json({error:'真实数据只读迁移演练；阻断项尚未解决，业务写入和结算已禁用'});
             return;
         }
@@ -30,18 +30,20 @@ export async function createApp(options: {
         app.get(path,(req,res,next)=>{void store.read(()=>handler(req,res,next)).catch(next);});
     const clients = new Map<Response, {
         after: number;
+        cursorOnly: boolean;
     }>();
     let closed=false;
     let publishing:Promise<void>|undefined;
     const writeChange = (res: Response, state: {
         after: number;
+        cursorOnly: boolean;
     }, change: {
         sequence: number;
     }) => {
         if (res.writableEnded || change.sequence <= state.after)
             return;
         state.after = change.sequence;
-        if (!res.write(`id: ${change.sequence}\ndata: ${JSON.stringify(change)}\n\n`)) {
+        if (!res.write(`id: ${change.sequence}\ndata: ${JSON.stringify(state.cursorOnly ? { sequence: change.sequence } : change)}\n\n`)) {
             // Finish the bounded queued frame, then let EventSource reconnect from its last complete ID.
             clients.delete(res);
             res.end();
@@ -261,7 +263,7 @@ export async function createApp(options: {
         }
         res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.flushHeaders();
-        const state = { after };
+        const state = { after, cursorOnly: req.query.mode === 'cursor' };
         clients.set(res, state);
         res.write(': connected\n\n');
         req.on('close', () => clients.delete(res));

@@ -98,6 +98,7 @@ export type DemoMessage = {
   state?: MessageState;
   spending?: CoreMessage['spending'];
   author: string;
+  authorId?: string;
   createdAt: string;
   content: string;
   kind: MessageKind;
@@ -291,9 +292,10 @@ export function convertMessagesToDemoModel(
     let settlementTargetId: string | undefined;
     let roundPayload: Record<string,unknown> | undefined;
     if (bk === 'ROUND' || bk === 'ROUND_RESULT') {
-      const refs = (m as any).targetRefs as Array<{ messageId?: string }> | undefined;
-      settlementTargetId = refs?.[0]?.messageId;
+      const ref = m.targetRefs?.[0];
       roundPayload = (m as any).relationPayload as Record<string,unknown> | undefined;
+      settlementTargetId = typeof roundPayload?.subjectId === 'string' ? roundPayload.subjectId
+        : ref?.reference?.messageId ?? (ref?.kind === 'relation' ? ref.relationId : ref?.messageId);
     }
     const stype = roundPayload?.settlementType as string | undefined;
     return {
@@ -304,6 +306,7 @@ export function convertMessagesToDemoModel(
     state: m.state,
     spending: m.spending,
     author: m.createdBy.username,
+    authorId: m.createdBy.id,
     createdAt: m.createdAt,
     content: m.content ?? kindLabel(bk, undefined, stype),
     kind: mapBackendKind(bk),
@@ -383,6 +386,7 @@ export function convertMessagesToDemoModel(
         state: rel.state,
         spending: rel.spending,
         author: rel.createdBy.username,
+        authorId: rel.createdBy.id,
         createdAt: rel.createdAt,
         content,
         kind: msgKind,

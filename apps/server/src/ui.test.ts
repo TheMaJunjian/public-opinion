@@ -3,7 +3,7 @@ import request from 'supertest';
 import { randomUUID, generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { createApp } from './app.js';
 import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
-import { replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
+import { replayArchive, decodeWorkbenchSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
 import * as projections from './ui-projections.js';
 
 const apps:Awaited<ReturnType<typeof createApp>>[]=[];
@@ -50,6 +50,100 @@ it('keeps empty deltas bounded and explicitly clears the last follower', async (
   const delta=(await user.agent.get(`/api/ui/snapshot?after=${before.sequence}`)).body;
   expect(delta.attentionUsers[message.id]).toEqual([]);
   expect(delta.users.map((u:{username:string})=>u.username)).not.toContain('无关用户');
+});
+
+it('validates the persisted snapshot source and rejects a cursor ahead of restored server history', async () => {
+  const app = await make(), user = await actor(app, '刷新缓存');
+  await good(post(user, '/messages', { content: '保留在本地的消息' }));
+  const initial = (await user.agent.get('/api/ui/snapshot')).body;
+  expect(initial.regionId).toBe(await app.store.setting('region'));
+  const prefix = `/api/ui/snapshot?after=${initial.sequence}&regionId=`;
+  const idle = await user.agent.get(prefix + encodeURIComponent(initial.regionId));
+  expect(idle.status, idle.text).toBe(200);
+  expect(idle.body.messages).toEqual([]);
+  expect(idle.body.regionId).toBe(initial.regionId);
+  expect((await user.agent.get(prefix + 'another-region')).status).toBe(409);
+  expect((await user.agent.get(`/api/ui/snapshot?after=${initial.sequence + 1}`)).status).toBe(409);
+});
+
+it('loads one bounded window, pages explicitly, and returns no old bodies in an unchanged refresh', async () => {
+  const app = await make(), user = await actor(app, '按需消息');
+  const commands = Array.from({ length: 100 }, (_, index) => ({ id: randomUUID(), method: 'POST', path: '/messages', body: { content: `按需 ${index}` } }));
+  await good(post(user, '/commands', { requestId: randomUUID(), commands }));
+  const read = async (query: Record<string, unknown> = {}) => {
+    const response = await user.agent.post('/api/ui/snapshot/query?format=compact-v1').send({ mode: 'window', parent: 'root', ...query });
+    expect(response.status, response.text).toBe(200);
+    return decodeWorkbenchSnapshot<WorkbenchSnapshot>(response.body);
+  };
+  const first = await read();
+  expect(first.messages).toHaveLength(50);
+  expect(first.nextCursor).toBeTruthy();
+  const idle = await read({ after: first.sequence, regionId: first.regionId, knownIds: first.messages.map(message => message.id) });
+  expect(idle.messages).toEqual([]);
+  const second = await read({ cursor: first.nextCursor });
+  expect(second.messages.filter(message => message.content?.startsWith('按需 '))).toHaveLength(50);
+  expect(new Set([...first.messages, ...second.messages].map(message => message.id)).size).toBe(100);
+  const missing = commands.find(command => !first.messages.some(message => message.id === command.id))!;
+  expect((await read({ ids: [missing.id] })).messages.some(message => message.id === missing.id)).toBe(true);
+  const limited = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', limit: 51 });
+  expect(limited.status).toBe(400);
+});
+
+it('does not download closed container members until their scope is opened', async () => {
+  const app = await make(), user = await actor(app, '按需分类');
+  const commands = Array.from({ length: 65 }, (_, index) => ({ id: randomUUID(), method: 'POST', path: '/messages', body: { content: `分类成员 ${index}` } }));
+  await good(post(user, '/commands', { requestId: randomUUID(), commands }));
+  const group = await good(post(user, '/relations', { relationType: 'CLASSIFY', targetRefs: commands.map(command => ({ kind: 'message', messageId: command.id })), payload: { title: '尚未展开' } }));
+  const root = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window' });
+  expect(root.status, root.text).toBe(200);
+  expect(root.body.messages.some((message: { id: string }) => message.id === group.id)).toBe(true);
+  expect(root.body.messages.some((message: { id: string }) => commands.some(command => command.id === message.id))).toBe(false);
+  const inside = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', parent: group.id });
+  expect(inside.status, inside.text).toBe(200);
+  expect(inside.body.messages.filter((message: { content: string }) => message.content?.startsWith('分类成员 '))).toHaveLength(50);
+  expect(inside.body.nextCursor).toBeTruthy();
+});
+
+it('pages older unseen members restored to the window without expanding other closed containers', async () => {
+  const app = await make(), user = await actor(app, '恢复窗口');
+  const commands = Array.from({ length: 55 }, (_, index) => ({ id: randomUUID(), method: 'POST', path: '/messages', body: { content: `恢复成员 ${index}` } }));
+  await good(post(user, '/commands', { requestId: randomUUID(), commands }));
+  const group = await good(post(user, '/relations', { relationType: 'CLASSIFY', targetRefs: commands.map(command => ({ kind: 'message', messageId: command.id })), payload: { title: '即将恢复' } }));
+  const closedMember = await good(post(user, '/messages', { content: '继续保持关闭' }));
+  await good(post(user, '/relations', { relationType: 'CLASSIFY', targetRefs: [{ kind: 'message', messageId: closedMember.id }], payload: { title: '保持关闭' } }));
+  const read = async (query: Record<string, unknown> = {}) => {
+    const response = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', ...query });
+    expect(response.status, response.text).toBe(200);
+    return response.body as WorkbenchSnapshot;
+  };
+  const before = await read();
+  const memberIds = new Set<string>(commands.map(command => command.id));
+  expect(before.messages.some(message => memberIds.has(message.id))).toBe(false);
+  await good(post(user, '/relations', { relationType: 'DISAGREE', targetRefs: [{ kind: 'relation', relationId: group.id }] }));
+  const delta = await read({ after: before.sequence, knownIds: before.messages.map(message => message.id) });
+  const restored = delta.messages.filter(message => memberIds.has(message.id));
+  expect(restored.length).toBeGreaterThan(0);
+  expect(restored.length).toBeLessThanOrEqual(50);
+  expect(restored.every(message => message.sequence! <= before.sequence)).toBe(true);
+  expect(delta.nextCursor).toBeTruthy();
+  const next = await read({ cursor: delta.nextCursor });
+  expect(new Set([...delta.messages, ...next.messages].filter(message => memberIds.has(message.id)).map(message => message.id)).size).toBe(55);
+  expect([...delta.messages, ...next.messages].some(message => message.id === closedMember.id)).toBe(false);
+});
+
+it('includes an older unseen member moved into the current window', async () => {
+  const app = await make(), user = await actor(app, '移入窗口');
+  const left = await good(post(user, '/relations', { relationType: 'CLASSIFY', targetRefs: [], payload: { title: '原位置' } }));
+  const right = await good(post(user, '/relations', { relationType: 'CLASSIFY', targetRefs: [], payload: { title: '新位置' } }));
+  const member = await good(post(user, '/messages', { parentMessageId: left.id, content: '移入的旧消息' }));
+  const before = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', parent: right.id });
+  expect(before.status, before.text).toBe(200);
+  expect(before.body.messages.some((message: { id: string }) => message.id === member.id)).toBe(false);
+  await good(post(user, '/relations', { relationType: 'JOIN', sourceMessageId: right.id, targetRefs: [{ kind: 'message', messageId: member.id }] }));
+  const delta = await user.agent.post('/api/ui/snapshot/query').send({ mode: 'window', parent: right.id, after: before.body.sequence, knownIds: before.body.messages.map((message: { id: string }) => message.id) });
+  expect(delta.status, delta.text).toBe(200);
+  expect(delta.body.messages.some((message: { id: string }) => message.id === member.id)).toBe(true);
+  expect((await app.store.message(member.id)).sequence).toBeLessThanOrEqual(before.body.sequence);
 });
 
 describe('保留操作方式的消息 API',()=>{

@@ -56,7 +56,7 @@ interface GesturePosition {
 
 function isExcludedTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest(
-    'input, textarea, select, button, a, [contenteditable="true"], [data-gesture-disabled="true"]',
+    'input, textarea, select, button, a, [role="separator"], [contenteditable="true"], [data-gesture-disabled="true"]',
   ));
 }
 
@@ -279,6 +279,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       } else {
         cancelCandidateRef.current = null;
       }
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
       if (isExcludedTarget(event.target)) {
         pointerIdRef.current = event.pointerId;
         pointsRef.current = [];
@@ -313,6 +314,15 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
         }
       }
       if (event.pointerId !== pointerIdRef.current) return;
+      // Pointerup can be lost when a captured handle disappears or the pointer
+      // leaves the window. Hovering after that must not extend an old gesture.
+      if (event.pointerType === 'mouse' && event.buttons === 0) {
+        onCancel();
+        return;
+      }
+      // Excluded controls keep their pointer ID only to cancel pending actions
+      // on release. Never start recording their drag halfway through a move.
+      if (pointsRef.current.length === 0) return;
       const isWorkbenchScrollPanelTouch = event.pointerType === 'touch'
         && event.target instanceof Element
         && Boolean(event.target.closest('[data-workbench-scroll-panel]'));
@@ -498,6 +508,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
     document.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
     document.addEventListener('pointerup', onPointerUp, true);
     document.addEventListener('pointercancel', onCancel, true);
+    document.addEventListener('lostpointercapture', onCancel, true);
     document.addEventListener('click', onClick, true);
     document.addEventListener('keydown', onKeyDown, true);
     return () => {
@@ -505,6 +516,7 @@ export default function GestureShortcutManager({ onConfirm }: Props) {
       document.removeEventListener('pointermove', onPointerMove, { capture: true });
       document.removeEventListener('pointerup', onPointerUp, true);
       document.removeEventListener('pointercancel', onCancel, true);
+      document.removeEventListener('lostpointercapture', onCancel, true);
       document.removeEventListener('click', onClick, true);
       document.removeEventListener('keydown', onKeyDown, true);
       if (cancelledTimerRef.current !== null) window.clearTimeout(cancelledTimerRef.current);

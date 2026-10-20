@@ -23,7 +23,7 @@ function cloneHighlightRegion(source: Element, bounds: DOMRect): Element | null 
   return clone;
 }
 
-export function PulseGuide({ start, end, index }: { start: { x: number; y: number }; end: { x: number; y: number }; index: number }) {
+export function PulseGuide({ start, end }: { start: { x: number; y: number }; end: { x: number; y: number } }) {
   const deltaX = end.x - start.x;
   const deltaY = end.y - start.y;
   const length = Math.max(12, Math.hypot(deltaX, deltaY));
@@ -33,9 +33,6 @@ export function PulseGuide({ start, end, index }: { start: { x: number; y: numbe
     backgroundSize: '20px 100%',
     backgroundPosition: '0 0',
     borderRadius: 3,
-    animation: 'popup-guide-line 0.5s ease-in-out infinite',
-    animationDelay: `${(index % 5) * 0.12}s`,
-    willChange: 'opacity, background-position',
   };
   return <div style={{
       position: 'absolute', left: start.x, top: start.y, width: length, height: 2,
@@ -123,25 +120,25 @@ export function MessageJumpOverlay({
         pointerEvents: 'none',
       }}
     >
-      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
+      <div className="popup-guides" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
         {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
           const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`top-${index}`} index={index}
+          return <PulseGuide key={`top-${index}`}
             start={{ x: ratio * viewportWidth, y: GUIDE_EDGE_INSET }} end={targetCenter} />;
         })}
         {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
           const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`bottom-${index}`} index={index}
+          return <PulseGuide key={`bottom-${index}`}
             start={{ x: ratio * viewportWidth, y: viewportHeight - GUIDE_EDGE_INSET }} end={targetCenter} />;
         })}
         {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
           const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`left-${index}`} index={index}
+          return <PulseGuide key={`left-${index}`}
             start={{ x: GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
         })}
         {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
           const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`right-${index}`} index={index}
+          return <PulseGuide key={`right-${index}`}
             start={{ x: viewportWidth - GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
         })}
       </div>
@@ -187,6 +184,7 @@ export default function PopupOverlay({
     centerX: (window.visualViewport?.offsetLeft ?? 0) + (window.visualViewport?.width ?? window.innerWidth) / 2,
     centerY: (window.visualViewport?.offsetTop ?? 0) + (window.visualViewport?.height ?? window.innerHeight) / 2,
   }));
+  const geometryRef = useRef(geometry);
 
   useLayoutEffect(() => {
     const updateGeometry = () => {
@@ -197,27 +195,23 @@ export default function PopupOverlay({
       const top = viewport?.offsetTop ?? 0;
       const width = viewport?.width ?? window.innerWidth;
       const height = viewport?.height ?? window.innerHeight;
-      if (!overlay || !content) {
-        setGeometry({
-          left, top, viewportWidth: width, viewportHeight: height,
-          overlayWidth: Math.max(document.documentElement.scrollWidth, window.innerWidth),
-          overlayHeight: Math.max(document.documentElement.scrollHeight, window.innerHeight),
-          centerX: left + width / 2, centerY: top + height / 2,
-        });
-        return;
-      }
-      const overlayBounds = overlay.getBoundingClientRect();
-      const contentBounds = content.getBoundingClientRect();
-      setGeometry({
+      const overlayBounds = overlay?.getBoundingClientRect();
+      const contentBounds = content?.getBoundingClientRect();
+      const next = {
         left,
         top,
         viewportWidth: width,
         viewportHeight: height,
-        overlayWidth: Math.max(document.documentElement.scrollWidth, overlay.clientWidth, window.innerWidth),
-        overlayHeight: Math.max(document.documentElement.scrollHeight, overlay.clientHeight, window.innerHeight),
-        centerX: (contentBounds.left + contentBounds.right) / 2 - overlayBounds.left,
-        centerY: (contentBounds.top + contentBounds.bottom) / 2 - overlayBounds.top,
-      });
+        // The fixed mask belongs to the viewport. Including page/overlay scroll extents
+        // feeds its own overflow back into layout and makes long graphs expensive to paint.
+        overlayWidth: window.innerWidth,
+        overlayHeight: window.innerHeight,
+        centerX: contentBounds && overlayBounds ? Math.max(left, Math.min(left + width, (contentBounds.left + contentBounds.right) / 2 - overlayBounds.left)) : left + width / 2,
+        centerY: contentBounds && overlayBounds ? Math.max(top, Math.min(top + height, (contentBounds.top + contentBounds.bottom) / 2 - overlayBounds.top)) : top + height / 2,
+      };
+      if (Object.keys(next).every(key => geometryRef.current[key as keyof typeof next] === next[key as keyof typeof next])) return;
+      geometryRef.current = next;
+      setGeometry(next);
     };
 
     updateGeometry();
@@ -245,30 +239,30 @@ export default function PopupOverlay({
       style={{
         position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
         width: overlayWidth, height: overlayHeight,
-        boxSizing: 'border-box', zIndex,
+        boxSizing: 'border-box', zIndex, overflow: 'hidden',
         background,
       }}
       onClick={onClick}
     >
-      <div aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
+      <div className="popup-guides" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
           {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
             const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`top-${index}`} index={index}
+            return <PulseGuide key={`top-${index}`}
               start={{ x: ratio * overlayWidth, y: GUIDE_EDGE_INSET }} end={center} />;
           })}
           {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
             const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`bottom-${index}`} index={index}
+            return <PulseGuide key={`bottom-${index}`}
               start={{ x: ratio * overlayWidth, y: overlayHeight - GUIDE_EDGE_INSET }} end={center} />;
           })}
           {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
             const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`left-${index}`} index={index}
+            return <PulseGuide key={`left-${index}`}
               start={{ x: GUIDE_EDGE_INSET, y: ratio * overlayHeight }} end={center} />;
           })}
           {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
             const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`right-${index}`} index={index}
+            return <PulseGuide key={`right-${index}`}
               start={{ x: overlayWidth - GUIDE_EDGE_INSET, y: ratio * overlayHeight }} end={center} />;
           })}
       </div>
@@ -290,10 +284,6 @@ export default function PopupOverlay({
         [data-popup-content-layer="true"] {
           position: relative;
           z-index: 2;
-        }
-        @keyframes popup-guide-line {
-          0%, 100% { opacity: 0.16; background-position: 0 0; }
-          50% { opacity: 0.58; background-position: 20px 0; }
         }
       `}</style>
     </div>

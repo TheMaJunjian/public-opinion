@@ -368,7 +368,10 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
     const limit = Math.min(200, Math.max(1, Number(query.limit) || 200)) * batch, after = Number(query.after ?? 0);
     if (!Number.isSafeInteger(after) || after < 0)
         throw new DomainError('变更游标无效');
+    const regionId = await store.setting<string>('region');
     if (query.after !== undefined) {
+        if ((query.regionId !== undefined && query.regionId !== regionId) || after > await store.latestSequence())
+            throw new DomainError('本地消息缓存已失效，请重新加载', 409);
         const changeRows = (await store.db.prepare("SELECT sequence,body FROM changes WHERE sequence>$1 ORDER BY sequence LIMIT 101").all(after)), selected = changeRows.slice(0, 100), changes = selected.map(r => JSON.parse(String(r.body)) as Change), changedIds = [...new Set<string>(changes.flatMap(change => [...change.messages.map((m: Message) => m.id), ...change.states.map((s: RecordData) => s.messageId), ...change.memberships.flatMap((m: RecordData) => [m.memberId, m.parentId]), ...change.removedMemberships]))];
         const scope = scopeSql(parent), messages: Message[] = [], present = new Set<string>();
         for (let i = 0; i < changedIds.length; i += 200) {
@@ -385,7 +388,7 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
         if (userId)
             for (let i = 0; i < ids.length; i += 100)
                 marks.push(...(await personalMarks(store, userId, ids.slice(i, i + 100))));
-        return { scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: selected.length ? Number(selected.at(-1)!.sequence) : after, hasMore: changeRows.length > 100, nextCursor: null, removedMemberships: [...new Set(changes.flatMap(c => c.removedMemberships))], removedMessageIds: changedIds.filter(id => id !== parent && !present.has(id)) };
+        return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: selected.length ? Number(selected.at(-1)!.sequence) : after, hasMore: changeRows.length > 100, nextCursor: null, removedMemberships: [...new Set(changes.flatMap(c => c.removedMemberships))], removedMessageIds: changedIds.filter(id => id !== parent && !present.has(id)) };
     }
     const scope = scopeSql(parent), params: (string | number)[] = [...scope.params], extra: string[] = [];
     const parameter=(value:string|number)=>{params.push(value);return `$${params.length}`;};
@@ -422,5 +425,5 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
     if (userId)
         for (let i = 0; i < ids.length; i += 100)
             marks.push(...(await personalMarks(store, userId, ids.slice(i, i + 100))));
-    return { scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
+    return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
 }

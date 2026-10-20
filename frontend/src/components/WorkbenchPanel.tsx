@@ -4,6 +4,7 @@ import DeferredWorkbench from './DeferredWorkbench';
 import { describeUnit as describeVisibleSelection } from '../utils/selectionLabel';
 import { isWholeMessageSelection } from '../utils/messageElementSelection';
 import type { User } from '../types';
+import { getPresentationSpec } from '../types';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import MessageRelationsView from './MessageRelationsView';
 import OperationLogView from './OperationLogView';
@@ -141,7 +142,7 @@ interface WorkbenchPanelProps {
   sendWarning: string | null;
 
   // Recent
-  recentNormals: DemoMessage[];
+  recentTexts: DemoMessage[];
   recentRelations: DemoMessage[];
 
   // Panels
@@ -526,7 +527,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
               : p.isGovernanceOrOpsType ? (p.relationType === "proposal"
                 ? (p.secondaryRelationType === '分配收入' ? "系统自动生成分配提案内容" : p.secondaryRelationType === '终止结算' ? "系统自动生成终止结算提案内容" : "输入提案内容（不能为空，支持 Markdown）")
                 : "输入运营公告内容（不能为空，支持 Markdown）")
-              : "输入一条新普通消息（支持自由换行）";
+              : "输入一条新文本消息（支持自由换行）";
             return (
               <textarea
                 data-guide-message-input="true"
@@ -553,13 +554,13 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
       {!p.isViewerMode && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>最近普通消息</div>
+          <div title="独立文本消息；带正文的回复、提案等仍属于关系消息。" style={{ fontWeight: 600, marginBottom: 4 }}>最近文本消息</div>
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
-            {p.recentNormals.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
+            {p.recentTexts.map(m => <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>{m.id}：{m.content}</li>)}
           </ul>
         </div>
         <div style={{ flex: 1, border: "1px solid #444", borderRadius: 6, padding: 8, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
+          <div title="包含回复、引用、赞同、分类、提案、加入、发起结算和结算结果等关系消息，可带正文。" style={{ fontWeight: 600, marginBottom: 4 }}>最近关系消息</div>
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0, fontSize: 12, maxHeight: 200, overflow: "auto" }}>
             {p.recentRelations.map(m => {
               const notifyUsers = m.relationType === 'notify'
@@ -569,7 +570,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
                 : [];
               return (
                 <li key={m.id} style={{ marginBottom: 2, wordBreak: "break-all" }}>
-                  {m.id}：{m.content}
+                  {`【${m.kind === 'round' ? '发起结算' : m.kind === 'round_result' ? '结算结果' : m.kind === 'join' ? '加入' : m.relationType ? getPresentationSpec(m.relationType).label : '关系消息'}】`}{m.id}：{m.content}
                   {notifyUsers.length > 0 && (
                     <span>（通知与会者：{notifyUsers.map((notifyUser, index) => (
                       <span key={notifyUser.id}>

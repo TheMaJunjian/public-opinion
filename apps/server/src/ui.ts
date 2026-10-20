@@ -7,12 +7,16 @@ import { DomainError, id, Store } from './db.js';
 import { dataOf } from './economy.js';
 import { executeBatch, executeCommand } from './ui-commands.js';
 import { sendSnapshot } from './snapshot-response.js';
+import { windowSnapshot } from './window-snapshot.js';
 import { accountView, allUsers, attentionUsers, legacyType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, tagCountsFor, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
 /** Transport views for the established interaction model. The domain contains messages only. */
 export function createUiRouter(store: Store, publish: () => Promise<void>) {
     const router = Router();
     const get=(path:string,handler:(req:Request,res:Response,next:NextFunction)=>Promise<unknown>)=>
         router.get(path,(req,res,next)=>{void store.read(()=>handler(req,res,next)).catch(next);});
+    router.post('/snapshot/query', (req, res, next) => {
+        void store.read(async () => sendSnapshot(req, res, await windowSnapshot(store, req.body))).catch(next);
+    });
     get('/snapshot', async (req, res, next) => { try {
         await sendSnapshot(req, res, await snapshot(store, String(req.query.parent ?? 'root'), req.query, (await currentSession(store, req))?.user.id));
     }

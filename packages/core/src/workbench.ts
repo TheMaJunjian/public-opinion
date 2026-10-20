@@ -171,6 +171,8 @@ export function isRelationView(view: NativeMessageView): view is NativeMessageVi
 }
 
 export interface WorkbenchSnapshot {
+  regionId?: string;
+  windowed?: boolean;
   scope: ScopeView;
   messages: MessageView[];
   relations: RelationView[];
@@ -181,6 +183,7 @@ export interface WorkbenchSnapshot {
   personalStates?: PersonalState[];
   sequence: number;
   nextCursor?: string | null;
+  pageCursors?: Record<string, string | null>;
   hasMore?: boolean;
   removedMessageIds?: string[];
   removedMemberships?: string[];

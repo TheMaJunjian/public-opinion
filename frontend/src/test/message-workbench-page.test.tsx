@@ -4,6 +4,9 @@ import MessageWorkbenchPage from '../pages/MessageWorkbenchPage';
 import type { ExportData } from '../api/client';
 import type { Message, Relation, ScopeView, User } from '../types';
 import { PART_SELECTION_EVENT } from '../utils/messageElementSelection';
+import * as leaderboardMetrics from '../utils/leaderboardMetrics';
+import { LEADERBOARD_PREFERENCES_KEY } from '../utils/leaderboardPreferences';
+import GestureShortcutManager from '../components/GestureShortcutManager';
 
 const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi.hoisted(() => {
   const mockApi = {
@@ -76,6 +79,21 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
   return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false }, viewerRoute: { archive: null as ExportData | null, key: '' } };
 });
 
+const catalogHarness = vi.hoisted(() => ({ callbacks: null as any, data: null as any,
+  progress: { ready: false, count: 0, syncing: true }, prioritize: vi.fn(), filters: vi.fn() }));
+vi.mock('../data/catalogClient', async () => {
+  const { deriveCleanVisibleIds } = await import('../utils/cleanProjection');
+  catalogHarness.filters.mockImplementation(async (query: any) => ({
+    clean: deriveCleanVisibleIds({ ...catalogHarness.data.projected, stakeCounts: catalogHarness.data.projected.counts,
+      tagCounts: catalogHarness.data.snapshot.tagCounts }, query.rules), home: null,
+  }));
+  return { createCatalogClient: (_user: string, _scope: string, callbacks: any) => {
+    catalogHarness.callbacks = callbacks;
+    return { prioritize: catalogHarness.prioritize, filters: catalogHarness.filters, catchUp: vi.fn(), applyCommitted: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(false), stop: vi.fn(), getProgress: () => catalogHarness.progress, subscribe: () => () => {} };
+  } };
+});
+
 vi.mock('../api', () => ({ api: mockApi }));
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
@@ -141,6 +159,216 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     mockApi.getRelations.mockResolvedValue({data:[relation('A','CLASSIFY',['C']),relation('C',type,joinOnly?[]:['B']),...(joinOnly?[relation('join-B','JOIN',['B'],'C')]:[]),relation('against-C','DISAGREE',['C'])]});
   }
   beforeEach(()=>{vi.clearAllMocks();HTMLElement.prototype.scrollIntoView=vi.fn();});
+  it('首次只加载一页，点击查看更多或跳转未加载编号时才请求对应消息', async () => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const snapshot = (records: Message[], nextCursor: string | null = null) => ({ windowed: true, regionId: 'region',
+      scope: { messageId: 'classification-1', title: '按需讨论' }, sequence: 10, messages: records,
+      relations: [], users: [makeUser()], stakes: {}, tagCounts: {}, attentionUsers: {}, nextCursor });
+    mockApi.getWorkbenchSnapshot.mockImplementation(async ({ after, cursor, ids }: { after?: number; cursor?: string; ids?: string[] }) =>
+      after !== undefined ? snapshot([]) : ids ? snapshot(ids.map(id => makeMessage(id, `定向 ${id}`)))
+        : cursor ? snapshot([makeMessage('older', '下一页消息')]) : snapshot([makeMessage('first', '首屏消息')], 'older-cursor'));
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      const more = await screen.findByRole('button', { name: '加载更多消息' });
+      expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.cursor)).toBe(false);
+      fireEvent.click(more);
+      await waitFor(() => expect(latest().messages.some((message: { id: string }) => message.id === 'older')).toBe(true));
+      expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.cursor === 'older-cursor')).toBe(true);
+      await waitFor(() => expect(screen.queryByRole('button', { name: '加载更多消息' })).toBeNull());
+      fireEvent.change(screen.getByRole('textbox', { name: '消息 ID' }), { target: { value: 'remote' } });
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+      await waitFor(() => expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.ids?.includes('remote'))).toBe(true));
+      await waitFor(() => expect(latest().messages.some((message: { id: string }) => message.id === 'remote')).toBe(true));
+    } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); }
+  });
+
+  it('全局数据未齐时等待排行榜，补齐后用全量统计并只挂载一页消息，编号跳转可显示后续页', async () => {
+    const original = mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const first = makeMessage('first-global', '首屏');
+    const remoteUser = { id: 'remote-user', username: '远端用户', createdAt: '' };
+    const remote = Array.from({ length: 52 }, (_, index) => ({ ...makeMessage(`remote-${index}`, `后续消息${index}`), createdBy: remoteUser }));
+    const snapshot = { windowed: true, regionId: 'region', scope: { messageId: 'classification-1', title: '全局讨论' },
+      sequence: 10, messages: [first], relations: [], users: [makeUser(), remoteUser], stakes: {}, tagCounts: {}, attentionUsers: {}, nextCursor: null };
+    mockApi.getWorkbenchSnapshot.mockImplementation(async ({ after }: { after?: number }) => ({ ...snapshot, messages: after === undefined ? [first] : [] }));
+    const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
+    const { buildLeaderboardRows } = await import('../utils/leaderboardRows');
+    const full = { ...snapshot, windowed: false, messages: [first, ...remote] };
+    const projected = projectWorkbenchSnapshot(full);
+    const rows = buildLeaderboardRows(leaderboardMetrics.buildLeaderboardMetrics(projected.messages, projected.edges, projected.relations, full.users), full.users, projected.counts, projected.bettors);
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === first.id)).toBe(true));
+      await waitFor(() => expect(catalogHarness.callbacks).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: '排行榜' }));
+      await screen.findByText('正在准备全局排行榜…');
+      expect(screen.queryByRole('dialog', { name: '排行榜' })).toBeNull();
+      act(() => catalogHarness.callbacks.onReady({ snapshot: { ...full, sequence: 9 }, projected, rows }));
+      expect(latest().messages).toHaveLength(1);
+      expect(screen.queryByRole('dialog', { name: '排行榜' })).toBeNull();
+      act(() => {
+        catalogHarness.data = { snapshot: full, projected, rows };
+        catalogHarness.progress = { ready: true, count: 53, syncing: false };
+        catalogHarness.callbacks.onReady(catalogHarness.data);
+      });
+      const dialog = await screen.findByRole('dialog', { name: '排行榜' });
+      const row = within(dialog).getByText(remoteUser.username).closest('tr')!;
+      expect(row.children[4]).toHaveTextContent('52');
+      fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
+      expect(latest().messages).toHaveLength(50);
+      fireEvent.change(screen.getByRole('textbox', { name: '消息 ID' }), { target: { value: 'remote-51' } });
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+      await waitFor(() => expect(latest().messages.some((message: Message) => message.id === 'remote-51')).toBe(true));
+      expect(mockApi.getWorkbenchSnapshot.mock.calls.some(([query]) => query.ids?.includes('remote-51'))).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: '加载更多消息' }));
+      await waitFor(() => expect(latest().messages).toHaveLength(53));
+      fireEvent.click(screen.getByRole('button', { name: '过滤' }));
+      fireEvent.click(screen.getByRole('button', { name: '按发送者' }));
+      const input = screen.getByPlaceholderText('例如: 张三');
+      fireEvent.change(input, { target: { value: remoteUser.username } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await screen.findByText('匹配 52 条 / 共 53 条内容消息');
+      expect(catalogHarness.filters).toHaveBeenCalledWith(expect.objectContaining({ rules: [expect.objectContaining({ kind: 'sender', username: remoteUser.username })] }));
+      expect(latest().messages.some((message: Message) => message.id === first.id)).toBe(false);
+      expect(catalogHarness.prioritize).toHaveBeenCalled();
+    } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
+  });
+
+  it('排行榜关闭重开复用统计与显示状态，不重新请求数据或读写设置，主动刷新仍可用', async () => {
+    fixture();
+    const metrics = vi.spyOn(leaderboardMetrics, 'buildLeaderboardMetrics');
+    const reads = vi.spyOn(Storage.prototype, 'getItem');
+    const writes = vi.spyOn(Storage.prototype, 'setItem');
+    try {
+      render(<MessageWorkbenchPage />);
+      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'A')).toBe(true));
+      expect(metrics).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: '排行榜' }));
+      expect(screen.getByRole('dialog', { name: '正在打开排行榜' })).toBeInTheDocument();
+      expect(metrics).not.toHaveBeenCalled();
+      await screen.findByRole('dialog', { name: '排行榜' });
+      fireEvent.click(screen.getByRole('button', { name: '消息榜' }));
+      const initialCalculations = metrics.mock.calls.length;
+      const initialReads = reads.mock.calls.filter(([key]) => key === LEADERBOARD_PREFERENCES_KEY).length;
+      const initialRequests = mockApi.getWorkbenchSnapshot.mock.calls.length;
+      const initialDraws = mockGraphView.mock.calls.length;
+      for (let index = 0; index < 3; index++) {
+        fireEvent.click(within(screen.getByRole('dialog', { name: '排行榜' })).getByRole('button', { name: '关闭' }));
+        expect(document.querySelector('[data-popup-overlay]')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: '排行榜' }));
+        expect(screen.getByRole('dialog', { name: '正在打开排行榜' })).toBeInTheDocument();
+        await screen.findByRole('dialog', { name: '排行榜' });
+        expect(screen.getByPlaceholderText('搜索消息ID/议事人ID/议事人')).toBeInTheDocument();
+      }
+      expect(metrics).toHaveBeenCalledTimes(initialCalculations);
+      expect(reads.mock.calls.filter(([key]) => key === LEADERBOARD_PREFERENCES_KEY)).toHaveLength(initialReads);
+      expect(writes.mock.calls.filter(([key]) => key === LEADERBOARD_PREFERENCES_KEY)).toHaveLength(0);
+      expect(mockApi.getWorkbenchSnapshot).toHaveBeenCalledTimes(initialRequests);
+      expect(mockGraphView).toHaveBeenCalledTimes(initialDraws);
+      const initialSnapshot = await mockApi.getWorkbenchSnapshot.mock.results[0].value;
+      const emptyDelta = { ...initialSnapshot, messages: [], relations: [], users: [], stakes: {}, tagCounts: {}, attentionUsers: {} };
+      mockApi.getWorkbenchSnapshot.mockResolvedValueOnce(emptyDelta);
+      fireEvent.click(within(screen.getByRole('dialog', { name: '排行榜' })).getByRole('button', { name: '刷新' }));
+      await waitFor(() => expect(mockApi.getWorkbenchSnapshot.mock.calls.length).toBeGreaterThan(initialRequests));
+      await screen.findByText('刷新完成，暂无新变化');
+      expect(mockApi.getWorkbenchSnapshot.mock.lastCall?.[0].after).toBe(initialSnapshot.sequence);
+      expect(mockApi.subscribeChanges).toHaveBeenCalledOnce();
+      expect(metrics).toHaveBeenCalledTimes(initialCalculations);
+      expect(mockGraphView).toHaveBeenCalledTimes(initialDraws);
+      mockApi.getWorkbenchSnapshot.mockResolvedValueOnce({ ...emptyDelta, sequence: initialSnapshot.sequence + 1,
+        messages: [makeMessage('refresh-added', '增量更新消息')], users: [makeUser()] });
+      fireEvent.click(within(screen.getByRole('dialog', { name: '排行榜' })).getByRole('button', { name: '刷新' }));
+      await screen.findByText('刷新完成，已更新最新数据');
+      expect(within(screen.getByRole('dialog', { name: '排行榜' })).getByText('增量更新消息')).toBeInTheDocument();
+      expect(mockApi.getWorkbenchSnapshot.mock.lastCall?.[0].after).toBe(initialSnapshot.sequence);
+      expect(mockApi.subscribeChanges).toHaveBeenCalledOnce();
+      expect(metrics).toHaveBeenCalledTimes(initialCalculations + 1);
+    } finally {
+      metrics.mockRestore();
+      reads.mockRestore();
+      writes.mockRestore();
+    }
+  });
+
+  it('排行榜拖动后自适应并关闭，真实消息图连续切换选择及延时操作仍正常', async () => {
+    mockApi.getScope.mockResolvedValue({ messageId: 'classification-1', title: '排行榜交互回归' });
+    mockApi.getMessages.mockResolvedValue({ data: [makeMessage('click-a', '第一条消息'), makeMessage('click-b', '第二条消息')] });
+    mockApi.getRelations.mockResolvedValue({ data: [] });
+    graphRendering.actual = true;
+    const metrics = vi.spyOn(leaderboardMetrics, 'buildLeaderboardMetrics');
+    const view = render(<><GestureShortcutManager onConfirm={vi.fn()} /><MessageWorkbenchPage /></>);
+    try {
+      await waitFor(() => expect(document.querySelector('[data-msgid="click-a"]')).not.toBeNull());
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: '排行榜' }));
+      const dialog = await screen.findByRole('dialog', { name: '排行榜' });
+      vi.spyOn(dialog, 'getBoundingClientRect').mockReturnValue(new DOMRect(200, 100, 640, 400));
+      const handle = screen.getByRole('separator', { name: '调整排行榜宽高' });
+      const pointer = (type: string, x: number, y: number) => Object.assign(new MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }), { pointerId: 1 });
+      fireEvent(handle, pointer('pointerdown', 840, 500));
+      fireEvent(handle, pointer('pointermove', 880, 600));
+      fireEvent(handle, pointer('pointermove', 940, 560));
+      fireEvent(handle, pointer('pointerup', 940, 560));
+      fireEvent.lostPointerCapture(handle);
+      expect(dialog).toHaveStyle({ width: '740px', height: '460px' });
+      expect(screen.queryByRole('dialog', { name: '快捷符输入蒙版' })).toBeNull();
+      fireEvent.click(within(dialog).getByRole('button', { name: '自适应窗口' }));
+      expect(dialog).toHaveStyle({ height: 'auto', margin: 'auto' });
+      expect(dialog.style.getPropertyValue('--leaderboard-body-flex')).toBe('');
+      fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
+      const calculations = metrics.mock.calls.length;
+      const clickAndCheck = (id: string, selected: boolean) => {
+        fireEvent.click(document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${id}"]`)!);
+        expect(latest().draftUnits.some((unit: { messageId: string }) => unit.messageId === id)).toBe(selected);
+        expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+        expect(document.querySelector('[data-popup-overlay]')).toBeNull();
+      };
+      for (let index = 0; index < 20; index++) {
+        clickAndCheck('click-a', index % 2 === 0);
+        clickAndCheck('click-b', index % 2 === 0);
+      }
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      act(() => { vi.advanceTimersByTime(10000); });
+      clickAndCheck('click-a', true);
+      clickAndCheck('click-b', true);
+      expect(metrics).toHaveBeenCalledTimes(calculations);
+      expect(screen.getByRole('button', { name: '清空' })).toBeEnabled();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+      metrics.mockRestore();
+      graphRendering.actual = false;
+    }
+  });
+
+  it('近期列表按文本和关系类型区分，加入、结算和治理消息均归关系列表', async () => {
+    mockApi.getScope.mockResolvedValue({ messageId: 'classification-1', title: '测试分类' });
+    mockApi.getMessages.mockResolvedValue({ data: [
+      makeMessage('text-older', '较早文本'),
+      { ...makeMessage('text-newer', '较新文本'), createdAt: '2024-01-01T00:05:00Z' },
+      { ...makeMessage('proposal', '提案正文'), kind: 'GOVERNANCE', relationType: 'PROPOSAL' },
+      { ...makeMessage('round', '结算记录'), kind: 'ROUND' },
+      { ...makeMessage('result', '结算完成'), kind: 'ROUND_RESULT' },
+    ] });
+    mockApi.getRelations.mockResolvedValue({ data: [makeRelation(), {
+      id: 'join', relationType: 'JOIN', sourceMessageId: 'classification-1', targetRefs: [{ kind: 'message', messageId: 'text-older' }],
+      createdAt: '2024-01-01T00:01:00Z', createdBy: makeUser(),
+    }] });
+    render(<MessageWorkbenchPage />);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    const texts = screen.getByText('最近文本消息').nextElementSibling as HTMLElement;
+    const relations = screen.getByText('最近关系消息').nextElementSibling as HTMLElement;
+    await waitFor(() => expect(within(texts).getAllByRole('listitem').map(item => item.textContent)).toEqual(['text-newer：较新文本', 'text-older：较早文本']));
+    expect(within(relations).getAllByRole('listitem')).toHaveLength(5);
+    expect(relations).toHaveTextContent('【回复】rel-1：');
+    expect(relations).toHaveTextContent('提案正文');
+    expect(texts).not.toHaveTextContent('提案正文');
+    expect(relations).toHaveTextContent('【发起结算】round：结算记录');
+    expect(relations).toHaveTextContent('【结算结果】result：结算完成');
+    expect(relations).toHaveTextContent('【加入】join：加入容器');
+    expect(texts).not.toHaveTextContent('结算记录');
+    expect(texts).not.toHaveTextContent('加入容器');
+  });
+
   it('keeps the classification header and navigation after a tab resumes, with only incremental reads',async()=>{
     fixture();
     const original=mockApi.getWorkbenchSnapshot.getMockImplementation()!;
@@ -201,7 +429,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     render(<MessageWorkbenchPage />);
     await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'A')).toBe(true));
     await act(async () => latest().onMessageClick(event(), 'A'));
-    fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: '独立发言' } });
+    fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '独立发言' } });
     fireEvent.click(document.querySelector('[data-guide-send="true"]')!);
     expect(screen.getByRole('dialog', { name: '确认发送文本消息' })).toBeInTheDocument();
     expect(mockApi.createMessage).not.toHaveBeenCalled();
@@ -240,8 +468,10 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       render(<MessageWorkbenchPage/>);
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
       await act(async()=>latest().onMessageDoubleClick(event(),scope));
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
       if(viewMode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
       const {card,toggle}=await waitFor(()=>{
+        expect(document.querySelector('[aria-busy="true"]')).toBeNull();
         const card=within(document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${side}"]`)!);
         return {card,toggle:card.getByRole('button',{name:/相关消息：1/})};
       });
@@ -783,7 +1013,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     graphRendering.actual = true;
     try {
       render(<MessageWorkbenchPage />);
-      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       await waitFor(() => expect(document.querySelector('[role="dialog"][aria-label="正在绘制"]')).toBeNull());
       const latest = () => mockGraphView.mock.lastCall![0];
       if (viewMode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
@@ -797,7 +1027,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(document.querySelector('[data-workbench-left-panel] [data-msgid="category"]:not([data-rel-overlay])')).toBeNull();
       expect(document.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).not.toBeNull();
       expect(document.body.style.overflow).not.toBe('hidden');
-      const textarea = screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      const textarea = screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）');
       expect(textarea.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
       expect((textarea.closest('[aria-busy]') as HTMLElement).inert).toBe(false);
       for (const canvas of document.querySelectorAll<HTMLElement>('[data-workbench-left-panel] [data-jump-canvas]')) {
@@ -825,14 +1055,14 @@ describe('MessageWorkbenchPage composer refresh', () => {
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 200, 500, 500));
     try {
       render(<MessageWorkbenchPage />);
-      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       const left = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
       expect(left.style.height).toBe('');
       expect(left.style.minHeight).toBe('');
       expect(left.style.maxHeight).toBe('');
       expect(left.style.flexGrow).toBe('1');
       expect(left.style.flexShrink).toBe('0');
-      fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: '新增消息' } });
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '新增消息' } });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => {
         expect(mockApi.createMessage).toHaveBeenCalled();
@@ -885,7 +1115,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
     try {
       render(<MessageWorkbenchPage />);
-      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       const latest = () => mockGraphView.mock.lastCall![0];
       await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, outer.id));
       await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, inner.id));
@@ -894,7 +1124,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
         await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
         fireEvent.click(screen.getByRole('button', { name: '分类' }));
       }
-      fireEvent.change(screen.getByPlaceholderText(sentKind === 'text' ? '输入一条新普通消息（支持自由换行）' : '输入分类名称（不能为空）'),
+      fireEvent.change(screen.getByPlaceholderText(sentKind === 'text' ? '输入一条新文本消息（支持自由换行）' : '输入分类名称（不能为空）'),
         { target: { value: '在内层发送' } });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => expect(screen.getByText('已定位目标消息')).toBeInTheDocument());
@@ -927,7 +1157,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getRelations.mockResolvedValue({ data: [current, destination] });
     mockApi.createRelation.mockResolvedValueOnce(join);
     render(<MessageWorkbenchPage />);
-    await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
     const latest = () => mockGraphView.mock.lastCall![0];
     await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
     await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, destination.id));
@@ -976,7 +1206,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
     try {
       render(<MessageWorkbenchPage />);
-      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       const latest = () => mockGraphView.mock.lastCall![0];
       await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
       await act(async () => {
@@ -985,7 +1215,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       });
       fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
       fireEvent.click(screen.getByRole('button', { name: '回复' }));
-      fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: sent.content } });
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: sent.content } });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => expect(finishCommit).toBeDefined());
       expect(screen.queryByText('已定位目标消息')).toBeNull();
@@ -1020,10 +1250,10 @@ describe('MessageWorkbenchPage composer refresh', () => {
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
     try {
       render(<MessageWorkbenchPage />);
-      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       await act(async () => mockGraphView.mock.lastCall![0].onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
       fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
-      fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: sent.content } });
+      fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: sent.content } });
       await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })));
       // The optimistic text is present in data, but its membership has not arrived.
       await act(async () => { await new Promise(resolve => setTimeout(resolve, 1200)); });
@@ -1050,12 +1280,12 @@ describe('MessageWorkbenchPage composer refresh', () => {
     localStorage.setItem('token', 'test-token');
     mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-outside-trace', '追溯中发送'));
     render(<MessageWorkbenchPage />);
-    await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
     await act(async () => mockGraphView.mock.lastCall![0].onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
     fireEvent.click(screen.getByRole('button', { name: '设为追溯消息' }));
     expect(screen.getByRole('button', { name: '退出追溯' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '清空' }));
-    fireEvent.change(screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）'), { target: { value: '追溯中发送' } });
+    fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '追溯中发送' } });
     await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })));
     expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1', expect.objectContaining({ content: '追溯中发送' }));
     await waitFor(() => expect(screen.queryByText('正在发送消息并更新关联结构，请稍候…')).toBeNull(), { timeout: 2000 });
@@ -1083,7 +1313,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     });
     try {
       render(<MessageWorkbenchPage />);
-      const textarea = await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      const textarea = await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
       const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
       Object.defineProperties(panel, { clientHeight: { value: 500 }, scrollHeight: { value: 2000 } });
@@ -1112,7 +1342,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
     try {
       render(<MessageWorkbenchPage />);
-      await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
       fireEvent.click(screen.getByRole('button', { name: '分类' }));
       fireEvent.change(screen.getByPlaceholderText('输入分类名称（不能为空）'), { target: { value: '发送分类后定位' } });
@@ -1127,7 +1357,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
 
   it('uses the global page for the natural right panel, preserving nested lists and boundary handoff', async () => {
     render(<MessageWorkbenchPage />);
-    await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
     const left = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
     const right = document.querySelector<HTMLElement>('[data-workbench-scroll-panel]')!;
@@ -1279,7 +1509,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       });
     render(<MessageWorkbenchPage />);
 
-    const textarea = await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    const textarea = await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
     fireEvent.change(textarea, { target: { value: '待发送消息' } });
     const sendButton = screen.getByRole('button', { name: '发送' });
     fireEvent.click(sendButton);
@@ -1316,7 +1546,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.createMessage.mockResolvedValue({ ...makeMessage('uncommitted', '尚未提交'), revision: 1 });
     mockApi.withCommandBatch.mockImplementationOnce(async work => { await work(); throw new Error('整批提交失败'); });
     render(<MessageWorkbenchPage />);
-    const textarea = await screen.findByPlaceholderText('输入一条新普通消息（支持自由换行）');
+    const textarea = await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
     fireEvent.change(textarea, { target: { value: '尚未提交' } });
     fireEvent.change(screen.getByLabelText('推荐投入'), { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1344,7 +1574,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: '清空' }));
 
     await waitFor(() => {
-      const textarea = screen.getByPlaceholderText('输入一条新普通消息（支持自由换行）');
+      const textarea = screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）');
       expect(textarea).not.toHaveAttribute('readonly');
     });
 

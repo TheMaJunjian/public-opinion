@@ -45,6 +45,17 @@ html, body, #root {
   display: none;
 }
 
+/* Keep guide segments static and pulse the group once. Independent moving
+   backgrounds caused seconds-long rendering stalls after closing in Chrome. */
+.popup-guides {
+  animation: popup-guide-pulse 0.5s ease-in-out infinite;
+}
+
+@keyframes popup-guide-pulse {
+  0%, 100% { opacity: 0.16; }
+  50% { opacity: 0.58; }
+}
+
 .workbench-right-panel {
   scrollbar-width: none;
   -ms-overflow-style: none;

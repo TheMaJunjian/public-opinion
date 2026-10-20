@@ -72,11 +72,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   headers['X-Device-Id'] = getDeviceId();
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
+  const readOnlySnapshot = path.split('?')[0] === '/snapshot/query';
   if (path === '/auth/signing-key' || path === '/logout') {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
   }
-  if (options.method && options.method !== 'GET' && !isAuthBootstrap) {
+  if (options.method && options.method !== 'GET' && !isAuthBootstrap && !readOnlySnapshot) {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
     const body = JSON.parse(typeof options.body === 'string' ? options.body : '{}');
@@ -176,16 +177,21 @@ export function withCommandBatch<T>(work: () => Promise<T>, onCommitted?: (comma
 }
 
 export async function getWorkbenchSnapshot({ signal, ...query }: import('../data/workbench').SnapshotQuery) {
+  type Snapshot = import('../data/workbench').WorkbenchSnapshot;
+  if (query.mode === 'window') {
+    return decodeWorkbenchSnapshot<Snapshot>(await request<Snapshot | CompactSnapshot<Snapshot>>('/snapshot/query?format=compact-v1', {
+      method: 'POST', body: JSON.stringify(query), signal,
+    }));
+  }
   const params = new URLSearchParams({ format: 'compact-v1' });
   // The server still uses bounded keyset pagination. Bundle four pages per
   // round trip without truncating the graph or changing the sync boundary.
   if (query.after === undefined) params.set('batch', '4');
   for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
-  type Snapshot = import('../data/workbench').WorkbenchSnapshot;
   return decodeWorkbenchSnapshot<Snapshot>(await request<Snapshot | CompactSnapshot<Snapshot>>(`/snapshot?${params}`, { signal }));
 }
 export function subscribeChanges(after: number) {
-  return new EventSource(`${CORE_URL}/events?after=${after}`, { withCredentials: true });
+  return new EventSource(`${CORE_URL}/events?after=${after}&mode=cursor`, { withCredentials: true });
 }
 
 export function getScope(parent = 'root') {

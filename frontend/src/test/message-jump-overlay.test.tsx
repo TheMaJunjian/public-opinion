@@ -51,13 +51,14 @@ it('copies the message above the mask and guides while keeping the live card int
 it('copies the visible card and SVG label behind a relation hit area without copying the rest of the canvas', () => {
   const canvas = document.createElement('div');
   canvas.dataset.jumpCanvas = 'true';
-  canvas.innerHTML = `<div><div data-msgid="card">消息卡</div><div data-msgid="outside">区域外消息</div></div>
+  canvas.innerHTML = `<div data-card-wrapper><div data-msgid="card">消息卡</div><div data-msgid="outside">区域外消息</div></div>
     <svg><defs><marker id="arrow"><path d="M 0 0 L 3 3" /></marker></defs>
       <text marker-end="url(#arrow)">关系标签</text></svg>
     <div data-rel-overlay="true" data-msgid="relation" data-jump-msgids="rejection-record" style="pointer-events:auto"></div>`;
   document.body.appendChild(canvas);
   const bounds = new DOMRect(20, 120, 240, 80);
   const geometry = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    if (this.hasAttribute('data-card-wrapper')) return new DOMRect(0, 100, 300, 0);
     if (this.getAttribute('data-msgid') === 'outside') return new DOMRect(900, 900, 240, 80);
     return bounds;
   });

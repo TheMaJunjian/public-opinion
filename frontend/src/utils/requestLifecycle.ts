@@ -30,11 +30,13 @@ export async function fetchJsonWithDeadline<T>(url: string, options: RequestInit
   try {
     return await Promise.race([interrupted, (async () => {
       const response = await fetch(url, { ...options, signal: controller.signal });
+      controller.signal.throwIfAborted();
       const data = await response.json().catch(error => {
         if (controller.signal.aborted) throw controller.signal.reason;
         if (response.ok) throw error;
         return { message: response.statusText };
       }) as T;
+      controller.signal.throwIfAborted();
       return { response, data };
     })()]);
   } finally {

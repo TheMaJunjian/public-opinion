@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom';
 import { useLayoutEffect, useState } from 'react';
 import { Z_INDEX } from '../constants/zIndex';
+import { dialogStyles } from './dialogStyles';
 
 interface RegistrationGuideHintProps {
   open: boolean;
@@ -54,21 +55,17 @@ export default function RegistrationGuideHint({ open, onClose }: RegistrationGui
         role="dialog"
         aria-label="新手提示"
         style={{
+          ...dialogStyles.panel,
           position: 'fixed',
           top,
           left,
           width: 'min(320px, calc(100vw - 32px))',
           boxSizing: 'border-box',
           padding: '16px 18px',
-          border: '1px solid #facc15',
-          borderRadius: 10,
-          background: '#18181b',
-          color: '#f4f4f5',
-          boxShadow: '0 12px 30px rgba(0,0,0,0.45)',
           pointerEvents: 'auto',
         }}
       >
-        <div style={{ color: '#fde68a', fontWeight: 700, fontSize: 15 }}>欢迎与会者参与公论</div>
+        <div style={{ ...dialogStyles.header, margin: '-16px -18px 0' }}>欢迎与会者参与公论</div>
         <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.7 }}>
           点击上方的“引导”按钮，可以查看分步骤操作引导。<br />
           点击“引导”按钮右侧的“教程”按钮可以查看教程。
@@ -77,7 +74,7 @@ export default function RegistrationGuideHint({ open, onClose }: RegistrationGui
           <button
             type="button"
             onClick={onClose}
-            style={{ padding: '6px 16px', border: '1px solid #facc15', borderRadius: 5, background: '#713f12', color: '#fef3c7', cursor: 'pointer', fontSize: 12 }}
+            style={dialogStyles.primaryButton}
           >
             已阅
           </button>

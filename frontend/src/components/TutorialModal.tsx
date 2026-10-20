@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import PopupOverlay from './PopupOverlay';
+import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 
 interface Props {
   open: boolean;
@@ -19,31 +20,27 @@ function TutorialModalContent({ onClose }: { onClose: () => void }) {
     <PopupOverlay
       contentRef={contentRef}
       zIndex={1000}
-      background="rgba(0,0,0,0.85)"
+      background={DIALOG_BACKDROP}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 12, boxSizing: 'border-box', overflow: 'auto',
       }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div ref={contentRef}
+      <div ref={contentRef} role="dialog" aria-modal="true" aria-label="教程"
       style={{
-        width: '90vw', maxWidth: 500, minHeight: 280,
-        background: '#101010', borderRadius: 12, border: '1px solid #333',
+        ...dialogStyles.panel,
+        width: '100%', maxWidth: 500, maxHeight: '100%',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
         <div style={{
-          padding: '12px 16px', borderBottom: '1px solid #333',
-          background: '#181818', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          ...dialogStyles.header, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>教程</div>
-          <button data-shortcut-cancel="true" onClick={onClose} style={{
-            padding: '4px 10px', borderRadius: 4, fontSize: 13, cursor: 'pointer',
-            background: '#333', color: '#fff', border: '1px solid #666',
-          }}>✕</button>
+          <div>教程</div>
+          <button data-shortcut-cancel="true" aria-label="关闭教程" onClick={onClose} style={dialogStyles.button}>✕</button>
         </div>
         <div style={{
-          flex: 1, minHeight: 220, maxHeight: '70vh', overflowY: 'auto',
+          flex: 1, minHeight: 0, maxHeight: '70vh', overflowY: 'auto',
           padding: '18px 20px', color: '#dbe4f0', fontSize: 13, lineHeight: 1.7,
         }}>
           <section>

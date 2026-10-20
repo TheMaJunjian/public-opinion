@@ -1,5 +1,5 @@
 import { forwardRef, lazy, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import PromptModal from './PromptModal';
 import type { LeaderboardModalProps } from './LeaderboardModal';
 import ErrorBoundary from './ErrorBoundary';
 import type { CatalogClient } from '../data/catalogClient';
@@ -71,25 +71,16 @@ export default forwardRef<LeaderboardHandle, Omit<LeaderboardModalProps, 'open' 
         <Opened open={open} onReady={onReady} />
       </Suspense>
     </ErrorBoundary>}
-    {(opening || failed || (open && !globalReady)) && createPortal(<div style={{
-      position: 'fixed', inset: 0, zIndex: 1600, display: 'grid', placeItems: 'center', padding: 20,
-      background: 'rgba(0,0,0,0.55)',
-    }}>
-      <div role="dialog" aria-modal="true" aria-label={failed ? '排行榜打开失败' : '正在打开排行榜'} aria-busy={opening}
-        style={{ minWidth: 260, maxWidth: '100%', padding: 24, border: '1px solid #475569', borderRadius: 12,
-          background: '#101216', color: '#e2e8f0', boxShadow: '0 8px 32px #0006' }}>
+    <PromptModal open={opening || failed || (open && !globalReady)} title={failed ? '排行榜打开失败' : '正在打开排行榜'}
+      confirmText={failed ? '关闭' : '取消'} onConfirm={close} zIndex={1600} lockScroll={false}
+      dialogProps={{ 'aria-busy': opening }} message={<>
         <div role={failed ? 'alert' : 'status'} aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 14 }}>
           {!failed && <span aria-hidden="true" style={{ display: 'inline-block', width: 22, height: 22, border: '2px solid #334155',
             borderTopColor: '#38bdf8', borderRadius: '50%', animation: 'leaderboard-opening-spin 0.8s linear infinite', willChange: 'transform' }} />}
           {failed ? '排行榜暂时无法打开，请刷新页面后重试。' : globalReady ? '正在打开排行榜…' : '正在准备全局排行榜…'}
         </div>
         {!globalReady && catalog && <Suspense fallback={null}><CatalogStatus client={catalog} /></Suspense>}
-        <div style={{ marginTop: 18, textAlign: 'right' }}><button onClick={close}
-          style={{ border: '1px solid #475569', borderRadius: 6, padding: '4px 14px', background: '#1e293b', color: '#cbd5e1', cursor: 'pointer', fontSize: 12 }}>
-          {failed ? '关闭' : '取消'}
-        </button></div>
-      </div>
       <style>{'@keyframes leaderboard-opening-spin { to { transform: rotate(360deg); } }'}</style>
-    </div>, document.body)}
+      </>} />
   </>;
 });

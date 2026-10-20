@@ -71,6 +71,63 @@ it('coalesces identical same-turn writes before signature preparation can yield'
   expect(await first).toEqual(await second); expect(fetcher).toHaveBeenCalledOnce();
 });
 
+it('retries a timed-out send with the same commands and ignores old bodies and headers during later sends', async () => {
+  let finishOldBody!: (value: unknown) => void;
+  const oldJson = vi.fn(() => new Promise(resolve => { finishOldBody = resolve; }));
+  const lateHeadersJson = vi.fn(async () => ({ snapshots: [{ sequence: 1 }] }));
+  const requests: Array<{ body: string; headers: Record<string, string>; finish: (response: Response) => void }> = [];
+  vi.stubGlobal('fetch', vi.fn((_url: string, options: RequestInit) => new Promise<Response>(resolve => {
+    requests.push({ body: String(options.body), headers: options.headers as Record<string, string>, finish: resolve });
+    if (requests.length === 1) resolve({ ok: true, json: oldJson } as unknown as Response);
+  })));
+  const published = vi.fn(), completed = vi.fn();
+  window.addEventListener('gonglun:committed', published);
+  const send = () => api.withCommandBatch(async () => {
+    const message = await api.createMessage('root', { content: '同一发送意图' });
+    await api.createRelation('root', { relationType: 'AGREE', targetRefs: [{ kind: 'message', messageId: message.id }] });
+    return message.id;
+  }, completed);
+  try {
+    const first = send().catch(error => error);
+    await vi.waitFor(() => expect(oldJson).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS * 2);
+    expect(await first).toMatchObject({ unknownOutcome: true });
+    expect(requests).toHaveLength(2);
+    expect(requests[1].body).toBe(requests[0].body);
+    const retry = send();
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    expect(requests[2].body).toBe(requests[0].body);
+    expect(requests[2].headers['X-Request-Id']).toBe(requests[0].headers['X-Request-Id']);
+    // Even an abort-ignoring body cannot publish a receipt or end the retry's progress.
+    finishOldBody({ snapshots: [{ sequence: 1 }] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(published).not.toHaveBeenCalled();
+    expect(completed).not.toHaveBeenCalled();
+    expect(getOperations()).toMatchObject([{ state: 'pending' }]);
+    requests[2].finish(new Response(JSON.stringify({ snapshots: [{ sequence: 2 }] })));
+    const recovered = await retry;
+    expect(recovered).toBe(JSON.parse(requests[0].body).commands[0].id);
+    expect(completed).toHaveBeenCalledExactlyOnceWith(2);
+    expect(published).toHaveBeenCalledOnce();
+    expect(published.mock.calls[0][0].detail).toEqual([{ sequence: 2 }]);
+    const next = send();
+    await vi.waitFor(() => expect(requests).toHaveLength(4));
+    expect(JSON.parse(requests[3].body).requestId).not.toBe(JSON.parse(requests[0].body).requestId);
+    // Old headers arriving while a fresh send is pending must not even decode their body.
+    requests[1].finish({ ok: true, json: lateHeadersJson } as unknown as Response);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lateHeadersJson).not.toHaveBeenCalled();
+    expect(published).toHaveBeenCalledOnce();
+    expect(completed).toHaveBeenCalledOnce();
+    expect(getOperations()).toMatchObject([{ state: 'pending' }]);
+    requests[3].finish(new Response(JSON.stringify({ snapshots: [{ sequence: 3 }] })));
+    expect(await next).not.toBe(recovered);
+    expect(published).toHaveBeenCalledTimes(2);
+    expect(completed).toHaveBeenCalledTimes(2);
+    expect(getOperations()).toHaveLength(0);
+  } finally { window.removeEventListener('gonglun:committed', published); }
+});
+
 it('does not retry a caller-aborted read', async () => {
   const fetcher = vi.fn(() => new Promise<Response>(() => {})); vi.stubGlobal('fetch', fetcher);
   const controller = new AbortController();

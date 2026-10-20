@@ -11,7 +11,9 @@ function cloneHighlightRegion(source: Element, bounds: DOMRect): Element | null 
   // SVG definitions have no visible bounds but are needed by copied paths.
   if (['defs', 'style'].includes(source.localName)) return source.cloneNode(true) as Element;
   const rect = source.getBoundingClientRect();
-  if ((rect.width > 0 || rect.height > 0)
+  // Absolute card children can overflow a zero-height wrapper above the frame.
+  // Such wrappers have no visible region of their own to cull.
+  if (rect.width > 0 && rect.height > 0
     && (rect.right < bounds.left || rect.left > bounds.right || rect.bottom < bounds.top || rect.top > bounds.bottom)) return null;
   // Preserve card/badge layout, including children that overflow its own box.
   if (source.matches('[data-msgid], [data-rel-overlay]')) return source.cloneNode(true) as Element;
@@ -61,6 +63,7 @@ export function MessageJumpOverlay({
   useLayoutEffect(() => {
     const layer = contentLayerRef.current;
     if (!layer || !targetElement.isConnected) return;
+    // Organization frames and their member cards are sibling layers in the canvas.
     const source = targetElement.hasAttribute('data-rel-overlay')
       ? targetElement.closest<HTMLElement>('[data-jump-canvas]') ?? targetElement
       : targetElement;

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import { createTestApp, cleanupTestDatabases } from './test-database.js';
+import { randomUUID } from 'node:crypto';
+import { createTestApp, createTestStore, cleanupTestDatabases } from './test-database.js';
 import { executeBatch } from './ui-commands.js';
 import { queueCommand, runCommandBatch, type CommandEnvelope } from '../../../frontend/src/api/commandBatch.js';
 
@@ -51,4 +52,23 @@ it('reconciles a lost committed response with one database receipt, then accepts
   expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM command_requests WHERE "userId"=$1').get(user.id))!.n).toBe(2);
   expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE "authorId"=$1 AND body::jsonb @> $2::jsonb').get(user.id,
     JSON.stringify({ parts: [{ type: 'text', text: '合成：同一意图与后续重复发言' }] })))!.n).toBe(2);
+});
+
+it('commits overlapping retries from separate database connections only once', async () => {
+  const app = await createTestApp();
+  const registration = await request(app).post('/api/register').send({ username: '并发重试验收', password: 'only-for-local-retry-test' });
+  expect(registration.status, registration.text).toBe(201);
+  const user = registration.body.user;
+  const other = await createTestStore(app.store.db.schema);
+  const messageId = randomUUID();
+  const input: CommandEnvelope = { requestId: randomUUID(), commands: [
+    { id: messageId, method: 'POST', path: '/messages', body: { content: '并发重试仅创建一次' } },
+    { id: randomUUID(), method: 'POST', path: '/relations', body: { relationType: 'AGREE', targetRefs: [{ kind: 'message', messageId }] } },
+  ] };
+  const [first, retry] = await Promise.all([executeBatch(app.store, user, input), executeBatch(other, user, input)]);
+  expect(retry.results).toEqual(first.results);
+  expect(retry.sequence).toBe(first.sequence);
+  expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM command_requests WHERE "userId"=$1').get(user.id))!.n).toBe(1);
+  expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE id=$1').get(messageId))!.n).toBe(1);
+  expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE id=$1').get(input.commands[1].id))!.n).toBe(1);
 });

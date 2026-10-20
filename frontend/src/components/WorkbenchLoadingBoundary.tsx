@@ -30,8 +30,10 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     setProgress(previous => previous.sending ? previous : { ...previous, phase: next, reason: 'loading', drawingRevision: undefined });
   }, [tasks]);
   const reportSending = useCallback((sending: boolean) => {
-    if (sending) setCycle(value => value + 1);
-    if (sending && !tasks.failure) tasks.setBlocking(true);
+    if (sending) {
+      tasks.clearFailure(); setFailure(null); setCycle(value => value + 1);
+      tasks.setBlocking(true);
+    }
     setProgress(previous => previous.sending === sending ? previous : { phase: tasks.failure ? 'ready' : sending ? 'sending' : 'drawing', sending, reason: 'sending' });
   }, [tasks]);
   const content = useRef<HTMLDivElement>(null);
@@ -39,18 +41,27 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const drawingWait = useRef<{ tasks: typeof tasks; cycle: number; remaining: number } | null>(null);
   const preparations = useRef(new Set<{ schedule(): void; cancel(): void }>());
   const prepareDrawing = useCallback((work: () => void) => {
-    let frame = 0, paintFrame = 0, scheduled = false;
+    if (tasks.failure) return () => {};
+    const task = tasks.begin('projection');
+    let frame = 0, paintFrame = 0, scheduled = false, disposed = false;
     const preparation = {
       schedule() {
-        if (scheduled) return;
+        if (scheduled || disposed) return;
         scheduled = true;
         frame = requestAnimationFrame(() => { paintFrame = requestAnimationFrame(() => {
+          if (disposed || !task.active) return;
           preparations.current.delete(preparation);
-          work();
+          try { work(); task.release(); } catch (error) { task.fail(error); }
         }); });
       },
-      cancel() { preparations.current.delete(preparation); cancelAnimationFrame(frame); cancelAnimationFrame(paintFrame); },
+      cancel() {
+        if (disposed) return;
+        disposed = true;
+        preparations.current.delete(preparation); cancelAnimationFrame(frame); cancelAnimationFrame(paintFrame);
+        task.cancel();
+      },
     };
+    task.onCancel(preparation.cancel);
     preparations.current.add(preparation);
     tasks.committed(); tasks.setBlocking(true);
     setHidden(false); setWaitNotice(null); setCycle(value => value + 1);
@@ -61,8 +72,9 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const busy = phase !== 'ready';
 
   useLayoutEffect(() => {
-    // Start the paint fence only after the progress portal has committed.
-    if (phase === 'drawing' && !hidden && !tasks.failure) for (const preparation of preparations.current) preparation.schedule();
+    // The full dialog and compact progress hint both present the pending work.
+    // Hiding progress must never suspend the work needed to unlock the scene.
+    if (phase === 'drawing' && !tasks.failure) for (const preparation of preparations.current) preparation.schedule();
   }, [phase, hidden, cycle, tasks]);
   useLayoutEffect(() => () => { for (const preparation of preparations.current) preparation.cancel(); }, []);
 
@@ -206,7 +218,8 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     </div>
     {busy && !hidden && <OperationProgressDialog title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'} onHide={() => setHidden(true)}>
       <div data-workbench-progress-active="true">
-        {phase === 'sending' ? '正在等待服务器确认发送，请勿重复提交。' : phase === 'drawing' ? '正在更新消息与关系，等待绘制和定位完成。' : '正在加载消息数据，请稍候。'}
+        {phase === 'sending' ? '正在等待服务器确认发送，请勿重复提交。' : phase === 'drawing' ? reason === 'sending'
+          ? '正在完成消息绘制和新消息定位，请稍候。' : '正在更新消息与关系，等待绘制和定位完成。' : '正在加载消息数据，请稍候。'}
         <p>可以收起进度；收起不会取消请求，工作区会在准备好后恢复操作。</p>
       </div>
     </OperationProgressDialog>}

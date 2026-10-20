@@ -26,6 +26,7 @@ import { renderAlertMessage as runRenderAlertMessage, renderMessageContentWithAn
 import { confirmReverseCorrection as runConfirmReverseCorrection, handleComparisonVote as runHandleComparisonVote, handleDecorationBodyClick as runHandleDecorationBodyClick, handleDecorationDoubleClick as runHandleDecorationDoubleClick, handleDecorationIconClick as runHandleDecorationIconClick, handleGroupFrameClick as runHandleGroupFrameClick, handleGroupFrameDoubleClick as runHandleGroupFrameDoubleClick, handleInlineBadgeClick as runHandleInlineBadgeClick, handleInlineBadgeDoubleClick as runHandleInlineBadgeDoubleClick, handleTagBodyClick as runHandleTagBodyClick, handleTagDoubleClick as runHandleTagDoubleClick } from './workbench/actions/relationActions';
 import { clampAndSetScroll, findMessageElements, cancelScrollRafs as runCancelScrollRafs, scheduleViewNavigation as runScheduleViewNavigation, scrollMsgToCenter as runScrollMsgToCenter, showMessagePulse as runShowMessagePulse } from './workbench/actions/scrollNavigation';
 import type { ScrollMessageOptions } from './workbench/actions/scrollNavigation';
+import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 import { handleQuickSendAndRelateFromDraftTargets as runHandleQuickSendAndRelateFromDraftTargets } from './workbench/actions/sendDraft';
 import { createJoinRelationsForContainer as runCreateJoinRelationsForContainer, handleCreateRelationWithSourcesAndTargets as runHandleCreateRelationWithSourcesAndTargets, sendTagRelation as runSendTagRelation } from './workbench/actions/sendRelation';
 import { attachMessageToCurrentClassify as runAttachMessageToCurrentClassify, handleSendMessageOnly as runHandleSendMessageOnly, registerCreatedRelationInCurrentClassify as runRegisterCreatedRelationInCurrentClassify } from './workbench/actions/sendText';
@@ -366,7 +367,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     traceEntries: TraceEntry[]; expandedFrames: Set<string>;
     previewId: string | null;
   } | null>(null);
-  const isPreviewMode = previewClassifyId !== null||containerPreviewId!==null;
+  const isPreviewMode = previewClassifyId !== null && containerPreviewId === null;
   // Fetch tag counts for clean view
   // Phase 6: Clean view — multi-dimensional filter rules
   const {
@@ -595,18 +596,31 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const sentMessageTargetsRef = useRef<string[]>([]);
   const [sentMessageTargets, setSentMessageTargets] = useState<string[]>([]);
   const activeSentMessageRef = useRef<string | null>(null);
+  const sentMessagePlacementRef = useRef<ReturnType<typeof beginPositioning> | null>(null);
 
-  useEffect(() => {
-    if (sentMessageTargets.length === 0 || sendInFlight) return;
-    // A message can already be committed while its canvas placement is still
-    // unavailable (for example after waking a suspended browser tab).
-    const timer = window.setTimeout(() => {
-      activeSentMessageRef.current = null;
-      setSentMessageTargets([]);
-      window.dispatchEvent(new Event('gonglun:catch-up'));
-    }, 10000);
-    return () => window.clearTimeout(timer);
-  }, [sentMessageTargets, sendInFlight]);
+  useLayoutEffect(() => {
+    // Keep one owner across snapshot arrival, navigation retries and overlay commits.
+    // Individual positioning attempts may finish before a placement JOIN arrives.
+    if (sentMessageTargets.length > 0) {
+      if (sentMessagePlacementRef.current) return;
+      const task = beginPositioning();
+      sentMessagePlacementRef.current = task;
+      task.onCancel(() => {
+        if (sentMessagePlacementRef.current !== task) return;
+        sentMessagePlacementRef.current = null;
+        activeSentMessageRef.current = null;
+        setSentMessageTargets([]);
+        scrollRequestIdRef.current++;
+        cancelScrollRafs();
+        cancelViewNavigation();
+        setSendError('消息已发送，但绘制或定位尚未完成，请核对消息记录，勿重复发送。');
+      });
+    } else {
+      sentMessagePlacementRef.current?.complete();
+      sentMessagePlacementRef.current = null;
+    }
+  }, [sentMessageTargets.length, beginPositioning]);
+  useLayoutEffect(() => () => { sentMessagePlacementRef.current?.cancel(); }, []);
 
   useEffect(() => {
     const sentMessageTarget = sentMessageTargets[0];
@@ -1500,6 +1514,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     if (messagePulseTimerRef.current !== null) clearTimeout(messagePulseTimerRef.current);
     messagePulseTimerRef.current = null;
     setMessagePulse(null);
+    leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
   }
 
   function scheduleViewNavigation(targetId: string, delay = 100): void {
@@ -1636,7 +1651,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       setClassifyKey(key=>key+1);setTraceKey(key=>key+1);
       setComparisonReviewBaseMessages(previous.baseMessages);
       setComparisonReviewBaseEdges(previous.baseEdges);
-      setMsgFilter(previous.filter);restoreSnapshot(previous.snapshot);
+      setMsgFilter(previous.filter);restoreSnapshot(previous.snapshot, { restoreSelection: false });
     }
   }
 
@@ -1992,7 +2007,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   async function handleSendClick(confirmedStandalone = false): Promise<void> {
-    if (sendInFlightRef.current) return;
+    if (sendInFlightRef.current || sentMessageTargets.length > 0 || sentMessagePlacementRef.current?.active) return;
     if (!confirmedStandalone && relationType === null && newMessageContent.trim()
       && (draftUnits.length > 0 || sourceUnits.length > 0 || targetUnits.length > 0)) {
       setConfirmStandaloneSend(true);
@@ -2374,6 +2389,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   async function confirmReverseCorrection(): Promise<void> {
+    if (sentMessageTargets.length > 0 || sentMessagePlacementRef.current?.active) return;
     return runConfirmReverseCorrection({ sendInFlightRef, comparisonPopup, scopeMessageId, setSendInFlight, createRel, msgMap, registerCreatedRelationInCurrentClassify, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setRecommendationAmount, setComparisonPopup, showAlert,
       onCreated: messageId => {
         setSentMessageTargets(queue => [...queue, messageId]);
@@ -2738,16 +2754,12 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   return (
     <>
       <ErrorBoundary onError={reportDrawingFailure}>
-        <div className="workbench-shell" style={{ flex: "1 0 auto", width: effectiveContainerWidth, maxWidth: "100%", minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
+        <div className="workbench-shell" style={{ flex: "1 0 auto", width: effectiveContainerWidth, minWidth: MIN_LEFT_PX + MIN_RIGHT_PX + 12, margin: 0, display: "flex", flexDirection: "column", background: "#101010", color: "#eee", fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif", overflowX: "visible" }}>
           <RelationToolbar barRef={relationBarRef} leftControlsRef={relationLeftControlsRef} rightControlsRef={relationRightControlsRef}
             top={topControlsFrozen ? topControlsOffset : 0} springWidth={relationSpringWidth} rightOffset={relationControlsRightOffset} viewer={isPreloaded}
             messageIdInput={messageIdInput} onMessageIdChange={setMessageIdInput} onJump={confirmMessageIdNavigation}
             composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />
 
-          <nav className="workbench-mobile-navigation" aria-label="工作区导航">
-            <button type="button" onClick={() => leftPanelRef.current?.scrollIntoView({ block: 'start' })}>查看消息图与列表</button>
-            <button type="button" onClick={() => { rightPanelRef.current?.scrollIntoView({ block: 'start' }); rightPanelRef.current?.focus({ preventScroll: true }); }}>发言与关系操作</button>
-          </nav>
           <div ref={panelContainerRef} className="workbench-panels" style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
             <div className="workbench-message-pane" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
               <WorkbenchViewToolbar top={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
@@ -2808,11 +2820,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     cardHandlers={{ onClick: handleMessageClick, onDoubleClick: handleMessageDoubleClick, onMouseDown: handleMessageMouseDown, onMouseUp: handleMessageMouseUp, onContentMouseUp: handleTextMouseUp }}
                     scopeMessageId={scopeMessageId}
                     onJoinFilter={handleJoinRecords}
-                    onRemoveMember={joinId => {
-                      setDraftUnits([]); setSourceUnits([]);
-                      setTargetUnits([{ messageId: joinId, selection: { kind: 'whole' } }]);
-                      setRelationType('disagree'); setSecondaryRelationType('none'); setSendError(null);
-                    }}
                     onNavigate={handleNavigateToMessage} onCorrectionNavigate={handleNavigateFromCorrectionTemporaryCategory}
                     renderRelation={renderRelationContentWithTargets} renderContent={renderMessageContentWithAnchorsForList}
                   />
@@ -3015,7 +3022,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               setRelStakeAmount={setRelStakeAmount}
               availablePoints={availablePoints}
               effectiveMinStake={effectiveMinStake}
-              singleButtonEnabled={singleButtonEnabled && !sendInFlight && !comparisonReviewed && !isPreloaded}
+              singleButtonEnabled={singleButtonEnabled && !sendInFlight && sentMessageTargets.length === 0 && !comparisonReviewed && !isPreloaded}
               singleButtonLabel={singleButtonLabel}
               sendValidationLabel={sendValidationLabel}
               totalConsumption={totalConsumption}

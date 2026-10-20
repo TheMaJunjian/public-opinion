@@ -7,38 +7,6 @@ button:enabled:active, [role="button"]:active { filter: brightness(1.2); }
   outline: 2px solid #7dd3fc !important;
   outline-offset: 3px;
 }
-.workbench-mobile-navigation { display: none; }
-
-@media (max-width: 760px) {
-  .app-navbar { flex-wrap: wrap; gap: 10px; padding-left: 12px; padding-right: 12px; }
-  .app-navbar-primary { flex-wrap: wrap; flex-shrink: 1; gap: 10px; min-width: 0; }
-  .app-navbar-primary > button { margin-left: 0; }
-  .app-navbar-primary > button[aria-pressed] { position: static; }
-  .app-navbar-account { position: static; flex-wrap: wrap; flex-shrink: 1; width: 100%; min-width: 0; padding-left: 0; gap: 10px; }
-  .app-navbar-account > span { overflow-wrap: anywhere; }
-  .workbench-shell { width: 100% !important; min-width: 0 !important; }
-  .workbench-panels { flex-direction: column !important; }
-  .workbench-message-pane { flex: none !important; width: 100%; min-width: 0 !important; }
-  .workbench-splitter { display: none; }
-  .workbench-right-panel {
-    position: static !important; flex: none !important; width: 100%;
-    min-width: 0 !important; max-width: none !important; overflow: visible !important;
-    border-top: 1px solid #475569; scroll-margin-top: 12px;
-  }
-  .workbench-right-panel :is(input, textarea) { max-width: 100%; box-sizing: border-box; }
-  .workbench-right-panel textarea { min-height: 120px; }
-  .workbench-mobile-navigation { display: flex; gap: 8px; padding: 8px; background: #172033; }
-  .workbench-mobile-navigation button { flex: 1; padding: 9px 4px; border: 1px solid #64748b; border-radius: 5px; background: #1e3a5f; color: #e0f2fe; }
-  .workbench-relation-toolbar { position: static !important; padding: 8px !important; }
-  .workbench-relation-toolbar > div:first-child { flex-shrink: 1 !important; max-width: 100%; }
-  .workbench-relation-toolbar input { width: min(170px, 32vw) !important; min-width: 50px; }
-  .workbench-relation-toolbar > div:last-child { position: static !important; right: auto !important; padding-left: 0 !important; }
-  [data-workbench-view-toolbar] { position: static !important; }
-  [data-workbench-view-toolbar] > div > div { flex-wrap: wrap; row-gap: 8px; }
-  .workbench-view-actions { justify-content: flex-start !important; }
-  .workbench-left-panel { scroll-margin-top: 8px; }
-  .workbench-left-panel [data-msgid] { overflow-wrap: anywhere; }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .popup-guides { animation: none !important; }

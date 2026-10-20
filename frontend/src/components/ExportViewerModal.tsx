@@ -4,6 +4,7 @@ import type { ExportData } from '../api/client';
 import { validateExportForViewing } from '../utils/exportArchive';
 import { loadLastExport, saveLastExport } from '../utils/exportViewerCache';
 import PopupOverlay from './PopupOverlay';
+import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 import PromptModal from './PromptModal';
 
 export { validateExportForViewing } from '../utils/exportArchive';
@@ -127,26 +128,22 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     <><PopupOverlay
       contentRef={dialogRef}
       zIndex={1000}
-      background="rgba(0,0,0,0.85)"
+      background={DIALOG_BACKDROP}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16, boxSizing: 'border-box',
       }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div ref={dialogRef} style={{
-        width: '90vw', maxWidth: 500,
-        background: '#101010', borderRadius: 12, border: '1px solid #333',
-        display: 'flex', flexDirection: 'column', overflow: 'hidden', color: '#f8fafc',
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="阅览导出文本" style={{
+        ...dialogStyles.panel, width: '100%', maxWidth: 500, maxHeight: '100%',
+        display: 'flex', flexDirection: 'column', overflow: 'auto',
       }}>
         <div style={{
-          padding: '12px 16px', borderBottom: '1px solid #333',
-          background: '#181818', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          ...dialogStyles.header, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
-          <div style={{ fontWeight: 600, fontSize: 16, color: '#f8fafc' }}>阅览导出文本</div>
-          <button onClick={onClose} style={{
-            padding: '4px 10px', borderRadius: 4, fontSize: 13, cursor: 'pointer',
-            background: '#333', color: '#fff', border: '1px solid #666',
-          }}>✕</button>
+          <div>阅览导出文本</div>
+          <button aria-label="关闭阅览" onClick={onClose} style={dialogStyles.button}>✕</button>
         </div>
 
         <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>

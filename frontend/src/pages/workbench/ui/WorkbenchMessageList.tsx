@@ -69,7 +69,6 @@ interface Props {
   cardHandlers: Pick<MessageCardProps, 'onClick' | 'onDoubleClick' | 'onMouseDown' | 'onMouseUp' | 'onContentMouseUp'>;
   scopeMessageId: string;
   onJoinFilter: (messageId: string, direction: 'incoming' | 'outgoing') => void;
-  onRemoveMember?: (joinId: string) => void;
   onNavigate: (messageId: string) => void;
   onRelatedNavigate?:(messageId:string)=>void;
   crossCanvasRelations?:Map<string,CrossCanvasRelationGroups>;
@@ -127,7 +126,6 @@ export default function WorkbenchMessageList(props: Props) {
           const outgoingJoinRelations = joinRelationsBySource.get(msg.id) ?? [];
           const joinRelation = msg.kind === 'join' ? relationById.get(msg.id) : undefined;
           const joinIsEffective = !!joinRelation && effectiveJoinRelationIds.has(joinRelation.id);
-          const effectiveJoinCount = relatedJoinRelations.filter(join => effectiveJoinRelationIds.has(join.id)).length;
           const ctx: MessageCardContext = {
             isWholeSelected, isActiveText, isOrganizationMessage,
             isClassification: isClassification,
@@ -277,13 +275,6 @@ export default function WorkbenchMessageList(props: Props) {
                     <div style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0, overflow: "hidden" }}>
                       <JoinRecordBadges messageId={msg.id} memberRecords={relatedJoinRelations} containerRecords={outgoingJoinRelations}
                         isContainer={isOrganizationMessage} isEffective={join => effectiveJoinRelationIds.has(join.id)} onOpen={onJoinFilter}/>
-                      {effectiveJoinCount === 1 && props.onRemoveMember && (
-                        <button
-                          onClick={event => { event.stopPropagation(); props.onRemoveMember?.(relatedJoinRelations.find(join => effectiveJoinRelationIds.has(join.id))!.id); }}
-                          title="选择反对此次加入；发送后恢复到此前仍有效的归属"
-                          style={{ flexShrink: 0, fontSize: 10, padding: '1px 6px', borderRadius: 4, border: '1px solid #7f1d1d', background: '#451a1a', color: '#fca5a5', cursor: 'pointer' }}
-                        >移出容器</button>
-                      )}
                     </div>
                     <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
                       <button data-settlement-toggle-truth onClick={(event) => { event.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }} style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }} title="真假仲裁">⚖️</button>

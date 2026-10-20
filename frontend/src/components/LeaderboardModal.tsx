@@ -8,6 +8,7 @@ import { readLeaderboardPreferences, saveLeaderboardPreferences } from '../utils
 import type { LeaderboardWindowSize } from '../utils/leaderboardPreferences';
 import LeaderboardTable from './LeaderboardTable';
 import LeaderboardRefreshButton from './LeaderboardRefreshButton';
+import { dialogStyles } from './dialogStyles';
 
 const USER_COLUMNS = [
   { label: '#', width: 48 }, { label: '与会者ID', width: 180 }, { label: '与会者', width: 120 },
@@ -176,7 +177,7 @@ function LeaderboardModal({
       onClose={onClose}
       scrollResetKey={`${tab}:${currentPage}:${pageSize}:${userSort}:${messageSort}:${userSortDir}:${messageSortDir}:${userKeyword}:${messageKeyword}:${userMinTruthSample}:${messageMinTruthSample}`}
       header={(
-        <div style={{ padding: '10px 14px', borderBottom: '1px solid #2b3440', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexShrink: 0 }}>
+        <div style={{ ...dialogStyles.header, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: '#e2e8f0' }}>排行榜</div>
             <LeaderboardRefreshButton onRefresh={onRefresh} />
@@ -199,12 +200,7 @@ function LeaderboardModal({
           <button
             onClick={onClose}
             style={{
-              border: '1px solid #475569',
-              background: '#1e293b',
-              color: '#e2e8f0',
-              borderRadius: 6,
-              padding: '2px 10px',
-              cursor: 'pointer',
+              ...dialogStyles.button,
               flexShrink: 0,
             }}
           >

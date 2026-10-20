@@ -3,6 +3,8 @@ import { computeCorrectionVersions, resolveCorrectionContent, type DemoEdge, typ
 import { relationTypeName } from '../utils/graphTextSelection';
 import { computeCharDiff, renderDiffParts, type DiffPart } from './CharDiffText';
 import PopupOverlay from './PopupOverlay';
+import PromptModal from './PromptModal';
+import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 
 type ComparisonPopupState = {
   relMsgId: string;
@@ -40,13 +42,9 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
       id: 'correction-preview', content: '', kind: 'normal', author: '', createdAt: '',
     } as DemoMessage;
     return (
-      <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
-        <div ref={contentRef} style={{ background: '#1e1e1e',
-          border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
-          overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
-          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
-          onClick={e => e.stopPropagation()}>
-          <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 反向更正预览</div>
+      <PromptModal open title="✏ 反向更正预览" confirmText={isSending ? '发送中…' : '确认发送更正'}
+        confirmDisabled={isSending} onConfirm={() => void reversePreview.onConfirm()} onCancel={onClose}
+        lockScroll={false} dialogProps={{ style: { width: 'min(700px, 100%)' } }} message={
           <div style={{ display: 'flex', gap: 10 }}>
             <MessageDiffColumn title="发送前最新内容" message={{ ...previewMessage, content: reversePreview.before }} border="#554" background="#211e14">
               {renderDiffParts(origParts, 'orig')}
@@ -55,16 +53,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
               {renderDiffParts(nextParts, 'next')}
             </MessageDiffColumn>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-            <button onClick={onClose} style={buttonStyle}>取消</button>
-            <button
-              onClick={() => void reversePreview.onConfirm()}
-              disabled={isSending}
-              style={{ ...buttonStyle, background: '#245b4a', color: '#fff', opacity: isSending ? 0.6 : 1, cursor: isSending ? 'wait' : 'pointer' }}
-            >{isSending ? '发送中...' : '确认发送更正'}</button>
-          </div>
-        </div>
-      </PopupOverlay>
+        } />
     );
   }
 
@@ -142,13 +131,13 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
         ));
       };
       return (
-        <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
-          <div ref={contentRef} style={{ background: '#1e1e1e',
-            border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
-            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+        <PopupOverlay contentRef={contentRef} zIndex={200} background={DIALOG_BACKDROP} onClick={onClose}>
+          <div ref={contentRef} style={{ ...dialogStyles.panel,
+            padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: 'calc(100% - 32px)',
+            overflow: 'auto',
             position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
+            <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
               <MessageDiffColumn title="原文" message={{ ...origMsg, content: beforeContent }} isCorrected={false} border="#554" background="#211e14">
                 {renderHighlightedContent(beforeContent, 'before')}
@@ -194,13 +183,13 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
         ...addedTargetIds.map(messageValue),
       ].filter(Boolean);
       return (
-        <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
-          <div ref={contentRef} style={{ background: '#1e1e1e',
-            border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
-            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+        <PopupOverlay contentRef={contentRef} zIndex={200} background={DIALOG_BACKDROP} onClick={onClose}>
+          <div ref={contentRef} style={{ ...dialogStyles.panel,
+            padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: 'calc(100% - 32px)',
+            overflow: 'auto',
             position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比（关系消息）</div>
+            <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比（关系消息）</div>
             <div style={{ display: 'flex', gap: 10 }}>
               <div style={{ flex: 1, minWidth: 0, borderRadius: 6, border: '1px solid #554', background: '#211e14', padding: 10 }}>
                 <div style={{ fontSize: 11, marginBottom: 6 }}>
@@ -264,13 +253,13 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
         ({ origParts, nextParts } = computeCharDiff(origMsg.content, sourceMsg.content));
       }
       return (
-        <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
-          <div ref={contentRef} style={{ background: '#1e1e1e',
-            border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: '80vh',
-            overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+        <PopupOverlay contentRef={contentRef} zIndex={200} background={DIALOG_BACKDROP} onClick={onClose}>
+          <div ref={contentRef} style={{ ...dialogStyles.panel,
+            padding: 16, width: 'min(700px, calc(100vw - 32px))', maxHeight: 'calc(100% - 32px)',
+            overflow: 'auto',
             position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>✏ 更正对比</div>
+            <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
             <div style={{ display: 'flex', gap: 10 }}>
               <MessageDiffColumn title="原文" message={origMsg} border="#554" background="#211e14">
                 {renderDiffParts(origParts, 'orig')}
@@ -287,13 +276,13 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
   }
 
   return (
-    <PopupOverlay contentRef={contentRef} zIndex={200} background="rgba(0,0,0,0.6)" onClick={onClose}>
-      <div ref={contentRef} style={{ background: '#1e1e1e',
-        border: '1px solid #555', borderRadius: 8, padding: 16, width: 'min(600px, calc(100vw - 32px))', maxHeight: '80vh',
-        overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.8)', color: '#eee',
+    <PopupOverlay contentRef={contentRef} zIndex={200} background={DIALOG_BACKDROP} onClick={onClose}>
+      <div ref={contentRef} style={{ ...dialogStyles.panel,
+        padding: 16, width: 'min(600px, calc(100vw - 32px))', maxHeight: 'calc(100% - 32px)',
+        overflow: 'auto',
         position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
         onClick={e => e.stopPropagation()}>
-        <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>
+        <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>
           {relationTypeName(relType)}对比：{popup.relMsgId}
         </div>
         <div style={{ display: 'flex', gap: 12, flexDirection: 'column' }}>
@@ -308,10 +297,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
   );
 }
 
-const buttonStyle: React.CSSProperties = {
-  border: '1px solid #555', borderRadius: 4, padding: '5px 10px',
-  background: '#333', color: '#ddd', cursor: 'pointer', fontSize: 12,
-};
+const buttonStyle = dialogStyles.button;
 
 export function getCorrectionBaseContent(
   target: DemoMessage,
@@ -411,9 +397,8 @@ export function computeReplacementDiff(
 
 function CloseRow({ onClose }: { onClose: () => void }) {
   return (
-    <div style={{ marginTop: 12, textAlign: 'right' }}>
-      <button onClick={onClose}
-        style={{ padding: '4px 12px', borderRadius: 4, border: '1px solid #555', background: '#333', color: '#eee', cursor: 'pointer', fontSize: 12 }}>
+    <div style={{ ...dialogStyles.footer, margin: '16px -16px -16px' }}>
+      <button data-shortcut-cancel="true" onClick={onClose} style={buttonStyle}>
         关闭
       </button>
     </div>

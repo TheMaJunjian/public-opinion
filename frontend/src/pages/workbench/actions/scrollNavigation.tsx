@@ -80,12 +80,16 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
       }, pulseElement.getBoundingClientRect());
       setMessagePulse({ messageId: targetId, element: pulseElement, rect });
       messagePulseTimerRef.current = setTimeout(() => {
+        if (requestId !== scrollRequestIdRef.current) return;
         setMessagePulse(current => current?.element === pulseElement ? null : current);
-        if (requestId === scrollRequestIdRef.current) messagePulseTimerRef.current = null;
+        messagePulseTimerRef.current = null;
+        leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
       }, MESSAGE_PULSE_DURATION_MS);
       onShown?.(true);
     };
-    if (dependencies.task) dependencies.task.run(show); else show();
+    if (dependencies.task?.afterLayout) dependencies.task.afterLayout(show);
+    else if (dependencies.task) dependencies.task.run(show);
+    else show();
   });
   dependencies.task?.onCancel(() => {
     if (messagePulseRafRef.current !== null) cancelAnimationFrame(messagePulseRafRef.current);
@@ -137,7 +141,7 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     return frame;
   };
   const complete = (located: boolean) => {
-    if (requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
+    if (!located && requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
     task?.complete(); options?.onComplete?.(located);
   };
   const tryScroll = () => {

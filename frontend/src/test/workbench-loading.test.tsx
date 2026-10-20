@@ -1,7 +1,7 @@
 import { StrictMode, useLayoutEffect, useState } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import WorkbenchLoadingBoundary, { useWorkbenchLoadingProgress, useWorkbenchSendingProgress, WORKBENCH_REQUEST_WAIT_MS } from '../components/WorkbenchLoadingBoundary';
+import WorkbenchLoadingBoundary, { useWorkbenchDrawingPreparation, useWorkbenchLoadingProgress, useWorkbenchSendingProgress, WORKBENCH_REQUEST_WAIT_MS } from '../components/WorkbenchLoadingBoundary';
 import WorkbenchActivityIndicator from '../components/WorkbenchActivityIndicator';
 import { useWorkbenchDrawingTask, WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
 import { resetWorkbenchActivity } from '../utils/workbenchActivity';
@@ -38,6 +38,12 @@ function Content({ loading = false, sending = false, error = null, count = 3, on
 
 const advance = (ms: number) => act(() => { vi.advanceTimersByTime(ms); });
 const finish = (tasks: Tasks) => act(() => { Object.values(tasks).forEach(task => task.complete()); });
+
+function Preparation({ onReady }: { onReady(prepare: ReturnType<typeof useWorkbenchDrawingPreparation>): void }) {
+  const prepare = useWorkbenchDrawingPreparation();
+  useLayoutEffect(() => { onReady(prepare); }, [prepare, onReady]);
+  return null;
+}
 
 describe('workbench loading through registered drawing tasks', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -160,6 +166,106 @@ describe('workbench loading through registered drawing tasks', () => {
     advance(34);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+  });
+
+  it('runs queued preparation after a slow send even when progress stays hidden until the mask is ready', () => {
+    let tasks!: Tasks, prepare!: ReturnType<typeof useWorkbenchDrawingPreparation>;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const onReady = (value: typeof prepare) => { prepare = value; };
+    const work = vi.fn();
+    const view = render(<WorkbenchLoadingBoundary><Content sending onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
+    act(() => { prepare(work); });
+    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+    advance(45_000);
+    const root = screen.getByTestId('workbench').parentElement!;
+    expect(root.inert).toBe(true);
+    expect(screen.getByRole('status')).toHaveTextContent('等待发送确认');
+    expect(work).not.toHaveBeenCalled();
+    view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
+    advance(34);
+    expect(work).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('工作区暂不可操作');
+    const key = vi.fn();
+    document.addEventListener('keydown', key);
+    try {
+      fireEvent.keyDown(screen.getByLabelText('消息输入'), { key: 'Enter' });
+      expect(key).not.toHaveBeenCalled();
+      const wheel = new WheelEvent('wheel', { cancelable: true });
+      window.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(true);
+      act(() => tasks.measurement.complete());
+      act(() => tasks.overlays.complete());
+      advance(1000);
+      expect(root.inert).toBe(true);
+      act(() => tasks.positioning.complete());
+      expect(screen.getByTestId('workbench')).toHaveAttribute('data-placed', 'true');
+      expect(root.inert).toBe(true);
+      advance(34);
+      expect(root.inert).toBe(false);
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally { document.removeEventListener('keydown', key); }
+  });
+
+  it('keeps a fixed drawing deadline when hiding and reopening progress, then gives the next send fresh ownership', () => {
+    let tasks!: Tasks;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const view = render(<WorkbenchLoadingBoundary><Content sending onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    advance(45_000);
+    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+    view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    const old = tasks, root = screen.getByTestId('workbench').parentElement!;
+    advance(20_000);
+    fireEvent.click(screen.getByRole('button', { name: '显示进度' }));
+    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+    advance(WORKBENCH_DRAWING_TIMEOUT_MS - 20_001);
+    expect(root.inert).toBe(true);
+    advance(1);
+    expect(root.inert).toBe(false);
+    expect(screen.getByRole('alert')).toHaveTextContent('超过 30 秒');
+    expect(screen.queryByRole('status')).toBeNull();
+    view.rerender(<WorkbenchLoadingBoundary><Content sending onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(root.inert).toBe(true);
+    advance(45_000);
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+    view.rerender(<WorkbenchLoadingBoundary><Content revision="next" onTasks={onTasks} /></WorkbenchLoadingBoundary>);
+    finish(old); advance(34);
+    expect(root.inert).toBe(true);
+    finish(tasks); advance(34);
+    expect(root.inert).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('cancels queued work on failure so it cannot run late or reopen progress indefinitely', () => {
+    let tasks!: Tasks, prepare!: ReturnType<typeof useWorkbenchDrawingPreparation>;
+    const onTasks = (value: Tasks) => { tasks = value; };
+    const onReady = (value: typeof prepare) => { prepare = value; };
+    const work = vi.fn();
+    const view = render(<WorkbenchLoadingBoundary><Content sending onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
+    act(() => { prepare(work); });
+    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+    act(() => tasks.overlays.fail(new Error('连线失败')));
+    view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
+    act(() => { prepare(work); });
+    advance(60_000);
+    expect(work).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+    expect(screen.getByRole('alert')).toHaveTextContent('连线绘制失败');
+  });
+
+  it('recovers a throwing preparation even after progress was hidden', () => {
+    let prepare!: ReturnType<typeof useWorkbenchDrawingPreparation>;
+    const onReady = (value: typeof prepare) => { prepare = value; };
+    render(<WorkbenchLoadingBoundary><Content /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
+    advance(34);
+    act(() => { prepare(() => { throw new Error('准备失败'); }); });
+    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+    advance(34);
+    expect(screen.getByRole('alert')).toHaveTextContent('消息整理失败');
+    expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('waits for the actual font promise without using a timeout', async () => {

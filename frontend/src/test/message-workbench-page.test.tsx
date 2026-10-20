@@ -7,6 +7,7 @@ import { PART_SELECTION_EVENT } from '../utils/messageElementSelection';
 import * as leaderboardMetrics from '../utils/leaderboardMetrics';
 import { LEADERBOARD_PREFERENCES_KEY } from '../utils/leaderboardPreferences';
 import GestureShortcutManager from '../components/GestureShortcutManager';
+import { WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
 
 const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi.hoisted(() => {
   const mockApi = {
@@ -703,7 +704,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(mockApi.createRelation).not.toHaveBeenCalled();
   });
 
-  it('stages removal against the effective JOIN rather than against the member content',async()=>{
+  it('selects the effective JOIN through its records instead of offering a fixed remove-container action',async()=>{
     localStorage.setItem('token','test-token');
     fixture('CLASSIFY',true);
     const response=await mockApi.getRelations();
@@ -714,8 +715,11 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     await act(async()=>latest().onMessageDoubleClick(event(),'A'));
     await act(async()=>latest().onMessageDoubleClick(event(),'C'));
     fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
-    fireEvent.click(screen.getByRole('button',{name:'移出容器'}));
-    expect(screen.getByRole('button',{name:/^目标消息 /})).toHaveTextContent('join-B');
+    expect(screen.queryByRole('button',{name:'移出容器'})).toBeNull();
+    fireEvent.click(await screen.findByRole('button',{name:'查看加入消息（1条）'}));
+    fireEvent.click(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="join-B"]')!);
+    expect(document.querySelector('[data-guide-selection-staging]')).toHaveTextContent('join-B');
+    fireEvent.click(screen.getByRole('button',{name:'反对'}));
     fireEvent.click(screen.getByRole('button',{name:'发送'}));
     await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledWith('C',expect.objectContaining({relationType:'DISAGREE',targetRefs:[expect.objectContaining({reference:{messageId:'join-B'}})]})));
   });
@@ -791,7 +795,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     await act(async()=>latest().onMessageDoubleClick(event(),'A'));
     await waitFor(()=>expect(latest().messages.map((m:Message)=>m.id)).toContain('B'));
     await act(async()=>latest().onMessageClick(event(),'B'));
-    const originalIds=latest().messages.map((m:Message)=>m.id),selection=latest().draftUnits;
+    const originalIds=latest().messages.map((m:Message)=>m.id);
     await act(async()=>latest().onRelatedMessageNavigate('C'));
     expect(screen.getByRole('region',{name:'单侧对比'})).toHaveTextContent('当前目标：C');
     expect(screen.getByRole('button',{name:'退出查看'}).closest('.workbench-right-panel')).not.toBeNull();
@@ -806,8 +810,6 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(latest().messages.map((m:Message)=>m.id)).toContain('C');
     expect(latest().messages.map((m:Message)=>m.id)).not.toContain('B');
     expect(latest().joinStatusByMessage.get('join-B')).toBe('valid');
-    await act(async()=>latest().onDecorationIconClick('C','agree'));
-    expect(mockApi.createRelation).not.toHaveBeenCalled();
     await act(async()=>latest().onMessageDoubleClick(event(),'C'));
     expect(latest().messages.map((m:Message)=>m.id)).toContain('B');
     fireEvent.click(screen.getByRole('button',{name:'退出分类'}));
@@ -818,11 +820,50 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
     await waitFor(()=>expect(screen.queryByRole('region',{name:'单侧对比'})).toBeNull());
     expect(latest().messages.map((m:Message)=>m.id)).toEqual(originalIds);
-    expect(latest().draftUnits).toEqual(selection);
+    expect(latest().draftUnits).toEqual([]);
     expect(latest().rejectedContainerIds.has('C')).toBe(true);
     expect(screen.getByRole('checkbox',{name:'屏蔽加入消息'})).toBeChecked();
     expect(screen.getByRole('button',{name:'退出分类'})).toBeInTheDocument();
     expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
+  });
+
+  it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'])('preserves selections made while viewing a rejected %s container on exit',async type=>{
+    fixture(type,true);render(<MessageWorkbenchPage/>);
+    await waitFor(()=>expect(latest()?.rejectedContainerIds.has('C')).toBe(true));
+    await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+    await act(async()=>latest().onMessageClick(event(),'B'));
+    await act(async()=>latest().onRelatedMessageNavigate('C'));
+    await act(async()=>latest().onCanvasBlankClick(event()));
+    await act(async()=>latest().onMessageClick(event(),'C'));
+    const selection=latest().draftUnits;
+    expect(selection).toEqual([expect.objectContaining({messageId:'C'})]);
+    fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
+    expect(latest().draftUnits).toEqual(selection);
+    expect(screen.getByRole('button',{name:'暂存消息 C'})).toBeInTheDocument();
+    expect(latest().rejectedContainerIds.has('C')).toBe(true);
+  });
+
+  it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'])('can send an actual stance on a rejected %s container selected in its viewing mode',async type=>{
+    localStorage.setItem('token','test-token');
+    fixture(type,true);
+    mockApi.createRelation.mockResolvedValueOnce({id:'support-C',relationType:'AGREE',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:'C'}],createdAt:'2026-01-01',createdBy:makeUser()});
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    try{
+      render(<MessageWorkbenchPage/>);
+      await waitFor(()=>expect(latest()?.rejectedContainerIds.has('C')).toBe(true));
+      await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+      await act(async()=>latest().onRelatedMessageNavigate('C'));
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      await act(async()=>latest().onMessageClick(event(),'C'));
+      fireEvent.click(screen.getByRole('button',{name:'赞同'}));
+      expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
+      fireEvent.click(screen.getByRole('button',{name:'发送'}));
+      await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledWith('A',expect.objectContaining({
+        relationType:'AGREE',targetRefs:[expect.objectContaining({reference:{messageId:'C'}})],
+      })));
+    }finally{geometry.mockRestore();graphRendering.actual=false;}
   });
 
   it('returns to the message table after viewing its related container',async()=>{
@@ -1380,8 +1421,14 @@ describe('MessageWorkbenchPage composer refresh', () => {
       // The optimistic text is present in data, but its membership has not arrived.
       await act(async () => { await new Promise(resolve => setTimeout(resolve, 1200)); });
       expect(screen.queryByText('已定位目标消息')).toBeNull();
-      // A failed positioning attempt must also commit its cancellation before unlocking.
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: '正在发送' })).toBeNull());
+      // Retrying placement must not expose an interactive gap before the new-message mask.
+      expect(screen.getByRole('dialog', { name: '正在发送' })).toHaveTextContent('正在完成消息绘制和新消息定位');
+      const workbench = screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）').closest<HTMLElement>('[aria-busy]')!;
+      expect(workbench).toHaveAttribute('aria-busy', 'true');
+      expect(workbench.inert).toBe(true);
+      const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true });
+      window.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(true);
       await act(async () => window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: [{
         scope: { messageId: 'classification-1', title: '测试分类' }, sequence: 2,
         messages: [sent, { ...makeMessage(join.id, ''), kind: 'RELATION', relationType: join.relationType,
@@ -1392,8 +1439,148 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="delayed-text"]')?.style.visibility).toBe('');
       expect(screen.getByText('已定位目标消息')).toBeInTheDocument();
       await waitFor(() => expect(screen.queryByRole('dialog', { name: '正在发送' })).toBeNull());
+      expect(document.querySelector('[data-message-jump-target="delayed-text"] [data-message-jump-clone]')).not.toBeNull();
+      expect(workbench).toHaveAttribute('aria-busy', 'false');
+      expect(workbench.inert).toBe(false);
       expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
     } finally {
+      geometry.mockRestore();
+    }
+  });
+
+  it('keeps hidden progress locked through two slow sends and enables each next send only after its own mask commits', async () => {
+    localStorage.setItem('token', 'test-token');
+    const sent = [makeMessage('slow-first', '第一条慢发送'), makeMessage('slow-second', '第二条慢发送')];
+    const originalBatch = mockApi.withCommandBatch.getMockImplementation()!;
+    mockApi.createMessage.mockReset().mockResolvedValueOnce(sent[0]).mockResolvedValueOnce(sent[1]);
+    const commits: Array<() => void> = [];
+    const commit = async (work: () => Promise<unknown>, onCommitted?: (count: number) => void) => {
+      const result = await work();
+      await new Promise<void>(resolve => commits.push(resolve));
+      onCommitted?.(1);
+      return result;
+    };
+    mockApi.withCommandBatch.mockImplementationOnce(commit).mockImplementationOnce(commit);
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    const view = render(<MessageWorkbenchPage />);
+    const tick = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+    const frames = async (count = 12) => { for (let index = 0; index < count; index++) await tick(16); };
+    try {
+      const input = await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitFor(() => expect(input.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false'));
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitFor(() => expect(document.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).not.toBeNull());
+      await waitFor(() => expect(input.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false'));
+      vi.useFakeTimers();
+      const root = input.closest<HTMLElement>('[aria-busy]')!;
+      const send = screen.getByRole('button', { name: '发送' });
+      fireEvent.change(input, { target: { value: sent[0].content } });
+      fireEvent.click(send); fireEvent.click(send);
+      await tick(0);
+      expect(commits).toHaveLength(1);
+      expect(mockApi.createMessage).toHaveBeenCalledOnce();
+      fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+      await tick(25_000);
+      expect(root.inert).toBe(true);
+      expect(send).toBeDisabled();
+      expect(document.querySelector('[data-workbench-progress-active][role="status"]')).toHaveTextContent('等待发送确认');
+      await act(async () => commits[0]());
+      // Programmatic events also must not bypass the send guard while placement is pending.
+      fireEvent.change(input, { target: { value: sent[1].content } });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(mockApi.createMessage).toHaveBeenCalledOnce();
+      expect(root.inert).toBe(true);
+      await frames();
+      expect(document.querySelector('[data-message-jump-target="slow-first"] [data-message-jump-clone]')).not.toBeNull();
+      expect(root.inert).toBe(false);
+      expect(send).toBeEnabled();
+      fireEvent.click(send);
+      await tick(0);
+      expect(commits).toHaveLength(2);
+      fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+      // The previous message's highlight expires while this request is still pending.
+      await tick(10_000);
+      expect(root.inert).toBe(true);
+      expect(send).toBeDisabled();
+      await act(async () => commits[1]());
+      expect(root.inert).toBe(true);
+      await frames();
+      expect(document.querySelector('[data-message-jump-target="slow-second"] [data-message-jump-clone]')).not.toBeNull();
+      expect(root.inert).toBe(false);
+      expect(mockApi.createMessage).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+      geometry.mockRestore();
+      mockApi.withCommandBatch.mockReset().mockImplementation(originalBatch);
+    }
+  });
+
+  it('bounds a hidden placement wait despite incoming updates, cancels late masks, and allows a fresh send after recovery', async () => {
+    localStorage.setItem('token', 'test-token');
+    const current: Relation = { ...makeRelation(), id: 'bounded-class', relationType: 'CLASSIFY', sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }], payload: { title: '等待测试分类' } };
+    const sent = makeMessage('abandoned-placement', '归属迟迟未返回');
+    const next = makeMessage('recovered-placement', '恢复后继续发送');
+    mockApi.getRelations.mockResolvedValue({ data: [current] });
+    mockApi.createMessage.mockReset().mockResolvedValueOnce(sent).mockResolvedValueOnce(next);
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    const view = render(<MessageWorkbenchPage />);
+    const tick = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+    const frames = async (count = 12) => { for (let index = 0; index < count; index++) await tick(16); };
+    const publish = async (sequence: number, records: Message[], joins: Relation[] = []) => act(async () => {
+      window.dispatchEvent(new CustomEvent('gonglun:committed', { detail: [{
+        scope: { messageId: 'classification-1', title: '测试分类' }, sequence,
+        messages: [...records, ...joins.map(join => ({ ...makeMessage(join.id, ''), kind: 'RELATION', relationType: join.relationType,
+          relSourceId: join.sourceMessageId, targetRefs: join.targetRefs }))],
+        relations: joins, users: [], stakes: {}, tagCounts: {}, attentionUsers: {},
+      }] }));
+    });
+    try {
+      const input = await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitFor(() => expect(input.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false'));
+      await act(async () => mockGraphView.mock.lastCall![0].onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, current.id));
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitFor(() => expect(document.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).not.toBeNull());
+      await waitFor(() => expect(input.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false'));
+      vi.useFakeTimers();
+      const root = input.closest<HTMLElement>('[aria-busy]')!;
+      fireEvent.change(input, { target: { value: sent.content } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await tick(0);
+      fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+      for (let index = 0; index < 5; index++) {
+        await tick(5000);
+        await publish(index + 2, [sent]);
+        expect(root.inert).toBe(true);
+        expect(document.querySelector('[data-message-jump-overlay]')).toBeNull();
+      }
+      await tick(WORKBENCH_DRAWING_TIMEOUT_MS - 25_000 + 100);
+      expect(root.inert).toBe(false);
+      expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('超过 30 秒'))).toBe(true);
+      expect(document.querySelector('[data-workbench-progress-active]')).toBeNull();
+      const lateJoin: Relation = { ...makeRelation(), id: 'late-join', relationType: 'JOIN', sourceMessageId: current.id,
+        targetRefs: [{ kind: 'message', messageId: sent.id }] };
+      await publish(8, [sent], [lateJoin]);
+      await frames();
+      expect(document.querySelector('[data-message-jump-overlay]')).toBeNull();
+      expect(root.inert).toBe(false);
+      fireEvent.change(input, { target: { value: next.content } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await tick(0);
+      expect(root.inert).toBe(true);
+      expect(screen.queryByRole('alert')).toBeNull();
+      const nextJoin: Relation = { ...lateJoin, id: 'next-join', targetRefs: [{ kind: 'message', messageId: next.id }] };
+      await publish(9, [next], [nextJoin]);
+      await frames();
+      expect(document.querySelector('[data-message-jump-target="recovered-placement"] [data-message-jump-clone]')).not.toBeNull();
+      expect(root.inert).toBe(false);
+      expect(mockApi.createMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
       geometry.mockRestore();
     }
   });

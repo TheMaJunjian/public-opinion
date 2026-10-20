@@ -537,7 +537,9 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [layout, finalFrameRects, frameBlocks, measuredHeights]);
   const virtualPins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]
     .filter((id): id is string => !!id)), [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]);
-  const virtual = useVirtualMessageMounts(canvasRef, measuredIds, virtualBoxes, measuredHeights, virtualPins);
+  const revealGroups = useMemo(() => new Map(frameBlocks.map(frame => [frame.relMsgId,
+    new Set([...frame.cardIds, ...frame.childRelMsgIds])])), [frameBlocks]);
+  const virtual = useVirtualMessageMounts(canvasRef, measuredIds, virtualBoxes, measuredHeights, virtualPins, false, revealGroups);
   const mountedNormals = useMemo(() => visibleNormals.filter(message => virtual.mounted.has(message.id)), [visibleNormals, virtual.mounted]);
   const visibleBottom = useMemo(() => {
     let bottom = 0;

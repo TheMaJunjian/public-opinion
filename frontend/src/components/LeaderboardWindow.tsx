@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { PointerEvent, ReactNode } from 'react';
 import type { LeaderboardWindowSize } from '../utils/leaderboardPreferences';
 import PopupOverlay from './PopupOverlay';
+import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 
 const MANUAL_LAYOUT = {
   '--leaderboard-body-flex': '1',
@@ -117,7 +118,7 @@ export default function LeaderboardWindow({ size, contentWidth, onSizeChange, on
   };
 
   return (
-    <PopupOverlay contentRef={dialogRef} zIndex={1500} background="rgba(0,0,0,0.65)"
+    <PopupOverlay contentRef={dialogRef} zIndex={1500} background={DIALOG_BACKDROP}
       onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div ref={viewportRef} role="region" aria-label="排行榜窗口区域" tabIndex={0} data-gesture-disabled="true"
         style={{ width: '100%', height: '100%', overflow: 'auto', overscrollBehavior: 'contain' }}
@@ -127,17 +128,18 @@ export default function LeaderboardWindow({ size, contentWidth, onSizeChange, on
           onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
           <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="排行榜" data-leaderboard-sizing={size ? 'manual' : 'auto'}
             style={{
+              ...dialogStyles.panel,
               ...(size ? MANUAL_LAYOUT : {}),
               position: 'relative', width: size?.width ?? Math.max(480, contentWidth), height: size?.height ?? 'auto',
               minWidth: 480, minHeight: size ? 240 : undefined, boxSizing: 'border-box', flexShrink: 0,
               margin: 'auto',
-              background: '#101216', border: '1px solid #2b3440', borderRadius: 12, display: 'flex', flexDirection: 'column',
+              display: 'flex', flexDirection: 'column',
             }}>
-            <div ref={headerRef} style={{ position: 'sticky', top: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: '#101216', borderRadius: '12px 12px 0 0' }}>
+            <div ref={headerRef} style={{ position: 'sticky', top: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: dialogStyles.panel.background, borderRadius: '12px 12px 0 0' }}>
               {header}
             </div>
             {children}
-            <div style={{ position: 'sticky', bottom: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: '#101216', borderRadius: '0 0 12px 12px' }}>
+            <div style={{ position: 'sticky', bottom: 0, left: 0, zIndex: 5, flexShrink: 0, width: '100%', maxWidth: Math.max(280, viewportWidth - 32), background: dialogStyles.panel.background, borderRadius: '0 0 12px 12px' }}>
               {footer}
             </div>
             <span role="separator" aria-label="调整排行榜宽高" aria-orientation="horizontal" tabIndex={0}

@@ -7,6 +7,7 @@ import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
 import { useRef } from 'react';
 import { useCanvasViewport } from '../hooks/useCanvasViewport';
+import { MessageJumpOverlay } from '../components/PopupOverlay';
 
 const pins = new Set<string>();
 const ids = Array.from({ length: 600 }, (_, index) => `m-${index}`);
@@ -103,6 +104,44 @@ describe('viewport message rendering with measured browser geometry', () => {
     expect([returned.style.left, returned.style.top]).toEqual(position);
     expect([canvas.style.height, canvas.style.width]).toEqual(geometry);
     expect(tasks.pending).toBe(0);
+  });
+
+  it.each([{ type: 'merge', nested: false }, { type: 'arrange', nested: false }, { type: 'merge', nested: true }] as const)(
+    'retains all $type members until its complete jump overlay has been copied (nested=$nested)', ({ type, nested }) => {
+    const memberIds = ids.slice(0, 80);
+    const members = memberIds.map(message);
+    const edges: DemoEdge[] = memberIds.map(id => ({ id: `${type}-${id}`, relationMessageId: type, relationType: type, relationLabel: type,
+      from: { messageId: `anon:${type}`, selection: { kind: 'whole' } }, to: { messageId: id, selection: { kind: 'whole' } } }));
+    const organizations: DemoMessage[] = [{ ...message(type), kind: 'relation', relationType: type, relationPayload: { title: type } }];
+    if (nested) {
+      organizations.push({ ...message('outer'), kind: 'relation', relationType: 'merge', relationPayload: { title: '外层归并' } });
+      edges.push({ id: 'nested', relationMessageId: 'outer', relationType: 'merge', relationLabel: '归并',
+        from: { messageId: 'anon:outer', selection: { kind: 'whole' } }, to: { messageId: type, selection: { kind: 'whole' } } });
+    }
+    const targetId = nested ? 'outer' : type;
+    const view = render(<div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
+      <GraphView messages={[...members, ...organizations]}
+        edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} voteStats={{}} {...callbacks} />
+    </div>);
+    frames(55);
+    const host = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+    expect(host.querySelector('[data-msgid="m-79"]')).toBeNull();
+    act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [targetId] } })); });
+    expect(host.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])')).toHaveLength(memberIds.length);
+    // A viewport update between positioning and the mask commit must keep members alive.
+    host.scrollTop = 1000; fireEvent.scroll(host); frames(4);
+    expect(host.querySelector('[data-msgid="m-79"]')).not.toBeNull();
+    const target = host.querySelector<HTMLElement>(`[data-msgid="${targetId}"][data-rel-overlay]`)!;
+    const canvas = host.querySelector<HTMLElement>('[data-jump-canvas]')!;
+    const overlay = render(<MessageJumpOverlay messageId={type} targetElement={target}
+      targetRect={new DOMRect(0, -1000, parseFloat(canvas.style.width), parseFloat(canvas.style.height))} />);
+    const copy = document.querySelector('[data-message-jump-clone]')!;
+    expect(copy.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])')).toHaveLength(memberIds.length);
+    expect(copy).toHaveTextContent('m-79');
+    overlay.unmount();
+    act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
+    expect(host.querySelector('[data-msgid="m-79"]')).toBeNull();
+    expect(host.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])').length).toBeLessThan(30);
   });
 
   it('converts a clipped, scaled canvas to local coordinates and coalesces unchanged events', () => {

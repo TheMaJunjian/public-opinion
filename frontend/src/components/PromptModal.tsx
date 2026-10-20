@@ -1,7 +1,8 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, Ref } from 'react';
 import PopupOverlay from './PopupOverlay';
+import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 
 let bodyScrollLockCount = 0;
 let bodyOverflowBeforeLock = '';
@@ -17,6 +18,9 @@ interface PromptModalProps {
   hideActions?: boolean;
   lockScroll?: boolean;
   guideSettlementConfirm?: boolean;
+  zIndex?: number;
+  dialogProps?: HTMLAttributes<HTMLDivElement>;
+  confirmButtonRef?: Ref<HTMLButtonElement>;
   onConfirm: () => void;
   onCancel?: () => void;
 }
@@ -37,6 +41,9 @@ export default function PromptModal({
   hideActions = false,
   lockScroll = true,
   guideSettlementConfirm = false,
+  zIndex = 3000,
+  dialogProps,
+  confirmButtonRef,
   onConfirm,
   onCancel,
 }: PromptModalProps) {
@@ -80,8 +87,8 @@ export default function PromptModal({
   return createPortal(
     <PopupOverlay
       contentRef={dialogRef}
-      zIndex={3000}
-      background="rgba(0,0,0,0.4)"
+      zIndex={zIndex}
+      background={DIALOG_BACKDROP}
       dataPromptModal
       style={{
         display: 'flex',
@@ -93,71 +100,55 @@ export default function PromptModal({
       onClick={() => onCancel?.()}
     >
       <div
+        {...dialogProps}
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); dialogProps?.onClick?.(e); }}
         style={{
+          ...dialogStyles.panel,
           width: 'min(460px, 100%)',
-          maxHeight: 'calc(100vh - 32px)',
-          background: '#1f2937',
-          border: '1px solid #374151',
-          borderRadius: 12,
-          boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
-          color: '#f3f4f6',
+          maxHeight: '100%',
           overflow: 'auto',
           transform: `translateY(${offsetY}px)`,
+          ...dialogProps?.style,
         }}
       >
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #374151', fontSize: 15, fontWeight: 700 }}>
+        <div style={dialogStyles.header}>
           {title}
         </div>
 
         <div
           {...(guideSettlementConfirm ? { 'data-guide-settlement-message': 'true' } : {})}
           style={{
-            padding: '16px',
-            fontSize: 14,
-            lineHeight: 1.6,
+            ...dialogStyles.body,
             whiteSpace: 'pre-wrap',
           }}
         >
           {message}
         </div>
 
-        {!hideActions && <div ref={footerRef} style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: '1px solid #374151' }}>
+        {!hideActions && <div ref={footerRef} style={dialogStyles.footer}>
           {onCancel && (
             <button
               data-shortcut-cancel="true"
               onClick={onCancel}
-              style={{
-                padding: '6px 14px',
-                borderRadius: 8,
-                border: '1px solid #4b5563',
-                background: '#374151',
-                color: '#e5e7eb',
-                cursor: 'pointer',
-                fontSize: 13,
-              }}
+              style={dialogStyles.button}
             >
               {cancelText}
             </button>
           )}
           <button
+            ref={confirmButtonRef}
             data-shortcut-confirm="true"
             {...(guideSettlementConfirm ? { 'data-guide-settlement-confirm': 'true' } : {})}
             onClick={onConfirm}
             disabled={confirmDisabled}
             style={{
-              padding: '6px 14px',
-              borderRadius: 8,
-              border: '1px solid transparent',
+              ...dialogStyles.primaryButton,
               background: danger ? '#b91c1c' : '#2563eb',
-              color: '#fff',
               cursor: confirmDisabled ? 'not-allowed' : 'pointer',
-              fontSize: 13,
-              fontWeight: 600,
               opacity: confirmDisabled ? 0.6 : 1,
             }}
           >

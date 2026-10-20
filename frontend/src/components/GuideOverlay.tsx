@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import PromptModal from './PromptModal';
 import { Z_INDEX } from '../constants/zIndex';
 
 interface GuideTargetDetail {
@@ -495,17 +496,12 @@ export default function GuideOverlay({ open, onClose }: { open: boolean; onClose
   if (!open) return null;
 
   if (completed) {
-    return createPortal(
-      <div style={{ position: 'fixed', inset: 0, zIndex: Z_INDEX.modal, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,0.72)' }}>
-        <div role="dialog" aria-modal="true" style={{ width: 'min(420px, calc(100vw - 32px))', padding: 24, border: '1px solid #86efac', borderRadius: 12, background: '#18181b', color: '#f4f4f5', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', textAlign: 'center' }}>
+    return <PromptModal open title="与会者引导完成" confirmText="完成" onConfirm={onClose} lockScroll={false} message={
+        <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 30, color: '#86efac' }}>✓</div>
-          <h2 style={{ margin: '8px 0', fontSize: 18 }}>与会者引导完成</h2>
           <p style={{ margin: 0, color: '#d4d4d8', fontSize: 13, lineHeight: 1.7 }}>接下来，请对世界做出重要指示。<br />比如：你认为贡献点能超越比特币吗？</p>
-          <button type="button" onClick={onClose} style={{ marginTop: 18, padding: '7px 20px', border: '1px solid #86efac', borderRadius: 5, background: '#14532d', color: '#dcfce7', cursor: 'pointer' }}>完成</button>
         </div>
-      </div>,
-      document.body,
-    );
+      } />;
   }
 
   return createPortal(

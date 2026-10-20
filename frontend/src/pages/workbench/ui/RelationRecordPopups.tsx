@@ -1,5 +1,21 @@
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import type { DemoEdge, DemoMessage } from '../../../utils/modelBridge';
+import { useRef, type ReactNode } from 'react';
+import PopupOverlay from '../../../components/PopupOverlay';
+import { DIALOG_BACKDROP, dialogStyles } from '../../../components/dialogStyles';
+
+function RecordDialog({ title, children, onClose }: { title: string; children: ReactNode; onClose(): void }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  return <PopupOverlay contentRef={contentRef} zIndex={1000} background={DIALOG_BACKDROP} onClick={onClose}
+    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, boxSizing: 'border-box' }}>
+    <div ref={contentRef} role="dialog" aria-modal="true" aria-label={title} onClick={event => event.stopPropagation()}
+      style={{ ...dialogStyles.panel, width: 'min(460px, 100%)', maxHeight: '100%', overflow: 'auto' }}>
+      <div style={dialogStyles.header}>{title}</div>
+      <div style={dialogStyles.body}>{children}</div>
+      <div style={dialogStyles.footer}><button data-shortcut-cancel="true" onClick={onClose} style={dialogStyles.button}>关闭</button></div>
+    </div>
+  </PopupOverlay>;
+}
 interface DecorationPopup { messageId: string; kind: 'agree' | 'disagree'; x: number; y: number }
 interface TagPopup { messageId: string; tagLabel: string; relMsgIds: string[]; x: number; y: number; subDetails?: Array<{ subType: string; customLabel?: string; count: number }> }
 interface MergePopup { relMsgId: string; x: number; y: number }
@@ -12,7 +28,7 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
   return (<>
     {/* Decoration double-click popup: shows sender info for agree/disagree relations */}
     {decorationPopup && (() => {
-      const { messageId, kind, x, y } = decorationPopup;
+      const { messageId, kind } = decorationPopup;
       const matchingRelations = edges.filter(e =>
         e.relationType === kind && isWholeMessageSelection(e.to, messageId)
       ).map(e => {
@@ -20,13 +36,7 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
         return relMsg ? { id: relMsg.id, author: relMsg.author, createdAt: relMsg.createdAt } : null;
       }).filter(Boolean) as { id: string; author: string; createdAt: string }[];
       return (
-        <div key="dec-popup" onClick={() => onCloseDecoration()}
-          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 200), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
-            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
-              {kind === "agree" ? "👍 赞同" : "👎 反对"} 记录（共 {matchingRelations.length} 条）
-            </div>
+        <RecordDialog title={`${kind === 'agree' ? '👍 赞同' : '👎 反对'} 记录（共 ${matchingRelations.length} 条）`} onClose={onCloseDecoration}>
             {matchingRelations.length === 0 ? (
               <div style={{ fontSize: 12, opacity: 0.6 }}>暂无记录</div>
             ) : (
@@ -39,31 +49,20 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
                 ))}
               </ul>
             )}
-            <button onClick={() => onCloseDecoration()}
-              style={{ marginTop: 10, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
-              关闭
-            </button>
-          </div>
-        </div>
+        </RecordDialog>
       );
     })()}
 
     {/* Tag double-click popup: shows who tagged with the given label */}
     {tagPopup && (() => {
-      const { messageId, tagLabel, relMsgIds, x, y, subDetails } = tagPopup;
+      const { messageId, tagLabel, relMsgIds, subDetails } = tagPopup;
       const taggers = relMsgIds.map(id => {
         const relMsg = messages.find(m => m.id === id);
         return relMsg ? { id: relMsg.id, author: relMsg.author, createdAt: relMsg.createdAt } : null;
       }).filter(Boolean) as { id: string; author: string; createdAt: string }[];
       return (
-        <div key="tag-popup" onClick={() => onCloseTag()}
-          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ position: "fixed", left: Math.min(x, window.innerWidth - 280), top: Math.min(y, window.innerHeight - 300), width: 260, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
-            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
-              🏷 「{tagLabel}」（共 {taggers.length} 人）<br />
-              <span style={{ fontSize: 11, opacity: 0.7 }}>消息：{messageId}</span>
-            </div>
+        <RecordDialog title={`🏷 「${tagLabel}」（共 ${taggers.length} 人）`} onClose={onCloseTag}>
+            <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 8, overflowWrap: 'anywhere' }}>消息：{messageId}</div>
             {/* SubType breakdown */}
             {subDetails && subDetails.length > 0 && (
               <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 4, background: "#2a2a2a", fontSize: 11 }}>
@@ -91,36 +90,18 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
                 ))}
               </ul>
             )}
-            <button onClick={() => onCloseTag()}
-              style={{ marginTop: 10, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
-              关闭
-            </button>
-          </div>
-        </div>
+        </RecordDialog>
       );
     })()}
     {mergeInfoPopup && (() => {
       const relMsg = messages.find(m => m.id === mergeInfoPopup.relMsgId);
-      const left = Math.min(mergeInfoPopup.x, window.innerWidth - 320);
-      const top = Math.min(mergeInfoPopup.y, window.innerHeight - 180);
       return (
-        <div key="merge-info-popup" onClick={() => onCloseMerge()}
-          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)" }}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ position: "fixed", left, top, width: 300, background: "#1e1e1e", border: "1px solid #555", borderRadius: 8, padding: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 1001 }}>
-            <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>
-              归并关系信息
-            </div>
+        <RecordDialog title="归并关系信息" onClose={onCloseMerge}>
             <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
               <div>创建者：<span style={{ fontWeight: 600 }}>{relMsg?.author ?? "未知"}</span></div>
               <div>发送时间：<span style={{ opacity: 0.8 }}>{relMsg ? new Date(relMsg.createdAt).toLocaleString() : "未知"}</span></div>
             </div>
-            <button onClick={() => onCloseMerge()}
-              style={{ marginTop: 12, width: "100%", padding: "4px 0", borderRadius: 4, border: "1px solid #555", background: "#333", color: "#fff", cursor: "pointer", fontSize: 12 }}>
-              关闭
-            </button>
-          </div>
-        </div>
+        </RecordDialog>
       );
     })()}
 

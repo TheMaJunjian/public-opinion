@@ -1,45 +1,36 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { dismissOperation, getOperations, subscribeOperations } from '../utils/requestLifecycle';
 import { useOptionalAuth } from '../context/AuthContext';
+import PromptModal from './PromptModal';
 import './OperationFeedback.css';
 
 /** Controls live outside the inert workbench and remain keyboard accessible. */
 export function OperationProgressDialog({ title, children, onHide }: { title: string; children: ReactNode; onHide(): void }) {
   const close = useRef<HTMLButtonElement>(null);
-  const dialog = useRef<HTMLElement>(null);
-  const [viewport, setViewport] = useState(() => ({ left: window.visualViewport?.offsetLeft ?? 0, top: window.visualViewport?.offsetTop ?? 0,
-    width: window.visualViewport?.width ?? window.innerWidth, height: window.visualViewport?.height ?? window.innerHeight }));
-  useLayoutEffect(() => {
-    const measure = () => setViewport({ left: window.visualViewport?.offsetLeft ?? 0, top: window.visualViewport?.offsetTop ?? 0,
-      width: window.visualViewport?.width ?? window.innerWidth, height: window.visualViewport?.height ?? window.innerHeight });
-    window.addEventListener('resize', measure); window.visualViewport?.addEventListener('resize', measure); window.visualViewport?.addEventListener('scroll', measure);
-    return () => { window.removeEventListener('resize', measure); window.visualViewport?.removeEventListener('resize', measure); window.visualViewport?.removeEventListener('scroll', measure); };
-  }, []);
   useLayoutEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     close.current?.focus();
     return () => { if (previous?.isConnected && !previous.closest('[inert]')) previous.focus(); };
   }, []);
-  return createPortal(<div className="operation-progress-mask" data-operation-progress="true" data-gesture-disabled="true"
-    style={{ left: viewport.left, top: viewport.top, width: viewport.width, height: viewport.height }}>
-    <section ref={dialog} className="operation-progress-dialog" role="dialog" aria-modal="true" aria-label={title}
-      style={{ maxHeight: Math.max(100, viewport.height - 32) }}
-      onKeyDown={event => {
-        event.stopPropagation();
-        if (event.key === 'Escape') { event.preventDefault(); onHide(); }
-        if (event.key === 'Tab') {
-          const controls = [...dialog.current!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-          const first = controls[0], last = controls.at(-1);
-          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-        }
-      }}>
-      <h2>{title}</h2>
-      <div>{children}</div>
-      <button ref={close} type="button" onClick={onHide}>收起进度</button>
-    </section>
-  </div>, document.body);
+  const dialogProps = {
+    'aria-busy': true,
+    'data-operation-progress': 'true',
+    'data-gesture-disabled': 'true',
+    style: { maxHeight: '100%', overflowWrap: 'anywhere' as const },
+    onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+      event.stopPropagation();
+      if (event.key === 'Escape') { event.preventDefault(); onHide(); }
+      if (event.key === 'Tab') {
+        const controls = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    },
+  };
+  return <PromptModal open title={title} message={children} confirmText="收起进度" onConfirm={onHide}
+    lockScroll={false} zIndex={3300} dialogProps={dialogProps} confirmButtonRef={close} />;
 }
 
 /** Pending feedback is immediate; longer requests expose details without opening a modal. */

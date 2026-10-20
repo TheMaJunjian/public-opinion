@@ -109,7 +109,7 @@ function AppContent() {
           style={{
             transform: interfaceZoom === 1 ? 'none' : `scale(${interfaceZoom})`,
             transformOrigin: 'top left',
-            width: `${100 / interfaceZoom}%`,
+            width: 'max-content',
             minWidth: `${100 / interfaceZoom}%`,
             minHeight: `${100 / interfaceZoom}vh`,
           }}

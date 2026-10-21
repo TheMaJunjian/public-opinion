@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, mkdtempSync, renameSync, createReadStream } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, mkdtempSync, renameSync, createReadStream, unlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve, posix, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
@@ -44,7 +44,7 @@ export function validateRemote({ host, port, user, deployDir, backupDir }) {
   if (!/^\d{1,5}$/.test(String(port)) || Number(port) < 1 || Number(port) > 65535) throw new Error('SSH 端口须为 1–65535。');
   if (!/^[a-z_][a-z0-9_-]*$/i.test(user)) throw new Error('SSH 用户名无效。');
   for (const path of [deployDir, backupDir]) {
-    // Server-generated backup paths use these portable characters, including on legacy SCP clients.
+    // Keep remote paths safe for server commands and SFTP batch arguments.
     if (!/^\/[a-z0-9_./-]+$/i.test(path) || path.split('/').includes('..')) throw new Error('VPS 目录须为绝对路径，使用字母、数字、下划线、点、斜线或短横线。');
   }
   return { host, port: String(Number(port)), user, deployDir: posix.normalize(deployDir), backupDir: posix.normalize(backupDir) };
@@ -158,8 +158,19 @@ export async function synchronize({ repoRoot = repository, ask = prompt, run = r
     mkdirSync(localDir, { recursive: true });
     const partial = mkdtempSync(join(localDir, '.vps-download.partial.'));
     try {
-      // Copy only the archive and its sidecars, never the surrounding deployment/configuration files.
-      run('scp', ['-P', remote.port, ...[selected, ...sidecars].map(path => `${destination}:${path}`), basename(partial)], { cwd: localDir });
+      // One SFTP session avoids scp reconnecting/authenticating once per remote source.
+      // Only these known files are fetched, never an entire deployment directory.
+      const batchFile = join(partial, 'download.sftp');
+      const batch = [...[selected, ...sidecars].map(path => `get "${path}" "${posix.basename(path)}"`), 'bye', ''].join('\n');
+      writeFileSync(batchFile, batch, { mode: 0o600, flag: 'wx' });
+      log(`正在通过一次 SFTP 连接下载 ${1 + sidecars.length} 个备份文件，请在连接时认证。`);
+      try {
+        // Must precede -b: OpenSSH uses the first BatchMode value. Allow a console
+        // password prompt while still aborting the batch if any get fails.
+        run('sftp', ['-oBatchMode=no', '-b', 'download.sftp', '-P', remote.port, destination], { cwd: partial });
+      } finally {
+        unlinkSync(batchFile);
+      }
       await verifyBackup(join(partial, posix.basename(selected)));
       const completed = join(localDir, `${posix.basename(parent)}.download-${randomUUID().slice(0, 8)}`);
       const within = relative(localDir, completed);
@@ -230,7 +241,7 @@ export async function synchronize({ repoRoot = repository, ask = prompt, run = r
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   if (process.argv.includes('--help')) {
-    console.log('运行 .\\deploy\\sync-vps-db.ps1 或 node scripts/sync-vps-db.mjs，按提示下载/选择备份、恢复到新的本地开发库，再确认切换 .env。需要 Node.js 24、Docker Desktop 及 OpenSSH 客户端。');
+    console.log('运行 .\\deploy\\sync-vps-db.ps1 或 node scripts/sync-vps-db.mjs，按提示下载/选择备份、恢复到新的本地开发库，再确认切换 .env。需要 Node.js 24、Docker Desktop 及 OpenSSH 客户端（ssh、sftp）。');
   } else {
     try {
       if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('需要 Node.js 24 或更新版本。');

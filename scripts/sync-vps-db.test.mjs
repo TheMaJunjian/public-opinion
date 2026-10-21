@@ -37,14 +37,18 @@ function fixture(t, { answers = ['2', '', '1', '', 'new_target', 'y'], failure, 
       if (failure === 'ssh') throw new Error('ssh failed');
       return args.includes('-t') ? '' : remote.join('\0');
     }
-    if (command === 'scp') {
-      const target = join(options.cwd, args.at(-1));
-      for (const source of args.slice(2, -1)) {
-        const name = posix.basename(source.slice(source.indexOf(':') + 1));
-        copyFileSync(join(dirname(file), name), join(target, name));
+    if (command === 'sftp') {
+      const batch = readFileSync(join(options.cwd, args[args.indexOf('-b') + 1]), 'utf8');
+      calls.at(-1).batch = batch;
+      for (const line of batch.trim().split('\n')) {
+        if (line === 'bye') continue;
+        const get = /^get "([^"]+)" "([^"]+)"$/.exec(line);
+        assert.ok(get, `Invalid SFTP command: ${line}`);
+        assert.equal(get[2], posix.basename(get[1]));
+        copyFileSync(join(dirname(file), get[2]), join(options.cwd, get[2]));
       }
-      if (failure === 'scp') throw new Error('download failed');
-      if (failure === 'download-checksum') writeFileSync(join(target, 'database.dump'), 'damaged');
+      if (failure === 'sftp') throw new Error('download failed');
+      if (failure === 'download-checksum') writeFileSync(join(options.cwd, 'database.dump'), 'damaged');
       return '';
     }
     assert.equal(command, 'docker');
@@ -144,23 +148,62 @@ for (const [schema, database] of [['bad;drop', 'new_target'], ['business', 'post
 }
 
 const remoteAnswers = (action = '1') => [action, '', 'vps.example', '44333', 'root', '/srv/gonglun/deploy', '/srv/gonglun/deploy/backups', '1', '', 'remote_target', 'y'];
-test('remote selection downloads only the chosen archive and sidecars, then verifies and restores it', async t => {
+test('remote selection uses one SFTP session for the archive and sidecars, then verifies and restores it', async t => {
   const f = fixture(t, { answers: remoteAnswers() });
   const result = await f.start();
   assert.equal(result.switched, true);
-  const transfer = f.calls.find(call => call.command === 'scp');
-  assert.deepEqual(transfer.args.slice(0, 2), ['-P', '44333']);
-  const sources = transfer.args.slice(2, -1);
-  assert.equal(sources.length, 3);
-  assert.ok(sources.every(source => source.startsWith('root@vps.example:/srv/gonglun/deploy/backups/snapshot/')));
-  assert.ok(!transfer.args.includes('-r'));
+  const transfers = f.calls.filter(call => call.command === 'sftp');
+  assert.equal(transfers.length, 1);
+  const transfer = transfers[0];
+  assert.deepEqual(transfer.args, ['-oBatchMode=no', '-b', 'download.sftp', '-P', '44333', 'root@vps.example']);
+  assert.deepEqual(transfer.batch.trim().split('\n'), [
+    'get "/srv/gonglun/deploy/backups/snapshot/database.dump" "database.dump"',
+    'get "/srv/gonglun/deploy/backups/snapshot/SHA256SUMS" "SHA256SUMS"',
+    'get "/srv/gonglun/deploy/backups/snapshot/metadata.txt" "metadata.txt"',
+    'bye',
+  ]);
   assert.ok(!result.file.includes('.partial.'));
   assert.equal(readFileSync(result.file, 'utf8'), 'test-archive');
+  assert.equal(existsSync(join(dirname(result.file), 'download.sftp')), false);
   const saved = JSON.parse(readFileSync(join(f.directory, '.env.vps-sync.json'), 'utf8'));
   assert.equal(saved.port, '44333');
   assert.equal(saved.host, 'vps.example');
   assert.ok(!JSON.stringify(saved).includes('password'));
-  assert.ok(f.calls.findIndex(call => call.command === 'scp') < f.calls.findIndex(call => call.args.includes('createdb')));
+  assert.ok(f.calls.findIndex(call => call.command === 'sftp') < f.calls.findIndex(call => call.args.includes('createdb')));
+});
+
+const nativeSftpServer = process.platform === 'win32' ? join(process.env.WINDIR || 'C:/Windows', 'System32/OpenSSH/sftp-server.exe') : '/usr/lib/openssh/sftp-server';
+for (const missing of [false, true]) {
+  test(`native SFTP executes one batch and aborts on a missing file: ${missing}`, { skip: !existsSync(nativeSftpServer) }, async t => {
+    const f = fixture(t, { answers: remoteAnswers() });
+    await f.start();
+    const transfer = f.calls.find(call => call.command === 'sftp');
+    const target = join(f.directory, 'native sftp');
+    mkdirSync(target);
+    const source = dirname(f.file).replaceAll('\\', '/');
+    let batch = transfer.batch.replaceAll('/srv/gonglun/deploy/backups/snapshot', source);
+    if (missing) batch = batch.replace(`${source}/SHA256SUMS`, `${source}/not-present`);
+    const batchFile = join(target, 'batch.sftp');
+    writeFileSync(batchFile, batch);
+    const result = spawnSync('sftp', ['-oBatchMode=no', '-b', batchFile, '-D', nativeSftpServer], {
+      cwd: target, encoding: 'utf8', timeout: 20000, windowsHide: true,
+    });
+    if (missing) {
+      assert.notEqual(result.status, 0);
+      assert.equal(readFileSync(join(target, 'database.dump'), 'utf8'), 'test-archive');
+      assert.equal(existsSync(join(target, 'metadata.txt')), false);
+    } else {
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal((await verifyBackup(join(target, 'database.dump'))).schema, 'business');
+    }
+  });
+}
+
+test('OpenSSH keeps the explicit password-enabled BatchMode before the batch default', t => {
+  const result = spawnSync('ssh', ['-G', '-F', 'none', '-oBatchMode=no', '-oBatchMode=yes', 'example.invalid'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  if (result.error?.code === 'ENOENT') { t.skip('OpenSSH is not installed on this test host.'); return; }
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^batchmode no\r?$/m);
 });
 
 test('fresh backup action runs only the existing online backup entry before listing remote backups', async t => {
@@ -190,20 +233,22 @@ ${command}
   assert.ok(!listing.includes('interrupted.partial.123'));
 });
 
-for (const failure of ['ssh', 'scp', 'download-checksum']) {
+for (const failure of ['ssh', 'sftp', 'download-checksum']) {
   test(`failed remote download cannot reach restoration: ${failure}`, async t => {
     const f = fixture(t, { answers: remoteAnswers(), failure });
     await assert.rejects(f.start());
     assert.ok(!f.calls.some(call => call.command === 'docker'));
     assert.equal(readFileSync(join(f.directory, '.env'), 'utf8'), original);
     if (failure !== 'ssh') assert.ok(readdirSync(join(f.directory, 'deploy/backups')).some(name => name.includes('.partial.')));
+    const transfer = f.calls.find(call => call.command === 'sftp');
+    if (transfer) assert.equal(existsSync(join(transfer.options.cwd, 'download.sftp')), false);
   });
 }
 
-test('remote paths outside the selected backup root are rejected before SCP', async t => {
+test('remote paths outside the selected backup root are rejected before SFTP', async t => {
   const f = fixture(t, { answers: remoteAnswers(), remoteFiles: ['/etc/database.dump', '/etc/SHA256SUMS'] });
   await assert.rejects(f.start(), /目录以外/);
-  assert.ok(!f.calls.some(call => call.command === 'scp' || call.command === 'docker'));
+  assert.ok(!f.calls.some(call => call.command === 'sftp' || call.command === 'docker'));
 });
 
 test('cancelled local backup selection never contacts Docker', async t => {

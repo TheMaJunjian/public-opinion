@@ -1,7 +1,7 @@
 .operation-feedback { position: fixed; z-index: 3200; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); max-width: min(400px, calc(100vw - 24px)); max-height: min(55dvh, 420px); overflow: auto; padding: 12px; border: 1px solid #64748b; border-radius: 8px; background: #172033; color: #e2e8f0; font-size: 13px; box-shadow: 0 4px 18px #0006; overflow-wrap: anywhere; }
 .operation-feedback-entry { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-.operation-feedback-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.operation-feedback p { font-size: 12px; line-height: 1.5; }
 .operation-feedback button { border: 1px solid #64748b; border-radius: 5px; padding: 5px 10px; background: #263449; color: #f1f5f9; cursor: pointer; flex-shrink: 0; }
 .operation-feedback button:focus-visible { outline: 3px solid #38bdf8; outline-offset: 3px; }
+/* This read-only text receives focus while the workspace is blocked; it is not a control. */
+.operation-progress-message[tabindex]:focus-visible { outline: none !important; }
 @media (max-width: 480px) { .operation-feedback { right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); max-width: calc(100vw - 16px); box-sizing: border-box; } }

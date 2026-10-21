@@ -1,5 +1,7 @@
 import type { Relation, TargetRef } from '../../../types';
 import { getEffectiveJoinByTarget } from './membership';
+import type { DemoEdge, DemoMessage } from '../../../utils/modelBridge';
+import { expandTextIdsWithCorrections } from './correction';
 type ContainerRelation = Pick<Relation,'id'|'relationType'|'sourceMessageId'|'targetRefs'> & Partial<Pick<Relation,'payload'|'state'|'createdAt'>>;
 const containerTypes=new Set(['CLASSIFY','SUMMARY','MERGE','ARRANGE']);
 
@@ -114,15 +116,19 @@ export function createContainerOwnership(relations:ContainerRelation[],rejectedC
 
 export type ContainerOwnership=ReturnType<typeof createContainerOwnership>;
 
-interface FindContainingClassificationInput {
+export interface FindContainingClassificationInput {
   relationById: Map<string,Relation>;
   relations: Relation[];
   rejectedContainerIds: Set<string>;
   rejectedJoinRelationIds: Set<string>;
+  containerOwnership?: ContainerOwnership;
+  edges?: DemoEdge[];
+  msgMap?: Map<string, DemoMessage>;
 }
 
 export function findContainingClassification(dependencies: FindContainingClassificationInput, messageId: string): string | null {
-  const { relationById, relations, rejectedContainerIds, rejectedJoinRelationIds } = dependencies;
+  const { relationById, relations, rejectedContainerIds, rejectedJoinRelationIds, edges, msgMap } = dependencies;
+  const ownership = dependencies.containerOwnership ?? createContainerOwnership(relations, rejectedContainerIds, rejectedJoinRelationIds);
   const targetRelation = relationById.get(messageId);
   let anchorId = messageId;
   if (targetRelation) {
@@ -143,14 +149,9 @@ export function findContainingClassification(dependencies: FindContainingClassif
   let match: { id: string; size: number } | null = null;
   for (const relation of relations) {
     if (!['CLASSIFY', 'SUMMARY'].includes(relation.relationType) || rejectedContainerIds.has(relation.id)) continue;
-    const owned = collectOwnedByRelation(
-      relation.id,
-      relationById,
-      new Set(),
-      rejectedContainerIds,
-      rejectedJoinRelationIds,
-    );
-    if (!owned.textIds.has(anchorId) && !owned.relationIds.has(anchorId)) continue;
+    const owned = ownership.owned(relation.id);
+    const textIds = edges && msgMap ? expandTextIdsWithCorrections(owned.textIds, edges, msgMap) : owned.textIds;
+    if (!textIds.has(anchorId) && !owned.relationIds.has(anchorId)) continue;
     const size = owned.textIds.size + owned.relationIds.size;
     if (!match || size < match.size) match = { id: relation.id, size };
   }

@@ -17,8 +17,10 @@ export function deriveCrossCanvasRelations(input: DeriveCrossCanvasRelationsInpu
   const raw = new Map<string, { outgoing: Record<string, Set<string>>; incoming: Record<string, Set<string>> }>();
   for (const e of edges) {
     const presentation = getPresentationSpec(e.relationType);
+    const stance = e.relationType === 'agree' || e.relationType === 'disagree';
     // JOINs have their own membership-history controls.
-    if (presentation.kind !== 'edge-label' || String(e.relationType).toLowerCase() === 'join' || e.from.messageId.startsWith('anon:')) continue;
+    // A stance with a content source remains discoverable when its endpoints live in different scopes.
+    if ((presentation.kind !== 'edge-label' && !stance) || String(e.relationType).toLowerCase() === 'join' || e.from.messageId.startsWith('anon:')) continue;
     if (completeEdges.has(e.id)) continue;
     const fromVisible = visibleMessageIds.has(e.from.messageId);
     const toVisible = visibleMessageIds.has(e.to.messageId);

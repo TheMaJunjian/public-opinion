@@ -12,6 +12,7 @@ import { useSceneComputation } from '../hooks/useSceneComputation';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { useVirtualMessageMounts } from '../hooks/useVirtualMessageMounts';
 import { intersectsViewport } from '../hooks/useCanvasViewport';
+import { createMessageJumpGroups, registerMessageJumpGroups } from '../utils/messageJumpDisplay';
 import { getMessageProminence, getOrganizationTitle, needsSeparateStanceCard } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import MessageTextPart from './MessageTextPart';
@@ -540,8 +541,11 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [layout, finalFrameRects, frameBlocks, measuredHeights]);
   const virtualPins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]
     .filter((id): id is string => !!id)), [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId, props.autoCenterMessageId]);
-  const revealGroups = useMemo(() => new Map(frameBlocks.map(frame => [frame.relMsgId,
-    new Set([...frame.cardIds, ...frame.childRelMsgIds])])), [frameBlocks]);
+  const revealGroups = useMemo(() => createMessageJumpGroups(messages, edges, new Map(frameBlocks.map(frame => [frame.relMsgId,
+    new Set([...frame.cardIds, ...frame.childRelMsgIds])]))), [messages, edges, frameBlocks]);
+  useLayoutEffect(() => {
+    if (canvasRef.current) return registerMessageJumpGroups(canvasRef.current, revealGroups);
+  }, [revealGroups]);
   const virtual = useVirtualMessageMounts(canvasRef, measuredIds, virtualBoxes, measuredHeights, virtualPins, false, revealGroups);
   const mountedNormals = useMemo(() => visibleNormals.filter(message => virtual.mounted.has(message.id)), [visibleNormals, virtual.mounted]);
   const visibleBottom = useMemo(() => {
@@ -580,6 +584,7 @@ function GraphViewCanvas(props: GraphViewProps) {
 
   const overlays = useGraphOverlays({
     pendingMeasurements: virtual.pending,
+    labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
   });
   const { labelBboxes, decorationsByMsgState, relDecByRelMsgState, tagsByRelMsgState } = overlays;
@@ -1184,7 +1189,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             if (sf.isBlankCorrected) return null;
             const isWhole=isRelWholeSel(sf.relMsgId);
             return (
-              <rect key={`supp-frame-${sf.relMsgId}`} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
+              <rect key={`supp-frame-${sf.relMsgId}`} data-jump-visual-msgids={sf.relMsgId} x={sf.rect.x} y={sf.rect.y} width={sf.rect.width} height={sf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={isWhole?"rgba(251,191,36,0.22)":"rgba(130,80,200,0.04)"}
                 stroke={isWhole?"rgba(251,191,36,1)":"rgba(130,80,200,0.55)"}
@@ -1201,7 +1206,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               : (isReplaceOverlay ? (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(180,120,0,0.7)') : (GROUP_FRAME_STROKE[gf.relColor] ?? 'rgba(140,140,150,0.55)'));
             const fillColor = isWhole ? 'rgba(251,191,36,0.22)' : isReplaceOverlay ? 'rgba(200,150,0,0.04)' : 'rgba(130,130,140,0.03)';
             return (
-              <rect key={`gf-${gf.relMsgId}`} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
+              <rect key={`gf-${gf.relMsgId}`} data-jump-visual-msgids={gf.relMsgId} x={gf.rect.x} y={gf.rect.y} width={gf.rect.width} height={gf.rect.height}
                 rx={FRAME_RADIUS} ry={FRAME_RADIUS}
                 fill={fillColor} stroke={strokeColor}
                 strokeWidth={isWhole?3:2} strokeDasharray={isReplaceOverlay?undefined:(isWhole?undefined:"6 3")}/>
@@ -1246,7 +1251,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             // Blank-corrected: anon-source CORRECT targets a relation message → hide arrow/text, keep bbox for badge
             const isBlankCorrected=anonCorrectedRelMsgIds.has(relId);
             return (
-              <g key={pe.drawId}>
+              <g key={pe.drawId} data-jump-visual-msgids={edge.relationMessageId}>
                 {!isBlankCorrected&&<path d={path} stroke={color} strokeWidth={edgeStrokeWidth} fill="none" strokeDasharray={isEvidenceEdge?"6 3":undefined}/>}
                 {!isBlankCorrected&&<path d={`M ${ax1} ${ay1} L ${end.x} ${end.y} L ${ax2} ${ay2}`} fill={color}/>}
                 {/* Text always rendered (opacity 0 when blank) so labelBboxes are stable for badge positioning */}
@@ -1523,7 +1528,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               const ci=sfCorrInfo[0];
               const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
               return (
-                <div key={`corr-supp-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                <div key={`corr-supp-${ci.corrRelMsgId}`} data-jump-visual-msgids={`${sf.relMsgId} ${ci.corrRelMsgId}`} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
                   title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
@@ -1576,7 +1581,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               const ci=gfCorrInfo[0];
               const isCorrSel=isRelWholeSel(ci.corrRelMsgId);
               return (
-                <div key={`corr-gf-${ci.corrRelMsgId}`} data-rel-overlay="true"
+                <div key={`corr-gf-${ci.corrRelMsgId}`} data-jump-visual-msgids={`${gf.relMsgId} ${ci.corrRelMsgId}`} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,ci.corrRelMsgId);}}
                   onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,ci.corrRelMsgId);}}
                   title={`更正关系：${ci.corrRelMsgId}；单击选中，双击查看历史`}
@@ -1593,7 +1598,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               );
             })()}
             {virtual.mounted.has(gf.relMsgId) && (gf.relType === "classify" || gf.relType === "summary" || gf.relType === "merge") && (
-              <div data-msgid={gf.relMsgId} data-rel-overlay="true"
+              <div data-msgid={gf.relMsgId} data-rel-overlay="true" data-frame-header="true"
                 data-measure-min-height={gf.relType === 'merge' ? MERGE_CARD_H : GROUP_HEADER_HEIGHT}
                 ref={el => { cardRefs.current[gf.relMsgId] = el; }}
                 role="group" tabIndex={0} aria-label={`组织消息 ${gf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard}
@@ -1673,7 +1678,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           const valuePro = sc?.value.pro ?? 0;
           const valueCon = sc?.value.con ?? 0;
           nodes.push(
-            <div key={`sf-settle-${sf.relMsgId}`} data-rel-overlay="true"
+            <div key={`sf-settle-${sf.relMsgId}`} data-jump-visual-msgids={sf.relMsgId} data-rel-overlay="true"
               style={{position:"absolute",left:sfDecLeft,top:sfDecTop,zIndex:7,
                 display:"flex",gap:4,alignItems:"center",pointerEvents:"auto"}}>
               {(truthPro > 0 || truthCon > 0) && <span style={{fontSize:10}}><span style={{color:"#a5b4fc"}}>⚖️</span>{truthPro > 0 && <span style={{color:"#4ade80"}}>👍{truthPro}</span>}{truthCon > 0 && <span style={{color:"#f87171"}}>👎{truthCon}</span>}</span>}
@@ -1704,7 +1709,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
           nodes.push(
-            <div key={`sf-${kind}-${sf.relMsgId}`} data-rel-overlay="true"
+            <div key={`sf-${kind}-${sf.relMsgId}`} data-jump-visual-msgids={sf.relMsgId} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
@@ -1775,7 +1780,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
           nodes.push(
-            <div key={`gf-${kind}-${gf.relMsgId}`} data-rel-overlay="true"
+            <div key={`gf-${kind}-${gf.relMsgId}`} data-jump-visual-msgids={gf.relMsgId} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,gf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
@@ -1869,7 +1874,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   const icon=kind==="agree"?"👍":"👎";
                   const label=kind==="agree"?"赞":"反";
                   return (
-                    <div key={`tag-dec-${kind}-${_mid}-${group.label}`} data-rel-overlay="true"
+                    <div key={`tag-dec-${kind}-${_mid}-${group.label}`} data-jump-visual-msgids={[...group.relMsgIds, ...selectedDecorationIds].join(' ')} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();}}
                       onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,tagIconRelMsgId,kind);}}
                       title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}

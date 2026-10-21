@@ -2,28 +2,10 @@ import { createPortal } from 'react-dom';
 import { Z_INDEX } from '../constants/zIndex';
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
+import { getMessageJumpRegions } from '../utils/messageJumpDisplay';
 
 const EDGE_ARROW_COUNT = 25;
 const GUIDE_EDGE_INSET = 12;
-
-/** Copy the highlighted region without duplicating every card in a large graph. */
-function cloneHighlightRegion(source: Element, bounds: DOMRect): Element | null {
-  // SVG definitions have no visible bounds but are needed by copied paths.
-  if (['defs', 'style'].includes(source.localName)) return source.cloneNode(true) as Element;
-  const rect = source.getBoundingClientRect();
-  // Absolute card children can overflow a zero-height wrapper above the frame.
-  // Such wrappers have no visible region of their own to cull.
-  if (rect.width > 0 && rect.height > 0
-    && (rect.right < bounds.left || rect.left > bounds.right || rect.bottom < bounds.top || rect.top > bounds.bottom)) return null;
-  // Preserve card/badge layout, including children that overflow its own box.
-  if (source.matches('[data-msgid], [data-rel-overlay]')) return source.cloneNode(true) as Element;
-  const clone = source.cloneNode(false) as Element;
-  for (const child of source.childNodes) {
-    const copied = child instanceof Element ? cloneHighlightRegion(child, bounds) : child.cloneNode(false);
-    if (copied) clone.appendChild(copied);
-  }
-  return clone;
-}
 
 export function PulseGuide({ start, end }: { start: { x: number; y: number }; end: { x: number; y: number } }) {
   const deltaX = end.x - start.x;
@@ -51,8 +33,8 @@ export function MessageJumpOverlay({
   targetElement: HTMLElement;
   targetRect: DOMRect;
 }) {
-  const contentLayerRef = useRef<HTMLDivElement>(null);
-  const cloneId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const maskId = `jump-mask-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const [regions, setRegions] = useState<ReturnType<typeof getMessageJumpRegions>>([]);
   const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
   const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
   const targetCenter = {
@@ -61,56 +43,34 @@ export function MessageJumpOverlay({
   };
 
   useLayoutEffect(() => {
-    const layer = contentLayerRef.current;
-    if (!layer || !targetElement.isConnected) return;
-    // Organization frames and their member cards are sibling layers in the canvas.
-    const source = targetElement.hasAttribute('data-rel-overlay')
-      ? targetElement.closest<HTMLElement>('[data-jump-canvas]') ?? targetElement
-      : targetElement;
-    const sourceRect = source.getBoundingClientRect();
-    const clone = (source === targetElement ? source.cloneNode(true) : cloneHighlightRegion(source, targetRect)) as HTMLElement | null;
-    if (!clone) return;
-    const frame = document.createElement('div');
-    frame.dataset.messageJumpClone = 'true';
-    frame.inert = true;
-    const sourceStyle = getComputedStyle(source);
-    Object.assign(frame.style, {
-      position: 'fixed', left: `${targetRect.left}px`, top: `${targetRect.top}px`,
-      width: `${targetRect.width}px`, height: `${targetRect.height}px`,
-      overflow: 'hidden', background: '#1f1f1f', pointerEvents: 'none',
-      font: sourceStyle.font, color: sourceStyle.color, letterSpacing: sourceStyle.letterSpacing,
-    });
-    Object.assign(clone.style, {
-      position: 'absolute', left: `${sourceRect.left - targetRect.left}px`, top: `${sourceRect.top - targetRect.top}px`,
-      width: `${sourceRect.width}px`, height: `${sourceRect.height}px`,
-      boxSizing: 'border-box', margin: '0', transform: 'none',
-    });
-    const nodes = [clone, ...clone.querySelectorAll<HTMLElement | SVGElement>('*')];
-    const ids = new Map<string, string>();
-    for (const node of nodes) {
-      node.style.setProperty('pointer-events', 'none', 'important');
-      if (node.id) {
-        const replacement = `jump-${cloneId}-${node.id}`;
-        ids.set(node.id, replacement);
-        node.id = replacement;
-      }
-    }
-    // Keep copied SVG markers local to the copy and avoid duplicate document IDs.
-    for (const node of nodes) for (const attribute of Array.from(node.attributes)) {
-      const value = attribute.value.replace(/url\((['"]?)#([^)'"\s]+)\1\)/g,
-        (match, quote: string, id: string) => ids.has(id) ? `url(${quote}#${ids.get(id)}${quote})` : match);
-      const reference = attribute.localName === 'href' && value.startsWith('#') ? ids.get(value.slice(1)) : undefined;
-      if (value !== attribute.value || reference) node.setAttribute(attribute.name, reference ? `#${reference}` : value);
-    }
-    frame.appendChild(clone);
-    layer.appendChild(frame);
-    // The live scene stays visible and interactive underneath this pointer-transparent copy.
-    return () => frame.remove();
-  }, [targetElement, targetRect, cloneId]);
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      setRegions(targetElement.isConnected
+        ? getMessageJumpRegions(targetElement, messageId ?? targetElement.dataset.msgid ?? '') : []);
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+    update();
+    window.addEventListener('scroll', schedule, true);
+    window.addEventListener('resize', schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [messageId, targetElement, targetRect]);
 
   if (!targetElement.isConnected) return null;
 
   return createPortal((
+    <>
+    <svg width="0" height="0" aria-hidden="true" style={{ position: 'fixed', pointerEvents: 'none' }}>
+      <defs><mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width={viewportWidth} height={viewportHeight} style={{ maskType: 'luminance' }}>
+        <rect width={viewportWidth} height={viewportHeight} fill="white" />
+        {regions.map(({ rect, ids }, index) => <rect key={index} data-message-jump-region={ids}
+          x={rect.left} y={rect.top} width={rect.width} height={rect.height} fill="black" />)}
+      </mask></defs>
+    </svg>
     <div
       aria-hidden="true"
       data-message-jump-overlay="true"
@@ -121,6 +81,10 @@ export function MessageJumpOverlay({
         boxSizing: 'border-box', zIndex: Z_INDEX.popup,
         background: 'rgba(0,0,0,0.42)',
         pointerEvents: 'none',
+        // One cutout covers every part of the prompt, including guides and text.
+        // The original live message remains visible, even with translucent frames.
+        maskImage: `url(#${maskId})`,
+        WebkitMaskImage: `url(#${maskId})`,
       }}
     >
       <div className="popup-guides" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
@@ -145,15 +109,15 @@ export function MessageJumpOverlay({
             start={{ x: viewportWidth - GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
         })}
       </div>
-      <div ref={contentLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }} />
       <div style={{
         position: 'fixed', left: '50%', top: 16, transform: 'translateX(-50%)',
-        zIndex: 3,
+        zIndex: 2,
         padding: '6px 12px', border: '1px solid rgba(250,204,21,0.7)', borderRadius: 4,
         background: 'rgba(23,23,23,0.92)', color: '#fde68a', fontSize: 13, fontWeight: 600,
         whiteSpace: 'nowrap', boxShadow: '0 2px 10px rgba(0,0,0,0.45)', pointerEvents: 'none',
       }}>已定位目标消息</div>
     </div>
+    </>
   ), document.body);
 }
 
@@ -247,28 +211,19 @@ export default function PopupOverlay({
       }}
       onClick={onClick}
     >
-      <div className="popup-guides" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
-          {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
+      <svg className="popup-backdrop-guides" aria-hidden="true" width={overlayWidth} height={overlayHeight}
+        viewBox={`0 0 ${overlayWidth} ${overlayHeight}`} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
+        {/* One animated path keeps the inward flow without a separate animation for every ray. */}
+        <path className="popup-backdrop-flow" fill="none" stroke="rgba(250,204,21,0.55)" strokeWidth={1.5}
+          strokeDasharray="11 9" strokeLinecap="round"
+          d={Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
             const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`top-${index}`}
-              start={{ x: ratio * overlayWidth, y: GUIDE_EDGE_INSET }} end={center} />;
-          })}
-          {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
-            const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`bottom-${index}`}
-              start={{ x: ratio * overlayWidth, y: overlayHeight - GUIDE_EDGE_INSET }} end={center} />;
-          })}
-          {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
-            const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`left-${index}`}
-              start={{ x: GUIDE_EDGE_INSET, y: ratio * overlayHeight }} end={center} />;
-          })}
-          {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
-            const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-            return <PulseGuide key={`right-${index}`}
-              start={{ x: overlayWidth - GUIDE_EDGE_INSET, y: ratio * overlayHeight }} end={center} />;
-          })}
-      </div>
+            return [
+              [ratio * overlayWidth, GUIDE_EDGE_INSET], [ratio * overlayWidth, overlayHeight - GUIDE_EDGE_INSET],
+              [GUIDE_EDGE_INSET, ratio * overlayHeight], [overlayWidth - GUIDE_EDGE_INSET, ratio * overlayHeight],
+            ].map(([x, y]) => `M${x},${y}L${center.x},${center.y}`).join(' ');
+          }).join(' ')} />
+      </svg>
       <div
         data-popup-content-layer="true"
         style={{

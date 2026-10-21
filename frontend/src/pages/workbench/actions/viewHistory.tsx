@@ -1,14 +1,15 @@
 import React from "react";
 import type { WorkbenchDrawingTask } from '../../../context/WorkbenchDrawingContext';
+import { REVEAL_VIRTUAL_MESSAGE } from '../../../hooks/useVirtualMessageMounts';
+import { findMessageElements } from './scrollNavigation';
 import { type MessageFilterSettings } from "../../../components/MessageFilterPanel";
-import type { Relation } from "../../../types";
 import { operationLog } from "../../../utils/debugLog";
 import type {
   DemoEdge,
   DemoMessage,
   UnitSelection
 } from "../../../utils/modelBridge";
-import { findContainingClassification as findClassification } from '../model/ownership';
+import { findContainingClassification as findClassification, type FindContainingClassificationInput } from '../model/ownership';
 import type { ClassifyStackEntry, TraceEntry, TraceSnapshot, ViewMode } from '../types';
 
 interface CaptureSnapshotDependencies {
@@ -43,6 +44,7 @@ export function captureSnapshot(dependencies: CaptureSnapshotDependencies): Trac
 interface RestoreSnapshotDependencies {
   startPositioning?: () => WorkbenchDrawingTask;
   onRestored?: () => void;
+  showMessagePulse?: (targetId: string, element: HTMLElement, requestId: number, onShown: (shown: boolean) => void) => void;
   scrollRequestIdRef: React.MutableRefObject<number>;
   setDraftUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
   setSourceUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
@@ -59,11 +61,17 @@ interface RestoreSnapshotDependencies {
   rightPanelRef: React.MutableRefObject<HTMLDivElement | null>;
 }
 
-export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; restoreScope?: boolean }): void {
+export interface RestoreSnapshotOptions {
+  restoreSelection?: boolean;
+  restoreScope?: boolean;
+  pulseMessageId?: string;
+}
+
+export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: TraceSnapshot | null, opts?: RestoreSnapshotOptions): void {
   const { scrollRequestIdRef, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, setTraceDistance, setViewMode, cancelScrollRafs, scrollRafRef, scrollRaf2Ref, clampAndSetScroll, leftPanelRef, rightPanelRef } = dependencies;
   if (!s) return;
   if (opts?.restoreScope !== false) s.restoreScope?.();
-  scrollRequestIdRef.current++;
+  const requestId = ++scrollRequestIdRef.current;
   const restoreSel = opts?.restoreSelection !== false; // 默认 true，追溯模式恢复候选区
   if (restoreSel) {
     setDraftUnits(s.draftUnits.map(u => ({ ...u, selection: { ...(u.selection as any) } })));
@@ -85,6 +93,25 @@ export function restoreSnapshot(dependencies: RestoreSnapshotDependencies, s: Tr
     clampAndSetScroll(document.scrollingElement as HTMLDivElement | null, s.pageScroll?.top ?? null, s.pageScroll?.left ?? null);
     clampAndSetScroll(rightPanelRef.current, s.rightScroll?.top ?? null, s.rightScroll?.left ?? null);
     dependencies.onRestored?.();
+    const messageId = opts?.pulseMessageId;
+    const showPulse = dependencies.showMessagePulse;
+    if (messageId && showPulse && leftPanelRef.current) {
+      // Re-pin the origin after restoring its scene, then highlight it without
+      // recentering and overwriting the saved viewport.
+      leftPanelRef.current.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [messageId] } }));
+      const pulse = () => {
+        if (requestId !== scrollRequestIdRef.current) { task?.complete(); return; }
+        const element = leftPanelRef.current && findMessageElements(leftPanelRef.current, messageId)[0];
+        if (element) showPulse(messageId, element, requestId, () => task?.complete());
+        else {
+          leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
+          task?.complete();
+        }
+      };
+      if (task?.afterLayout) task.afterLayout(pulse);
+      else scrollRaf2Ref.current = requestAnimationFrame(pulse);
+      return;
+    }
     task?.complete();
   };
   if (task?.afterLayout) task.afterLayout(restore);
@@ -369,14 +396,7 @@ export function enterClassification(dependencies: EnterClassificationDependencie
   setClassifyKey(k => k + 1);
 }
 
-interface FindContainingClassificationDependencies {
-  relationById: Map<string, Relation>;
-  relations: Relation[];
-  rejectedContainerIds: Set<string>;
-  rejectedJoinRelationIds: Set<string>;
-}
-
-export function findContainingClassification(dependencies: FindContainingClassificationDependencies,messageId:string):string|null {
+export function findContainingClassification(dependencies: FindContainingClassificationInput,messageId:string):string|null {
   return findClassification(dependencies,messageId);
 }
 
@@ -390,7 +410,7 @@ interface ExitClassificationDependencies {
   setTargetUnits: React.Dispatch<React.SetStateAction<UnitSelection[]>>;
   setActiveTextSelectId: React.Dispatch<React.SetStateAction<string | null>>;
   setLastClickedMessageId: React.Dispatch<React.SetStateAction<string | null>>;
-  restoreSnapshot: (s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; restoreScope?: boolean; }) => void;
+  restoreSnapshot: (s: TraceSnapshot | null, opts?: RestoreSnapshotOptions) => void;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
 }
 
@@ -419,7 +439,7 @@ export function exitClassification(dependencies: ExitClassificationDependencies,
   if (_options?.restoreSnapshot !== false && entry?.snapshot) {
     // Classification navigation changes the current layer within the active
     // trace/comparison view; those surrounding modes keep their own history.
-    restoreSnapshot(entry.snapshot, { restoreSelection: false, restoreScope: false });
+    restoreSnapshot(entry.snapshot, { restoreSelection: false, restoreScope: false, pulseMessageId: entry.relMsgId });
   }
   if (_options?.preserveViewMode) setViewMode(_options.preserveViewMode);
 }

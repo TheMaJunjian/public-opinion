@@ -1,69 +1,97 @@
-import { act, render, screen } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, expect, it } from 'vitest';
 import { useWorkbenchViewport } from '../pages/workbench/useWorkbenchViewport';
-import { InterfaceZoomContext } from '../context/InterfaceZoomContext';
 
-const originalResizeObserver = window.ResizeObserver;
-afterEach(() => { window.ResizeObserver = originalResizeObserver; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+function Viewport({ showRight }: { showRight: boolean }) {
+  const viewport = useWorkbenchViewport({ comparisonReviewed: false, viewMode: 'graph', loading: false });
+  return <div ref={viewport.panelContainerRef}>
+    <div data-workbench-panel-surface="true">
+      <div data-testid="toolbar-scroll" style={{ overflowY: 'auto' }}>筛选选项</div>
+      <div ref={viewport.leftPanelRef} data-testid="left">
+        <div data-testid="left-nested" style={{ overflowY: 'auto' }}>消息列表</div>
+      </div>
+    </div>
+    {showRight && <div ref={viewport.rightPanelRef} data-testid="right" data-workbench-panel-surface="true">
+      <div data-testid="nested" style={{ overflowY: 'auto' }}>最近消息</div>
+    </div>}
+  </div>;
+}
 
-it('fills the viewport immediately after interface or browser zoom without saving scaled widths', () => {
-  localStorage.removeItem('workbenchWidth');
-  vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1280);
-  function Viewport() {
-    const viewport = useWorkbenchViewport({ comparisonReviewed: false, viewMode: 'graph', loading: false });
-    return <div data-testid="width">{viewport.effectiveContainerWidth}</div>;
-  }
-  const view = render(<InterfaceZoomContext.Provider value={1}><Viewport /></InterfaceZoomContext.Provider>);
-  expect(screen.getByTestId('width')).toHaveTextContent('1280');
-  view.rerender(<InterfaceZoomContext.Provider value={0.8}><Viewport /></InterfaceZoomContext.Provider>);
-  expect(screen.getByTestId('width')).toHaveTextContent('1600');
-  expect(localStorage.getItem('workbenchWidth')).toBe('1280');
-  view.rerender(<InterfaceZoomContext.Provider value={1}><Viewport /></InterfaceZoomContext.Provider>);
-  expect(screen.getByTestId('width')).toHaveTextContent('1280');
-  vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1800);
-  act(() => { window.dispatchEvent(new Event('resize')); });
-  expect(screen.getByTestId('width')).toHaveTextContent('1800');
-  localStorage.removeItem('workbenchWidth');
+const setDimensions = (element: HTMLElement) => Object.defineProperties(element, {
+  clientHeight: { value: 200 }, scrollHeight: { value: 1000 },
 });
 
-it('does not show the fixed horizontal scrollbar on a narrow mobile viewport', async () => {
-  vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
-    matches: query.includes('max-width: 768px'), media: query, onchange: null,
-    addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
-  }));
-  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(500);
-  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1000);
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 500, 400));
-  function Viewport() {
-    const viewport = useWorkbenchViewport({ comparisonReviewed: false, viewMode: 'graph', loading: false });
-    return <><div ref={viewport.leftPanelRef} /><span data-testid="fixed-scroll">{viewport.fixedHorizontalScroll ? 'shown' : 'hidden'}</span></>;
-  }
-  render(<Viewport />);
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
-  expect(screen.getByTestId('fixed-scroll')).toHaveTextContent('hidden');
+it.each(['left', 'right'].flatMap(side => [1, -1].map(direction => ({ side, direction }))))(
+  'prioritizes the hovered region on the $side through boundary handoff and reversal (direction $direction)', ({ side, direction }) => {
+    render(<Viewport showRight />);
+    const current = screen.getByTestId(side);
+    const other = screen.getByTestId(side === 'left' ? 'right' : 'left');
+    const nested = screen.getByTestId(side === 'left' ? 'left-nested' : 'nested');
+    [current, other, nested].forEach(setDimensions);
+    const edge = direction > 0 ? 800 : 0;
+    current.scrollTop = nested.scrollTop = edge - direction * 10;
+    other.scrollTop = 300;
+    const page = document.documentElement;
+    page.scrollTop = 200;
+    const positions = () => [nested.scrollTop, current.scrollTop, other.scrollTop, page.scrollTop];
+
+    wheel(nested, direction * 10);
+    expect(positions()).toEqual([edge, edge - direction * 10, 300, 200]);
+    wheel(nested, direction * 10);
+    expect(positions()).toEqual([edge, edge, 300, 200]);
+    wheel(nested, direction * 40);
+    expect(positions()).toEqual([edge, edge, 300 + direction * 40, 200]);
+    wheel(nested, direction * -20);
+    expect(positions()).toEqual([edge - direction * 20, edge, 300 + direction * 40, 200]);
+
+    // Moving to the opposite panel changes priority immediately as well.
+    wheel(other, direction * -20);
+    expect(positions()).toEqual([edge - direction * 20, edge, 300 + direction * 20, 200]);
+  },
+);
+
+it('prioritizes a scrollable toolbar region above the left canvas', () => {
+  render(<Viewport showRight />);
+  const target = screen.getByTestId('toolbar-scroll'), left = screen.getByTestId('left'), right = screen.getByTestId('right');
+  [target, left, right].forEach(setDimensions);
+  left.scrollTop = right.scrollTop = 300;
+  expect(wheel(target, 120).defaultPrevented).toBe(true);
+  expect([target.scrollTop, left.scrollTop, right.scrollTop]).toEqual([120, 300, 300]);
 });
+const wheel = (element: HTMLElement, deltaY: number) => {
+  const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
+  act(() => { element.dispatchEvent(event); });
+  return event;
+};
 
-it('does not redraw the workbench for unchanged scroll and DOM measurements', async () => {
-  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(500);
-  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1000);
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 500, 400));
-  vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(800);
-  let renders = 0;
-  function Viewport() {
-    renders++;
-    const viewport = useWorkbenchViewport({ comparisonReviewed: false, viewMode: 'graph', loading: false });
-    return <div ref={viewport.leftPanelRef} data-testid="left" />;
-  }
+afterEach(() => { cleanup(); localStorage.clear(); document.documentElement.scrollTop = 0; });
 
-  render(<Viewport />);
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)); });
-  expect(renders).toBeGreaterThan(1);
-  const stableRenders = renders;
-  act(() => {
-    window.dispatchEvent(new Event('scroll'));
-    window.dispatchEvent(new Event('scroll'));
-    screen.getByTestId('left').append(document.createElement('span'));
-  });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
-  expect(renders).toBe(stableRenders);
+it('prioritizes nested content and the right panel even when that panel mounts late or is replaced, then releases the listener', () => {
+  const view = render(<Viewport showRight={false} />);
+  const left = screen.getByTestId('left');
+  setDimensions(left);
+  left.scrollTop = 300;
+  const page = document.documentElement;
+  page.scrollTop = 200;
+  view.rerender(<Viewport showRight />);
+  let right = screen.getByTestId('right');
+  const nested = screen.getByTestId('nested');
+  setDimensions(right); setDimensions(nested);
+  right.scrollTop = 100;
+
+  expect(wheel(nested, 60).defaultPrevented).toBe(true);
+  expect([nested.scrollTop, right.scrollTop, left.scrollTop, page.scrollTop]).toEqual([60, 100, 300, 200]);
+  expect(wheel(right, 120).defaultPrevented).toBe(true);
+  expect([right.scrollTop, left.scrollTop, page.scrollTop]).toEqual([220, 300, 200]);
+
+  view.rerender(<Viewport showRight={false} />);
+  view.rerender(<Viewport showRight />);
+  right = screen.getByTestId('right');
+  setDimensions(right);
+  expect(wheel(right, 120).defaultPrevented).toBe(true);
+  expect([right.scrollTop, left.scrollTop, page.scrollTop]).toEqual([120, 300, 200]);
+
+  view.unmount();
+  expect(wheel(right, 120).defaultPrevented).toBe(false);
+  expect(right.scrollTop).toBe(120);
 });

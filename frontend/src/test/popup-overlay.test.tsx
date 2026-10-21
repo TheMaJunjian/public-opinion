@@ -25,15 +25,23 @@ it('相同布局的测量不重复绘制遮罩，真实尺寸变化仍会更新�
   const view = render(<Profiler id="popup" onRender={commits}><Preview /></Profiler>);
   try {
     const initialCommits = commits.mock.calls.length;
+    const flow = document.querySelector('.popup-backdrop-flow')!;
+    expect(document.querySelectorAll('.popup-backdrop-flow')).toHaveLength(1);
+    expect(document.querySelector('.popup-guides')).toBeNull();
+    const originalPath = flow.getAttribute('d');
+    expect(originalPath?.match(/M/g)).toHaveLength(100);
+    expect(originalPath?.match(/L300,220/g)).toHaveLength(100);
     for (let index = 0; index < 10; index++) act(() => { callbacks[0](); });
     expect(commits).toHaveBeenCalledTimes(initialCommits);
     contentWidth = 600;
     act(() => { callbacks[0](); });
     expect(commits).toHaveBeenCalledTimes(initialCommits + 1);
+    expect(flow.getAttribute('d')?.match(/L400,220/g)).toHaveLength(100);
     act(() => { callbacks[0](); });
     expect(commits).toHaveBeenCalledTimes(initialCommits + 1);
     view.unmount();
     expect(disconnect).toHaveBeenCalledOnce();
+    expect(document.querySelector('.popup-backdrop-flow')).toBeNull();
   } finally {
     view.unmount();
     geometry.mockRestore();

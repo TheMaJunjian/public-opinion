@@ -3,6 +3,7 @@ import type { Relation } from "../../../types";
 import { getPresentationSpec } from "../../../types";
 import type { WorkbenchDrawingTask } from '../../../context/WorkbenchDrawingContext';
 import { REVEAL_VIRTUAL_MESSAGE } from '../../../hooks/useVirtualMessageMounts';
+import { getMessageJumpDisplay } from '../../../utils/messageJumpDisplay';
 import type {
   DemoEdge
 } from "../../../utils/modelBridge";
@@ -71,13 +72,14 @@ export function showMessagePulse(dependencies: ShowMessagePulseDependencies, tar
       const targetRects = targetElements
         .map(candidate => (candidate as HTMLElement).getBoundingClientRect())
         .filter(candidateRect => candidateRect.width > 0 && candidateRect.height > 0);
-      const rect = targetRects.reduce((bounds, candidateRect) => {
+      const targetRect = targetRects.reduce((bounds, candidateRect) => {
         const left = Math.min(bounds.left, candidateRect.left);
         const top = Math.min(bounds.top, candidateRect.top);
         const right = Math.max(bounds.right, candidateRect.right);
         const bottom = Math.max(bounds.bottom, candidateRect.bottom);
         return new DOMRect(left, top, right - left, bottom - top);
       }, pulseElement.getBoundingClientRect());
+      const { rect } = getMessageJumpDisplay(pulseElement, targetId, targetRect);
       setMessagePulse({ messageId: targetId, element: pulseElement, rect });
       messagePulseTimerRef.current = setTimeout(() => {
         if (requestId !== scrollRequestIdRef.current) return;
@@ -104,7 +106,42 @@ export function findMessageElements(container: HTMLElement, messageId: string): 
       if (element.getAttribute('data-msgid') === messageId) return true;
       return element.getAttribute('data-jump-msgids')?.split(/\s+/).includes(messageId) ?? false;
     }) as HTMLElement[];
-  return directElements;
+  // A frame has four border hit strips and a real message header. Center the
+  // header so wide/tall frames cannot place the message card outside the view.
+  return directElements.sort((a, b) => Number(b.hasAttribute('data-frame-header')) - Number(a.hasAttribute('data-frame-header')));
+}
+
+function viewportContainsTarget(element: HTMLElement, container: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  const viewport = window.visualViewport;
+  let left = viewport?.offsetLeft ?? 0;
+  let top = viewport?.offsetTop ?? 0;
+  let right = left + (viewport?.width ?? window.innerWidth);
+  let bottom = top + (viewport?.height ?? window.innerHeight);
+  // A card can be inside the browser viewport while still clipped by its pane
+  // or a nested comparison viewport.
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    const clipsX = parent === container || /auto|scroll|hidden|clip/.test(style.overflowX);
+    const clipsY = parent === container || /auto|scroll|hidden|clip/.test(style.overflowY);
+    if (!clipsX && !clipsY) continue;
+    const bounds = parent.getBoundingClientRect();
+    if (clipsX) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
+    if (clipsY) { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }
+  }
+  // Oversized messages cannot fit in full; their center must still be visible.
+  const axisVisible = (start: number, end: number, min: number, max: number) => max > min && (end - start <= max - min
+    ? start >= min - 1 && end <= max + 1
+    : (start + end) / 2 >= min && (start + end) / 2 <= max);
+  return rect.width > 0 && rect.height > 0
+    && axisVisible(rect.left, rect.right, left, right) && axisVisible(rect.top, rect.bottom, top, bottom);
+}
+
+function scrollScale(element: HTMLElement, rect: DOMRect) {
+  return {
+    x: element.offsetWidth > 0 ? rect.width / element.offsetWidth : 1,
+    y: element.offsetHeight > 0 ? rect.height / element.offsetHeight : 1,
+  };
 }
 
 interface ScrollMsgToCenterDependencies {
@@ -139,6 +176,10 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     const frame = requestAnimationFrame(() => run(work));
     task?.onCancel(() => cancelAnimationFrame(frame));
     return frame;
+  };
+  const afterLayout = (work: () => void) => {
+    if (task?.afterLayout) task.afterLayout(work);
+    else scrollRafRef.current = nextFrame(work);
   };
   const complete = (located: boolean) => {
     if (!located && requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
@@ -205,14 +246,14 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
       scrollRafRef.current = nextFrame(tryScroll);
       return;
     }
-    pendingScrollMsgIdRef.current = null;
     const comparisonView = el.closest('[data-comparison-view="agree"]');
     const comparisonViewport = comparisonView?.querySelector('[data-comparison-viewport="agree"]') as HTMLDivElement | null;
     const comparisonPairElement = comparisonView?.closest('[data-comparison-pair]');
     if (comparisonViewport && comparisonPairElement) {
       const comparisonViewportRect = comparisonViewport.getBoundingClientRect();
-      const comparisonTargetTop = comparisonViewport.scrollTop + elRect.top - comparisonViewportRect.top + elRect.height / 2 - comparisonViewport.clientHeight / 2;
-      const comparisonTargetLeft = comparisonViewport.scrollLeft + elRect.left - comparisonViewportRect.left + elRect.width / 2 - comparisonViewport.clientWidth / 2;
+      const scale = scrollScale(comparisonViewport, comparisonViewportRect);
+      const comparisonTargetTop = comparisonViewport.scrollTop + (elRect.top - comparisonViewportRect.top + elRect.height / 2) / scale.y - comparisonViewport.clientHeight / 2;
+      const comparisonTargetLeft = comparisonViewport.scrollLeft + (elRect.left - comparisonViewportRect.left + elRect.width / 2) / scale.x - comparisonViewport.clientWidth / 2;
       const comparisonTop = Math.max(0, comparisonTargetTop);
       const comparisonLeft = Math.max(0, comparisonTargetLeft);
       const comparisonScrollTargets = comparisonPairElement.querySelectorAll('[data-comparison-viewport], [data-comparison-scroll-vertical]');
@@ -222,15 +263,16 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
       horizontalTargets.forEach(node => { (node as HTMLElement).scrollLeft = comparisonLeft; });
       if (horizontalScroll) horizontalScroll.scrollLeft = comparisonLeft;
     } else {
-      const elCenterX = elRect.left - containerRect.left + container.scrollLeft + elRect.width / 2;
-      const elCenterY = elRect.top - containerRect.top + container.scrollTop + elRect.height / 2;
+      const scale = scrollScale(container, containerRect);
+      const elCenterX = (elRect.left - containerRect.left + elRect.width / 2) / scale.x + container.scrollLeft;
+      const elCenterY = (elRect.top - containerRect.top + elRect.height / 2) / scale.y + container.scrollTop;
       container.scrollLeft = Math.max(0, Math.min(elCenterX - container.clientWidth / 2, container.scrollWidth - container.clientWidth));
       container.scrollTop = Math.max(0, Math.min(elCenterY - container.clientHeight / 2, container.scrollHeight - container.clientHeight));
     }
     // The left panel may itself be only partly visible in the browser viewport.
     // Re-read after the inner scroll, then move the outer page if the target is
     // still outside the actual viewport before creating the jump overlay.
-    nextFrame(() => {
+    const verify = (afterNativeScroll = false) => {
       if (requestId !== scrollRequestIdRef.current) { complete(false); return; }
       let currentElement = el;
       if (!currentElement.isConnected) {
@@ -241,25 +283,19 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
         ) ?? currentCandidates.find(candidate => isDecorationTarget && candidate.hasAttribute('data-rel-overlay'))
           ?? currentCandidates[0];
       }
-      if (!currentElement?.isConnected) { complete(false); return; }
-      const currentRect = currentElement.getBoundingClientRect();
-      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-      const targetOutsideViewport = currentRect.bottom <= 0
-        || currentRect.top >= viewportHeight
-        || currentRect.right <= 0
-        || currentRect.left >= viewportWidth;
-      if (targetOutsideViewport) {
-        currentElement.scrollIntoView({ block: 'center', inline: 'nearest' });
-        nextFrame(() => {
-          if (requestId === scrollRequestIdRef.current) {
-            showMessagePulse(targetId, currentElement, requestId, complete);
-          } else complete(false);
-        });
+      if (!currentElement?.isConnected) { scrollRafRef.current = nextFrame(tryScroll); return; }
+      if (!viewportContainsTarget(currentElement, container)) {
+        if (afterNativeScroll) { scrollRafRef.current = nextFrame(tryScroll); return; }
+        currentElement.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+        // Native scrolling can also adjust nested panes and the outer page.
+        // Verify that result before centering again, which could undo it.
+        afterLayout(() => verify(true));
         return;
       }
+      pendingScrollMsgIdRef.current = null;
       showMessagePulse(targetId, currentElement, requestId, complete);
-    });
+    };
+    afterLayout(verify);
     // The left panel handles the inner scroll; the target scrollIntoView above
     // handles the outer page when the panel itself is outside the viewport.
   };
@@ -268,7 +304,9 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
   task?.onCancel(() => {
     if (requestId === scrollRequestIdRef.current) leftPanelRef.current?.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } }));
   });
-  scrollRafRef.current = nextFrame(tryScroll);
+  // Measurement can move an already mounted card. Position only after the
+  // destination scene has committed, then verify the resulting visible area.
+  afterLayout(tryScroll);
 }
 
 export function clampAndSetScroll(container: HTMLDivElement | null, top: number | null, left: number | null): void {

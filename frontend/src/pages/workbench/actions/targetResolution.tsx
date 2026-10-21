@@ -423,8 +423,8 @@ export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCross
   }
 
   for (const e of edges) {
-    // Reference is a citation and does not imply semantic grouping.
-    if (e.relationType === "reference") continue;
+    // Citations and stances can cross scopes; they do not require shared membership.
+    if (['reference', 'agree', 'disagree'].includes(e.relationType.toLowerCase())) continue;
     if (crossesBoundary(e.from.messageId, e.to.messageId)) {
       return describeViolation(e.from.messageId, e.to.messageId, e.relationType);
     }
@@ -437,7 +437,7 @@ export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCross
     const relationType = relation.relationType.toUpperCase();
     // Container relations describe membership, not a semantic cross-link
     // between the selected messages and their surrounding messages.
-    if (relationType === 'REFERENCE' || relationType === 'JOIN'
+    if (relationType === 'REFERENCE' || relationType === 'AGREE' || relationType === 'DISAGREE' || relationType === 'JOIN'
       || relationType === 'CLASSIFY' || relationType === 'SUMMARY'
       || relationType === 'ARRANGE' || relationType === 'MERGE') continue;
     const sourceId = relation.sourceMessageId;

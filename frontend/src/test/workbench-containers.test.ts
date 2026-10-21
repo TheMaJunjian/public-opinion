@@ -6,13 +6,35 @@ import {filterMessageListContext} from '../pages/workbench/projections/messageLi
 import {projectJoinMembershipEdges} from '../pages/workbench/model/membership';
 import {projectGraphScene} from '../utils/graphProjection';
 import {deriveContainerEffect} from '../pages/workbench/model/containerEffect';
-import {collectContainerVisibleIds} from '../pages/workbench/model/ownership';
+import {collectContainerVisibleIds,createContainerOwnership,findContainingClassification} from '../pages/workbench/model/ownership';
 import {getEffectiveJoinRelationIds, filterContainerEdgesByEffectiveJoins} from '../pages/workbench/model/membership';
 
 const author={id:'user',username:'tester',createdAt:''};
 const at='2026-01-01T00:00:00Z';
 const text=(id:string):Message=>({id,kind:'TEXT',content:id,contentType:'TEXT',createdAt:at,updatedAt:at,createdBy:author});
 const rel=(id:string,type:string,targets:string[]=[],source:string|null=null):Relation=>({id,relationType:type,sourceMessageId:source,targetRefs:targets.map(messageId=>({kind:'message',messageId})),payload:type==='CLASSIFY'?{title:id}:{targetLayout:'single-row'},createdAt:at,createdBy:author});
+
+it('locates a merge in its innermost current classification despite historical targets on its ancestors', () => {
+  const relations = [rel('outer', 'CLASSIFY', ['merge', 'inner']), rel('inner', 'CLASSIFY'), rel('merge', 'MERGE', ['leaf']),
+    rel('joined-merge', 'JOIN', ['merge'], 'inner')];
+  const context = { relations, relationById: new Map(relations.map(relation => [relation.id, relation])),
+    rejectedContainerIds: new Set<string>(), rejectedJoinRelationIds: new Set<string>() };
+  expect(findContainingClassification(context, 'merge')).toBe('inner');
+  expect(findContainingClassification(context, 'leaf')).toBe('inner');
+  expect(findContainingClassification(context, 'inner')).toBe('outer');
+});
+
+it('uses the viewer membership choice for navigation rather than recomputing the latest JOIN', () => {
+  const relations = [rel('A', 'CLASSIFY'), rel('B', 'CLASSIFY'), rel('merge', 'MERGE', ['leaf']),
+    rel('old', 'JOIN', ['merge'], 'A'), { ...rel('new', 'JOIN', ['merge'], 'B'), createdAt: '2026-01-02' }];
+  const rejected = new Set<string>();
+  const context = { relations, relationById: new Map(relations.map(relation => [relation.id, relation])),
+    rejectedContainerIds: rejected, rejectedJoinRelationIds: rejected };
+  expect(findContainingClassification(context, 'merge')).toBe('B');
+  const containerOwnership = createContainerOwnership(relations, rejected, rejected, new Map([['merge', 'old']]));
+  expect(findContainingClassification({ ...context, containerOwnership }, 'merge')).toBe('A');
+  expect(findContainingClassification({ ...context, containerOwnership }, 'leaf')).toBe('A');
+});
 
 it('does not revive a native declaration after its independent JOIN is opposed',()=>{
   const container={...rel('C','CLASSIFY',['leaf']),payload:{independentMemberships:true}};

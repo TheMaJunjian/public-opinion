@@ -56,11 +56,7 @@ function AppContent() {
   }, []);
 
   const handleGestureConfirm = (direction: GestureDirection, target: HTMLElement | null, symbol: ShortcutSymbol) => {
-    const progress = document.querySelector<HTMLElement>('[data-workbench-progress-active="true"]');
-    if (progress) {
-      if (symbol === 'cancel') progress.closest('[data-operation-progress="true"]')?.querySelector<HTMLButtonElement>('button')?.click();
-      return;
-    }
+    if (document.querySelector('[data-workbench-progress-active="true"]')) return;
     if (symbol === 'zoom-in' || symbol === 'zoom-out') {
       setInterfaceZoom(currentZoom => {
         const nextZoom = symbol === 'zoom-in'

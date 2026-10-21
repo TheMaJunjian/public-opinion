@@ -77,7 +77,9 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
       sequence: 1, nextCursor: null, hasMore: false,
     };
   });
-  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false }, viewerRoute: { archive: null as ExportData | null, key: '' } };
+  return { mockApi, mockNavigate: vi.fn(), mockGraphView: vi.fn(), graphRendering: { actual: false,
+    tasks: null as ReturnType<typeof import('../context/WorkbenchDrawingContext')['createWorkbenchDrawingTasks']> | null,
+  }, viewerRoute: { archive: null as ExportData | null, key: '' } };
 });
 
 const catalogHarness = vi.hoisted(() => ({ callbacks: null as any, data: null as any,
@@ -121,9 +123,12 @@ vi.mock('react-router-dom', async () => {
 });
 vi.mock('../components/GraphView', async () => {
   const actual = await vi.importActual<typeof import('../components/GraphView')>('../components/GraphView');
+  const { useContext } = await import('react');
+  const { WorkbenchDrawingContext } = await import('../context/WorkbenchDrawingContext');
   return {
     ...actual,
-    default: (props: any) => {
+    default: function GraphViewMock(props: any) {
+      graphRendering.tasks = useContext(WorkbenchDrawingContext);
       mockGraphView(props);
       if (graphRendering.actual) return <actual.default {...props} />;
       return <div data-testid="graph-view">{(props.comparisonPair||props.comparisonSingle)&&props.comparisonScopeHeader}</div>;
@@ -155,6 +160,22 @@ function makeRelation(): Relation {
     createdAt: '2024-01-01T00:01:00.000Z',
     createdBy: makeUser(),
   };
+}
+
+async function waitForWorkbenchIdle() {
+  const assertIdle = () => {
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(graphRendering.tasks).not.toBeNull();
+    expect(graphRendering.tasks!.failure).toBeNull();
+    expect(graphRendering.tasks!.pending).toBe(0);
+  };
+  if (vi.isFakeTimers()) {
+    for (let frame = 0; frame < 300; frame++) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+      if (!document.querySelector('[aria-busy="true"]') && graphRendering.tasks?.pending === 0) { assertIdle(); return; }
+    }
+    assertIdle();
+  } else await waitFor(assertIdle, { timeout: 5000 });
 }
 
 describe('rejected child container boundaries and single-side comparison',()=>{
@@ -201,7 +222,8 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       const { projectWorkbenchSnapshot } = await import('../utils/workbenchProjection');
       const full = { ...snapshot([makeMessage('first', '首屏消息'), makeMessage('older', '下一页消息')]), windowed: false };
       act(() => catalogHarness.callbacks.onReady({ snapshot: full, projected: projectWorkbenchSnapshot(full), rows: { userRows: [], messageRows: [] } }));
-      await waitFor(() => expect(latest()?.messages).toHaveLength(2));
+      await waitForWorkbenchIdle();
+      expect(latest().messages).toHaveLength(2);
       expect(screen.queryByRole('button', { name: '加载更多消息' })).toBeNull();
     } finally { view.unmount(); mockApi.getWorkbenchSnapshot.mockImplementation(original); catalogHarness.callbacks = null; }
   });
@@ -233,6 +255,9 @@ describe('rejected child container boundaries and single-side comparison',()=>{
         catalogHarness.progress = { ready: true, count: 53, syncing: false };
         catalogHarness.callbacks.onReady(catalogHarness.data);
       });
+      // A complete model still needs its lazy view modules and drawing tasks.
+      // Wait until the browser would allow interaction before opening the board.
+      await waitForWorkbenchIdle();
       fireEvent.click(await screen.findByRole('button', { name: '排行榜' }));
       const dialog = await screen.findByRole('dialog', { name: '排行榜' });
       const row = within(dialog).getByText(remoteUser.username).closest('tr')!;
@@ -364,6 +389,9 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     try {
       render(<MessageWorkbenchPage />);
       await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'A')).toBe(true));
+      // fireEvent bypasses the browser's inert guard. Opening before the initial
+      // draw finishes can leave its unrelated progress dialog behind the board.
+      await waitForWorkbenchIdle();
       expect(metrics).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole('button', { name: '排行榜' }));
       expect(screen.getByRole('dialog', { name: '正在打开排行榜' })).toBeInTheDocument();
@@ -579,7 +607,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(latest().crossCanvasRelations.get('target')?.incoming['引用']).toEqual(['reference']);
   });
 
-  it.each(['REFERENCE','REPLY','ANNOTATION'].flatMap(type=>[
+  it.each(['REFERENCE','REPLY','ANNOTATION','AGREE','DISAGREE'].flatMap(type=>[
     {type,side:'source',scope:'A',viewMode:'graph'}, {type,side:'target',scope:'B',viewMode:'list'},
   ]))('views cross-canvas $type from its $side in $viewMode with distance one and a single full-exit button',async({type,side,scope,viewMode})=>{
     const relation=(id:string,relationType:string,targets:string[],sourceMessageId:string|null=null):Relation=>({id,relationType,sourceMessageId,targetRefs:targets.map(messageId=>({kind:'message',messageId})),createdAt:'2026-01-01',createdBy:makeUser()});
@@ -747,6 +775,53 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     }finally{geometry.mockRestore();graphRendering.actual=false;}
   });
 
+  it.each([0.7, 1, 1.5])('locates the JOIN record itself after clicking its temporary-category header at scale %s', async scale => {
+    fixture('CLASSIFY', true);
+    const response = await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({ data: response.data.filter((relation: Relation) => relation.id !== 'against-C') });
+    graphRendering.actual = true;
+    let navigating = false;
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute('data-workbench-left-panel')) return new DOMRect(0, 120, 600 * scale, 400 * scale);
+      if (navigating && this.dataset.msgid === 'join-B' && !this.hasAttribute('data-rel-overlay')) {
+        const panel = this.closest<HTMLElement>('[data-workbench-left-panel]');
+        return new DOMRect((100 - (panel?.scrollLeft ?? 0)) * scale, 120 + (2600 - (panel?.scrollTop ?? 0)) * scale, 300 * scale, 120 * scale);
+      }
+      return new DOMRect(0, 120, 300 * scale, 120 * scale);
+    });
+    try {
+      render(<MessageWorkbenchPage />);
+      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'A')).toBe(true));
+      await act(async () => latest().onMessageDoubleClick(event(), 'A'));
+      await act(async () => latest().onMessageDoubleClick(event(), 'C'));
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      Object.defineProperties(panel, {
+        clientHeight: { configurable: true, value: 400 }, offsetHeight: { configurable: true, value: 400 },
+        clientWidth: { configurable: true, value: 600 }, offsetWidth: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, value: 5000 }, scrollWidth: { configurable: true, value: 600 },
+      });
+      fireEvent.click(within(panel).getByRole('button', { name: '查看加入消息（1条）' }));
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      navigating = true;
+      fireEvent.click(within(panel).getByTitle('跳转到加入消息 join-B 的当前实际位置'));
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="join-B"]')).not.toBeNull());
+      expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
+      const card = panel.querySelector<HTMLElement>('[data-msgid="join-B"]:not([data-rel-overlay])')!;
+      const rect = card.getBoundingClientRect(), viewport = panel.getBoundingClientRect();
+      expect(rect.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(rect.bottom).toBeLessThanOrEqual(viewport.bottom);
+      expect(panel.scrollTop).toBeCloseTo(2460);
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="join-B"]')).toBeNull());
+      const retained = panel.querySelector<HTMLElement>('[data-msgid="join-B"]:not([data-rel-overlay])')!;
+      expect(retained).toBeVisible();
+      expect(retained.getBoundingClientRect().top).toBeGreaterThanOrEqual(viewport.top);
+      expect(retained.getBoundingClientRect().bottom).toBeLessThanOrEqual(viewport.bottom);
+      expect(panel.scrollTop).toBeCloseTo(2460);
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    } finally { geometry.mockRestore(); graphRendering.actual = false; }
+  });
+
   it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'].flatMap(type=>['graph','list'].map(mode=>({type,mode}))))('restores browsing history between $type and JOIN records from $mode',async({type,mode})=>{
     fixture(type,true);
     const response=await mockApi.getRelations();
@@ -832,6 +907,35 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     }
   });
 
+  it('waits for background view positioning before saving a manually scrolled location', async () => {
+    mockApi.getScope.mockResolvedValue({ messageId: 'classification-1', title: '后台定位' });
+    mockApi.getMessages.mockResolvedValue({ data: [makeMessage('background-location', '定位消息')] });
+    mockApi.getRelations.mockResolvedValue({ data: [] });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await waitFor(() => expect(latest()?.messages.some((message: Message) => message.id === 'background-location')).toBe(true));
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onMessageClick(event(), 'background-location'));
+      vi.useFakeTimers();
+      fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      // aria-busy only describes the blocking load; mode-switch navigation has
+      // a live positioning ticket even though the workbench is interactive.
+      expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+      expect(graphRendering.tasks!.pending).toBeGreaterThan(0);
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      panel.scrollTop = 730; panel.scrollLeft = 90;
+      await waitForWorkbenchIdle();
+      // Reproduce the old test's race: the scheduled centering overwrites a
+      // position assigned while aria-busy is false but navigation is pending.
+      expect([panel.scrollTop, panel.scrollLeft]).not.toEqual([730, 90]);
+      panel.scrollTop = 730; panel.scrollLeft = 90;
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect([panel.scrollTop, panel.scrollLeft]).toEqual([730, 90]);
+      expect(graphRendering.tasks!.pending).toBe(0);
+    } finally { view.unmount(); vi.useRealTimers(); geometry.mockRestore(); }
+  });
+
   it.each(['graph','list'] as const)('restores A/B/C and JOIN-record history after taking a new branch from %s',async initialMode=>{
     const containers=['A','B','C'] as const;
     const relation=(id:string,type:string,targets:string[],source:string|null=null,order=0):Relation=>({
@@ -857,11 +961,15 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400)),
     ];
     graphRendering.actual=true;
+    let view: ReturnType<typeof render> | undefined;
     try{
-      render(<MessageWorkbenchPage/>);
-      const ready=()=>waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      view = render(<MessageWorkbenchPage/>);
+      // Ordinary navigation is non-blocking. Its delayed centering still owns a
+      // positioning task after aria-busy becomes false, so wait before scrolling.
+      const ready=waitForWorkbenchIdle;
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
       await ready();
+      vi.useFakeTimers();
       const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
       const right=document.querySelector<HTMLElement>('.workbench-right-panel')!,page=document.documentElement;
       const row=(id:string)=>left.querySelector<HTMLElement>(`[data-msgid="${id}"]:not([data-rel-overlay])`)!;
@@ -912,7 +1020,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
             expect(screen.getByRole('button',{name:`暂存消息 ${saved.id}`})).toBeInTheDocument();
           }
         }
-        await waitFor(()=>expect(readScroll()).toEqual(saved.scroll));
+        expect(readScroll()).toEqual(saved.scroll);
       };
       const back=()=>fireEvent.click(screen.getByRole('button',{name:'返回'}));
       const forward=()=>fireEvent.click(screen.getByRole('button',{name:'前进'}));
@@ -944,6 +1052,9 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
       expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
     }finally{
+      // Navigation frames use controlled time rather than racing real timers.
+      view?.unmount();
+      vi.useRealTimers();
       graphRendering.actual=false;dimensions.forEach(spy=>spy.mockRestore());
       if(scrollingElement)Object.defineProperty(document,'scrollingElement',scrollingElement);
       else Reflect.deleteProperty(document,'scrollingElement');
@@ -1491,6 +1602,105 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
   });
 
+  it.each(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].flatMap(type =>
+    ['graph', 'list'].map(mode => ({ type, mode }))))(
+    'finishes agreeing to a rejected JOIN into $type in $mode without moving the view', async ({ type, mode }) => {
+    localStorage.setItem('token', 'test-token');
+    const container: Relation = { ...makeRelation(), id: 'join-owner', relationType: type, sourceMessageId: null,
+      targetRefs: [], payload: { title: '加入的容器', independentMemberships: true } };
+    const join: Relation = { ...makeRelation(), id: 'rejected-join', relationType: 'JOIN', sourceMessageId: container.id,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }] };
+    const rejection: Relation = { ...makeRelation(), id: 'against-join', relationType: 'DISAGREE', sourceMessageId: null,
+      targetRefs: [{ kind: 'relation', relationId: join.id }] };
+    const agreement: Relation = { ...rejection, id: 'restore-join', relationType: 'AGREE', createdAt: '2026-10-21T00:00:00Z' };
+    mockApi.getRelations.mockResolvedValue({ data: [container, join, rejection] });
+    mockApi.createRelation.mockResolvedValueOnce(agreement);
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      const latest = () => mockGraphView.mock.lastCall![0];
+      expect(latest().joinStatusByMessage.get(join.id)).toBe('rejected');
+      await act(async () => latest().onJoinFilterClick('msg-1', 'incoming'));
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, join.id));
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      panel.scrollTop = 127; panel.scrollLeft = 35;
+      fireEvent.click(screen.getByRole('button', { name: /^赞同$/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^发送$/ }));
+      await waitFor(() => expect(mockApi.createRelation).toHaveBeenCalledWith(expect.any(String),
+        expect.objectContaining({ relationType: 'AGREE', targetRefs: [expect.objectContaining({ reference: expect.objectContaining({ messageId: join.id }) })] })));
+      await waitForWorkbenchIdle();
+      if (mode === 'graph') expect(latest().joinStatusByMessage.get(join.id)).toBe('valid');
+      else expect(panel.querySelector(`[data-msgid="${join.id}"]`)).toHaveTextContent('生效');
+      expect(screen.getByRole('button', { name: '退出临时分类' })).toBeInTheDocument();
+      expect([panel.scrollTop, panel.scrollLeft]).toEqual([127, 35]);
+      expect(document.querySelector('[data-message-jump-overlay]')).toBeNull();
+      expect(screen.queryByRole('dialog', { name: '正在发送' })).toBeNull();
+      expect(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）').closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
+      // The member remains reachable through its existing explicit navigation.
+      await act(async () => latest().onNavigateToMessage('msg-1'));
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="msg-1"]')).not.toBeNull());
+    } finally {
+      view.unmount(); geometry.mockRestore(); graphRendering.actual = false;
+    }
+  });
+
+  it.each(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].flatMap(type =>
+    ['graph', 'list'].flatMap(mode => [false, true].map(keepsMember => ({ type, mode, keepsMember })))))(
+    'finishes rejecting a JOIN and restoring $type in $mode after its member moves (remaining member=$keepsMember)', async ({ type, mode, keepsMember }) => {
+    localStorage.setItem('token', 'test-token');
+    const container: Relation = { ...makeRelation(), id: 'join-owner', relationType: type, sourceMessageId: null,
+      targetRefs: [], payload: { title: '原容器', independentMemberships: true } };
+    const join: Relation = { ...makeRelation(), id: 'active-join', relationType: 'JOIN', sourceMessageId: container.id,
+      targetRefs: [{ kind: 'message', messageId: 'msg-1' }] };
+    const retained: Relation = { ...join, id: 'retained-join', targetRefs: [{ kind: 'message', messageId: 'msg-2' }] };
+    const rejection: Relation = { ...makeRelation(), id: 'reject-join', relationType: 'DISAGREE', sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: join.id }], createdAt: '2026-10-21T00:00:00Z' };
+    mockApi.getRelations.mockResolvedValue({ data: [container, join, ...(keepsMember ? [retained] : [])] });
+    mockApi.createRelation.mockResolvedValueOnce(rejection);
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      const latest = () => mockGraphView.mock.lastCall![0];
+      if (type === 'CLASSIFY' || type === 'SUMMARY') {
+        await act(async () => latest().onMessageDoubleClick({ button: 0, stopPropagation: vi.fn() }, container.id));
+        await waitForWorkbenchIdle();
+      }
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onJoinFilterClick('msg-1', 'incoming'));
+      await waitForWorkbenchIdle();
+      await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, join.id));
+      fireEvent.click(screen.getByRole('button', { name: /^反对$/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^发送$/ }));
+      await waitFor(() => expect(mockApi.createRelation).toHaveBeenCalled());
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: '退出临时分类' }));
+      await waitForWorkbenchIdle();
+      expect(screen.queryByRole('button', { name: '退出临时分类' })).toBeNull();
+      expect(screen.queryByRole('dialog', { name: '正在绘制' })).toBeNull();
+      expect(screen.queryByText(/绘制超时|绘制或定位尚未完成/)).toBeNull();
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      if (type === 'CLASSIFY' || type === 'SUMMARY') {
+        expect(panel.querySelector('[data-msgid="msg-1"]:not([data-rel-overlay])')).toBeNull();
+        expect(screen.getAllByRole('button', { name: type === 'CLASSIFY' ? '退出分类' : '退出总结' }).length).toBeGreaterThan(0);
+      } else expect(panel.querySelector('[data-msgid="msg-1"]:not([data-rel-overlay])')).not.toBeNull();
+      const input = screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      fireEvent.change(input, { target: { value: '退出后继续编辑' } });
+      expect(input).toHaveValue('退出后继续编辑');
+      expect(input.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
+    } finally {
+      view.unmount(); geometry.mockRestore(); graphRendering.actual = false;
+    }
+  });
+
   it.each([
     ['CLASSIFY', 'graph'], ['SUMMARY', 'graph'], ['MERGE', 'graph'], ['ARRANGE', 'graph'],
     ['CLASSIFY', 'list'], ['SUMMARY', 'list'], ['MERGE', 'list'], ['ARRANGE', 'list'],
@@ -1548,7 +1758,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     }
   });
 
-  it('keeps the left view free of height caps after sending', async () => {
+  it('keeps the left scroll viewport bounded by its pane after sending', async () => {
     localStorage.setItem('token', 'test-token');
     mockApi.createMessage.mockResolvedValueOnce(makeMessage('sent-height-check', '新增消息'));
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 200, 500, 500));
@@ -1556,11 +1766,14 @@ describe('MessageWorkbenchPage composer refresh', () => {
       render(<MessageWorkbenchPage />);
       await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
       const left = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const pane = left.closest<HTMLElement>('.workbench-message-pane')!;
+      expect(pane.style.maxHeight).toContain('100dvh');
+      expect(pane.style.position).toBe('sticky');
       expect(left.style.height).toBe('');
-      expect(left.style.minHeight).toBe('');
+      expect(left.style.minHeight).toBe('0');
       expect(left.style.maxHeight).toBe('');
       expect(left.style.flexGrow).toBe('1');
-      expect(left.style.flexShrink).toBe('0');
+      expect(left.style.flexShrink).toBe('1');
       fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '新增消息' } });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => {
@@ -1569,9 +1782,11 @@ describe('MessageWorkbenchPage composer refresh', () => {
       });
       expect(document.querySelector<HTMLElement>('[data-workbench-left-panel]')).toBe(left);
       expect(left.style.height).toBe('');
-      expect(left.style.minHeight).toBe('');
+      expect(left.style.minHeight).toBe('0');
       expect(left.style.maxHeight).toBe('');
       expect(left.style.flexGrow).toBe('1');
+      expect(left.closest('.workbench-message-pane')).toBe(pane);
+      expect(pane.style.maxHeight).toContain('100dvh');
     } finally {
       geometry.mockRestore();
     }
@@ -1775,7 +1990,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(document.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="delayed-text"]')?.style.visibility).toBe('');
       expect(screen.getByText('已定位目标消息')).toBeInTheDocument();
       await waitFor(() => expect(screen.queryByRole('dialog', { name: '正在发送' })).toBeNull());
-      expect(document.querySelector('[data-message-jump-target="delayed-text"] [data-message-jump-clone]')).not.toBeNull();
+      expect(document.querySelector('[data-message-jump-target="delayed-text"]')).not.toBeNull();
       expect(workbench).toHaveAttribute('aria-busy', 'false');
       expect(workbench.inert).toBe(false);
       expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
@@ -1784,7 +1999,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     }
   });
 
-  it('keeps hidden progress locked through two slow sends and enables each next send only after its own mask commits', async () => {
+  it('keeps progress visible through two slow sends and enables each next send only after its own mask commits', async () => {
     localStorage.setItem('token', 'test-token');
     const sent = [makeMessage('slow-first', '第一条慢发送'), makeMessage('slow-second', '第二条慢发送')];
     const originalBatch = mockApi.withCommandBatch.getMockImplementation()!;
@@ -1815,11 +2030,11 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await tick(0);
       expect(commits).toHaveLength(1);
       expect(mockApi.createMessage).toHaveBeenCalledOnce();
-      fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+      expect(screen.queryByRole('button', { name: /收起进度|显示进度/ })).toBeNull();
       await tick(25_000);
       expect(root.inert).toBe(true);
       expect(send).toBeDisabled();
-      expect(document.querySelector('[data-workbench-progress-active][role="status"]')).toHaveTextContent('等待发送确认');
+      expect(screen.getByRole('dialog', { name: '正在发送' })).toHaveTextContent('正在等待服务器确认发送');
       await act(async () => commits[0]());
       // Programmatic events also must not bypass the send guard while placement is pending.
       fireEvent.change(input, { target: { value: sent[1].content } });
@@ -1828,13 +2043,13 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(mockApi.createMessage).toHaveBeenCalledOnce();
       expect(root.inert).toBe(true);
       await frames();
-      expect(document.querySelector('[data-message-jump-target="slow-first"] [data-message-jump-clone]')).not.toBeNull();
+      expect(document.querySelector('[data-message-jump-target="slow-first"]')).not.toBeNull();
       expect(root.inert).toBe(false);
       expect(send).toBeEnabled();
       fireEvent.click(send);
       await tick(0);
       expect(commits).toHaveLength(2);
-      fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+      expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
       // The previous message's highlight expires while this request is still pending.
       await tick(10_000);
       expect(root.inert).toBe(true);
@@ -1842,7 +2057,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await act(async () => commits[1]());
       expect(root.inert).toBe(true);
       await frames();
-      expect(document.querySelector('[data-message-jump-target="slow-second"] [data-message-jump-clone]')).not.toBeNull();
+      expect(document.querySelector('[data-message-jump-target="slow-second"]')).not.toBeNull();
       expect(root.inert).toBe(false);
       expect(mockApi.createMessage).toHaveBeenCalledTimes(2);
       expect(screen.queryByRole('alert')).toBeNull();
@@ -1854,7 +2069,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     }
   });
 
-  it('bounds a hidden placement wait despite incoming updates, cancels late masks, and allows a fresh send after recovery', async () => {
+  it('bounds a placement wait despite incoming updates, cancels late masks, and allows a fresh send after recovery', async () => {
     localStorage.setItem('token', 'test-token');
     const current: Relation = { ...makeRelation(), id: 'bounded-class', relationType: 'CLASSIFY', sourceMessageId: null,
       targetRefs: [{ kind: 'message', messageId: 'msg-1' }], payload: { title: '等待测试分类' } };
@@ -1886,7 +2101,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.change(input, { target: { value: sent.content } });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await tick(0);
-      fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+      expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
       for (let index = 0; index < 5; index++) {
         await tick(5000);
         await publish(index + 2, [sent]);
@@ -1911,7 +2126,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       const nextJoin: Relation = { ...lateJoin, id: 'next-join', targetRefs: [{ kind: 'message', messageId: next.id }] };
       await publish(9, [next], [nextJoin]);
       await frames();
-      expect(document.querySelector('[data-message-jump-target="recovered-placement"] [data-message-jump-clone]')).not.toBeNull();
+      expect(document.querySelector('[data-message-jump-target="recovered-placement"]')).not.toBeNull();
       expect(root.inert).toBe(false);
       expect(mockApi.createMessage).toHaveBeenCalledTimes(2);
     } finally {
@@ -2000,7 +2215,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     }
   });
 
-  it('uses the global page for the natural right panel, preserving nested lists and boundary handoff', async () => {
+  it('prioritizes each hovered region, then its panel and the opposite panel before the page, including reversal', async () => {
     render(<MessageWorkbenchPage />);
     await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
@@ -2010,8 +2225,9 @@ describe('MessageWorkbenchPage composer refresh', () => {
     const pageHeight = vi.spyOn(page, 'clientHeight', 'get').mockReturnValue(200);
     const pageContentHeight = vi.spyOn(page, 'scrollHeight', 'get').mockReturnValue(1000);
     Object.defineProperties(left, { clientHeight: { value: 200 }, scrollHeight: { value: 1000 } });
-    Object.defineProperties(right, { clientHeight: { value: 1000 }, scrollHeight: { value: 1000 } });
+    Object.defineProperties(right, { clientHeight: { value: 200 }, scrollHeight: { value: 1000 } });
     left.scrollTop = 200;
+    right.scrollTop = 200;
     page.scrollTop = 200;
     const wheel = (target: HTMLElement, deltaY: number, canceled: boolean) => {
       const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
@@ -2019,20 +2235,22 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(event.defaultPrevented).toBe(canceled);
     };
     try {
-      expect(right.style.maxHeight).toBe('');
+      expect(right.style.maxHeight).toContain('100dvh');
       wheel(right, 120, true);
-      expect(page.scrollTop).toBe(320);
-      expect(right.scrollTop).toBe(0);
+      expect(page.scrollTop).toBe(200);
+      expect(right.scrollTop).toBe(320);
       expect(left.scrollTop).toBe(200);
       wheel(left, -120, true);
       expect(left.scrollTop).toBe(80);
-      expect(page.scrollTop).toBe(320);
-      page.scrollTop = 800;
+      expect(page.scrollTop).toBe(200);
+      right.scrollTop = 800;
       wheel(right, 120, true);
       expect(left.scrollTop).toBe(200);
+      expect(page.scrollTop).toBe(200);
       left.scrollTop = 0;
       wheel(left, -120, true);
-      expect(page.scrollTop).toBe(680);
+      expect(right.scrollTop).toBe(680);
+      expect(page.scrollTop).toBe(200);
 
       const recent = screen.getByText('最近关系消息').nextElementSibling as HTMLElement;
       Object.defineProperties(recent, { clientHeight: { value: 100 }, scrollHeight: { value: 400 } });
@@ -2042,24 +2260,30 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(page.scrollTop).toBe(800);
       expect(left.scrollTop).toBe(0);
 
-      // The list hands off to the page before it can move the opposite canvas.
+      // The list hands off to its right panel, then the opposite canvas, then the page.
       recent.scrollTop = 280;
+      right.scrollTop = 740;
       page.scrollTop = 740;
       wheel(recent.firstElementChild as HTMLElement, 60, true);
       expect(recent.scrollTop).toBe(300);
-      expect(page.scrollTop).toBe(780);
+      expect(right.scrollTop).toBe(780);
+      expect(page.scrollTop).toBe(740);
       expect(left.scrollTop).toBe(0);
       wheel(recent.firstElementChild as HTMLElement, 60, true);
-      expect(page.scrollTop).toBe(800);
+      expect(right.scrollTop).toBe(800);
+      expect(page.scrollTop).toBe(740);
       expect(left.scrollTop).toBe(40);
       wheel(recent.firstElementChild as HTMLElement, 60, true);
+      expect(page.scrollTop).toBe(740);
       expect(left.scrollTop).toBe(100);
+      wheel(recent.firstElementChild as HTMLElement, 60, true);
+      expect(left.scrollTop).toBe(160);
       wheel(recent.firstElementChild as HTMLElement, -60, true);
       expect(recent.scrollTop).toBe(240);
-      expect(page.scrollTop).toBe(800);
-      expect(left.scrollTop).toBe(100);
+      expect(page.scrollTop).toBe(740);
+      expect(left.scrollTop).toBe(160);
 
-      // The same ancestry order applies to nested content in the left canvas.
+      // The same priority applies to nested content in the left canvas.
       const leftList = document.createElement('div');
       leftList.style.overflowY = 'auto';
       Object.defineProperties(leftList, { clientHeight: { value: 100 }, scrollHeight: { value: 400 } });
@@ -2068,9 +2292,9 @@ describe('MessageWorkbenchPage composer refresh', () => {
       page.scrollTop = 20;
       leftList.scrollTop = 20;
       wheel(leftList, -100, true);
-      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([0, 0, 0]);
+      expect([leftList.scrollTop, left.scrollTop, right.scrollTop, page.scrollTop]).toEqual([0, 0, 740, 20]);
       wheel(leftList, 40, true);
-      expect([leftList.scrollTop, left.scrollTop, page.scrollTop]).toEqual([40, 0, 0]);
+      expect([leftList.scrollTop, left.scrollTop, right.scrollTop, page.scrollTop]).toEqual([40, 0, 740, 20]);
     } finally {
       page.scrollTop = 0;
       pageHeight.mockRestore();
@@ -2304,6 +2528,21 @@ describe('MessageWorkbenchPage nested-classify merge expansion', () => {
         },
       ],
     });
+  });
+
+  it('jumps directly into the current inner classification when an outer declaration still lists the merge', async () => {
+    const stored = await mockApi.getRelations();
+    const outer = stored.data.find((relation: Relation) => relation.id === 'rel-outer');
+    outer.targetRefs.push({ kind: 'relation', relationId: 'rel-merge' });
+    stored.data.push({ id: 'join-merge', relationType: 'JOIN', sourceMessageId: 'rel-inner',
+      targetRefs: [{ kind: 'relation', relationId: 'rel-merge' }], createdAt: '2024-01-01T00:05:00Z', createdBy: makeUser() });
+    render(<MessageWorkbenchPage />);
+    await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText('输入消息 ID'), { target: { value: 'rel-merge' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    await waitFor(() => expect(mockGraphView.mock.lastCall![0].messages.map((message: { id: string }) => message.id))
+      .toEqual(expect.arrayContaining(['rel-merge', 'msg-a', 'msg-b'])));
+    expect(screen.getByText('内层分类')).toBeInTheDocument();
   });
 
   it('shows only outer classify targets and their related messages after entering classification', async () => {
@@ -3413,6 +3652,32 @@ describe('MessageWorkbenchPage exit classify classification restores base view',
         },
       ] as Relation[],
     });
+  });
+
+  it.each(['graph', 'list'] as const)('shows the exited classification mask in %s without recentering its saved viewport', async mode => {
+    graphRendering.actual = true;
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 120, 300, 140));
+    const dimensions = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(5000),
+      vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(3000),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600),
+    ];
+    try {
+      render(<MessageWorkbenchPage />);
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      if (mode === 'list') fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
+      const panel = document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      await waitFor(() => expect(panel.querySelector('[data-msgid="rel-classify"]')).not.toBeNull());
+      panel.scrollTop = 480; panel.scrollLeft = 90;
+      fireEvent.doubleClick(panel.querySelector('[data-msgid="rel-classify"]')!);
+      await waitFor(() => expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('测试分类'));
+      panel.scrollTop = 150; panel.scrollLeft = 20;
+      fireEvent.click(screen.getByRole('button', { name: '退出分类' }));
+      await waitFor(() => expect(document.querySelector('[data-message-jump-target="rel-classify"]')).not.toBeNull());
+      expect([panel.scrollTop, panel.scrollLeft]).toEqual([480, 90]);
+      expect(document.querySelector('[data-message-jump-target="rel-classify"]')).not.toBeNull();
+    } finally { geometry.mockRestore(); dimensions.forEach(spy => spy.mockRestore()); graphRendering.actual = false; }
   });
 
   it.each(['graph','list'] as const)('restores the original %s mode and all scroll positions without loading known messages again',async originalMode=>{

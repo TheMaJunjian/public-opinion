@@ -104,7 +104,7 @@ describe('linked panel wheel scrolling', () => {
   it.each([
     { side: 'left', direction: 1 }, { side: 'right', direction: 1 },
     { side: 'left', direction: -1 }, { side: 'right', direction: -1 },
-  ])('scrolls the target, each parent and the page before the opposite $side panel (direction $direction)', ({ direction }) => {
+  ])('scrolls the target and its parents before the opposite $side panel, and immediately returns on reversal (direction $direction)', ({ direction }) => {
     const page = panel(), current = panel(), other = panel(400), parent = panel(), nested = panel();
     page.append(current);
     current.append(parent);
@@ -112,7 +112,8 @@ describe('linked panel wheel scrolling', () => {
     parent.style.overflow = nested.style.overflow = 'auto';
     const target = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     nested.append(target);
-    const chain = [nested, parent, current, page];
+    const chain = [nested, parent, current];
+    page.scrollTop = 400;
     for (const element of chain) element.scrollTop = direction > 0 ? 760 : 40;
     current.addEventListener('wheel', event => handlePanelWheel(current, other, event, page), { passive: false });
     const edge = direction > 0 ? 800 : 0;
@@ -122,9 +123,11 @@ describe('linked panel wheel scrolling', () => {
       expect(event.defaultPrevented).toBe(true);
       expect(chain.map(element => element.scrollTop)).toEqual(chain.map((_, i) => i <= index ? edge : direction > 0 ? 760 : 40));
       expect(other.scrollTop).toBe(400);
+      expect(page.scrollTop).toBe(400);
     }
     target.dispatchEvent(new WheelEvent('wheel', { deltaY: direction * 40, bubbles: true, cancelable: true }));
     expect(other.scrollTop).toBe(400 + direction * 40);
+    expect(page.scrollTop).toBe(400);
     // Reversing the wheel goes back to the target without moving the mouse.
     target.dispatchEvent(new WheelEvent('wheel', { deltaY: direction * -40, bubbles: true, cancelable: true }));
     expect(nested.scrollTop).toBe(edge - direction * 40);
@@ -141,9 +144,9 @@ describe('linked panel wheel scrolling', () => {
     current.addEventListener('wheel', event => handlePanelWheel(current, other, event, page), { passive: false });
     const wheel = () => nested.dispatchEvent(new WheelEvent('wheel', { deltaY: direction * 100, bubbles: true, cancelable: true }));
     wheel();
-    expect([nested.scrollTop, current.scrollTop, page.scrollTop, other.scrollTop]).toEqual([edge, edge, edge, 300 + direction * 40]);
+    expect([nested.scrollTop, current.scrollTop, page.scrollTop, other.scrollTop]).toEqual([edge, edge, start, 300 + direction * 60]);
     wheel();
-    expect(other.scrollTop).toBe(300 + direction * 140);
+    expect(other.scrollTop).toBe(300 + direction * 160);
   });
 
   it.each([1, -1])('passes one wheel input through each horizontal boundary (direction %s)', direction => {
@@ -159,7 +162,7 @@ describe('linked panel wheel scrolling', () => {
     nested.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
     expect([nested.scrollLeft, current.scrollLeft, page.scrollLeft, other.scrollLeft]).toEqual([
-      direction > 0 ? 800 : 0, direction > 0 ? 800 : 0, direction > 0 ? 800 : 0, 300 + direction * 65,
+      direction > 0 ? 800 : 0, direction > 0 ? 800 : 0, start[2], 300 + direction * 70,
     ]);
     expect([nested.scrollTop, current.scrollTop, page.scrollTop, other.scrollTop]).toEqual([0, 0, 0, 0]);
   });
@@ -178,8 +181,17 @@ describe('linked panel wheel scrolling', () => {
     other.scrollLeft = other.scrollTop = 300;
     current.addEventListener('wheel', event => handlePanelWheel(current, other, event, page), { passive: false });
     nested.dispatchEvent(new WheelEvent('wheel', { deltaX: 100, deltaY: 100, bubbles: true, cancelable: true }));
-    expect([nested.scrollLeft, current.scrollLeft, page.scrollLeft, other.scrollLeft]).toEqual([800, 800, 800, 365]);
-    expect([nested.scrollTop, current.scrollTop, page.scrollTop, other.scrollTop]).toEqual([800, 800, 800, 365]);
+    expect([nested.scrollLeft, current.scrollLeft, page.scrollLeft, other.scrollLeft]).toEqual([800, 800, 795, 370]);
+    expect([nested.scrollTop, current.scrollTop, page.scrollTop, other.scrollTop]).toEqual([800, 800, 790, 375]);
+  });
+
+  it.each([1, -1])('hands off to the page only after both panels reach their boundary (direction %s)', direction => {
+    const edge = direction > 0 ? 800 : 0;
+    const current = panel(edge), other = panel(edge - direction * 20), page = panel(400);
+    handlePanelWheel(current, other, new WheelEvent('wheel', { deltaY: direction * 60, cancelable: true }), page);
+    expect([current.scrollTop, other.scrollTop, page.scrollTop]).toEqual([edge, edge, 400 + direction * 40]);
+    handlePanelWheel(current, other, new WheelEvent('wheel', { deltaY: direction * -30, cancelable: true }), page);
+    expect([current.scrollTop, other.scrollTop, page.scrollTop]).toEqual([edge - direction * 30, edge, 400 + direction * 40]);
   });
 
   it('routes Shift plus a vertical wheel to horizontal scrolling and passes the remainder', () => {

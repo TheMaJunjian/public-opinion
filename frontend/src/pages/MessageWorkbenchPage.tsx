@@ -11,6 +11,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { api } from '../api';
 import { ApiError } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 import type {
   DemoEdge,
   DemoMessage,
@@ -34,6 +35,7 @@ import { attachMessageToCurrentClassify as runAttachMessageToCurrentClassify, ha
 import { handleSendClick as runHandleSendClick } from './workbench/actions/sendTransaction';
 import { collectExclusiveRelationMsgIds as runCollectExclusiveRelationMsgIds, getClassifyTargetRefs as runGetClassifyTargetRefs, getContainerCycleError as runGetContainerCycleError, getContainerMembershipTargetError as runGetContainerMembershipTargetError, getDependentDisplayTarget as runGetDependentDisplayTarget, getDependentDisplayTargets as runGetDependentDisplayTargets, getGroupedTargetTextMessageIds as runGetGroupedTargetTextMessageIds, getJoinContainerCycleError as runGetJoinContainerCycleError, getSelectedWholeMessageIds as runGetSelectedWholeMessageIds, hasCrossNonReferenceTextLinkForClassifyTargets as runHasCrossNonReferenceTextLinkForClassifyTargets, organizationTargetRef as runOrganizationTargetRef, promoteCompleteContainerSelections as runPromoteCompleteContainerSelections, resolveEffectiveTargetUnits as runResolveEffectiveTargetUnits } from './workbench/actions/targetResolution';
 import { captureSnapshot as runCaptureSnapshot, confirmMessageIdNavigation as runConfirmMessageIdNavigation, enterClassification as runEnterClassification, enterTemporaryCategory as runEnterTemporaryCategory, enterTrace as runEnterTrace, enterTraceMultiple as runEnterTraceMultiple, exitAllTemporaryCategories as runExitAllTemporaryCategories, exitAllTrace as runExitAllTrace, exitClassification as runExitClassification, exitTemporaryCategory as runExitTemporaryCategory, findContainingClassification as runFindContainingClassification, handleExitClassification as runHandleExitClassification, restoreSnapshot as runRestoreSnapshot } from './workbench/actions/viewHistory';
+import type { RestoreSnapshotOptions } from './workbench/actions/viewHistory';
 import { deriveComparisonGraphProjections, projectComparisonSide } from './workbench/projections/comparisonGraphProjections';
 import type { DeriveComparisonGraphProjectionsInput } from './workbench/projections/comparisonGraphProjections';
 import { deriveCrossCanvasRelations } from '../utils/crossCanvasRelations';
@@ -139,6 +141,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const scopeMessageId = routeMessageId ?? 'root';
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const interfaceZoom = useInterfaceZoom();
   const { user, logout, loading: authLoading } = useAuth();
   const {
     scope, messages, setMessages, edges, setEdges,
@@ -161,84 +164,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
 
   // Auto-enter classify scope if msg belongs to one
   const [autoClassifyMsgId, setAutoClassifyMsgId] = useState<string | null>(null);
-  useEffect(() => {
-    if (loading || relations.length === 0) return;
-    const msgId = autoClassifyMsgId;
-    if (!msgId) return;
-
-    const msgRel = relations.find(r => r.id === msgId);
-    const msgRelType = msgRel?.relationType?.toUpperCase();
-    // Determine the "anchor" — the message whose classify determines where
-    // this message is displayed on the canvas.
-    // - ANNOTATION / REFERENCE / REPLY / CORRECT → displayed alongside source
-    // - AGREE / DISAGREE / TAG → displayed alongside target (as decorations)
-    // - Other types / text messages → the message itself is the anchor
-    let anchorId = msgId;
-    if (msgRel) {
-      const srcId = msgRel.sourceMessageId ?? null;
-      const firstTextTarget = ((msgRel.targetRefs ?? []) as TargetRef[])
-        .find(t => t.kind === 'message' || t.kind === 'text-fragment');
-      const tgtId = firstTextTarget ? firstTextTarget.messageId : null;
-      if (msgRelType === 'ANNOTATION' || msgRelType === 'REFERENCE'
-        || msgRelType === 'REPLY' || msgRelType === 'CORRECT') {
-        anchorId = srcId || msgId;
-      } else if (msgRelType === 'AGREE' || msgRelType === 'DISAGREE'
-        || msgRelType === 'TAG') {
-        anchorId = tgtId || msgId;
-      }
-    }
-    // Build lookup for ownership expansion
-    const relById = new Map(relations.map(r => [r.id, r]));
-    const msgMapLocal = new Map(messages.map(m => [m.id, m]));
-
-    const tryEnter = (relId: string) => {
-      if (classifyRelMsgId === relId) {
-        // Already in this classify — just ensure correct view mode
-        if (hiddenInGraphView.has(msgId)) setViewMode("list");
-        setAutoClassifyMsgId(null);
-        return;
-      }
-      if (classifyRelMsgId) exitClassification({ restoreSnapshot: false });
-      enterClassification(relId, false);
-      // If the classify is rejected, enter preview (read-only) mode
-      if (rejectedContainerIds.has(relId)) {
-        setPreviewClassifyId(relId);
-      }
-      if (hiddenInGraphView.has(msgId)) setViewMode("list");
-      setAutoClassifyMsgId(null);
-    };
-
-    // ── Find the classify that owns the anchor ──
-    // First pass: direct targetRefs match.
-    for (const rel of relations) {
-      const rt = rel.relationType?.toUpperCase();
-      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
-      // Don't auto-enter rejected classifies from navigation jumps —
-      // their messages are back on the main canvas.  User can still
-      // enter preview mode by double-clicking the card directly.
-      if (rejectedContainerIds.has(rel.id)) continue;
-      const targets = (rel.targetRefs ?? []) as TargetRef[];
-      if (targets.some(t =>
-        (t.kind === 'relation' && t.relationId === anchorId) ||
-        (t.kind !== 'relation' && t.messageId === anchorId)
-      )) { tryEnter(rel.id); return; }
-    }
-    // Second pass: transitive ownership + CORRECT expansion.
-    for (const rel of relations) {
-      const rt = rel.relationType?.toUpperCase();
-      if (rt !== 'CLASSIFY' && rt !== 'SUMMARY') continue;
-      if (rejectedContainerIds.has(rel.id)) continue;
-      const owned = collectOwnedByRelation(rel.id, relById, new Set(), undefined, rejectedJoinRelationIds);
-      const expanded = expandTextIdsWithCorrections(owned.textIds, edges, msgMapLocal);
-      if (expanded.has(anchorId) || owned.relationIds.has(anchorId)) {
-        tryEnter(rel.id); return;
-      }
-    }
-    // Anchor not in any classify → main view.
-    if (classifyRelMsgId) exitClassification({ restoreSnapshot: false }); else setClassifyRelMsgId(null);
-    if (hiddenInGraphView.has(msgId)) setViewMode("list");
-    setAutoClassifyMsgId(null);
-  }, [loading, relations, autoClassifyMsgId, hiddenInGraphView, edges, messages]);
 
   // Phase 3: auto-open settlement from URL params (triggered by points-navigate)
   const pendingScrollMsgRef = useRef<string | null>(null);
@@ -522,7 +447,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   // View-switch decisions (graph→list for hidden messages) are made in the auto-classify
   // effect above; this effect only handles the actual scrolling.
   useEffect(() => {
-    if (!loading && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
+    if (!loading && !autoClassifyMsgId && pendingScrollMsgRef.current && messages.some(m => m.id === pendingScrollMsgRef.current)) {
       // A pending navigation may target a JOIN record itself. Do not resolve
       // it to the joined target; the JOIN card is the requested destination.
       const dependencyIds = pendingScrollDependencyIdsRef.current;
@@ -532,7 +457,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       scrollMsgToCenter(pendingScrollMsgRef.current, { dependencyIds, onComplete });
       pendingScrollMsgRef.current = null;
     }
-  }, [loading, messages, classifyKey, traceKey, scrollKey, viewMode]);
+  }, [loading, autoClassifyMsgId, messages, classifyKey, traceKey, scrollKey, viewMode]);
 
   useEffect(() => {
     const pendingNavigation = pendingCorrectionNavigationRef.current;
@@ -640,6 +565,15 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     };
     // Membership records update the structure without moving the user's view.
     if (target.kind === 'join' || target.relationType?.toLowerCase() === 'join') { advance(); return; }
+    // A stance on a JOIN updates membership in place. JOIN history shows only
+    // membership records, so its new stance has no independent navigation target.
+    // Keep this view and let the user follow the JOIN's member label explicitly.
+    const isJoinStance = ['agree', 'disagree'].includes(target.relationType ?? '')
+      && target.targetRefs?.some(ref => {
+        const id = ref.kind === 'relation' ? ref.relationId : ref.messageId;
+        return messages.some(message => message.id === id && (message.kind === 'join' || String(message.relationType) === 'join'));
+      });
+    if (isJoinStance) { advance(); return; }
     activeSentMessageRef.current = sentMessageTarget;
     if (!renderedMessageIdsRef.current.has(sentMessageTarget)) setHomeFilterMode(null);
     handleNavigateToMessage(sentMessageTarget, { select: false, preserveScope: true,
@@ -899,6 +833,19 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const effectiveSuppressedRelIdsForLayout = containerEffect.suppressed;
   const rejectedContainerIds = containerEffect.rejectedContainerIds;
   const rejectedJoinRelationIds = containerEffect.rejectedJoinRelationIds;
+  useEffect(() => {
+    if (loading || !autoClassifyMsgId) return;
+    // Locate in the same effective, innermost scope that renders the message.
+    // Historical target declarations may still mention members moved elsewhere.
+    const containerId = findContainingClassification(autoClassifyMsgId);
+    if (containerId !== classifyRelMsgId) {
+      if (classifyRelMsgId) exitClassification({ restoreSnapshot: false });
+      if (containerId) enterClassification(containerId, false);
+      else setClassifyRelMsgId(null);
+    }
+    if (hiddenInGraphView.has(autoClassifyMsgId)) setViewMode('list');
+    setAutoClassifyMsgId(null);
+  }, [loading, autoClassifyMsgId, containerEffect, hiddenInGraphView]);
 
   const stakeDefaultLoaded = useRef(false);
   const relationStakeMap = useRef<Record<string, number>>({});
@@ -1545,8 +1492,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   // Scroll the left panel canvas so the message with the given ID is centered.
-  // Polls via requestAnimationFrame until the card appears in the DOM.
-  // MAX_SCROLL_ATTEMPTS × ~16ms/frame ≈ 1 second maximum wait time.
+  // Wait for layout, then retry until the target is visible or attempts run out.
   const MAX_SCROLL_ATTEMPTS = 60;
 
   function showMessagePulse(targetId: string, element: HTMLElement, requestId = scrollRequestIdRef.current, onShown?: (shown: boolean) => void): void {
@@ -1692,7 +1638,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
 
 
 
-  function restoreSnapshot(s: TraceSnapshot | null, opts?: { restoreSelection?: boolean; restoreScope?: boolean }): void {
+  function restoreSnapshot(s: TraceSnapshot | null, opts?: RestoreSnapshotOptions): void {
     if (!s) return;
     cancelViewNavigation();
     const pending = { snapshot: s };
@@ -1711,7 +1657,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     // Switching presentation also restores its per-mode position. The complete
     // snapshot takes precedence over positions recorded inside the category.
     viewModeScrollRef.current = { graph: null, list: null };
-    return runRestoreSnapshot({ startPositioning: startRestoring, onRestored, scrollRequestIdRef, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, setTraceDistance, setViewMode, cancelScrollRafs, scrollRafRef, scrollRaf2Ref, clampAndSetScroll, leftPanelRef, rightPanelRef }, s, opts);
+    return runRestoreSnapshot({ startPositioning: startRestoring, onRestored, showMessagePulse, scrollRequestIdRef, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, setTraceDistance, setViewMode, cancelScrollRafs, scrollRafRef, scrollRaf2Ref, clampAndSetScroll, leftPanelRef, rightPanelRef }, s, opts);
   }
 
   function startComparison(): void {
@@ -1996,7 +1942,8 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     pendingViewportRestoreRef.current = null;
   }
   function findContainingClassification(messageId: string): string | null {
-    return runFindContainingClassification({ relationById, relations, rejectedContainerIds, rejectedJoinRelationIds }, messageId);
+    return runFindContainingClassification({ relationById, relations, rejectedContainerIds, rejectedJoinRelationIds,
+      containerOwnership: containerEffect.ownership, edges, msgMap }, messageId);
   }
 
   function exitClassification(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }): void {
@@ -2798,6 +2745,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     );
   }
   const relationSpringWidth = Math.max(0, effectiveContainerWidth - relationBarMinWidth);
+  const panelStickyTop = topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight;
   const isRouteScope = scopeMessageId !== 'root' && !isInsideClassify && traceEntries.length === 0;
   const classificationHeader = <ClassificationHeader isInsideClassify={isInsideClassify || isRouteScope} isRouteScope={isRouteScope} isTemporaryJoinCategory={isTemporaryJoinCategory} correctionFilterTargetId={correctionFilterTargetId} comparisonMode={comparisonMode}
                 comparisonTargetCount={comparisonViewIds?.size ?? 0} correctionCount={correctionTemporaryViewIds?.size ?? 0} temporaryJoinCount={temporaryJoinCount} classificationTitle={isRouteScope ? (scope?.title ?? '分类') : classificationTitle} classifyKindLabel={classifyKindLabel}
@@ -2814,8 +2762,8 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
             composer={{ relationType, secondaryRelationType, newMessageContent, subType, setRelationType, setSecondaryRelationType, setNewMessageContent, lastTagSecondaryRef, lastDelegationSecondaryRef, savedTextOnTypeSwitchRef, subTypeCustomBufferRef, guideTargetIdRef }} />
 
           <div ref={panelContainerRef} className="workbench-panels" style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
-            <div className="workbench-message-pane" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
-              <WorkbenchViewToolbar top={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
+            <div className="workbench-message-pane" data-workbench-panel-surface="true" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, maxHeight: `calc(${100 / interfaceZoom}dvh - ${panelStickyTop}px - 8px)`, alignSelf: 'flex-start', position: 'sticky', top: panelStickyTop, overflow: "visible", paddingBottom: 8 }}>
+              <WorkbenchViewToolbar top={panelStickyTop}
                 history={browsingHistory}
                 scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
@@ -2830,7 +2778,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               <div ref={leftPanelRef}
                 data-workbench-left-panel="true"
                 className={`workbench-left-panel ${previewClassifyId !== null && !containerPreview ? "preview-mode" : ""}`}
-                style={{ flex: "1 0 auto", boxSizing: "border-box", overflowY: "auto", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
+                style={{ flex: "1 1 auto", minHeight: 0, boxSizing: "border-box", overflowY: "auto", overflowX: "auto", touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch", padding: 8, paddingBottom: 24, position: "relative" }}
                 onTouchStart={handleLeftPanelTouchStart}
                 onTouchMove={handleLeftPanelTouchMove}
                 onTouchEnd={handleLeftPanelTouchEnd}
@@ -2990,7 +2938,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
               leftFlex={leftFlex}
               minWidth={MIN_RIGHT_PX}
               maxWidth={MAX_RIGHT_PX}
-              stickyTop={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
+              stickyTop={panelStickyTop}
               isPreviewMode={isPreviewMode}
               singleSideReview={containerPreview ? {
                 title: getRelationTitle(containerPreview.target.relationPayload) || containerPreview.target.id,

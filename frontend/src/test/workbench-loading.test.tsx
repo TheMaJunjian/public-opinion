@@ -49,23 +49,26 @@ describe('workbench loading through registered drawing tasks', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => { resetWorkbenchActivity(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
-  it('allows keyboard dismissal and reopening while preserving drawing ownership and background guards', () => {
+  it('keeps progress visible without collapse controls until drawing completes, preserving focus and background guards', () => {
     let tasks!: Tasks;
     const onTasks = (value: Tasks) => { tasks = value; };
     render(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
     const root = screen.getByTestId('workbench').parentElement!;
-    const hide = screen.getByRole('button', { name: '收起进度' });
-    expect(hide).toHaveFocus();
+    const dialog = screen.getByRole('dialog');
+    const message = dialog.querySelector<HTMLElement>('[tabindex="-1"]')!;
+    expect(message).toHaveFocus();
+    expect(screen.queryByRole('button', { name: /收起|显示进度/ })).toBeNull();
     const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
-    hide.dispatchEvent(tab); expect(tab.defaultPrevented).toBe(true);
-    fireEvent.keyDown(hide, { key: 'Escape' });
-    expect(screen.queryByRole('dialog')).toBeNull(); expect(root.inert).toBe(true);
-    const reopen = screen.getByRole('button', { name: '显示进度' }); expect(reopen).toHaveFocus();
-    fireEvent.click(reopen); expect(screen.getByRole('dialog')).toBeInTheDocument();
+    message.dispatchEvent(tab); expect(tab.defaultPrevented).toBe(true);
+    fireEvent.keyDown(message, { key: 'Escape' });
+    fireEvent.click(dialog.closest('[data-popup-content-layer]')!);
+    expect(dialog).toBeInTheDocument(); expect(root.inert).toBe(true);
+    expect(message).toHaveFocus();
     const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true });
-    screen.getByRole('button', { name: '收起进度' }).dispatchEvent(wheel);
+    message.dispatchEvent(wheel);
     expect(wheel.defaultPrevented).toBe(false);
     finish(tasks); advance(34); expect(root.inert).toBe(false);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('releases an abandoned sending wait without claiming that the write completed', () => {
@@ -168,24 +171,22 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);
   });
 
-  it('runs queued preparation after a slow send even when progress stays hidden until the mask is ready', () => {
+  it('keeps progress visible through a slow send and queued preparation until the mask is ready', () => {
     let tasks!: Tasks, prepare!: ReturnType<typeof useWorkbenchDrawingPreparation>;
     const onTasks = (value: Tasks) => { tasks = value; };
     const onReady = (value: typeof prepare) => { prepare = value; };
     const work = vi.fn();
     const view = render(<WorkbenchLoadingBoundary><Content sending onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
     act(() => { prepare(work); });
-    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
     advance(45_000);
     const root = screen.getByTestId('workbench').parentElement!;
     expect(root.inert).toBe(true);
-    expect(screen.getByRole('status')).toHaveTextContent('等待发送确认');
+    expect(screen.getByRole('dialog')).toHaveTextContent('正在等待服务器确认发送');
     expect(work).not.toHaveBeenCalled();
     view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
     advance(34);
     expect(work).toHaveBeenCalledOnce();
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByRole('status')).toHaveTextContent('工作区暂不可操作');
+    expect(screen.getByRole('dialog')).toHaveTextContent('正在完成消息绘制和新消息定位');
     const key = vi.fn();
     document.addEventListener('keydown', key);
     try {
@@ -203,21 +204,19 @@ describe('workbench loading through registered drawing tasks', () => {
       expect(root.inert).toBe(true);
       advance(34);
       expect(root.inert).toBe(false);
-      expect(screen.queryByRole('status')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
     } finally { document.removeEventListener('keydown', key); }
   });
 
-  it('keeps a fixed drawing deadline when hiding and reopening progress, then gives the next send fresh ownership', () => {
+  it('keeps a fixed drawing deadline with continuous progress, then gives the next send fresh ownership', () => {
     let tasks!: Tasks;
     const onTasks = (value: Tasks) => { tasks = value; };
     const view = render(<WorkbenchLoadingBoundary><Content sending onTasks={onTasks} /></WorkbenchLoadingBoundary>);
     advance(45_000);
-    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
     view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /></WorkbenchLoadingBoundary>);
     const old = tasks, root = screen.getByTestId('workbench').parentElement!;
     advance(20_000);
-    fireEvent.click(screen.getByRole('button', { name: '显示进度' }));
-    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
     advance(WORKBENCH_DRAWING_TIMEOUT_MS - 20_001);
     expect(root.inert).toBe(true);
     advance(1);
@@ -244,7 +243,6 @@ describe('workbench loading through registered drawing tasks', () => {
     const work = vi.fn();
     const view = render(<WorkbenchLoadingBoundary><Content sending onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
     act(() => { prepare(work); });
-    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
     act(() => tasks.overlays.fail(new Error('连线失败')));
     view.rerender(<WorkbenchLoadingBoundary><Content onTasks={onTasks} /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
     act(() => { prepare(work); });
@@ -255,13 +253,12 @@ describe('workbench loading through registered drawing tasks', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('连线绘制失败');
   });
 
-  it('recovers a throwing preparation even after progress was hidden', () => {
+  it('closes progress and restores interaction when preparation throws', () => {
     let prepare!: ReturnType<typeof useWorkbenchDrawingPreparation>;
     const onReady = (value: typeof prepare) => { prepare = value; };
     render(<WorkbenchLoadingBoundary><Content /><Preparation onReady={onReady} /></WorkbenchLoadingBoundary>);
     advance(34);
     act(() => { prepare(() => { throw new Error('准备失败'); }); });
-    fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
     advance(34);
     expect(screen.getByRole('alert')).toHaveTextContent('消息整理失败');
     expect(screen.getByTestId('workbench').parentElement!.inert).toBe(false);

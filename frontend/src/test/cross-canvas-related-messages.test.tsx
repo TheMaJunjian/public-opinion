@@ -12,12 +12,16 @@ const edge = (type: DemoEdge['relationType'], id = 'relation', from = 'source', 
 });
 const index = (edges: DemoEdge[], ids: string[], renderedEdges?: DemoEdge[]) => deriveCrossCanvasRelations({ edges, visibleMessageIds: new Set(ids), renderedEdges });
 
-it.each(['reference', 'reply', 'annotation', 'notify', 'authorize'] as const)('attaches cross-canvas %s to the source and target independently', type => {
+it.each(['reference', 'reply', 'annotation', 'notify', 'authorize', 'agree', 'disagree'] as const)('attaches cross-canvas %s to the source and target independently', type => {
   const edges = [edge(type)];
   expect(Object.values(index(edges, ['source']).get('source')!.outgoing)).toEqual([['relation']]);
   expect(Object.values(index(edges, ['target']).get('target')!.incoming)).toEqual([['relation']]);
   expect(index(edges, ['source', 'target']).size).toBe(0);
   expect(index(edges, []).size).toBe(0);
+});
+
+it.each(['agree', 'disagree'] as const)('does not add a separate related entry for a pure %s vote with no source message', type => {
+  expect(index([edge(type, 'vote', 'anon:vote')], ['target']).size).toBe(0);
 });
 
 it('deduplicates fragments and targets while retaining missing connections beside a complete local edge', () => {

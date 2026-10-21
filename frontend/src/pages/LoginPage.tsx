@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import PromptModal from '../components/PromptModal';
+import { dialogStyles } from '../components/dialogStyles';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -28,60 +30,61 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-      <div className="bg-white rounded-xl shadow-md p-8 w-full max-w-sm">
-        <h1 className="text-2xl font-bold text-center text-indigo-700 mb-2">公论</h1>
-        <p className="text-center text-gray-500 text-sm mb-6">登录您的与会者账户，参与公论</p>
+    <PromptModal open title={redirectReason ? '请先登录' : '登录公论'} hideActions onConfirm={() => {}}
+      dialogProps={{ style: { width: 'min(400px, 100%)', colorScheme: 'dark' } }} message={<div style={{ whiteSpace: 'normal' }}>
+        <p className="text-center text-gray-300 text-sm mb-6">登录您的与会者账户，参与公论</p>
         {redirectReason && (
-          <div className="bg-amber-50 border border-amber-200 text-amber-700 rounded px-3 py-2 text-sm mb-4">
-            ⚠️ {redirectReason}
+          <div role="status" className="bg-amber-950 border border-amber-800 text-amber-200 rounded-lg px-3 py-2 text-sm mb-4">
+            {redirectReason}
           </div>
         )}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-600 rounded px-3 py-2 text-sm mb-4">
+          <div role="alert" className="bg-red-950 border border-red-800 text-red-200 rounded-lg px-3 py-2 text-sm mb-4">
             {error}
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">与会者名</label>
+            <label htmlFor="login-username" className="block text-sm font-medium text-gray-200 mb-1">与会者名</label>
             <input
+              id="login-username"
               type="text"
               name="username"
               autoComplete="username"
               value={username}
               onChange={e => setUsername(e.target.value)}
               placeholder="请输入与会者名"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              className="w-full bg-gray-900 text-gray-100 border border-gray-600 rounded-lg px-3 py-2 text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
+            <label htmlFor="login-password" className="block text-sm font-medium text-gray-200 mb-1">密码</label>
             <input
+              id="login-password"
               type="password"
               name="password"
               autoComplete="current-password"
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="请输入密码"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              className="w-full bg-gray-900 text-gray-100 border border-gray-600 rounded-lg px-3 py-2 text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white py-2 rounded-lg text-sm font-semibold transition-colors"
+            style={{ ...dialogStyles.primaryButton, padding: '9px 14px' }}
+            className="w-full disabled:opacity-50 disabled:cursor-wait"
           >
             {loading ? '登录中…' : '登录'}
           </button>
         </form>
-        <p className="mt-4 text-center text-sm text-gray-500">
+        <p className="mt-4 text-center text-sm text-gray-400">
           还没有账户？{' '}
-          <Link to="/register" className="text-indigo-600 hover:underline font-medium">
+          <Link to="/register" className="text-blue-400 hover:underline font-medium">
             立即注册
           </Link>
         </p>
-      </div>
-    </div>
+      </div>} />
   );
 }

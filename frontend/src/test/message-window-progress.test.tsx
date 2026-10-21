@@ -49,10 +49,10 @@ it('opens progress and crosses a paint before mounting a batch, then waits for d
   expect(view.container.querySelector('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
 });
 
-it('reopens progress after a previous cycle was hidden and does not open it when the range is exhausted', () => {
+it('shows progress for each batch and does not open it when the range is exhausted', () => {
   render(<WorkbenchLoadingBoundary><Window /></WorkbenchLoadingBoundary>); frames(4);
   fireEvent.click(screen.getByRole('button', { name: '追加结构' }));
-  fireEvent.click(screen.getByRole('button', { name: '收起进度' }));
+  expect(screen.queryByRole('button', { name: /收起|显示进度/ })).toBeNull();
   frames(2); act(() => releaseMeasurement!()); frames(8);
   expect(screen.queryByRole('dialog')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '追加结构' }));

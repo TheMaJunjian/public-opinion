@@ -10,6 +10,8 @@ import type { GraphAnchorCache } from '../utils/graphAnchorCache';
 type LabelBbox = Rect;
 
 export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> & {
+  labelViewport?: import('../utils/frameLayout').Box | null;
+  labelRetainedIds?: ReadonlySet<string>;
   textRefs: MutableRefObject<Record<string, SVGTextElement | null>>;
   actualCanvasWidth: number;
   actualCanvasHeight: number;
@@ -86,6 +88,8 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
       });
       task.complete();
     });
-  }, [positionedEdges, actualCanvasWidth, actualCanvasHeight]);
+  // Virtual reveal/scroll can mount labels without changing their routed paths.
+  // Measure that new DOM as well, so its hit areas and decorations appear.
+  }, [positionedEdges, actualCanvasWidth, actualCanvasHeight, input.labelViewport, input.labelRetainedIds]);
   return { ...overlays, labelBboxes };
 }

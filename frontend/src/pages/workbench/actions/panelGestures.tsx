@@ -164,16 +164,18 @@ export function handlePanelWheel(panel: HTMLElement, otherPanel: HTMLElement | n
     if (force || /^(auto|scroll)$/.test(style.overflowY || style.overflow)) remainingY = consumeWheelDelta(element, remainingY, 'top');
     if (force || /^(auto|scroll)$/.test(style.overflowX || style.overflow)) remainingX = consumeWheelDelta(element, remainingX, 'left');
   };
-  // Keep the owning panel explicit: its nested scroll areas and ancestors must
-  // already be at their boundary before an input can reach its sibling.
+  // Start under the pointer on every input, including a direction reversal.
+  // A toolbar can contain scrollable content beside, rather than inside, its canvas.
+  const surface = panel.closest('[data-workbench-panel-surface]') ?? panel;
   const target = event.composedPath()[0] ?? event.target;
   let ancestor = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
-  if (!ancestor || !panel.contains(ancestor)) ancestor = panel;
+  if (!ancestor || !surface.contains(ancestor)) ancestor = panel;
   while (ancestor && ancestor !== page) {
     if (ancestor instanceof HTMLElement) consume(ancestor, ancestor === panel);
-    if (ancestor === panel && !page) break;
+    if (ancestor === surface) break;
     ancestor = ancestor.parentElement;
   }
-  if (page) consume(page, true);
+  consume(panel, true);
   if (otherPanel) consume(otherPanel, true);
+  if (page) consume(page, true);
 }

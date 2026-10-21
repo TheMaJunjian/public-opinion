@@ -240,20 +240,22 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
   }
 
   useEffect(() => {
-    const left = leftPanelRef.current;
-    const right = rightPanelRef.current;
-    if (!left || !right) return;
-    // Both panels use their natural height and the page scrollbar. Nested
-    // lists and horizontal canvas overflow keep their own scroll handling.
+    const container = panelContainerRef.current;
+    if (!container) return;
     const page = document.scrollingElement as HTMLElement | null ?? document.documentElement;
-    const scrollLeft = (event: WheelEvent) => handlePanelWheel(left, right, event, page);
-    const scrollRight = (event: WheelEvent) => handlePanelWheel(right, left, event, page);
+    // The operation panel loads lazily. Resolve its current node for every input
+    // so the first visit and replacement panels retain the same scroll priority.
+    const scrollPanel = (event: WheelEvent) => {
+      const left = leftPanelRef.current, right = rightPanelRef.current;
+      const target = event.composedPath()[0] ?? event.target;
+      if (!(target instanceof Node)) return;
+      if (right?.contains(target)) handlePanelWheel(right, left, event, page);
+      else if (left && (left.closest('[data-workbench-panel-surface]') ?? left).contains(target)) handlePanelWheel(left, right, event, page);
+    };
     // React delegates wheel events passively, so preventDefault must run here.
-    left.addEventListener('wheel', scrollLeft, { passive: false });
-    right.addEventListener('wheel', scrollRight, { passive: false });
+    container.addEventListener('wheel', scrollPanel, { passive: false });
     return () => {
-      left.removeEventListener('wheel', scrollLeft);
-      right.removeEventListener('wheel', scrollRight);
+      container.removeEventListener('wheel', scrollPanel);
     };
   }, [loading]);
 

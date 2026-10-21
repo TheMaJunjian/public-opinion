@@ -136,6 +136,19 @@ html, body, #root {
   50% { opacity: 0.58; }
 }
 
+/* Popup backgrounds share one flowing vector path. Jump highlights retain their own pulse. */
+.popup-backdrop-flow {
+  animation: popup-backdrop-flow 600ms linear infinite;
+}
+@keyframes popup-backdrop-flow {
+  0% { stroke-dashoffset: 20; opacity: 0.5; }
+  50% { opacity: 0.9; }
+  100% { stroke-dashoffset: 0; opacity: 0.5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .popup-backdrop-flow { animation: none; opacity: 0.45; }
+}
+
 .workbench-right-panel {
   scrollbar-width: none;
   -ms-overflow-style: none;

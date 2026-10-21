@@ -6,6 +6,7 @@ import { isWholeMessageSelection } from '../utils/messageElementSelection';
 import type { User } from '../types';
 import { getPresentationSpec } from '../types';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
+import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 import MessageRelationsView from './MessageRelationsView';
 import OperationLogView from './OperationLogView';
 import StagedMessageLabel from './StagedMessageLabel';
@@ -179,6 +180,8 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
     return isWholeMessageSelection(unit, unit.messageId) && !historic ? undefined : describeSelection(unit);
   };
   const navigate = useNavigate();
+  const interfaceZoom = useInterfaceZoom();
+  const stickyTop = typeof p.stickyTop === 'number' ? `${p.stickyTop}px` : p.stickyTop ?? '0px';
   const touchStartXRef = useRef<number | null>(null);
   const showContributionControls = !p.isPreviewMode;
   const handlePanelTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -219,6 +222,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
     overflowX: "auto" as const,
     minWidth: p.minWidth,
     maxWidth: p.maxWidth,
+    maxHeight: `calc(${100 / interfaceZoom}dvh - ${stickyTop} - 8px)`,
     boxSizing: "border-box" as const,
     overflowWrap: "anywhere" as const,
     alignSelf: "flex-start",
@@ -292,7 +296,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   );
 
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" style={panelStyle}>
+    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" data-workbench-panel-surface="true" style={panelStyle}>
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ fontWeight: 600 }}>容器查看</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>

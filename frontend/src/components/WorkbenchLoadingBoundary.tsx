@@ -18,9 +18,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const { tasks } = attempt;
   const [failure, setFailure] = useState<DrawingFailure | null>(null);
   const [cycle, setCycle] = useState(0);
-  const [hidden, setHidden] = useState(false);
   const [waitNotice, setWaitNotice] = useState<string | null>(null);
-  const reopen = useRef<HTMLButtonElement>(null);
   const [progress, setProgress] = useState<{ phase: Phase; sending: boolean; reason: 'loading' | 'sending'; drawingRevision?: number }>({ phase: 'loading', sending: false, reason: 'loading' });
   const { phase, reason, drawingRevision } = progress;
   const reportLoading = useCallback((next: Phase, resetFailure = false) => {
@@ -64,7 +62,7 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     task.onCancel(preparation.cancel);
     preparations.current.add(preparation);
     tasks.committed(); tasks.setBlocking(true);
-    setHidden(false); setWaitNotice(null); setCycle(value => value + 1);
+    setWaitNotice(null); setCycle(value => value + 1);
     setProgress(previous => ({ ...previous, phase: previous.phase === 'sending' ? 'sending' : 'drawing',
       reason: previous.phase === 'sending' ? 'sending' : 'loading', drawingRevision: undefined }));
     return preparation.cancel;
@@ -72,14 +70,11 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
   const busy = phase !== 'ready';
 
   useLayoutEffect(() => {
-    // The full dialog and compact progress hint both present the pending work.
-    // Hiding progress must never suspend the work needed to unlock the scene.
     if (phase === 'drawing' && !tasks.failure) for (const preparation of preparations.current) preparation.schedule();
-  }, [phase, hidden, cycle, tasks]);
+  }, [phase, cycle, tasks]);
   useLayoutEffect(() => () => { for (const preparation of preparations.current) preparation.cancel(); }, []);
 
-  useEffect(() => { setHidden(false); setWaitNotice(null); }, [cycle, attempt.key]);
-  useLayoutEffect(() => { if (hidden && busy) reopen.current?.focus(); }, [hidden, busy]);
+  useEffect(() => { setWaitNotice(null); }, [cycle, attempt.key]);
   useEffect(() => {
     if (phase !== 'loading' && phase !== 'sending') return;
     const timer = setTimeout(() => {
@@ -216,17 +211,13 @@ export default function WorkbenchLoadingBoundary({ children }: { children: React
     <div key={attempt.key} ref={content} aria-busy={busy} style={{ display: 'contents' }}>
       <ErrorBoundary onError={error => tasks.abort({ kind: 'render', reason: 'error', error })}>{children}</ErrorBoundary>
     </div>
-    {busy && !hidden && <OperationProgressDialog title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'} onHide={() => setHidden(true)}>
+    {busy && <OperationProgressDialog title={reason === 'sending' ? '正在发送' : phase === 'drawing' ? '正在绘制' : '正在加载'}>
       <div data-workbench-progress-active="true">
         {phase === 'sending' ? '正在等待服务器确认发送，请勿重复提交。' : phase === 'drawing' ? reason === 'sending'
           ? '正在完成消息绘制和新消息定位，请稍候。' : '正在更新消息与关系，等待绘制和定位完成。' : '正在加载消息数据，请稍候。'}
-        <p>可以收起进度；收起不会取消请求，工作区会在准备好后恢复操作。</p>
+        <p>完成后将自动关闭，并恢复工作区操作。</p>
       </div>
     </OperationProgressDialog>}
-    {busy && hidden && <div className="operation-feedback" data-operation-progress="true" data-workbench-progress-active="true" data-gesture-disabled="true" role="status">
-      <span>仍在{phase === 'sending' ? '等待发送确认' : phase === 'drawing' ? '绘制消息' : '加载消息'}，工作区暂不可操作。</span>
-      <button ref={reopen} type="button" onClick={() => setHidden(false)}>显示进度</button>
-    </div>}
   </DrawingPreparationContext.Provider></SendingContext.Provider></LoadingContext.Provider></WorkbenchDrawingContext.Provider>;
 }
 

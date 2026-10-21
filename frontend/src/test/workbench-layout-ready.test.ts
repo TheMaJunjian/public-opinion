@@ -1,9 +1,33 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createWorkbenchDrawingTasks, WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
-import { showMessagePulse } from '../pages/workbench/actions/scrollNavigation';
+import { findMessageElements, scrollMsgToCenter, showMessagePulse } from '../pages/workbench/actions/scrollNavigation';
 import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it('centers a wide merge on its message header after the frame border strips have mounted', () => {
+  vi.useFakeTimers();
+  const panel = document.createElement('div'), strip = document.createElement('div'), header = document.createElement('div');
+  for (const element of [strip, header]) { element.dataset.msgid = 'merge'; element.dataset.relOverlay = 'true'; }
+  header.dataset.frameHeader = 'true';
+  panel.append(strip, header); document.body.append(panel);
+  for (const [name, value] of Object.entries({ clientWidth: 400, clientHeight: 300, scrollWidth: 2000, scrollHeight: 5000 })) {
+    Object.defineProperty(panel, name, { value });
+  }
+  vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 50, 400, 300));
+  vi.spyOn(strip, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 1050 - panel.scrollTop, 1800, 32));
+  vi.spyOn(header, 'getBoundingClientRect').mockImplementation(() => new DOMRect(200 - panel.scrollLeft, 1058 - panel.scrollTop, 320, 58));
+  const pulse = vi.fn();
+  try {
+    scrollMsgToCenter({ scrollRequestIdRef: { current: 0 }, pendingScrollMsgIdRef: { current: null }, MAX_SCROLL_ATTEMPTS: 60,
+      pendingScrollDependencyIdsRef: { current: [] }, leftPanelRef: { current: panel }, scrollRafRef: { current: null },
+      findMessageElements, relationsRef: { current: [] }, edgesRef: { current: [] }, showMessagePulse: pulse, cancelScrollRafs: () => {} }, 'merge');
+    vi.advanceTimersByTime(50);
+    expect(panel.scrollLeft).toBe(160);
+    expect(panel.scrollTop).toBe(887);
+    expect(pulse).toHaveBeenCalledWith('merge', header, 1, expect.any(Function));
+  } finally { panel.remove(); }
+});
 
 it('restores positioning only after pending layout work commits and the browser presents it', () => {
   vi.useFakeTimers();

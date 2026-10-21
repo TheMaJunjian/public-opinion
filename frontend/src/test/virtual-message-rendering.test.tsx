@@ -2,12 +2,15 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import VirtualMessageList from '../components/VirtualMessageList';
 import GraphView, { type GraphViewProps } from '../components/GraphView';
-import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
+import { REVEAL_VIRTUAL_MESSAGE, useVirtualMessageMounts } from '../hooks/useVirtualMessageMounts';
+import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
 import { useRef } from 'react';
 import { useCanvasViewport } from '../hooks/useCanvasViewport';
 import { MessageJumpOverlay } from '../components/PopupOverlay';
+import { findMessageElements, scrollMsgToCenter, showMessagePulse, MESSAGE_PULSE_DURATION_MS } from '../pages/workbench/actions/scrollNavigation';
+import { getMessageJumpDisplay } from '../utils/messageJumpDisplay';
 
 const pins = new Set<string>();
 const ids = Array.from({ length: 600 }, (_, index) => `m-${index}`);
@@ -36,6 +39,34 @@ describe('viewport message rendering with measured browser geometry', () => {
     });
   });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('finishes measuring the new scene when membership changes remove an unmounted measurement target', () => {
+    const tasks = createWorkbenchDrawingTasks();
+    function Scene({ changed }: { changed: boolean }) {
+      const canvas = useRef<HTMLDivElement>(null), cards = useRef<Record<string, HTMLDivElement | null>>({});
+      const heights = useCardMeasurements(canvas, cards);
+      const currentIds = changed ? ['destination'] : ['old-member'];
+      const virtual = useVirtualMessageMounts(canvas, currentIds, {
+        destination: { x: 0, y: 10000, width: 320, height: 100 },
+      }, heights, pins);
+      return <div data-workbench-left-panel><div ref={canvas} style={{ height: 11000 }}>
+        {/* The departing member was still waiting for its layout result. */}
+        {changed && virtual.mounted.has('destination') && <div data-msgid="destination"
+          ref={element => { cards.current.destination = element; }}>当前实际消息</div>}
+        <output>{heights.destination ? '当前消息尺寸已就绪' : '等待测量'}</output>
+      </div></div>;
+    }
+    const renderScene = (changed: boolean) => <WorkbenchDrawingContext.Provider value={tasks}><Scene changed={changed} /></WorkbenchDrawingContext.Provider>;
+    const view = render(renderScene(false));
+    frames(2);
+    expect(tasks.pending).toBeGreaterThan(0);
+    view.rerender(renderScene(true));
+    frames(8);
+    expect(tasks.pending).toBe(0);
+    expect(tasks.failure).toBeNull();
+    expect(view.getByText('当前消息尺寸已就绪')).toBeInTheDocument();
+    expect(view.container.querySelector('[data-msgid="old-member"]')).toBeNull();
+  });
 
   it('bounds list mounts, preserves measured scroll geometry, and reveals remote navigation targets', () => {
     const tasks = createWorkbenchDrawingTasks();
@@ -106,42 +137,99 @@ describe('viewport message rendering with measured browser geometry', () => {
     expect(tasks.pending).toBe(0);
   });
 
-  it.each([{ type: 'merge', nested: false }, { type: 'arrange', nested: false }, { type: 'merge', nested: true }] as const)(
-    'retains all $type members until its complete jump overlay has been copied (nested=$nested)', ({ type, nested }) => {
+  it.each((['merge', 'arrange', 'summary'] as const).flatMap(type =>
+    ([null, 'merge', 'arrange', 'summary'] as const).flatMap(outer =>
+      (['annotation', 'reference', 'reply'] as const).map(dependency => ({ type, outer, dependency })))))(
+    'unmasks $type inside $outer with members and $dependency dependants, then keeps the destination visible', ({ type, outer, dependency }) => {
     const memberIds = ids.slice(0, 80);
     const members = memberIds.map(message);
     const edges: DemoEdge[] = memberIds.map(id => ({ id: `${type}-${id}`, relationMessageId: type, relationType: type, relationLabel: type,
       from: { messageId: `anon:${type}`, selection: { kind: 'whole' } }, to: { messageId: id, selection: { kind: 'whole' } } }));
     const organizations: DemoMessage[] = [{ ...message(type), kind: 'relation', relationType: type, relationPayload: { title: type } }];
-    if (nested) {
-      organizations.push({ ...message('outer'), kind: 'relation', relationType: 'merge', relationPayload: { title: '外层归并' } });
-      edges.push({ id: 'nested', relationMessageId: 'outer', relationType: 'merge', relationLabel: '归并',
+    if (outer) {
+      organizations.push({ ...message('outer'), kind: 'relation', relationType: outer, relationPayload: { title: '外层容器' } });
+      edges.push({ id: 'nested', relationMessageId: 'outer', relationType: outer, relationLabel: outer,
         from: { messageId: 'anon:outer', selection: { kind: 'whole' } }, to: { messageId: type, selection: { kind: 'whole' } } });
     }
-    const targetId = nested ? 'outer' : type;
+    const targetId = outer ? 'outer' : type;
+    organizations.push({ ...message('dependent-reference'), kind: 'relation', relationType: dependency, sourceMessageId: 'm-79' });
+    edges.push({ id: 'dependent-reference', relationMessageId: 'dependent-reference', relationType: dependency, relationLabel: dependency,
+      from: { messageId: 'm-79', selection: { kind: 'whole' } }, to: { messageId: 'm-0', selection: { kind: 'whole' } } });
+    for (const target of [targetId, type, 'm-79', 'dependent-reference']) for (const stance of ['agree', 'disagree'] as const) {
+      const id = `${stance}-${target}`;
+      if (organizations.some(message => message.id === id)) continue;
+      organizations.push({ ...message(id), kind: 'relation', relationType: stance });
+      edges.push({ id, relationMessageId: id, relationType: stance, relationLabel: stance,
+        from: { messageId: `anon:${id}`, selection: { kind: 'whole' } }, to: { messageId: target, selection: { kind: 'whole' } } });
+    }
+    const expanded = new Set(organizations.filter(message => message.relationType === 'summary').map(message => message.id));
     const view = render(<div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
       <GraphView messages={[...members, ...organizations]}
-        edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} voteStats={{}} {...callbacks} />
+        edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={targetId} voteStats={{}}
+        traceFrameIds={expanded} traceExpandedFrameIds={expanded} {...callbacks} />
     </div>);
     frames(55);
     const host = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
-    expect(host.querySelector('[data-msgid="m-79"]')).toBeNull();
+    expect(host.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])').length).toBeLessThan(memberIds.length);
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [targetId] } })); });
     expect(host.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])')).toHaveLength(memberIds.length);
     // A viewport update between positioning and the mask commit must keep members alive.
     host.scrollTop = 1000; fireEvent.scroll(host); frames(4);
     expect(host.querySelector('[data-msgid="m-79"]')).not.toBeNull();
     const target = host.querySelector<HTMLElement>(`[data-msgid="${targetId}"][data-rel-overlay]`)!;
+    const display = getMessageJumpDisplay(target, targetId);
+    for (const id of memberIds) expect(display.elements?.has(host.querySelector(`[data-msgid="${id}"]:not([data-rel-overlay])`)!)).toBe(true);
     const canvas = host.querySelector<HTMLElement>('[data-jump-canvas]')!;
-    const overlay = render(<MessageJumpOverlay messageId={type} targetElement={target}
+    const overlay = render(<MessageJumpOverlay messageId={targetId} targetElement={target}
       targetRect={new DOMRect(0, -1000, parseFloat(canvas.style.width), parseFloat(canvas.style.height))} />);
-    const copy = document.querySelector('[data-message-jump-clone]')!;
-    expect(copy.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])')).toHaveLength(memberIds.length);
-    expect(copy).toHaveTextContent('m-79');
+    const regions = [...document.querySelectorAll('[data-message-jump-region]')];
+    const uncoveredIds = regions.flatMap(region => region.getAttribute('data-message-jump-region')!.split(/\s+/));
+    // Every mounted display component contributes an opening; clipping may
+    // remove offscreen members, which must not uncover other UI below the pane.
+    expect(uncoveredIds.some(id => memberIds.includes(id))).toBe(true);
+    expect(host.querySelector('[data-jump-visual-msgids="dependent-reference"] path')).not.toBeNull();
+    for (const id of [targetId, type, 'm-79', 'dependent-reference']) for (const stance of ['赞同', '反对']) {
+      const decoration = host.querySelector(`[data-msgid="${id}"][title^="${stance}"], [data-jump-visual-msgids="${id}"][title^="${stance}"]`);
+      expect(decoration, `${id}: ${stance}`).not.toBeNull();
+      expect(display.elements?.has(decoration!)).toBe(true);
+    }
     overlay.unmount();
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
-    expect(host.querySelector('[data-msgid="m-79"]')).toBeNull();
-    expect(host.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])').length).toBeLessThan(30);
+    expect(host.querySelectorAll('[data-msgid^="m-"]:not([data-rel-overlay])').length).toBeLessThan(memberIds.length);
+    // Exercise the actual positioning, pulse timer and reveal-release lifecycle.
+    Object.defineProperties(host, { clientWidth: { value: 800 }, clientHeight: { value: 500 },
+      scrollWidth: { value: parseFloat(canvas.style.width) }, scrollHeight: { value: parseFloat(canvas.style.height) } });
+    const liveOverlay = render(<></>);
+    const request = { current: 0 };
+    let pulse: { messageId: string; element: HTMLElement; rect: DOMRect } | null = null;
+    const pulseDependencies: Parameters<typeof showMessagePulse>[0] = { scrollRequestIdRef: request, messagePulseTimerRef: { current: null as number | null },
+      messagePulseRafRef: { current: null as number | null }, leftPanelRef: { current: host as HTMLDivElement }, findMessageElements,
+      setMessagePulse: value => {
+        pulse = typeof value === 'function' ? value(pulse) : value;
+        liveOverlay.rerender(pulse ? <MessageJumpOverlay messageId={pulse.messageId} targetElement={pulse.element} targetRect={pulse.rect} /> : <></>);
+      } };
+    const completed = vi.fn();
+    scrollMsgToCenter({ scrollRequestIdRef: request, pendingScrollMsgIdRef: { current: null }, MAX_SCROLL_ATTEMPTS: 60,
+      pendingScrollDependencyIdsRef: { current: [] }, leftPanelRef: { current: host as HTMLDivElement }, scrollRafRef: { current: null },
+      findMessageElements, relationsRef: { current: [] }, edgesRef: { current: edges }, cancelScrollRafs: vi.fn(),
+      showMessagePulse: (...args) => showMessagePulse(pulseDependencies, ...args) }, targetId, { onComplete: completed });
+    frames(8);
+    expect(completed).toHaveBeenCalledExactlyOnceWith(true);
+    expect(document.querySelector('[data-message-jump-region]')).not.toBeNull();
+    expect([...document.querySelectorAll('[data-message-jump-region]')].some(region => region.getAttribute('data-message-jump-region')?.split(/\s+/).includes(targetId))).toBe(true);
+    const position = [host.scrollLeft, host.scrollTop];
+    const visible = () => {
+      const rect = findMessageElements(host, targetId)[0].getBoundingClientRect(), viewport = host.getBoundingClientRect();
+      expect(rect.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(rect.bottom).toBeLessThanOrEqual(viewport.bottom);
+    };
+    visible();
+    frames(Math.ceil(MESSAGE_PULSE_DURATION_MS / 17) + 5);
+    fireEvent.scroll(host); frames(4);
+    expect(document.querySelector('[data-message-jump-region]')).toBeNull();
+    expect([host.scrollLeft, host.scrollTop]).toEqual(position);
+    visible();
+    liveOverlay.unmount();
   });
 
   it('converts a clipped, scaled canvas to local coordinates and coalesces unchanged events', () => {
@@ -181,8 +269,12 @@ describe('viewport message rendering with measured browser geometry', () => {
 
   it('reveals an offscreen relation decoration without mounting its target card', () => {
     const messages = ids.map(message);
+    messages.push({ ...message('tag'), kind: 'relation', relationType: 'tag' },
+      { ...message('tag-agree'), kind: 'relation', relationType: 'agree' });
     const edges: DemoEdge[] = [{ id: 'tag-edge', relationMessageId: 'tag', relationType: 'tag', relationLabel: '远处标注',
-      from: { messageId: 'anon:tag', selection: { kind: 'whole' } }, to: { messageId: 'm-599', selection: { kind: 'whole' } } }];
+      from: { messageId: 'anon:tag', selection: { kind: 'whole' } }, to: { messageId: 'm-599', selection: { kind: 'whole' } } },
+      { id: 'tag-agree', relationMessageId: 'tag-agree', relationType: 'agree', relationLabel: '赞同',
+        from: { messageId: 'anon:tag-agree', selection: { kind: 'whole' } }, to: { messageId: 'tag', selection: { kind: 'whole' } } }];
     const view = render(<div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
       <GraphView messages={messages} edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} voteStats={{}} {...callbacks} />
     </div>);
@@ -192,6 +284,13 @@ describe('viewport message rendering with measured browser geometry', () => {
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['tag'] } })); });
     expect(host.querySelector('[data-jump-msgids~="tag"]')).not.toBeNull();
     expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).toBeNull();
+    const target = host.querySelector<HTMLElement>('[data-jump-msgids~="tag"]')!;
+    const overlay = render(<MessageJumpOverlay messageId="tag" targetElement={target} targetRect={target.getBoundingClientRect()} />);
+    expect(host).toHaveTextContent('远处标注');
+    expect(host.querySelector('[data-jump-visual-msgids~="tag"][title^="赞同"]')).not.toBeNull();
+    expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).toBeNull();
+    expect(document.querySelector('[data-message-jump-overlay]')?.getAttribute('style')).toContain('mask-image');
+    overlay.unmount();
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
     expect(host.querySelector('[data-jump-msgids~="tag"]')).toBeNull();
   });

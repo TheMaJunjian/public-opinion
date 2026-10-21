@@ -7,23 +7,22 @@ vi.mock('../context/AuthContext', () => ({ useOptionalAuth: () => ({ user: { id:
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { resetRequestOperations(); vi.useRealTimers(); });
 
-it('shows pending immediately, offers long-wait details, and hides without completing a request', () => {
+it('shows pending, long waits and results directly without collapse controls or an extra progress modal', () => {
   render(<OperationFeedback />);
   let ticket!: ReturnType<typeof beginRequestOperation>;
   act(() => { ticket = beginRequestOperation('提交投票', false, 'u'); });
   expect(screen.getByRole('status')).toHaveTextContent('正在处理');
   expect(screen.queryByRole('dialog')).toBeNull();
   act(() => vi.advanceTimersByTime(LONG_OPERATION_MS));
-  fireEvent.click(screen.getByRole('button', { name: '查看进度' }));
-  const hide = screen.getByRole('button', { name: '收起进度' });
-  expect(hide).toHaveFocus(); fireEvent.keyDown(hide, { key: 'Escape' });
+  expect(screen.getByRole('status')).toHaveTextContent('仍在等待服务器响应');
+  expect(screen.queryByRole('button', { name: /收起|查看进度|显示进度/ })).toBeNull();
   expect(screen.queryByRole('dialog')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '收起提示' }));
-  expect(screen.getByRole('button', { name: '1 项请求进行中' })).toBeInTheDocument();
   expect(getOperations()[0].state).toBe('pending');
   act(() => ticket.finish('uncertain', '结果尚未确认，请核对记录'));
-  fireEvent.click(screen.getByRole('button', { name: '查看操作结果' }));
   expect(screen.getByRole('alert')).toHaveTextContent('结果尚未确认');
+  fireEvent.click(screen.getByRole('button', { name: '关闭提交投票提示' }));
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(getOperations()).toHaveLength(0);
 });
 
 it('does not open a modal or retain completion noise for quick requests, and isolates owners', () => {
@@ -45,25 +44,23 @@ it('keeps progress centered in the changing visible viewport without changing pa
   render(<button>打开进度</button>);
   const trigger = screen.getByRole('button', { name: '打开进度' });
   trigger.focus();
-  const hide = vi.fn();
-  const view = render(<OperationProgressDialog title="正在绘制" onHide={hide}>正在更新消息与关系。</OperationProgressDialog>);
+  const view = render(<OperationProgressDialog title="正在绘制">正在更新消息与关系。</OperationProgressDialog>);
   try {
     const dialog = screen.getByRole('dialog', { name: '正在绘制' });
     const layer = dialog.closest('[data-popup-content-layer]')!;
     expect(dialog.closest('[data-prompt-modal]')).not.toBeNull();
     expect(layer).toHaveStyle({ left: '80px', top: '120px', width: '360px', height: '440px' });
     expect(document.body.style.overflow).toBe('scroll');
-    const button = screen.getByRole('button', { name: '收起进度' });
-    expect(button).toHaveFocus();
-    expect(button.closest('[data-operation-progress]')).toBe(dialog);
+    const message = dialog.querySelector<HTMLElement>('[tabindex="-1"]')!;
+    expect(message).toHaveFocus();
+    expect(dialog.querySelector('button')).toBeNull();
     fireEvent.click(layer);
-    expect(hide).not.toHaveBeenCalled();
+    fireEvent.keyDown(message, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
     Object.assign(viewport, { offsetLeft: 0, offsetTop: 40, width: 320, height: 240 });
     act(() => { viewport.dispatchEvent(new Event('resize')); });
     expect(layer).toHaveStyle({ left: '0px', top: '40px', width: '320px', height: '240px' });
-    expect(button).toHaveFocus();
-    fireEvent.click(button);
-    expect(hide).toHaveBeenCalledOnce();
+    expect(message).toHaveFocus();
     view.unmount();
     expect(trigger).toHaveFocus();
     expect(document.body.style.overflow).toBe('scroll');

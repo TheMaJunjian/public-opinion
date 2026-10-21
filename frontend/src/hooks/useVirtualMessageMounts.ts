@@ -17,7 +17,12 @@ export function useVirtualMessageMounts(ref: RefObject<HTMLElement>, ids: string
   const startMeasurement = useWorkbenchDrawingTask('measurement');
   const ticket = useRef<ReturnType<typeof startMeasurement> | null>(null);
   const missing = useMemo(() => ids.filter(id => heights[id] === undefined), [ids, heights]);
-  const measuring = useMemo(() => new Set(batch.filter(id => heights[id] === undefined)), [batch, heights]);
+  const measuring = useMemo(() => {
+    // Membership/scope changes can remove a card before its layout mounts it.
+    // Only the current scene's missing cards can keep a measurement batch alive.
+    const required = new Set(missing);
+    return new Set(batch.filter(id => required.has(id)));
+  }, [batch, missing]);
   useLayoutEffect(() => {
     if (!missing.length) { ticket.current?.complete(); ticket.current = null; return; }
     ticket.current ??= startMeasurement();

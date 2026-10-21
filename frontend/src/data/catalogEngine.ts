@@ -62,7 +62,7 @@ export function createCatalogEngine(options: CatalogOptions, callbacks: {
       if (!published) throw new Error('正在准备全局消息');
       const { projected, snapshot } = published;
       const { messages, edges, relations, counts } = projected;
-      const memberships = query.home ? deriveContainerEffect({ messages, edges, relations, username: query.user?.username ?? null }).memberships : [];
+      const memberships = query.home ? deriveContainerEffect({ messages, edges, relations, username: query.user?.username ?? null, stakeCounts:counts }).memberships : [];
       return {
         clean: deriveCleanVisibleIds({ messages, edges, stakeCounts: counts, tagCounts: snapshot.tagCounts }, query.rules),
         home: deriveHomeFilterResult({ messages, edges, msgMap: new Map(messages.map(message => [message.id, message])),

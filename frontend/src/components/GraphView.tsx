@@ -5,6 +5,8 @@ import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationType
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
+import { getJoinStatusPresentation, type JoinStatus } from '../pages/workbench/model/membership';
+import type { JoinEffectSource } from '../pages/workbench/model/joinDisplay';
 import { computeCorrectionVersions, isCardMessage } from '../utils/modelBridge';
 import { useSceneComputation } from '../hooks/useSceneComputation';
 import { useCardMeasurements } from '../hooks/useCardMeasurements';
@@ -114,11 +116,11 @@ export interface GraphViewProps {
   comparisonDisplay?: 'agree' | 'disagree';
   comparisonRecommendedDisplay?: 'agree' | 'disagree';
   comparisonAgreeMessages?: DemoMessage[];
-  comparisonAgreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'joinStatusByMessage'|'crossCanvasRelations'>;
+  comparisonAgreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
   comparisonAgreeEdges?: DemoEdge[];
   comparisonAgreeHideMessageIds?: Set<string>;
   comparisonDisagreeMessages?: DemoMessage[];
-  comparisonDisagreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'joinStatusByMessage'|'crossCanvasRelations'>;
+  comparisonDisagreeContext?: Pick<GraphViewProps,'relatedMessages'|'relatedEdges'|'rejectedContainerIds'|'joinStatusByMessage'|'joinEffectSourcesByMessage'|'crossCanvasRelations'>;
   comparisonDisagreeEdges?: DemoEdge[];
   comparisonDisagreeHideMessageIds?: Set<string>;
   comparisonAgreeSuppressedRelIds?: Set<string>;
@@ -151,7 +153,8 @@ export interface GraphViewProps {
   /** JOIN records emitted by each container. */
   joinRelationsBySource?: Map<string, Relation[]>;
   onJoinFilterClick?: (messageId: string, direction: 'incoming' | 'outgoing') => void;
-  joinStatusByMessage?: Map<string, 'valid' | 'rejected' | 'superseded' | 'container-rejected'>;
+  joinStatusByMessage?: Map<string, JoinStatus>;
+  joinEffectSourcesByMessage?: ReadonlyMap<string, ReadonlySet<JoinEffectSource>>;
 }
 
 const EMPTY_COMPARISON_SUPPRESSED_REL_IDS = new Set<string>();
@@ -900,7 +903,8 @@ function GraphViewCanvas(props: GraphViewProps) {
           const kindBorder = kindMeta ? `3px solid ${kindMeta.color}` : undefined;
           const kindBg = kindMeta ? kindMeta.bg : undefined;
           const joinStatus = joinStatusByMessage?.get(msg.id);
-          const joinIsInvalid = joinStatus === 'rejected' || joinStatus === 'superseded' || joinStatus === 'container-rejected';
+          const joinPresentation = joinStatus ? getJoinStatusPresentation(joinStatus, props.joinEffectSourcesByMessage?.get(msg.id)) : undefined;
+          const joinIsInvalid = !!joinStatus && joinStatus !== 'valid';
 
           return (
             <div key={msg.id} data-msgid={msg.id} ref={el=>{cardRefs.current[msg.id]=el;}}
@@ -1005,8 +1009,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                 <div style={{ fontSize: 11, color: '#fcd34d' }}>{msg.relationType === 'summary' ? '覆盖已取消' : '显示组织已取消'} · 原消息已恢复，仍可查看和表态</div>
               )}
               {joinStatus && (
-                <div style={{ fontSize: 10, fontWeight: 600, color: joinIsInvalid ? '#fca5a5' : '#86efac', alignSelf: 'flex-start', padding: '1px 6px', borderRadius: 4, background: joinIsInvalid ? 'rgba(239,68,68,0.16)' : 'rgba(34,197,94,0.15)', border: `1px solid ${joinIsInvalid ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.3)'}` }}>
-                  {joinStatus === 'rejected' ? '被反对 · 无效' : joinStatus === 'superseded' ? '已重新分类 · 无效' : joinStatus === 'container-rejected' ? '容器被反对 · 无效' : '有效'}
+                <div title={joinPresentation?.hint} style={{ fontSize: 10, fontWeight: 600, color: joinIsInvalid ? '#fca5a5' : '#86efac', alignSelf: 'flex-start', padding: '1px 6px', borderRadius: 4, background: joinIsInvalid ? 'rgba(239,68,68,0.16)' : 'rgba(34,197,94,0.15)', border: `1px solid ${joinIsInvalid ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.3)'}` }}>
+                  {joinPresentation?.label}
                 </div>
               )}
               {msg.executedStance && needsSeparateStanceCard(msg, msgMap) && (

@@ -8,4 +8,9 @@ for(const args of [['run','typecheck'],['--workspace','frontend','run','build']]
   if(result.error)throw result.error;
   if(result.status!==0)process.exit(result.status??1);
 }
-await build({entryPoints:['apps/server/src/main.ts'],bundle:true,platform:'node',format:'esm',external:['express','zod','pg'],outfile:'apps/server/dist/main.js',logLevel:'info'});
+await build({entryPoints:{
+  main:'apps/server/src/main.ts',
+  'retire-legacy-topics-cli':'apps/server/src/retire-legacy-topics-cli.ts',
+  'topic-retirement-audit':'scripts/topic-retirement-audit.ts',
+  'topic-retirement-view-audit':'scripts/topic-retirement-view-audit.ts',
+},bundle:true,platform:'node',format:'esm',external:['express','zod','pg'],outdir:'apps/server/dist',logLevel:'info'});

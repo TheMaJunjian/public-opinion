@@ -4,11 +4,12 @@ type ContainerRelation = Pick<Relation,'id'|'relationType'|'sourceMessageId'|'ta
 const containerTypes=new Set(['CLASSIFY','SUMMARY','MERGE','ARRANGE']);
 
 /** Build once per traversal. Avoid scanning every relation for every member. */
-function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejectedJoins:Set<string>) {
+function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejectedJoins:Set<string>,displayWinners?:ReadonlyMap<string,string>) {
   const byId=new Map(relations.map(relation=>[relation.id,relation]));
+  const retired=new Set(relations.filter(relation=>relation.state?.organizationRetired).map(relation=>relation.id));
   const normalize=(ref:TargetRef):TargetRef=>ref.kind!=='relation'&&containerTypes.has(byId.get(ref.messageId)?.relationType?.toUpperCase()??'')?{kind:'relation',relationId:ref.messageId}:ref;
   const key=(ref:TargetRef)=>{const normalized=normalize(ref);return normalized.kind==='relation'?`r:${normalized.relationId}`:`m:${normalized.messageId}`;};
-  const effective=getEffectiveJoinByTarget(relations,rejected,rejectedJoins);
+  const effective=displayWinners??getEffectiveJoinByTarget(relations,rejected,rejectedJoins);
   const releasedJoins=new Map<string,Map<string,string>>();
   const effectiveFor=(id:string)=>{
     // Native membership is restored by its history, never by flattening the
@@ -16,7 +17,15 @@ function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejec
     if (byId.get(id)?.payload?.independentMemberships || (bySource.get(id) ?? []).some(join => join.payload?.membershipHistory)) return effective;
     if(!rejected.has(id))return effective;
     let joins=releasedJoins.get(id);
-    if(!joins){const parents=new Set(rejected);parents.delete(id);joins=getEffectiveJoinByTarget(relations,parents,rejectedJoins);releasedJoins.set(id,joins);}
+    if(!joins){
+      const parents=new Set(rejected);parents.delete(id);
+      joins=getEffectiveJoinByTarget(relations,parents,rejectedJoins);
+      if(displayWinners){
+        joins=new Map([...joins].filter(([target,joinId])=>!displayWinners.has(target)&&byId.get(joinId)?.sourceMessageId===id));
+        for(const [target,joinId] of displayWinners)joins.set(target,joinId);
+      }
+      releasedJoins.set(id,joins);
+    }
     return joins;
   };
   const bySource=new Map<string,ContainerRelation[]>(),byTarget=new Map<string,ContainerRelation[]>();
@@ -26,8 +35,8 @@ function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejec
   }
   const direct=(id:string)=>{
     const textIds=new Set<string>(),relationIds=new Set<string>(),relation=byId.get(id);
-    const add=(ref:TargetRef)=>{const normalized=normalize(ref);if(normalized.kind==='relation')relationIds.add(normalized.relationId);else textIds.add(normalized.messageId);};
-    if(!relation)return {textIds,relationIds};
+    const add=(ref:TargetRef)=>{const normalized=normalize(ref);if(retired.has(normalized.kind==='relation'?normalized.relationId:normalized.messageId))return;if(normalized.kind==='relation')relationIds.add(normalized.relationId);else textIds.add(normalized.messageId);};
+    if(!relation||retired.has(id))return {textIds,relationIds};
     const memberJoins=effectiveFor(id);
     if(relation.relationType?.toUpperCase()==='ARRANGE'&&relation.sourceMessageId)textIds.add(relation.sourceMessageId);
     for(const ref of relation.targetRefs??[]) {
@@ -51,8 +60,8 @@ export function collectOwnedByRelation(relationId:string,relationById:Map<string
 }
 
 /** One consistent membership index for a real or simulated organization state. */
-export function createContainerOwnership(relations:ContainerRelation[],rejectedContainerIds=new Set<string>(),rejectedJoinRelationIds=new Set<string>()) {
-  const index=ownershipIndex(relations,rejectedContainerIds,rejectedJoinRelationIds);
+export function createContainerOwnership(relations:ContainerRelation[],rejectedContainerIds=new Set<string>(),rejectedJoinRelationIds=new Set<string>(),displayWinners?:ReadonlyMap<string,string>) {
+  const index=ownershipIndex(relations,rejectedContainerIds,rejectedJoinRelationIds,displayWinners);
   const cached=new Map<string,{textIds:Set<string>;relationIds:Set<string>}>();
   const owned=(relationId:string,visited=new Set<string>())=>{
   const cacheable=visited.size===0;

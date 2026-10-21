@@ -27,7 +27,8 @@
     "test:watch": "vitest",
     "test:load": "tsx scripts/architecture-load.ts --output data/performance/load.json",
     "test:bundle": "node scripts/bundle-report.mjs --check --output data/performance/bundle.json",
-    "db:migrate": "tsx --env-file-if-exists=.env apps/server/src/migrate-cli.ts"
+    "db:migrate": "tsx --env-file-if-exists=.env apps/server/src/migrate-cli.ts",
+    "db:topic-retirement": "tsx --env-file-if-exists=.env apps/server/src/retire-legacy-topics-cli.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.23",

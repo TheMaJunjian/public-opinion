@@ -1,6 +1,7 @@
-import { bindRoles, ORGANIZATIONS, relations, resolveMemberships, type Json, type Membership, type MembershipAction, type Message, type Part } from '@gonglun/core';
+import { bindRoles, ORGANIZATIONS, relations, resolveMemberships, type Json, type Membership, type MembershipAction, type Message, type Part, type Reference } from '@gonglun/core';
 import { DomainError, Mutation, type Store } from './db.js';
 import { statesFor } from './projections.js';
+import { retiredTopicIds } from './retired-topics.js';
 
 const whole = (ref: { revision?: number; partId?: string; memberId?: string; path?: unknown[]; range?: unknown }) =>
     ref.revision === undefined && !ref.partId && !ref.memberId && !ref.path?.length && !ref.range;
@@ -8,12 +9,38 @@ async function parent(tx: Mutation, memberId: string): Promise<string | null> {
     const row = await tx.store.db.prepare('SELECT "parentId" FROM memberships WHERE "memberId"=$1').get(memberId);
     return row ? String(row.parentId) : null;
 }
-async function validateMove(tx: Mutation, memberId: string, parentId: string) {
+async function containerRejectedForUser(store: Store, parentId: string, userId: string) {
+    const message = await store.message(parentId), group = relations(message).find(part => ORGANIZATIONS.has(part.relation) || part.relation === 'members');
+    if (!group) return false;
+    const own = await store.db.prepare(`SELECT side FROM display_stances WHERE "targetId"=$1 AND "targetRevision"=$2 AND "authorId"=$3
+        AND "wholeComponent"=1 AND ("targetPartId" IS NULL OR "targetPartId"=$4) ORDER BY sequence DESC,"sourceId" DESC LIMIT 1`)
+        .get(parentId, message.revision, userId, group.id);
+    if (own) return own.side === 'con';
+    if (message.authorId === userId) return false;
+    const chosen = await store.db.prepare(`SELECT 1 FROM membership_actions a JOIN messages j ON j.id=a.id
+        WHERE a.body->>'parentId'=$1 AND (j."authorId"=$2 OR EXISTS (
+            SELECT 1 FROM display_stances s WHERE s."targetId"=a.id AND s."authorId"=$2 AND s.side='pro'
+            AND s."wholeComponent"=1 AND (s."targetPartId" IS NULL OR s."targetPartId"=COALESCE(a.body->>'sourcePartId','relation'))
+        )) LIMIT 1`).get(parentId, userId);
+    if(chosen)return false;
+    const rows = await store.db.prepare(`SELECT b.side,SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
+        WHERE COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}')=$1
+        AND NOT EXISTS (SELECT 1 FROM legacy_stakes old WHERE old.id=b.id) GROUP BY b.side`).all(parentId);
+    const legacy = await store.db.prepare('SELECT side,SUM(amount) AS amount FROM legacy_stakes WHERE "messageId"=$1 GROUP BY side').all(parentId);
+    const amounts = { pro: 0, con: 0 };
+    for (const row of [...rows, ...legacy]) amounts[String(row.side).toLowerCase() as 'pro' | 'con'] += Number(row.amount);
+    return amounts.con > amounts.pro;
+}
+async function validateMove(tx: Mutation, memberId: string, parentId: string, userId: string) {
+    const retired = await retiredTopicIds(tx.store);
+    if (retired.has(parentId) || retired.has(memberId)) throw new DomainError('旧 Topic 分类已取消，保留记录仅供历史查看', 409);
     if (memberId === parentId) throw new DomainError('消息不能包含自身');
     const organization = await tx.store.message(parentId);
     await tx.store.message(memberId);
     if (!relations(organization).some(p => ORGANIZATIONS.has(p.relation) || p.relation === 'members'))
         throw new DomainError('父消息必须是组织');
+    if (await containerRejectedForUser(tx.store, parentId, userId))
+        throw new DomainError('容器已被反对，请先赞同并恢复容器，再加入消息', 409);
     let current: string | null = parentId;
     const seen = new Set<string>();
     while (current) {
@@ -21,6 +48,20 @@ async function validateMove(tx: Mutation, memberId: string, parentId: string) {
         seen.add(current); current = await parent(tx, current);
         if (seen.size > 1000) throw new DomainError('组织层级过深');
     }
+}
+
+/** Check the resolved stance, including opposition to an opposing stance. */
+export async function validateJoinApproval(store: Store, target: Reference, side: 'pro' | 'con', userId: string) {
+    if (side !== 'pro' || target.memberId || target.path?.length || target.range) return;
+    const message = await store.message(target.messageId);
+    if (target.revision !== undefined && target.revision !== message.revision) return;
+    const placement = relations(message).find(part => part.relation === 'member-of' && part.roles.member?.length);
+    if (!placement || target.partId && target.partId !== placement.id) return;
+    const parentId = placement.roles.parent?.[0]?.reference.messageId;
+    if (parentId && (await retiredTopicIds(store)).has(parentId))
+        throw new DomainError('旧 Topic 分类已取消，历史加入消息不能恢复', 409);
+    if (parentId && await containerRejectedForUser(store, parentId, userId))
+        throw new DomainError('容器已被反对，请先赞同并恢复容器，再赞同加入消息', 409);
 }
 
 /** Persist history on the public JOIN message as well as in its query index. */
@@ -122,7 +163,7 @@ export async function reconcileOrganizationEffects(tx: Mutation) {
     const states = await statesFor(tx.store, [...new Set(actions.flatMap(action => [action.id, action.parentId]))]);
     const rejected = new Set(states.filter(state => state.suppressed).map(state => state.messageId));
     for (const row of rows) if (row.disabled) rejected.add(String(row.id));
-    const resolved = resolveMemberships(actions, rejected);
+    const resolved = resolveMemberships(actions, rejected, await retiredTopicIds(tx.store));
     for (const memberId of resolved.trackedMembers) {
         const action = resolved.effective.get(memberId);
         if (action) await setMembership(tx, { memberId, parentId: action.parentId, sourceId: action.id, sourcePartId: action.sourcePartId ?? 'relation', bindingId: action.bindingId ?? 'member-0', sourceRevision: action.sourceRevision ?? 1 });
@@ -149,7 +190,7 @@ export async function reconcileOrganizationRevision(tx: Mutation, before: Messag
         if (placement) {
             const members = placement.roles.member!, parents = placement.roles.parent ?? [];
             if (members.length !== 1 || parents.length !== 1 || !whole(members[0]!.reference) || !whole(parents[0]!.reference)) throw new DomainError('加入组织须指定唯一完整父消息和成员');
-            await validateMove(tx, members[0]!.reference.messageId, parents[0]!.reference.messageId);
+            await validateMove(tx, members[0]!.reference.messageId, parents[0]!.reference.messageId, after.authorId);
             await createJoin(tx, after, members[0]!.reference.messageId, parents[0]!.reference.messageId);
         }
         return true;
@@ -176,7 +217,7 @@ export async function reconcileOrganizationRevision(tx: Mutation, before: Messag
         }
     }
     for (const ref of refs) if (!current.some(member => member.memberId === ref.messageId)) {
-        await validateMove(tx, ref.messageId, after.id);
+        await validateMove(tx, ref.messageId, after.id, after.authorId);
         await createJoin(tx, after, ref.messageId, after.id);
     }
     if (!after.parts.some(part => part.id === 'organization-memberships')) {
@@ -201,9 +242,9 @@ export async function applyOrganization(tx: Mutation, message: Message) {
                 for (const ref of members) parents.add(await parent(tx, ref.messageId));
                 if (parents.size !== 1) throw new DomainError('重新组织的消息须为同父兄弟');
                 const existingParent = [...parents][0];
-                if (existingParent) { await validateMove(tx, message.id, existingParent); await createJoin(tx, message, message.id, existingParent); }
+                if (existingParent) { await validateMove(tx, message.id, existingParent, message.authorId); await createJoin(tx, message, message.id, existingParent); }
                 for (const member of members) {
-                    await validateMove(tx, member.messageId, message.id);
+                    await validateMove(tx, member.messageId, message.id, message.authorId);
                     await createJoin(tx, message, member.messageId, message.id);
                 }
             }
@@ -213,7 +254,7 @@ export async function applyOrganization(tx: Mutation, message: Message) {
             const members = part.roles.member ?? [{ id: 'self', reference: { messageId: message.id } }];
             if (members.length !== 1 || !whole(members[0]!.reference)) throw new DomainError('加入组织须指定唯一完整成员');
             const memberId = members[0]!.reference.messageId, parentId = part.roles.parent[0]!.reference.messageId;
-            await validateMove(tx, memberId, parentId);
+            await validateMove(tx, memberId, parentId, message.authorId);
             if (part.roles.member?.length) await recordJoin(tx, message, memberId, parentId);
             else await createJoin(tx, message, memberId, parentId);
         }

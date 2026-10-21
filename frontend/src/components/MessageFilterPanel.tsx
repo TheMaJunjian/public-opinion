@@ -59,6 +59,8 @@ export default function MessageFilterPanel({
           fontSize: 12,
           fontWeight: hasActive ? 600 : 400,
         }}
+        aria-pressed={hasActive}
+        aria-expanded={open}
       >
         {hasActive ? '🧹 清爽' : '清爽视图'}
       </button>

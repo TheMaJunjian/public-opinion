@@ -32,8 +32,9 @@ interface Props {
   home: ComponentProps<typeof HomeFilterPanel>; clean: ComponentProps<typeof CleanFilterPanel>; filter: ComponentProps<typeof MessageFilterPanel>;
   view: ViewNavigation; comparison: ComparisonControls;
   correctionFilterTargetId: string | null; onLeaderboard: () => void;
+  history?: { canGoBack: boolean; canGoForward: boolean; back: () => void; forward: () => void };
 }
-export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard }: Props) {
+export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId, exportTitle, exportData, exportUsername, home, clean, filter, view, comparison, correctionFilterTargetId, onLeaderboard, history }: Props) {
   const [exportOpen, setExportOpen] = useState(false);
   const { viewMode, setViewMode, leftPanelRef, viewModeScrollRef, draftUnits, targetUnits, traceCount, currentClassifyRelMsgId, messages, relations, findContainingClassification, exitClassification, enterClassification, scheduleViewNavigation } = view;
   const { singleSideReview, comparisonMode, comparisonReviewed, comparisonTargetId, setComparisonTargetId, onStartComparison } = comparison;
@@ -48,7 +49,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
           </div>
         </div>
         <div className="workbench-view-actions" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button onClick={() => setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #4a9eff", background: "#1a3a5c", color: "#4a9eff", fontSize: 12, cursor: "pointer" }}>
+          <button onClick={() => setExportOpen(true)} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer", fontWeight: 400 }}>
             导出
           </button>
           <HomeFilterPanel {...home} />
@@ -70,44 +71,69 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
           >
             排行榜
           </button>
-          {!singleSideReview && !comparisonMode && !comparisonReviewed && correctionFilterTargetId === null && <button onClick={() => {
-            if (leftPanelRef.current) {
-              viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
-            }
-            const nextViewMode = viewMode === "list" ? "graph" : "list";
-            const navigationUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
-            const comparisonId = navigationUnits.length === 1 ? navigationUnits[0].messageId : comparisonTargetId;
-            if (comparisonMode && nextViewMode === 'list') {
-              setComparisonTargetId(null);
-            }
-            setViewMode(nextViewMode);
-            const selectedMessageIds = new Set(navigationUnits.map(unit => unit.messageId));
-            const selectedMessageId = selectedMessageIds.size === 1
-              ? selectedMessageIds.values().next().value ?? null
-              : null;
-            if (nextViewMode === 'graph' && selectedMessageId && traceCount === 0) {
-              const containingClassifyId = findContainingClassification(selectedMessageId);
-              if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
-                if (currentClassifyRelMsgId) exitClassification({ restoreSnapshot: false });
-                enterClassification(containingClassifyId);
+          <div style={{display:'flex',gap:6,alignItems:'center',flexShrink:0}}>
+            {history && <div role="group" aria-label="浏览历史" style={{display:'flex',gap:4}}>
+              {(['back','forward'] as const).map(direction => {
+                const enabled = direction === 'back' ? history.canGoBack : history.canGoForward;
+                return <button key={direction} type="button" disabled={!enabled} onClick={history[direction]}
+                  className="workbench-history-button" aria-label={direction === 'back' ? '返回' : '前进'}
+                  title={direction === 'back' ? '返回上一个浏览位置' : '前进到下一个浏览位置'}
+                >
+                  <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d={direction === 'back' ? 'M19 12H5m7 7-7-7 7-7' : 'M5 12h14m-7-7 7 7-7 7'} />
+                  </svg>
+                </button>;
+              })}
+            </div>}
+            {!singleSideReview && !comparisonMode && !comparisonReviewed && correctionFilterTargetId === null && <button onClick={() => {
+              if (leftPanelRef.current) {
+                viewModeScrollRef.current[viewMode] = { top: leftPanelRef.current.scrollTop, left: leftPanelRef.current.scrollLeft };
               }
-            }
-            const scrollTargetId = comparisonMode
-              ? comparisonId
-              : selectedMessageId;
-            if (scrollTargetId) {
-              const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
-              const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
-              const isCorrectionTarget = scrollTargetMessage?.relationType?.toUpperCase() === 'CORRECT'
-                || scrollTargetRelation?.relationType?.toUpperCase() === 'CORRECT';
-              const navigationTargetId = isCorrectionTarget
-                ? scrollTargetId
-                : resolveNavigationTargetId(scrollTargetId, messages, relations);
-              scheduleViewNavigation(navigationTargetId);
-            }
-          }} data-shortcut-view-toggle="true" style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: "#333", color: "#fff", fontSize: 12, cursor: "pointer" }}>
-            {viewMode === "list" ? "切换为消息图" : "切换为消息表"}
-          </button>}
+              const nextViewMode = viewMode === "list" ? "graph" : "list";
+              const navigationUnits = draftUnits.length > 0 ? draftUnits : targetUnits;
+              const comparisonId = navigationUnits.length === 1 ? navigationUnits[0].messageId : comparisonTargetId;
+              if (comparisonMode && nextViewMode === 'list') {
+                setComparisonTargetId(null);
+              }
+              setViewMode(nextViewMode);
+              const selectedMessageIds = new Set(navigationUnits.map(unit => unit.messageId));
+              const selectedMessageId = selectedMessageIds.size === 1
+                ? selectedMessageIds.values().next().value ?? null
+                : null;
+              if (nextViewMode === 'graph' && selectedMessageId && traceCount === 0) {
+                const containingClassifyId = findContainingClassification(selectedMessageId);
+                if (containingClassifyId && containingClassifyId !== currentClassifyRelMsgId) {
+                  if (currentClassifyRelMsgId) exitClassification({ restoreSnapshot: false });
+                  enterClassification(containingClassifyId);
+                }
+              }
+              const scrollTargetId = comparisonMode
+                ? comparisonId
+                : selectedMessageId;
+              if (scrollTargetId) {
+                const scrollTargetMessage = messages.find(message => message.id === scrollTargetId);
+                const scrollTargetRelation = relations.find(relation => relation.id === scrollTargetId);
+                const isCorrectionTarget = scrollTargetMessage?.relationType?.toUpperCase() === 'CORRECT'
+                  || scrollTargetRelation?.relationType?.toUpperCase() === 'CORRECT';
+                const navigationTargetId = isCorrectionTarget
+                  ? scrollTargetId
+                  : resolveNavigationTargetId(scrollTargetId, messages, relations);
+                scheduleViewNavigation(navigationTargetId);
+              }
+            }} data-shortcut-view-toggle="true" className="workbench-view-toggle">
+              <span key={viewMode} className="workbench-view-toggle-content">
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  {viewMode === 'list' ? <>
+                    <path d="m7.5 6 9 0M7 8l4 9m6-9-4 9" />
+                    <circle cx="6" cy="5" r="2.5" /><circle cx="18" cy="5" r="2.5" /><circle cx="12" cy="19" r="2.5" />
+                  </> : <>
+                    <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M3 10h18M9 10v10m6-10v10" />
+                  </>}
+                </svg>
+                {viewMode === "list" ? "切换为消息图" : "切换为消息表"}
+              </span>
+            </button>}
+          </div>
         </div>
       </div>
       </div>

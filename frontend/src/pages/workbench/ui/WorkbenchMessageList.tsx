@@ -15,6 +15,9 @@ import { messageScopePath } from '../../../utils/messageRoutes';
 import { type CorrectionVersion, type DemoEdge, type DemoMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
 import { formatCorrectionRange } from '../model/correction';
 import { collectOwnedByRelation } from '../model/ownership';
+import { getJoinStatusPresentation, type JoinStatus } from '../model/membership';
+import type { JoinEffectSource } from '../model/joinDisplay';
+import type { ContainerEffect } from '../model/containerEffect';
 import { filterMessageListContext } from '../projections/messageListContext';
 import VirtualMessageList from '../../../components/VirtualMessageList';
 
@@ -27,6 +30,9 @@ interface MessageCatalog {
   joinRelationsByTarget: Map<string, Relation[]>;
   joinRelationsBySource: Map<string, Relation[]>;
   effectiveJoinRelationIds: Set<string>;
+  joinStatusByMessage?: ReadonlyMap<string, JoinStatus>;
+  joinEffectSourcesByMessage?: ReadonlyMap<string, ReadonlySet<JoinEffectSource>>;
+  containerOwnership?: ContainerEffect['ownership'];
   summaryCoverageByMessageId: Map<string, { summaryId: string; title: string }[]>;
   correctionVersions: Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>;
 }
@@ -116,7 +122,7 @@ export default function WorkbenchMessageList(props: Props) {
           const isGovernanceMsg = !isOrganizationMessage && msg.kind !== "relation" && (govKind === "GOVERNANCE" || govKind === "CODE" || govKind === "OPERATIONS");
           const governanceColor = govKind === "GOVERNANCE" ? "#f59e0b" : govKind === "CODE" ? "#3b82f6" : "#10b981";
           const memberCount = isOrganizationMessage
-            ? collectOwnedByRelation(msg.id, relationById).textIds.size
+            ? (props.catalog.containerOwnership?.owned(msg.id)??collectOwnedByRelation(msg.id, relationById)).textIds.size
             : 0;
           const organizationTitle = isOrganizationMessage ? getOrganizationTitle(msg, memberCount) : "";
           const summaryCoverages = summaryCoverageByMessageId.get(msg.id) ?? [];
@@ -126,6 +132,8 @@ export default function WorkbenchMessageList(props: Props) {
           const outgoingJoinRelations = joinRelationsBySource.get(msg.id) ?? [];
           const joinRelation = msg.kind === 'join' ? relationById.get(msg.id) : undefined;
           const joinIsEffective = !!joinRelation && effectiveJoinRelationIds.has(joinRelation.id);
+          const joinStatus = props.catalog.joinStatusByMessage?.get(msg.id) ?? (joinIsEffective ? 'valid' : 'inactive');
+          const joinPresentation = getJoinStatusPresentation(joinStatus, props.catalog.joinEffectSourcesByMessage?.get(msg.id));
           const ctx: MessageCardContext = {
             isWholeSelected, isActiveText, isOrganizationMessage,
             isClassification: isClassification,
@@ -301,8 +309,8 @@ export default function WorkbenchMessageList(props: Props) {
                 <>
                   {msg.kind === "join" && joinRelation && (
                     <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(34,197,94,0.15)", color: "#86efac", border: "1px solid rgba(34,197,94,0.3)" }}>
-                        {joinIsEffective ? '生效' : '未生效'}
+                      <span title={joinPresentation.hint} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinIsEffective ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.16)", color: joinIsEffective ? "#86efac" : "#fca5a5", border: `1px solid ${joinIsEffective ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.35)'}` }}>
+                        {joinPresentation.label}
                       </span>
                     </div>
                   )}

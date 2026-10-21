@@ -1,6 +1,7 @@
 import { bindRoles, referenceKey, relations, resolveStance, textOf, type Allocation, type Distribution, type Json, type Message, type Reference, type RelationPart, type Round } from '@gonglun/core';
 import { DomainError, id, integer, Mutation, now, Store } from './db.js';
 import { recordStance } from './projections.js';
+import { validateJoinApproval } from './organizations.js';
 
 type Bet={id:string;roundId:string;targetKey:string;userId:string;messageId:string;side:'pro'|'con';amount:number};
 type SavedRound=Round&{targetKey:string;payouts:Allocation[];betIds:string[];createdAt:string;settlementType?:'TRUTH'|'VALUE';subjectId?:string;legacyActive?:boolean;legacyActiveBoundary?:boolean};
@@ -121,6 +122,7 @@ export async function placeWager(tx: Mutation, message: Message, amount: number)
     if (stance.length !== 1 || stance[0]!.roles.target?.length !== 1)
         throw new DomainError('押注必须对应一项明确的赞同或反对');
     const resolved = await resolveExecutedStance(tx.store, stance[0]!.roles.target![0]!.reference, stance[0]!.relation === 'agree' ? 'pro' : 'con');
+    await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
     if(amount===0 && await hasEffect(tx.store,`legacy-settlement:${resolved.target.messageId}`)) {
         const target={...resolved.target,revision:(await tx.store.message(resolved.target.messageId,resolved.target.revision)).revision};
         await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id,message.revision,stance[0]!.id,JSON.stringify(target),resolved.side);

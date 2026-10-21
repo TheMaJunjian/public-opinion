@@ -704,6 +704,342 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(mockApi.createRelation).not.toHaveBeenCalled();
   });
 
+  it.each(['graph','list'])('locates the container after clicking a member JOIN badge and its container label in %s',async mode=>{
+    fixture('CLASSIFY',true);
+    const response=await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({data:response.data.filter((relation:Relation)=>relation.id!=='against-C')});
+    graphRendering.actual=true;
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this:HTMLElement){
+      if(this.hasAttribute('data-workbench-left-panel'))return new DOMRect(0,120,600,500);
+      if(this.dataset.msgid==='C'&&!this.hasAttribute('data-rel-overlay')){
+        const panel=this.closest<HTMLElement>('[data-workbench-left-panel]');
+        return new DOMRect(20,1120+(parseFloat(this.style.top)||0)-(panel?.scrollTop??0),300,140);
+      }
+      return new DOMRect(0,120,300,140);
+    });
+    try{
+      render(<MessageWorkbenchPage/>);
+      await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
+      await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+      await act(async()=>latest().onMessageDoubleClick(event(),'C'));
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      Object.defineProperties(left,{clientHeight:{configurable:true,value:500},clientWidth:{configurable:true,value:600},
+        scrollHeight:{configurable:true,value:3000},scrollWidth:{configurable:true,value:600}});
+      fireEvent.click(within(left).getByRole('button',{name:'查看加入消息（1条）'}));
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      const join=left.querySelector<HTMLElement>('[data-msgid="join-B"]')!;
+      fireEvent.click(within(join).getByTitle(/跳转到.*消息 C/));
+      await waitFor(()=>expect(left.querySelector('[data-msgid="C"]:not([data-rel-overlay])')).not.toBeNull());
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      await waitFor(()=>{
+        const target=left.querySelector<HTMLElement>('[data-msgid="C"]:not([data-rel-overlay])')!;
+        const rect=target.getBoundingClientRect(),viewport=left.getBoundingClientRect();
+        expect(rect.top).toBeGreaterThanOrEqual(viewport.top);
+        expect(rect.bottom).toBeLessThanOrEqual(viewport.bottom);
+      });
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
+      fireEvent.click(screen.getByRole('button',{name:/清爽/}));
+      expect(screen.getByRole('checkbox',{name:'屏蔽加入消息'})).toBeChecked();
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{geometry.mockRestore();graphRendering.actual=false;}
+  });
+
+  it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'].flatMap(type=>['graph','list'].map(mode=>({type,mode}))))('restores browsing history between $type and JOIN records from $mode',async({type,mode})=>{
+    fixture(type,true);
+    const response=await mockApi.getRelations();
+    mockApi.getRelations.mockResolvedValue({data:response.data.filter((relation:Relation)=>relation.id!=='against-C')});
+    const scrollingElement=Object.getOwnPropertyDescriptor(document,'scrollingElement');
+    Object.defineProperty(document,'scrollingElement',{configurable:true,value:document.documentElement});
+    const dimensions=[
+      vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(5000),
+      vi.spyOn(HTMLElement.prototype,'scrollWidth','get').mockReturnValue(3000),
+      vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400)),
+    ];
+    graphRendering.actual=true;
+    try{
+      render(<MessageWorkbenchPage/>);
+      const ready=()=>waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
+      expect(screen.getByRole('button',{name:'返回'})).toBeDisabled();
+      expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
+      await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+      if(type==='CLASSIFY'||type==='SUMMARY')await act(async()=>latest().onMessageDoubleClick(event(),'C'));
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+      await ready();
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const right=document.querySelector<HTMLElement>('.workbench-right-panel')!,page=document.documentElement;
+      const read=()=>[left.scrollTop,left.scrollLeft,right.scrollTop,right.scrollLeft,page.scrollTop,page.scrollLeft];
+      const write=(offset:number)=>{
+        left.scrollTop=450+offset;left.scrollLeft=70+offset;right.scrollTop=110+offset;right.scrollLeft=50+offset;
+        page.scrollTop=800+offset;page.scrollLeft=30+offset;return read();
+      };
+      fireEvent.click(screen.getByRole('button',{name:/清爽/}));
+      fireEvent.click(screen.getByRole('checkbox',{name:'屏蔽结算消息'}));
+      const filterState=()=>[screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽加入消息'}).checked,
+        screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽结算消息'}).checked];
+      expect(filterState()).toEqual([true,false]);
+      const originScroll=write(0),requests=mockApi.getWorkbenchSnapshot.mock.calls.length;
+      fireEvent.click(within(left).getByRole('button',{name:'查看加入消息（1条）'}));
+      await ready();
+      fireEvent.click(screen.getByRole('button',{name:mode==='graph'?'切换为消息表':'切换为消息图'}));
+      fireEvent.click(screen.getByRole('checkbox',{name:'屏蔽结算消息'}));
+      await ready();
+      const joinMode=mode==='graph'?'list':'graph',joinScroll=write(100);
+      expect(filterState()).toEqual([false,true]);
+      const join=left.querySelector<HTMLElement>('[data-msgid="join-B"]')!;
+      fireEvent.click(within(join).getByTitle(/跳转到.*消息 C/));
+      await ready();
+      expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
+      const destinationMode=screen.queryByRole('button',{name:'切换为消息表'})?'graph':'list';
+      const destinationFilters=filterState(),destinationScroll=write(200);
+      const back=()=>fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      const forward=()=>fireEvent.click(screen.getByRole('button',{name:'前进'}));
+      const assertRecords=async()=>{
+        expect(screen.getByText('加入记录临时分类（1）')).toBeInTheDocument();
+        expect(screen.getByRole('button',{name:joinMode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
+        expect(filterState()).toEqual([false,true]);
+        await ready();await waitFor(()=>expect(read()).toEqual(joinScroll));
+      };
+      back();await assertRecords();
+      back();
+      expect(screen.queryByText('加入记录临时分类（1）')).toBeNull();
+      expect(screen.getByRole('button',{name:mode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
+      expect(filterState()).toEqual([true,false]);
+      await ready();await waitFor(()=>expect(read()).toEqual(originScroll));
+      forward();await assertRecords();
+      forward();await ready();await waitFor(()=>expect(read()).toEqual(destinationScroll));
+      expect(filterState()).toEqual(destinationFilters);
+      expect(screen.getByRole('button',{name:destinationMode==='list'?'切换为消息图':'切换为消息表'})).toBeInTheDocument();
+      expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
+      // Reverse before the viewport restore paints: preserve its intended scroll.
+      back();forward();await ready();await waitFor(()=>expect(read()).toEqual(destinationScroll));
+      back();await assertRecords();
+      fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));
+      await ready();await waitFor(()=>expect(read()).toEqual(originScroll));
+      expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
+      back();await assertRecords();
+      expect(mockApi.getWorkbenchSnapshot).toHaveBeenCalledTimes(requests);
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{
+      graphRendering.actual=false;dimensions.forEach(spy=>spy.mockRestore());
+      if(scrollingElement)Object.defineProperty(document,'scrollingElement',scrollingElement);
+      else Reflect.deleteProperty(document,'scrollingElement');
+    }
+  });
+
+  it.each(['graph','list'] as const)('restores A/B/C and JOIN-record history after taking a new branch from %s',async initialMode=>{
+    const containers=['A','B','C'] as const;
+    const relation=(id:string,type:string,targets:string[],source:string|null=null,order=0):Relation=>({
+      id,relationType:type,sourceMessageId:source,targetRefs:targets.map(messageId=>({kind:'message',messageId})),
+      payload:type==='CLASSIFY'?{title:`${id}标题`,independentMemberships:true}:undefined,
+      createdAt:new Date(Date.parse('2026-10-21T00:00:00Z')+order*1000).toISOString(),createdBy:makeUser(),
+    });
+    const relations=containers.map(id=>relation(id,'CLASSIFY',[`member-${id}`]));
+    for(const [index,id] of containers.entries()){
+      const targets=[...containers.filter(other=>other!==id),id];
+      targets.forEach((parent,order)=>relations.push(relation(`join-${id}-${parent}`,'JOIN',[`member-${id}`],parent,index*3+order+1)));
+    }
+    mockApi.getScope.mockResolvedValue({messageId:'classification-1',title:'三容器讨论'});
+    mockApi.getMessages.mockResolvedValue({data:containers.map(id=>makeMessage(`member-${id}`,`${id}的成员`))});
+    mockApi.getRelations.mockResolvedValue({data:relations});
+    const scrollingElement=Object.getOwnPropertyDescriptor(document,'scrollingElement');
+    Object.defineProperty(document,'scrollingElement',{configurable:true,value:document.documentElement});
+    const dimensions=[
+      vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(5000),
+      vi.spyOn(HTMLElement.prototype,'scrollWidth','get').mockReturnValue(3000),
+      vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype,'clientWidth','get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400)),
+    ];
+    graphRendering.actual=true;
+    try{
+      render(<MessageWorkbenchPage/>);
+      const ready=()=>waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
+      await ready();
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      const right=document.querySelector<HTMLElement>('.workbench-right-panel')!,page=document.documentElement;
+      const row=(id:string)=>left.querySelector<HTMLElement>(`[data-msgid="${id}"]:not([data-rel-overlay])`)!;
+      const readScroll=()=>[left.scrollTop,left.scrollLeft,right.scrollTop,right.scrollLeft,page.scrollTop,page.scrollLeft];
+      const filter=()=>[screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽加入消息'}).checked,
+        screen.getByRole<HTMLInputElement>('checkbox',{name:'屏蔽结算消息'}).checked];
+      const mode=()=>screen.queryByRole('button',{name:'切换为消息表'})?'graph':'list';
+      const historyButtons=screen.getByRole('group',{name:'浏览历史'});
+      expect(historyButtons.closest('.workbench-view-actions')).not.toBeNull();
+      expect(historyButtons.nextElementSibling).toHaveAttribute('data-shortcut-view-toggle','true');
+      const enter=async(id:string)=>{fireEvent.doubleClick(row(id));await ready();};
+      const records=async(id:string)=>{
+        fireEvent.click(within(row(`member-${id}`)).getByRole('button',{name:'查看加入消息（3条）'}));await ready();
+      };
+      const follow=async(member:string,parent:string)=>{
+        fireEvent.click(within(row(`join-${member}-${parent}`)).getByTitle(new RegExp(`跳转到.*消息 ${parent}$`)));await ready();
+      };
+      type Saved={kind:'container'|'records'|'root';id:string;mode:'graph'|'list';filter:boolean[];scroll:number[]};
+      let position=0;
+      const save=async(kind:Saved['kind'],id:string,view:Saved['mode'],settings:boolean[]):Promise<Saved>=>{
+        if(mode()!==view){fireEvent.click(screen.getByRole('button',{name:view==='graph'?'切换为消息图':'切换为消息表'}));await ready();}
+        if(!screen.queryByRole('checkbox',{name:'屏蔽加入消息'}))fireEvent.click(screen.getByRole('button',{name:/清爽/}));
+        for(const [index,label] of ['屏蔽加入消息','屏蔽结算消息'].entries()){
+          const input=screen.getByRole<HTMLInputElement>('checkbox',{name:label});
+          if(input.checked!==settings[index])fireEvent.click(input);
+        }
+        await ready();position++;
+        const scroll=[300+position*110,20+position*13,80+position*37,10+position*11,650+position*130,15+position*17];
+        [left.scrollTop,left.scrollLeft,right.scrollTop,right.scrollLeft,page.scrollTop,page.scrollLeft]=scroll;
+        return {kind,id,mode:view,filter:settings,scroll};
+      };
+      const assertSaved=async(saved:Saved)=>{
+        await ready();
+        expect(mode()).toBe(saved.mode);expect(filter()).toEqual(saved.filter);
+        if(saved.kind==='records'){
+          expect(screen.getByText('加入记录临时分类（3）')).toBeInTheDocument();
+          expect(screen.getByText(new RegExp(`消息 member-${saved.id} 加入容器`))).toBeInTheDocument();
+          for(const parent of containers)expect(row(`join-${saved.id}-${parent}`)).not.toBeNull();
+          expect(row(`member-${saved.id}`)).toBeNull();
+        }else{
+          expect(screen.queryByText('加入记录临时分类（3）')).toBeNull();
+          if(saved.kind==='container'){
+            expect(screen.getByRole('button',{name:'退出分类'}).parentElement).toHaveTextContent(`${saved.id}标题`);
+            expect(row(`member-${saved.id}`)).not.toBeNull();
+            for(const id of containers.filter(id=>id!==saved.id))expect(row(`member-${id}`)).toBeNull();
+          }else{
+            for(const id of containers){expect(row(id)).not.toBeNull();expect(row(`member-${id}`)).toBeNull();}
+            expect(screen.getByRole('button',{name:`暂存消息 ${saved.id}`})).toBeInTheDocument();
+          }
+        }
+        await waitFor(()=>expect(readScroll()).toEqual(saved.scroll));
+      };
+      const back=()=>fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      const forward=()=>fireEvent.click(screen.getByRole('button',{name:'前进'}));
+      const opposite=initialMode==='graph'?'list':'graph';
+      const states:Saved[]=[];
+      await enter('A');states.push(await save('container','A',initialMode,[true,true]));
+      await records('A');states.push(await save('records','A',opposite,[false,false]));
+      await follow('A','B');states.push(await save('root','B',initialMode,[true,false]));
+      await enter('B');states.push(await save('container','B',opposite,[true,false]));
+      await records('B');states.push(await save('records','B',initialMode,[false,true]));
+      await follow('B','C');states.push(await save('root','C',opposite,[true,true]));
+      await enter('C');states.push(await save('container','C',initialMode,[true,false]));
+      await records('C');states.push(await save('records','C',opposite,[false,true]));
+      await assertSaved(states.at(-1)!);
+      for(let index=states.length-2;index>=0;index--){back();await assertSaved(states[index]);}
+      for(const state of states.slice(1)){forward();await assertSaved(state);}
+      // Return to B's records, then replace the old C route with A -> records -> C.
+      for(const index of [6,5,4]){back();await assertSaved(states[index]);}
+      expect(screen.getByRole('button',{name:'前进'})).toBeEnabled();
+      await follow('B','A');
+      expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
+      const branch=states.slice(0,5);
+      branch.push(await save('root','A',opposite,[true,true]));
+      await enter('A');branch.push(await save('container','A',initialMode,[true,false]));
+      await records('A');branch.push(await save('records','A',opposite,[false,true]));
+      await follow('A','C');branch.push(await save('root','C',initialMode,[true,false]));
+      for(let index=branch.length-2;index>=0;index--){back();await assertSaved(branch[index]);}
+      for(const state of branch.slice(1)){forward();await assertSaved(state);}
+      expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{
+      graphRendering.actual=false;dimensions.forEach(spy=>spy.mockRestore());
+      if(scrollingElement)Object.defineProperty(document,'scrollingElement',scrollingElement);
+      else Reflect.deleteProperty(document,'scrollingElement');
+    }
+  },15000);
+
+  it('waits for restored global filters before applying the browsing viewport',async()=>{
+    const originalSnapshot=mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    const category:Relation={id:'A',relationType:'CLASSIFY',sourceMessageId:null,targetRefs:[{kind:'message',messageId:'B'}],
+      createdAt:'2024-01-01',createdBy:makeUser(),payload:{title:'A'}};
+    const full={scope:{messageId:'classification-1',title:'讨论'},regionId:'history-region',sequence:10,
+      messages:[makeMessage('B','成员'),{...makeMessage('A',''),kind:'RELATION' as const,relationType:'CLASSIFY',targetRefs:category.targetRefs,relationPayload:category.payload}],
+      relations:[category],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{}};
+    mockApi.getWorkbenchSnapshot.mockResolvedValue({...full,windowed:true,messages:[],relations:[]});
+    const dimensions=[
+      vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockImplementation(()=>document.body.textContent?.includes('正在准备全局筛选结果')?0:5000),
+      vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(600),
+    ];
+    const {projectWorkbenchSnapshot}=await import('../utils/workbenchProjection');
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await waitFor(()=>expect(catalogHarness.callbacks).not.toBeNull());
+      act(()=>{
+        catalogHarness.data={snapshot:full,projected:projectWorkbenchSnapshot(full),rows:{userRows:[],messageRows:[]}};
+        catalogHarness.callbacks.onReady(catalogHarness.data);
+      });
+      await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='A')).toBe(true));
+      const ready=()=>waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      const addSender=async(username:string)=>{
+        fireEvent.click(screen.getByRole('button',{name:'按发送者'}));
+        const input=screen.getByPlaceholderText('例如: 张三');
+        fireEvent.change(input,{target:{value:username}});fireEvent.keyDown(input,{key:'Enter'});
+        expect(await screen.findByText(`发送者: ${username}`)).toBeInTheDocument();
+        await ready();
+      };
+      await ready();
+      fireEvent.click(screen.getByRole('button',{name:'过滤'}));
+      await addSender('tester');
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      left.scrollTop=700;
+      await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+      await ready();
+      fireEvent.click(await screen.findByTitle('移除此规则'));
+      await addSender('another-user');
+      const originalFilters=catalogHarness.filters.getMockImplementation()!;
+      let finish!:()=>Promise<void>;
+      catalogHarness.filters.mockImplementationOnce((query:unknown)=>new Promise(resolve=>{finish=async()=>resolve(await originalFilters(query));}));
+      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      await waitFor(()=>expect(finish).toBeDefined());
+      expect((await screen.findAllByText('正在准备全局筛选结果…')).length).toBeGreaterThan(0);
+      await act(async()=>{await new Promise(resolve=>setTimeout(resolve,50));});
+      await act(async()=>finish());
+      await ready();await waitFor(()=>expect(left.scrollTop).toBe(700));
+      expect(latest().messages.some((message:Message)=>message.id==='A')).toBe(true);
+    }finally{
+      view.unmount();dimensions.forEach(spy=>spy.mockRestore());
+      mockApi.getWorkbenchSnapshot.mockImplementation(originalSnapshot);catalogHarness.callbacks=null;
+    }
+  });
+
+  it('restores a rejected container preview and its JOIN history without corrupting the preview exit',async()=>{
+    fixture('CLASSIFY',true);
+    const dimensions=[vi.spyOn(HTMLElement.prototype,'scrollHeight','get').mockReturnValue(5000),
+      vi.spyOn(HTMLElement.prototype,'clientHeight','get').mockReturnValue(600),
+      vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400))];
+    graphRendering.actual=true;
+    try{
+      render(<MessageWorkbenchPage/>);
+      await waitFor(()=>expect(latest()?.rejectedContainerIds.has('C')).toBe(true));
+      await act(async()=>latest().onMessageDoubleClick(event(),'A'));
+      await act(async()=>latest().onRelatedMessageNavigate('C'));
+      expect(latest().comparisonSingle).toBe(true);
+      await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
+      const left=document.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
+      left.scrollTop=350;
+      await act(async()=>latest().onJoinFilterClick('C','outgoing'));
+      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      expect(latest().comparisonSingle).toBe(true);
+      await waitFor(()=>expect(left.scrollTop).toBe(350));
+      fireEvent.click(screen.getByRole('button',{name:'前进'}));
+      expect(screen.getByText('被加入记录临时分类（1）')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
+      expect(latest().comparisonSingle).toBe(false);
+      expect(latest().rejectedContainerIds.has('C')).toBe(true);
+      expect(latest().messages.map((message:Message)=>message.id)).toContain('B');
+      expect(screen.getByRole('button',{name:'前进'})).toBeDisabled();
+      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      expect(latest().comparisonSingle).toBe(true);
+      fireEvent.click(screen.getByRole('button',{name:'退出查看'}));
+      expect(latest().comparisonSingle).toBe(false);
+      expect(latest().messages.map((message:Message)=>message.id)).toContain('B');
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{graphRendering.actual=false;dimensions.forEach(spy=>spy.mockRestore());}
+  });
+
   it('selects the effective JOIN through its records instead of offering a fixed remove-container action',async()=>{
     localStorage.setItem('token','test-token');
     fixture('CLASSIFY',true);
@@ -988,7 +1324,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     await act(async()=>latest().onMessageClick(event(),'B'));
     const selection=latest().draftUnits;
     fireEvent.click(screen.getByRole('button',{name:'对比'}));
-    fireEvent.click(screen.getAllByText('C')[0]);
+    fireEvent.click((await screen.findAllByText('C'))[0]);
     fireEvent.click(screen.getByRole('button',{name:'审阅'}));
     await waitFor(()=>expect(latest().comparisonPair).toBe(true));
     const agreeInA={messages:latest().comparisonAgreeMessages,edges:latest().comparisonAgreeEdges,context:latest().comparisonAgreeContext};
@@ -998,7 +1334,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     const agreeAtRoot={messages:latest().comparisonAgreeMessages,edges:latest().comparisonAgreeEdges,context:latest().comparisonAgreeContext};
     fireEvent.click(screen.getByRole('button',{name:'退出对比'}));
     await act(async()=>latest().onRelatedMessageNavigate('C'));
-    const single=()=>({messages:latest().messages,edges:latest().edges,context:{relatedMessages:latest().relatedMessages,relatedEdges:latest().relatedEdges,rejectedContainerIds:latest().rejectedContainerIds,joinStatusByMessage:latest().joinStatusByMessage,crossCanvasRelations:latest().crossCanvasRelations}});
+    const single=()=>({messages:latest().messages,edges:latest().edges,context:{relatedMessages:latest().relatedMessages,relatedEdges:latest().relatedEdges,rejectedContainerIds:latest().rejectedContainerIds,joinStatusByMessage:latest().joinStatusByMessage,joinEffectSourcesByMessage:latest().joinEffectSourcesByMessage,crossCanvasRelations:latest().crossCanvasRelations}});
     expect(single()).toEqual(agreeInA);
     expect(latest().messages.map((message:Message)=>message.id)).toContain('neighbor');
     expect(screen.queryByRole('button',{name:'返回上层查看'})).toBeNull();

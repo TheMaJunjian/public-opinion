@@ -32,10 +32,10 @@ it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'])('shares %s approval, JOIN swit
   expect(scene(comparison.agree)).toEqual(scene(preview));
   expect(comparison.agree.context.rejectedContainerIds.has('C')).toBe(false);
   expect(comparison.disagree.context.rejectedContainerIds.has('C')).toBe(true);
-  expect(comparison.agree.context.joinStatusByMessage.has('new')).toBe(true);
-  expect(comparison.agree.context.joinStatusByMessage.has('old')).toBe(false);
-  expect(comparison.disagree.context.joinStatusByMessage.has('new')).toBe(false);
-  expect(comparison.disagree.context.joinStatusByMessage.has('old')).toBe(true);
+  expect(comparison.agree.context.joinStatusByMessage.get('new')).toBe('valid');
+  expect(comparison.agree.context.joinStatusByMessage.get('old')).toBe('superseded');
+  expect(comparison.disagree.context.joinStatusByMessage.get('new')).toBe('container-rejected');
+  expect(comparison.disagree.context.joinStatusByMessage.get('old')).toBe('valid');
   expect(scene(comparison.disagree).ids).toEqual(['one','two']);
   const rejected=deriveContainerEffect({...model,relations,username:'tester',assumption:{messageId:'C',side:'disagree'}});
   expect(rejected.ownership.direct('A').textIds).toEqual(new Set(['one','two']));
@@ -93,6 +93,47 @@ it('honors authoritative active JOIN state despite historical opposing records',
   const effect=deriveContainerEffect({...model,relations,username:'tester'});
   expect(effect.effectiveJoinIds).toEqual(new Set(['joined']));
   expect(effect.ownership.direct('C').textIds).toEqual(new Set(['leaf']));
+});
+
+it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'])('keeps native %s ownership, edges and record status consistent through successive moves and recovery',type=>{
+  const relations=[rel('C',type,['leaf','stay']),rel('P','CLASSIFY'),rel('Q','CLASSIFY'),
+    rel('original','JOIN',['leaf'],'C'),rel('stay-join','JOIN',['stay'],'C'),
+    rel('first','JOIN',['leaf'],'P'),rel('second','JOIN',['leaf'],'Q')];
+  relations[0].payload={...relations[0].payload,independentMemberships:true};
+  for(const [order,id,parentId,memberId,previousId] of [
+    [1,'original','C','leaf',null],[2,'stay-join','C','stay',null],
+    [3,'first','P','leaf',null],[4,'second','Q','leaf','first'],
+  ] as const){
+    const join=relations.find(relation=>relation.id===id)!;
+    join.payload={membershipHistory:{id,parentId,memberId,previousId,previousParentId:previousId?'P':null,order}};
+  }
+  // The first move was made while C was rejected, so its recorded predecessor
+  // is root. Restoring C must never splice its old JOIN into that later branch.
+  for(const [rejected,owner] of [
+    [new Set(['C']),'Q'],[new Set<string>(),'Q'],[new Set(['second']),'P'],
+    [new Set(['second','first']),null],[new Set(['C','second','first']),null],
+    [new Set(['C','first']),'Q'],
+  ] as const){
+    const current=relations.map(relation=>({...relation,state:state(relation.id,rejected.has(relation.id))}));
+    const model=convertMessagesToDemoModel(['leaf','stay'].map(text),current);
+    const effect=deriveContainerEffect({...model,relations:current,username:'tester'});
+    const owners=['C','P','Q'].filter(id=>effect.ownership.direct(id).textIds.has('leaf'));
+    expect(owners).toEqual(owner?[owner]:[]);
+    const memberEdges=effect.edges.filter(edge=>['C','P','Q'].includes(edge.relationMessageId)&&edge.to.messageId==='leaf');
+    expect(memberEdges.map(edge=>edge.relationMessageId)).toEqual(owner?[owner]:[]);
+    expect(effect.effectiveJoinIds.has('original')).toBe(false);
+    for(const relation of current.filter(relation=>relation.relationType==='JOIN')){
+      expect(effect.context.joinStatusByMessage.get(relation.id)==='valid').toBe(effect.effectiveJoinIds.has(relation.id));
+    }
+    expect(effect.ownership.direct('C').textIds.has('stay')).toBe(!rejected.has('C'));
+    const root=projectContainerCanvas(effect,{kind:'root'});
+    expect(root.messages.some(message=>message.id==='leaf')).toBe(owner===null);
+    if(owner==='Q'){
+      const recovered=deriveContainerEffect({...model,relations:current,username:'tester',assumption:{messageId:'C',side:'agree'}});
+      expect(recovered.ownership.direct('Q').textIds).toEqual(new Set(['leaf']));
+      expect(recovered.ownership.direct('C').textIds).toEqual(new Set(['stay']));
+    }
+  }
 });
 
 it('keeps JOIN-only released members reachable in comparison trace without restoring the rejected frame',()=>{

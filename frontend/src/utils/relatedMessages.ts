@@ -9,7 +9,7 @@ export function isRejectedContainer(message:DemoMessage,ids?:ReadonlySet<string>
  * Pure votes and round records already have graph presentations.
  */
 export function indexRelatedMessages(messages:DemoMessage[],rejectedIds?:ReadonlySet<string>) {
-  const rejected=new Map(messages.filter(message=>isRejectedContainer(message,rejectedIds)).map(message=>[message.id,message]));
+  const rejected=new Map(messages.filter(message=>!message.state?.organizationRetired&&isRejectedContainer(message,rejectedIds)).map(message=>[message.id,message]));
   const targets=new Map<string,Set<string>>();
   const add=(container:string,target:string)=>{if(target===container)return;const ids=targets.get(container)??new Set<string>();ids.add(target);targets.set(container,ids);};
   for(const message of rejected.values()) {

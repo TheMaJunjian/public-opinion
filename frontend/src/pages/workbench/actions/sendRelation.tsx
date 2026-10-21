@@ -59,7 +59,6 @@ interface HandleCreateRelationWithSourcesAndTargetsDependencies {
   registerCreatedRelationInCurrentClassify: (backendRel: Relation) => Promise<string | null>;
   showAlert: (message: string) => void;
   secondaryRelationType: string;
-  additionalAgreeTargetIds: string[];
   subType: string;
   sendTagRelation: (target: UnitSelection, tagLabel: string, subType?: string, customLabel?: string) => Promise<DemoEdge | null>;
   subTypeCustomLabel: string;
@@ -69,7 +68,7 @@ interface HandleCreateRelationWithSourcesAndTargetsDependencies {
 export async function handleCreateRelationWithSourcesAndTargets(dependencies: HandleCreateRelationWithSourcesAndTargetsDependencies, params: {
   sources: UnitSelection[]; targets: UnitSelection[]; label: string;
 }): Promise<void> {
-  const { requireAuth, scopeMessageId, relationType, msgMap, newMessageContent, createRel, registerCreatedRelationInCurrentClassify, showAlert, secondaryRelationType, additionalAgreeTargetIds, subType, sendTagRelation, subTypeCustomLabel, setEdges } = dependencies;
+  const { requireAuth, scopeMessageId, relationType, msgMap, newMessageContent, createRel, registerCreatedRelationInCurrentClassify, showAlert, secondaryRelationType, subType, sendTagRelation, subTypeCustomLabel, setEdges } = dependencies;
   if (!requireAuth()) return;
   if (!scopeMessageId) return;
   if (!relationType) return;
@@ -162,8 +161,7 @@ export async function handleCreateRelationWithSourcesAndTargets(dependencies: Ha
       }
     } else {
       // Pure-stance: no source — persist to backend (relation messages are first-class messages)
-      const recoveryTargets = mergeUnits(targets, additionalAgreeTargetIds.map(messageId => ({ messageId, selection: { kind: 'whole' as const } })));
-      for (const target of recoveryTargets) {
+      for (const target of mergeUnits([], targets)) {
         try {
           const backendRel = await createRel(scopeMessageId, { relationType: relationType.toUpperCase(), sourceMessageId: null, targetRefs: [unitSelectionToTargetRef(target, msgMap)] });
           await registerCreatedRelationInCurrentClassify(backendRel);
@@ -282,6 +280,7 @@ export async function handleCreateRelationWithSourcesAndTargets(dependencies: Ha
 }
 
 interface CreateJoinRelationsForContainerDependencies {
+  effectiveJoinRelationIds?: ReadonlySet<string>;
   getDependentDisplayTarget: (messageId: string) => { messageId: string; dependencyId: string; } | null;
   setSendError: React.Dispatch<React.SetStateAction<string | null>>;
   msgMap: Map<string, DemoMessage>;
@@ -293,7 +292,7 @@ interface CreateJoinRelationsForContainerDependencies {
 }
 
 export async function createJoinRelationsForContainer(dependencies: CreateJoinRelationsForContainerDependencies, containerId: string, _containerType: string, targetMids: Array<string | TargetRef>): Promise<boolean> {
-  const { getDependentDisplayTarget, setSendError, msgMap, containerRelationTypes, relationsRef, createRel, scopeMessageId, appendCreatedRelation } = dependencies;
+  const { getDependentDisplayTarget, setSendError, msgMap, containerRelationTypes, relationsRef, createRel, scopeMessageId, appendCreatedRelation, effectiveJoinRelationIds } = dependencies;
   const invalidTarget = targetMids
     .map(target => typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId)
     .map(messageId => getDependentDisplayTarget(messageId))
@@ -321,7 +320,7 @@ export async function createJoinRelationsForContainer(dependencies: CreateJoinRe
         : target;
       const existingJoin = relationsRef.current.find(relation =>
         relation.relationType?.toUpperCase() === 'JOIN' &&
-        relation.state?.membershipActive === true &&
+        (effectiveJoinRelationIds ? effectiveJoinRelationIds.has(relation.id) : relation.state?.membershipActive === true) &&
         relation.sourceMessageId === containerId &&
         relation.targetRefs.some(ref =>
           targetRef.kind === 'relation'
@@ -333,7 +332,7 @@ export async function createJoinRelationsForContainer(dependencies: CreateJoinRe
       );
       // Reusing a historical, inactive JOIN would leave the member outside the
       // requested container. Only an already effective placement is a no-op.
-      if (existingJoin?.state?.membershipActive === true) continue;
+      if (existingJoin) continue;
       const relation = await createRel(scopeMessageId!, {
         relationType: 'JOIN',
         sourceMessageId: containerId,

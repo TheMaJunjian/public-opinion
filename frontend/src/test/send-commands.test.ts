@@ -17,6 +17,17 @@ const relationResult: Relation = { id: 'relation-result', relationType: 'AGREE',
 beforeEach(() => vi.clearAllMocks());
 
 describe('addressed send commands', () => {
+  it.each([false, true])('sends only the selected JOIN stance, without implicitly approving its container (with reason: %s)', async withReason => {
+    const source = message('reason'), target = { ...message('joining'), kind: 'join' as const, joinInfo: { containerId: 'container', containerType: 'JOIN', targetIds: ['member'] } };
+    const createRel = vi.fn(async () => relationResult);
+    await handleCreateRelationWithSourcesAndTargets({
+      requireAuth: () => true, scopeMessageId: 'root', relationType: 'agree', msgMap: new Map([[source.id, source], [target.id, target]]),
+      newMessageContent: '', createRel, registerCreatedRelationInCurrentClassify: vi.fn(async () => null), showAlert: vi.fn(),
+      secondaryRelationType: 'none', subType: '', sendTagRelation: vi.fn(async () => null), subTypeCustomLabel: '', setEdges: vi.fn(),
+    }, { sources: withReason ? [{ messageId: source.id, selection: { kind: 'whole' } }] : [], targets: [{ messageId: target.id, selection: { kind: 'whole' } }], label: '赞同' });
+    expect(createRel).toHaveBeenCalledExactlyOnceWith('root', expect.objectContaining({ relationType: 'AGREE', targetRefs: [expect.objectContaining({ messageId: 'joining' })] }));
+  });
+
   it('retains selected reason parts and does not discard an edge merely because another part uses whole visual selection', async () => {
     const source = message('source'), target = { ...message('target'), kind: 'relation' as const, relationType: 'disagree' as const };
     const reasonParts: UnitSelection[] = [
@@ -31,7 +42,7 @@ describe('addressed send commands', () => {
     await handleCreateRelationWithSourcesAndTargets({
       requireAuth: () => true, scopeMessageId: 'root', relationType: 'agree', msgMap: new Map([[source.id, source], [target.id, target]]),
       newMessageContent: '', createRel, registerCreatedRelationInCurrentClassify: vi.fn(async () => null), showAlert: vi.fn(),
-      secondaryRelationType: 'none', additionalAgreeTargetIds: [], subType: '', sendTagRelation: vi.fn(async () => null), subTypeCustomLabel: '', setEdges: vi.fn(),
+      secondaryRelationType: 'none', subType: '', sendTagRelation: vi.fn(async () => null), subTypeCustomLabel: '', setEdges: vi.fn(),
     }, { sources: reasonParts, targets, label: '赞同' });
     expect(createRel).toHaveBeenCalledTimes(2);
     expect(createRel.mock.calls.map(call => call[1])).toMatchObject(targets.map(targetUnit => ({
@@ -47,6 +58,20 @@ describe('addressed send commands', () => {
     }, 'classification', 'CLASSIFY', [{ kind: 'message', messageId: 'a', reference: { messageId: 'a', partId: 'body' } }]);
     expect(result).toBe(false); expect(createRel).not.toHaveBeenCalled();
     expect(setSendError).toHaveBeenCalledWith(expect.stringContaining('当前完整消息'));
+  });
+
+  it.each([true, false])('only skips a repeated join when that exact placement is currently active (active: %s)', async active => {
+    const existing: Relation = { ...relationResult, id: 'old-join', relationType: 'JOIN', sourceMessageId: 'classification',
+      targetRefs: [{ kind: 'message', messageId: 'a' }], state: { messageId: 'old-join', revision: 1, suppressed: false,
+        supportCount: 0, oppositionCount: 0, recommendationTotal: 0, membershipActive: active } };
+    const createRel = vi.fn(async () => ({ ...existing, id: 'new-join' }));
+    const result = await createJoinRelationsForContainer({
+      getDependentDisplayTarget: () => null, setSendError: vi.fn(), msgMap: new Map([['a', message('a')]]), containerRelationTypes: new Set(['CLASSIFY']),
+      relationsRef: { current: [existing] }, createRel, scopeMessageId: 'root', appendCreatedRelation: vi.fn(async () => null),
+    }, 'classification', 'CLASSIFY', ['a']);
+    expect(result).toBe(true);
+    if (active) expect(createRel).not.toHaveBeenCalled();
+    else expect(createRel).toHaveBeenCalledExactlyOnceWith('root', expect.objectContaining({ relationType: 'JOIN', sourceMessageId: 'classification' }));
   });
 });
 

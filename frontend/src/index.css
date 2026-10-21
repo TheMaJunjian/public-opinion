@@ -3,6 +3,72 @@
 @tailwind utilities;
 
 button:enabled:active, [role="button"]:active { filter: brightness(1.2); }
+
+.workbench-history-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #414752;
+  border-radius: 5px;
+  background: #22252b;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: background 160ms, border-color 160ms;
+}
+.workbench-history-button:enabled:hover { background: #334155; border-color: #64748b; }
+.workbench-history-button:disabled { color: #596273; opacity: 0.65; cursor: default; }
+
+.workbench-view-toggle {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 6px 12px;
+  border: 1px solid #7dd3fc;
+  border-radius: 6px;
+  background: linear-gradient(115deg, #0369a1, #4338ca);
+  color: #fff;
+  box-shadow: 0 0 14px #38bdf826, inset 0 1px 0 #ffffff26;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 180ms, box-shadow 180ms, border-color 180ms;
+}
+.workbench-view-toggle:hover, .workbench-view-toggle:focus-visible {
+  transform: translateY(-1px);
+  border-color: #bae6fd;
+  box-shadow: 0 0 20px #38bdf847, 0 3px 10px #0004, inset 0 1px 0 #ffffff40;
+}
+.workbench-view-toggle:active { transform: translateY(0); }
+.workbench-view-toggle::after {
+  content: '';
+  position: absolute;
+  inset: -60% -20%;
+  background: linear-gradient(110deg, transparent 40%, #ffffff40 50%, transparent 60%);
+  transform: translateX(-110%);
+  pointer-events: none;
+}
+.workbench-view-toggle:hover::after, .workbench-view-toggle:focus-visible::after {
+  animation: workbench-view-sheen 650ms ease-out;
+}
+.workbench-view-toggle-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  animation: workbench-view-switch-in 220ms ease-out;
+}
+@keyframes workbench-view-sheen { to { transform: translateX(110%); } }
+@keyframes workbench-view-switch-in {
+  from { opacity: 0.5; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 :is(button, input, textarea, select, summary, [tabindex]):focus-visible {
   outline: 2px solid #7dd3fc !important;
   outline-offset: 3px;
@@ -11,6 +77,9 @@ button:enabled:active, [role="button"]:active { filter: brightness(1.2); }
 @media (prefers-reduced-motion: reduce) {
   .popup-guides { animation: none !important; }
   .workbench-shell * { scroll-behavior: auto !important; }
+  .workbench-view-toggle, .workbench-history-button { transition: none; }
+  .workbench-view-toggle-content, .workbench-view-toggle::after { animation: none !important; }
+  .workbench-view-toggle:hover, .workbench-view-toggle:focus-visible { transform: none; }
 }
 
 html, body, #root {

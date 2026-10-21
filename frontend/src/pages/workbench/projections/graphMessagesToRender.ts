@@ -51,7 +51,7 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
   // is cleared asynchronously when entering trace, so checking it here can
   // render the old sub-canvas together with the new trace window.
   const useTraceWindow = traceEntries.length > 0;
-  const baseMessages = useTraceWindow ? messagesToShow : messages;
+  const baseMessages = useTraceWindow ? messagesToShow : messages.filter(message => !message.state?.organizationRetired);
   const baseEdges = useTraceWindow ? edgesToShow : edges;
   if (useTraceWindow) {
     const traceStartIds = traceEntries[traceEntries.length - 1].ids.filter(Boolean);

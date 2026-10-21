@@ -3,7 +3,7 @@ import type { TargetRef } from '../types';
 import { isContentKind, isTraceTextLikeMessage } from '../utils/modelBridge';
 import { collectContainerVisibleIds, collectOwnedByRelation } from '../pages/workbench/model/ownership';
 import { expandTextIdsWithSettlementResults, getAutoClassifyTargetForSettlementMessage, getSettlementClassifyJoinTarget, resolveNavigationTargetId } from '../pages/workbench/model/navigation';
-import { filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getEffectiveJoinRelationIds, getJoinRecoveryTargetIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getStaleJoinRelationIds, isAppendToExistingClassifyAction } from '../pages/workbench/model/membership';
+import { filterContainerEdgesByEffectiveJoins, getActiveJoinRelationsForMessage, getEffectiveJoinRelationIds, getJoinRelationsForMessage, getRejectedJoinRelationIds, getStaleJoinRelationIds, isAppendToExistingClassifyAction } from '../pages/workbench/model/membership';
 
 /**
  * classify-visibility.test.ts
@@ -440,18 +440,6 @@ describe('消息加入/移出分类', () => {
 
     expect(filterContainerEdgesByEffectiveJoins(edges, relations, new Set())).toEqual(edges);
   });
-
-  it('分类被反对时，赞同无效 JOIN 还需要同时赞同其分类消息', () => {
-    const relations = [
-      { id: 'classify-1', relationType: 'CLASSIFY', sourceMessageId: null },
-      { id: 'join-1', relationType: 'JOIN', sourceMessageId: 'classify-1' },
-      { id: 'join-2', relationType: 'JOIN', sourceMessageId: 'classify-1' },
-      { id: 'classify-2', relationType: 'CLASSIFY', sourceMessageId: null },
-    ] as any;
-    expect(getJoinRecoveryTargetIds(['join-1', 'join-2'], relations, new Set(['classify-1']))).toEqual(['classify-1']);
-    expect(getJoinRecoveryTargetIds(['join-1'], relations, new Set(['classify-2']))).toEqual([]);
-  });
-
 
   it('JOIN 所在容器被反对后按其他容器推荐', () => {
     const relations = [

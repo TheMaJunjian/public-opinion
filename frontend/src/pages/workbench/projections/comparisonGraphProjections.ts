@@ -119,7 +119,7 @@ export function projectComparisonSide(input: DeriveComparisonGraphProjectionsInp
     return {messages:projectedMessages,edges:projectedEdges,hideMessageIds:undefined};
   };
 
-    const effect = deriveContainerEffect({messages,relations,edges,username,assumption:{messageId:comparisonTargetId,side}});
+    const effect = deriveContainerEffect({messages,relations,edges,username,stakeCounts:input.sourceEffect?.stakeCounts,assumption:{messageId:comparisonTargetId,side}});
     let canvas = project(effect);
     if (traceStartIds.length) {
       const traceMessages = organizationEffect ? effect.messages : [

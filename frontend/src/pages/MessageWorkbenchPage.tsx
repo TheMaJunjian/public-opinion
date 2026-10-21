@@ -1,6 +1,7 @@
 import { useWorkbenchComposer } from './workbench/useWorkbenchComposer';
 import { useRelationToolbar } from './workbench/useRelationToolbar';
 import { useWorkbenchViewport } from './workbench/useWorkbenchViewport';
+import { useBrowsingHistory } from './workbench/useBrowsingHistory';
 import { useWorkbenchData, VIEWER_USERNAME_KEY } from './workbench/useWorkbenchData';
 import React, { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import DeferredWorkbench from '../components/DeferredWorkbench';
@@ -17,7 +18,7 @@ import type {
   RelationType,
   UnitSelection,
 } from '../utils/modelBridge';
-import { computeEffectiveSuppressedRelIds, computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isContentKind, withCorrectionContent } from '../utils/modelBridge';
+import { computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isContentKind, withCorrectionContent } from '../utils/modelBridge';
 import { isRelationMessage, isTextMessage } from '../utils/leaderboardMetrics';
 import { getLatestUserReadStatusByMessageId } from './workbench/model/filters';
 import { blockCorrectionForSecondBettor as runBlockCorrectionForSecondBettor, handleAuthError as runHandleAuthError, requireAuth as runRequireAuth } from './workbench/actions/authentication';
@@ -85,7 +86,7 @@ import { applyTextCorrectionInheritance, expandTextIdsWithCorrections, isCorrect
 import { collectOwnedByRelation } from './workbench/model/ownership';
 import { describeUnit } from '../utils/selectionLabel';
 import { expandTextIdsWithSettlementResults } from './workbench/model/navigation';
-import { filterContainerEdgesByEffectiveJoins, getJoinRecoveryTargetIds, getJoinRelationsForMessage,projectJoinMembershipEdges } from './workbench/model/membership';
+import { filterContainerEdgesByEffectiveJoins, getJoinRelationsForMessage,projectJoinMembershipEdges } from './workbench/model/membership';
 import { nextId, selKey, unitEquals } from './workbench/model/selection';
 
 // ========================= MessageWorkbenchPage =========================
@@ -198,7 +199,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         return;
       }
       if (classifyRelMsgId) exitClassification({ restoreSnapshot: false });
-      enterClassification(relId);
+      enterClassification(relId, false);
       // If the classify is rejected, enter preview (read-only) mode
       if (rejectedContainerIds.has(relId)) {
         setPreviewClassifyId(relId);
@@ -379,6 +380,12 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const workerFilters = onDemand && !isPreloaded && (!catalogReady || catalogComputationsCurrent);
   const globalFilters = useCatalogFilters(workerFilters ? catalog : null, catalogVersion, catalogReady, { rules: cleanFilters, home: homeFilterMode, user: displayUser });
   const globalFilterPending = workerFilters && globalFilters.pending;
+  useLayoutEffect(() => {
+    if (!globalFilterPending || globalFilters.error) return;
+    const task = beginProjection();
+    // History restores its viewport after the filtered canvas has mounted.
+    return () => task.complete();
+  }, [globalFilterPending, globalFilters.error, beginProjection]);
   const cleanVisibleIds = workerFilters ? globalFilters.result?.clean ?? null : localCleanVisibleIds;
   const cleanSender = searchParams.get('sender');
   const skipCleanSenderInitRef = useRef(false);
@@ -534,7 +541,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       || relationsRef.current.some(relation => relation.id === pendingNavigation.messageId);
     if (!targetExists) return;
     pendingCorrectionNavigationRef.current = null;
-    handleNavigateToMessage(pendingNavigation.messageId);
+    handleNavigateToMessage(pendingNavigation.messageId, { recordHistory: false });
   }, [correctionFilterTargetId, viewMode, loading, messages, edges, relations, scrollKey]);
 
   useEffect(() => () => {
@@ -888,7 +895,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     const totals = comparisonStakeTotals.get(comparisonTargetId);
     return totals && totals.disagree > totals.agree ? 'disagree' as const : 'agree' as const;
   }, [comparisonStakeTotals, comparisonTargetId]);
-  const containerEffect = useMemo(() => deriveContainerEffect({messages,relations,edges,username:displayUser?.username??null}),[messages,relations,edges,displayUser?.username]);
+  const containerEffect = useMemo(() => deriveContainerEffect({messages,relations,edges,username:displayUser?.username??null,stakeCounts}),[messages,relations,edges,displayUser?.username,stakeCounts]);
   const effectiveSuppressedRelIdsForLayout = containerEffect.suppressed;
   const rejectedContainerIds = containerEffect.rejectedContainerIds;
   const rejectedJoinRelationIds = containerEffect.rejectedJoinRelationIds;
@@ -923,15 +930,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   })();
   const joinOnlyAction = appendContainerType !== null;
   const reclassificationJoinCount = useMemo(() => deriveReclassificationJoinCount({ relationType, draftUnits, targetUnits, relations, rejectedJoinRelationIds }), [relationType, draftUnits, targetUnits, relations, rejectedJoinRelationIds]);
-  const additionalAgreeTargetIds = useMemo(() => {
-    if (relationType !== 'agree' || sourceUnits.length > 0) return [];
-    const targets = draftUnits.length > 0 ? draftUnits : targetUnits;
-    return getJoinRecoveryTargetIds(
-      Array.from(new Set(targets.map(target => target.messageId))),
-      relations,
-      rejectedContainerIds,
-    );
-  }, [relationType, sourceUnits.length, draftUnits, targetUnits, relations, rejectedContainerIds]);
 
   const { effectiveMinStake, totalConsumption, stakeFeeAmountRef } = useStakeCalculation({
     relationType, secondaryRelationType, subType, draftUnits, targetUnits, sourceUnits, newMessageContent,
@@ -939,7 +937,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     existingJoinCount,
     joinOnlyAction,
     reclassificationJoinCount,
-    additionalAgreeTargetCount: additionalAgreeTargetIds.length,
     onRelStakeChange: (min) => { setMinSelfStake(min); setRelStakeAmount(min); },
     stakeDefaultLoaded,
   });
@@ -1293,14 +1290,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     }
     return roles;
   }, [edges, homeFilterResult]);
-  const joinStatusByMessage = useMemo(() => {
-    const map = new Map<string, 'valid'>();
-    for (const relation of relations) {
-      if (relation.relationType?.toUpperCase() !== 'JOIN') continue;
-      if (effectiveJoinRelationIds.has(relation.id)) map.set(relation.id, 'valid');
-    }
-    return map;
-  }, [relations, effectiveJoinRelationIds]);
+  const joinStatusByMessage = containerEffect.context.joinStatusByMessage;
 
   // Real-time: if the previewed classify becomes active (no longer rejected),
   // exit preview mode so the user gets full interaction capabilities.
@@ -1611,13 +1601,56 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     };
   }
 
+  function captureBrowsingSnapshot(): TraceSnapshot {
+    const snapshot = captureSnapshot();
+    const filter = { ...msgFilter }, rules = cleanFilters.map(rule => ({ ...rule }));
+    const modeScroll = {
+      graph: viewModeScrollRef.current.graph ? { ...viewModeScrollRef.current.graph } : null,
+      list: viewModeScrollRef.current.list ? { ...viewModeScrollRef.current.list } : null,
+    };
+    const skipSender = skipCleanSenderInitRef.current;
+    return { ...snapshot, restoreScope() {
+      snapshot.restoreScope?.();
+      setMsgFilter({ ...filter });
+      setHomeFilterMode(homeFilterMode);
+      skipCleanSenderInitRef.current = skipSender;
+      clearCleanFilters(); rules.forEach(rule => addCleanFilter({ ...rule }));
+      // The explicit snapshot owns the active mode's viewport; retain the other
+      // mode's position for the next graph/list switch.
+      viewModeScrollRef.current = { ...modeScroll, [snapshot.viewMode]: null };
+    } };
+  }
+
+  function restoreBrowsingSnapshot(snapshot: TraceSnapshot): void {
+    relatedViewAbortRef.current?.abort();
+    setAutoClassifyMsgId(null);
+    pendingScrollMsgRef.current = null;
+    pendingScrollMsgIdRef.current = null;
+    pendingScrollDependencyIdsRef.current = [];
+    pendingScrollCompletionRef.current = undefined;
+    pendingRemoteNavigationRef.current = null;
+    pendingCorrectionNavigationRef.current = null;
+    activeSentMessageRef.current = null;
+    setSentMessageTargets([]);
+    closeSettlement();
+    restoreSnapshot(snapshot);
+    setClassifyKey(key => key + 1);
+    setTraceKey(key => key + 1);
+  }
+
+  const browsingHistoryKey = useMemo(() => ({ scopeMessageId, loadedExport, username: displayUser?.username }),
+    [scopeMessageId, loadedExport, displayUser?.username]);
+  const browsingHistory = useBrowsingHistory(browsingHistoryKey, captureBrowsingSnapshot, restoreBrowsingSnapshot);
+  function recordBrowsingNavigation(): void { if (!loading) browsingHistory.record(); }
+
   // Both presentations enter and navigate the same ordinary workbench scope.
   function prepareComparisonReview(targetId:string):void {
+    recordBrowsingNavigation();
     cancelScrollRafs();
     const containingClassifyId=findContainingClassification(targetId);
     if(containingClassifyId && containingClassifyId!==currentClassifyRelMsgId){
       if(currentClassifyRelMsgId)exitClassification({restoreSnapshot:false});
-      enterClassification(containingClassifyId);
+      enterClassification(containingClassifyId, false);
     }
     closeSettlement();
     setComparisonReviewBaseMessages(containingClassifyId?null:(isInsideClassify?normalGraphProjection.scopedMessages:normalGraphProjection.messages));
@@ -1630,6 +1663,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   function viewRelatedContainer(id:string):void {
     if(!['classify','summary','arrange','merge'].includes(msgMap.get(id)?.relationType??''))return;
     if(id===containerPreviewId)return;
+    recordBrowsingNavigation();
     containerPreviewStack.current.push({
       id:containerPreviewId,snapshot:captureSnapshot(),filter:{...msgFilter},
       classifyId:classifyRelMsgId,classifyStack:[...classifyStackRef.current],
@@ -1640,6 +1674,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     setContainerPreviewId(id);
   }
   function exitContainerPreview():void {
+    recordBrowsingNavigation();
     const previous=containerPreviewStack.current.pop();
     setContainerPreviewId(previous?.id??null);
     if(previous){
@@ -1680,6 +1715,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   function startComparison(): void {
+    recordBrowsingNavigation();
     cancelViewNavigation();
     cancelScrollRafs();
     comparisonOrigin.current = {
@@ -1709,6 +1745,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     setTraceKey(key => key + 1);
   }
   function exitComparison(): void {
+    recordBrowsingNavigation();
     const origin = comparisonOrigin.current;
     restoreComparisonScope();
     comparisonOrigin.current = null;
@@ -1725,6 +1762,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   function enterTemporaryCategory(force = false): void {
+    recordBrowsingNavigation();
     cancelViewNavigation();
     cancelScrollRafs();
     runEnterTemporaryCategory({ joinFilterTargetId, correctionFilterTargetId, comparisonMode, comparisonReviewed, temporaryCategoryStackRef, captureSnapshot, msgFilter, joinFilterDirection, comparisonTargetId, comparisonSide, comparisonReviewBaseMessages, comparisonReviewBaseEdges }, force);
@@ -1739,7 +1777,8 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     setJoinFilterDirection(direction); setJoinFilterTargetId(messageId);
   }
 
-  function exitTemporaryCategory(options?: { restoreMessageFilter?: boolean }): void {
+  function exitTemporaryCategory(options?: { restoreMessageFilter?: boolean; recordHistory?: boolean }): void {
+    if (options?.recordHistory !== false) recordBrowsingNavigation();
     return runExitTemporaryCategory({ temporaryCategoryStackRef, setMsgFilter, setJoinFilterTargetId, setJoinFilterDirection, setCorrectionFilterTargetId, setComparisonMode, setComparisonReviewed, setComparisonTargetId, setComparisonSide, setComparisonReviewBaseMessages, setComparisonReviewBaseEdges, restoreSnapshot }, options);
   }
 
@@ -1764,6 +1803,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }, [classifyRelMsgId]);
 
   function enterTrace(messageId: string, options?: { replace?: boolean; mode?: "trace" | "scope"; scopeRelationMessageId?: string; relatedView?: boolean }): void {
+    recordBrowsingNavigation();
     if (!isPreloaded && onDemand) void ensureMessages([messageId]).catch(error => showAlert(error.message));
     cancelViewNavigation();
     runEnterTrace({ captureSnapshot, classifyRelMsgId, classifyStackRef, setTraceExpandedFrameIds, setTraceEntries, setClassifyRelMsgId, setClassifyKey, cancelScrollRafs, scrollRequestIdRef, leftPanelRef }, messageId, options);
@@ -1771,12 +1811,14 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   function enterTraceMultiple(messageIds: string[], options?: { replace?: boolean; mode?: "trace" | "scope"; scopeRelationMessageId?: string }): void {
+    recordBrowsingNavigation();
     cancelViewNavigation();
     runEnterTraceMultiple({ captureSnapshot, classifyRelMsgId, classifyStackRef, setTraceExpandedFrameIds, setTraceEntries, setClassifyRelMsgId, setClassifyKey, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, setTraceKey }, messageIds, options);
     pendingViewportRestoreRef.current = null;
   }
 
   function exitAllTrace(): void {
+    recordBrowsingNavigation();
     runExitAllTrace({ traceEntries, setTraceEntries, setTraceExpandedFrameIds, setTraceKey, classifyStackRef, setClassifyRelMsgId, setClassifyKey, restoreSnapshot });
     setRelatedTraceContext(null);
   }
@@ -1946,7 +1988,8 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     return runHasCrossNonReferenceTextLinkForClassifyTargets({ effectiveTargetUnits, msgMap, relationTypeByRelMsgId, relationById, relations, edges }, targetTextIds, selectionUnits);
   }
 
-  function enterClassification(relMsgId: string): void {
+  function enterClassification(relMsgId: string, recordHistory = true): void {
+    if (recordHistory) recordBrowsingNavigation();
     cancelViewNavigation();
     if (viewMode === 'graph') beginWorkbenchDrawing();
     runEnterClassification({ captureSnapshot, cancelScrollRafs, scrollRequestIdRef, leftPanelRef, classifyStackRef, setClassifyRelMsgId, setClassifyKey }, relMsgId);
@@ -1957,6 +2000,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   function exitClassification(_options?: { restoreSnapshot?: boolean; clearSelectionOnRootExit?: boolean; preserveViewMode?: ViewMode }): void {
+    if (_options?.restoreSnapshot !== false) recordBrowsingNavigation();
     if (viewMode === 'graph') beginWorkbenchDrawing();
     return runExitClassification({ classifyStackRef, setClassifyRelMsgId, setClassifyKey, setPreviewClassifyId, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setLastClickedMessageId, restoreSnapshot, setViewMode }, _options);
   }
@@ -1989,7 +2033,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   async function handleCreateRelationWithSourcesAndTargets(params: {
     sources: UnitSelection[]; targets: UnitSelection[]; label: string;
   }): Promise<void> {
-    return runHandleCreateRelationWithSourcesAndTargets({ requireAuth, scopeMessageId, relationType, msgMap, newMessageContent, createRel, registerCreatedRelationInCurrentClassify, showAlert, secondaryRelationType, additionalAgreeTargetIds, subType, sendTagRelation, subTypeCustomLabel, setEdges }, params);
+    return runHandleCreateRelationWithSourcesAndTargets({ requireAuth, scopeMessageId, relationType, msgMap, newMessageContent, createRel, registerCreatedRelationInCurrentClassify, showAlert, secondaryRelationType, subType, sendTagRelation, subTypeCustomLabel, setEdges }, params);
   }
 
   /**
@@ -1999,7 +2043,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
    * to find which container a message belongs to (bottom-up lookup).
    */
   async function createJoinRelationsForContainer(containerId: string, _containerType: string, targetMids: Array<string | TargetRef>): Promise<boolean> {
-    return runCreateJoinRelationsForContainer({ getDependentDisplayTarget, setSendError, msgMap, containerRelationTypes, relationsRef, createRel, scopeMessageId, appendCreatedRelation }, containerId, _containerType, targetMids);
+    return runCreateJoinRelationsForContainer({ getDependentDisplayTarget, setSendError, msgMap, containerRelationTypes, relationsRef, createRel, scopeMessageId, appendCreatedRelation, effectiveJoinRelationIds }, containerId, _containerType, targetMids);
   }
 
   async function handleQuickSendAndRelateFromDraftTargets(): Promise<void> {
@@ -2435,7 +2479,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   }
 
   /** Navigate to a message: switch canvas if needed, scroll, select (clear + add to candidates) */
-  const handleNavigateToMessage = useCallback((messageId: string, options?: { select?: boolean; preserveScope?: boolean; onComplete?: ScrollMessageOptions['onComplete'] }) => {
+  const handleNavigateToMessage = useCallback((messageId: string, options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] }) => {
     if (!isPreloaded && onDemand && !messagesRef.current.some(message => message.id === messageId)) {
       pendingRemoteNavigationRef.current = { messageId, options };
       void ensureMessages([messageId]).catch(error => {
@@ -2444,6 +2488,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       });
       return;
     }
+    if (!options?.preserveScope && options?.recordHistory !== false) recordBrowsingNavigation();
     scrollRequestIdRef.current++;
     const wasTemporaryCategoryActive = temporaryCategoryStackRef.current.length > 0
       || joinFilterTargetId !== null;
@@ -2476,7 +2521,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       activeSentMessageRef.current = null;
       setSentMessageTargets([]);
       if (wasTemporaryCategoryActive) {
-        exitAllTemporaryCategories({ restoreMessageFilter: false });
+        // JOIN history temporarily reveals JOIN cards. Restore the original
+        // filter when following its member/container labels; keep JOINs visible
+        // only when the requested destination is itself a JOIN record.
+        exitAllTemporaryCategories({ restoreMessageFilter: targetMessage?.kind !== 'join' });
         if (targetMessage?.kind === 'join') {
           setClassifyRelMsgId(null);
           setClassifyKey(k => k + 1);
@@ -2511,7 +2559,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     setScrollKey(k => k + 1);
   }, [cleanMode, joinFilterTargetId, msgFilter, clearCleanView, showAlert, hiddenInGraphView, isPreloaded, onDemand, ensureMessages]);
 
-  const pendingRemoteNavigationRef = useRef<{ messageId: string; options?: { select?: boolean; preserveScope?: boolean; onComplete?: ScrollMessageOptions['onComplete'] } } | null>(null);
+  const pendingRemoteNavigationRef = useRef<{ messageId: string; options?: { select?: boolean; preserveScope?: boolean; recordHistory?: boolean; onComplete?: ScrollMessageOptions['onComplete'] } } | null>(null);
   useEffect(() => {
     const pending = pendingRemoteNavigationRef.current;
     if (!pending || !messages.some(message => message.id === pending.messageId)) return;
@@ -2536,8 +2584,9 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       handleNavigateToMessage(messageId);
       return;
     }
+    recordBrowsingNavigation();
     pendingCorrectionNavigationRef.current = { messageId };
-    exitTemporaryCategory();
+    exitTemporaryCategory({ recordHistory: false });
     setCorrectionFilterTargetId(null);
     if (switchToList) setViewMode('list');
   }, [correctionFilterTargetId, handleNavigateToMessage, viewMode]);
@@ -2591,7 +2640,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   // JOIN records can belong to different containers and therefore be absent
   // from the current canvas. Build this temporary category from the full
   // message map and show JOIN records only, not the target message itself.
-  const messagesToRenderFiltered = comparisonViewIds
+  const messagesToRenderFiltered = (comparisonViewIds
     ? Array.from(comparisonViewIds)
       .map(id => msgMap.get(id))
       .filter((message): message is DemoMessage => Boolean(message))
@@ -2604,7 +2653,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
           .map(id => msgMap.get(id))
           .filter((message): message is DemoMessage => Boolean(message))
           .filter(message => !msgFilter.hideJoin || message.kind !== 'join')
-        : typeFilteredMessages;
+        : typeFilteredMessages).map(message=>{
+          const state=containerEffect.msgMap.get(message.id)?.state;
+          return state&&state!==message.state?{...message,state}:message;
+        });
 
   const projectionEdgesToRender = [
     ...(viewMode === "list" ? listEdgesToRender : graphEdgesToRender),
@@ -2620,9 +2672,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     projectionEdgesToRender,
     relations,
     effectiveJoinRelationIds,
+    containerEffect.joinByTarget,
   ).filter((edge, index, all) => all.findIndex(candidate => candidate.id === edge.id) === index);
   const visibleContainerIds=new Set(messagesToRenderFiltered.map(message=>message.id));
-  const rawEdgesToRender=projectJoinMembershipEdges(declaredEdgesToRender,relations,effectiveJoinRelationIds,visibleContainerIds);
+  const rawEdgesToRender=projectJoinMembershipEdges(declaredEdgesToRender,relations,effectiveJoinRelationIds,visibleContainerIds,containerEffect.joinByTarget);
   // Phase 6: Also filter edges through clean view
   const rawEdgesToRenderClean = cleanVisibleIds
     ? rawEdgesToRender.filter(e => cleanVisibleIds.visibleRelIds.has(e.relationMessageId)||(getPresentationSpec(e.relationType).isContainer&&visibleContainerIds.has(e.relationMessageId)))
@@ -2649,7 +2702,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   // A user's DISAGREE relation may be outside the current classify scope.
   // Use all scope edges to determine suppression, then filter only the edges
   // currently being rendered.
-  const effectiveSuppressedRelIds = computeEffectiveSuppressedRelIds(edges, messages, displayUser?.username ?? null);
+  const effectiveSuppressedRelIds = containerEffect.suppressed;
   const globallySuppressedRelIds = computeGloballySuppressedRelIds(edges, messages);
   const comparisonSuppressedRelIds = comparisonReviewed && comparisonTargetId
     ? comparisonSide === 'agree' ? comparisonAgreeSuppressedRelIds : comparisonDisagreeSuppressedRelIds
@@ -2676,7 +2729,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     joinRelationsByTarget, comparisonMode, comparisonTargets, correctionFilterTargetId, edges, msgMap,
     listEdgesToRender, graphEdgesToRender, traceEntries.length, traceRelationMsgIds, relations,
     effectiveJoinRelationIds, messages, displayUser?.username, comparisonReviewed, comparisonTargetId,
-    comparisonSide, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds, containerPreview]);
+    comparisonSide, comparisonAgreeSuppressedRelIds, comparisonDisagreeSuppressedRelIds, containerPreview, containerEffect]);
   const messageWindow = useMessageWindow(
     viewMode === 'list' ? previewMessages ?? messagesToRenderFiltered : graphMessagesFinal,
     edgesToRender, onDemand && !isPreloaded && !comparisonReviewed && !containerPreview && traceEntries.length === 0,
@@ -2763,6 +2816,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
           <div ref={panelContainerRef} className="workbench-panels" style={{ display: "flex", flex: "1 0 auto", width: "100%", minWidth: 0 }}>
             <div className="workbench-message-pane" style={{ flex: leftFlex, display: "flex", flexDirection: "column", minWidth: MIN_LEFT_PX, overflow: "visible", paddingBottom: 8 }}>
               <WorkbenchViewToolbar top={topControlsFrozen ? topControlsOffset + relationBarHeight : relationBarHeight}
+                history={browsingHistory}
                 scopeHeader={!containerPreview && !comparisonReviewed ? classificationHeader : undefined}
                 scopeMessageId={scopeMessageId} exportTitle={scope?.title ?? 'export'} showAlert={showAlert}
                 exportData={preloadedData} exportUsername={displayUser?.username ?? null}
@@ -2812,7 +2866,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     crossCanvasRelations={containerPreview?.context.crossCanvasRelations??crossCanvasRelations} onRelatedRelationView={viewRelatedRelation}
                     onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={comparisonViewIds??standaloneMessageIds}
                     visibleMessages={messageWindow.messages}
-                    catalog={{ messages:containerPreview?.allMessages??messages, edges:containerPreview?.edges??edges, msgMap:containerPreview?new Map(containerPreview.allMessages.map(message=>[message.id,message])):msgMap, relationById:containerPreview?new Map(containerPreview.relations.map(relation=>[relation.id,relation])):relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds:containerPreview?.effectiveJoinIds??effectiveJoinRelationIds, summaryCoverageByMessageId, correctionVersions }}
+                    catalog={{ messages:containerPreview?.allMessages??containerEffect.messages, edges:containerPreview?.edges??edges, msgMap:containerPreview?new Map(containerPreview.allMessages.map(message=>[message.id,message])):containerEffect.msgMap, relationById:containerPreview?new Map(containerPreview.relations.map(relation=>[relation.id,relation])):containerEffect.relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds:containerPreview?.effectiveJoinIds??effectiveJoinRelationIds, joinStatusByMessage:containerPreview?.context.joinStatusByMessage??joinStatusByMessage, joinEffectSourcesByMessage:containerPreview?.context.joinEffectSourcesByMessage??containerEffect.context.joinEffectSourcesByMessage, containerOwnership:containerPreview?.effect.ownership??containerEffect.ownership, summaryCoverageByMessageId, correctionVersions }}
                     display={{ tagSourceIdsForList:comparisonMode?new Set<string>():tagSourceIdsForList, suppressedRelIds:containerPreview?.suppressed??suppressedRelIds, rejectedContainerIds:containerPreview?.rejectedContainerIds??rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds: homeFilterResult?.matchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts, correctionFilterTargetId, joinFilterTargetId }}
                     comparison={{ comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap, stanceEffectByRelMsgId }}
                     settlement={{ settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated: message => (window as Window & { __addSettlementMessage?: (value: typeof message) => void }).__addSettlementMessage?.(message) }}
@@ -2828,7 +2882,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                   <DeferredWorkbench label="消息画布" blocksDrawing>
                   <GraphView
                     relatedEdges={containerPreview?.context.relatedEdges??relatedEdges} onRelatedRelationView={viewRelatedRelation}
-                    relatedMessages={containerPreview?.allMessages??messages}
+                    relatedMessages={containerPreview?.allMessages??containerEffect.messages}
                     comparisonScopeHeader={classificationHeader}
                     comparisonSingle={Boolean(containerPreview)}
                     comparisonDisplay={containerPreview?'agree':undefined}
@@ -2885,7 +2939,8 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     onNavigateToMessage={handleNavigateToMessage}
                     joinRelationsByTarget={joinRelationsByTarget}
                     joinRelationsBySource={joinRelationsBySource}
-                    joinStatusByMessage={containerPreview?new Map([...containerPreview.effectiveJoinIds].map(id=>[id,'valid' as const])):joinStatusByMessage}
+                    joinStatusByMessage={containerPreview?.context.joinStatusByMessage??joinStatusByMessage}
+                    joinEffectSourcesByMessage={containerPreview?.context.joinEffectSourcesByMessage??containerEffect.context.joinEffectSourcesByMessage}
                     onJoinFilterClick={handleJoinRecords}
                   />
                   </DeferredWorkbench>
@@ -3056,7 +3111,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                 setComparisonMode(false);
               }}
               onComparisonVote={handleComparisonVote}
-              onReturnToComparisonCategory={() => { restoreComparisonScope(); setComparisonReviewed(false); setComparisonMode(true); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); setViewMode('list'); }}
+              onReturnToComparisonCategory={() => { recordBrowsingNavigation(); restoreComparisonScope(); setComparisonReviewed(false); setComparisonMode(true); setComparisonTargetId(null); setComparisonReviewBaseMessages(null); setComparisonReviewBaseEdges(null); setViewMode('list'); }}
               onExitComparison={exitComparison}
             /></DeferredWorkbench>
           </div>

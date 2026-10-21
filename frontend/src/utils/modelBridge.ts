@@ -740,20 +740,16 @@ export function computeCorrectedEdgeMap(edges: DemoEdge[]): Map<string, Set<stri
  * Used by computeUserSuppressedRelIds and computeTransitiveVoteStats to walk
  * stance chains to their ultimate target.
  */
-function buildStanceTargetMap(
+export function buildStanceTargetMap(
   edges: DemoEdge[],
   msgMap: Map<string, DemoMessage>
 ): Map<string, { targetId: string; type: 'agree' | 'disagree' }> {
   const stanceMap = new Map<string, { targetId: string; type: 'agree' | 'disagree' }>();
-  for (const [id, msg] of msgMap) {
-    if (msg.kind !== 'relation') continue;
-    if (msg.relationType !== 'agree' && msg.relationType !== 'disagree') continue;
-    for (const e of edges) {
-      if (e.relationMessageId === id && e.relationType === msg.relationType) {
-        stanceMap.set(id, { targetId: e.to.messageId, type: msg.relationType as 'agree' | 'disagree' });
-        break;
-      }
-    }
+  for (const e of edges) {
+    const msg = msgMap.get(e.relationMessageId);
+    if (msg?.kind !== 'relation' || stanceMap.has(msg.id)) continue;
+    if ((msg.relationType === 'agree' || msg.relationType === 'disagree') && e.relationType === msg.relationType)
+      stanceMap.set(msg.id, { targetId: e.to.messageId, type: msg.relationType });
   }
   return stanceMap;
 }
@@ -788,7 +784,7 @@ function resolveUltimateStance(
 }
 
 /** Whole-message badges must never reinterpret a vote on a reason or member field. */
-function resolveDisplayedStance(edge: DemoEdge, msgMap: Map<string, DemoMessage>, stanceMap: Map<string, { targetId: string; type: 'agree' | 'disagree' }>) {
+export function resolveDisplayedStance(edge: DemoEdge, msgMap: Map<string, DemoMessage>, stanceMap: Map<string, { targetId: string; type: 'agree' | 'disagree' }>) {
   const executed = msgMap.get(edge.relationMessageId)?.executedStance;
   const addressKey = (reference: Reference) => reference.partId || reference.memberId || reference.path?.length || reference.range
     || (reference.revision !== undefined && reference.revision !== msgMap.get(reference.messageId)?.revision)

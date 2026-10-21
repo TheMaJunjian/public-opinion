@@ -51,18 +51,25 @@ export default function HomeFilterPanel({ mode, onChange }: HomeFilterPanelProps
             return !current;
           });
         }}
-        title="主页：按与我相关的范围查看消息"
+        title={isActive ? `主页过滤中：${activeOption?.label ?? ''}` : '主页：按与我相关的范围查看消息'}
+        aria-expanded={open}
         style={{
-          padding: '2px 8px',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: isActive ? '4px 10px' : '2px 8px',
           borderRadius: 4,
-          border: isActive ? '1px solid #38bdf8' : '1px solid #666',
-          background: isActive ? '#123047' : '#333',
-          color: isActive ? '#bae6fd' : '#fff',
+          border: isActive ? '1px solid #22d3ee' : '1px solid #666',
+          backgroundColor: isActive ? '#087f8c' : '#333',
+          color: isActive ? '#eee' : '#fff',
           fontSize: 12,
           cursor: 'pointer',
           fontWeight: isActive ? 600 : 400,
         }}
       >
+        {isActive && <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m3 10 9-7 9 7M5 9v11h14V9M9 20v-7h6v7" />
+        </svg>}
         主页
       </button>
       {open && (

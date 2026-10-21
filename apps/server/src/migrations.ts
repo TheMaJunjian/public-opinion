@@ -6,6 +6,7 @@ import { schemaSql } from './schema.js';
 import { initializeProjections } from './projections.js';
 import { initializePersonal } from './personal-actions.js';
 import { initializeOrganizationMemberships } from './organizations.js';
+import { retireLegacyTopics } from './retire-legacy-topics.js';
 
 export interface Migration { version: number; name: string; up(): Promise<void> }
 
@@ -19,7 +20,8 @@ export function migrationsFor(store: Store): Migration[] {
     await initializeProjections(store);
     await initializePersonal(store);
     await initializeOrganizationMemberships(store);
-  } }, { version: 2, name: 'committed-change-predecessors', up: () => linkExistingChanges(store.db) }];
+  } }, { version: 2, name: 'committed-change-predecessors', up: () => linkExistingChanges(store.db) },
+  { version: 3, name: 'retire-converted-topic-containers', up: async () => { await retireLegacyTopics(store); } }];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

@@ -24,6 +24,13 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it.each([['personal','当前用户生效'],['recommended','推荐生效']] as const)('distinguishes %s JOIN ownership on the graph',(source,label)=>{
+    const joining:DemoMessage={...message('joining'),kind:'join',joinInfo:{containerId:'parent',containerType:'classify',targetIds:['leaf']}};
+    const view=renderScene([joining],[],{joinStatusByMessage:new Map([['joining','valid']]),
+      joinEffectSourcesByMessage:new Map([['joining',new Set([source])]])});
+    expect(view.container.querySelector('[data-msgid="joining"]')).toHaveTextContent(label);
+  });
+
   it.each([false, true])('preserves mounted card positions when later structures with different heights are revealed (edge-only frame=%s)', edgeOnlyFrame => {
     const records = Array.from({ length: 120 }, (_, index) => ({ ...message(`m-${index}`), createdAt: new Date(index * 1000).toISOString() }));
     const edges: DemoEdge[] = edgeOnlyFrame ? [

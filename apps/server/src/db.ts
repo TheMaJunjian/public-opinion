@@ -15,6 +15,13 @@ export function integer(value: number, label = '金额'): number {
 export class Store {
   private constructor(readonly db: Postgres) {}
 
+  /** Inspect an existing database in one enforced read-only snapshot, without startup upgrades. */
+  static async inspect<T>(databaseUrl: string, options: { schema?: string }, read: (store: Store) => T | Promise<T>): Promise<T> {
+    const store = new Store(new Postgres(databaseUrl, options.schema));
+    try { return await store.read(() => read(store)); }
+    finally { await store.close(); }
+  }
+
   static async open(databaseUrl: string, options: { schema?: string } = {}): Promise<Store> {
     const store = new Store(new Postgres(databaseUrl, options.schema));
     try {

@@ -38,6 +38,29 @@ const renderList = (messages: DemoMessage[], props = listProps(messages)) => ren
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.getSelection()?.removeAllRanges(); });
 
 describe('native list content and navigation regressions', () => {
+  it.each([
+    ['valid', '生效'], ['rejected', '被反对 · 未生效'],
+    ['container-rejected', '容器被反对 · 未生效'], ['superseded', '未选中 · 未生效'],
+  ] as const)('shows the shared JOIN status %s on the list record', (status, label) => {
+    const relation = { id: 'joining', relationType: 'JOIN', sourceMessageId: 'parent', targetRefs: [{ kind: 'message' as const, messageId: 'leaf' }], createdAt: '', createdBy: { id: 'author', username: '作者', createdAt: '' } };
+    const converted = convertMessagesToDemoModel([], [relation]), props = listProps(converted.messages);
+    props.catalog.relationById.set(relation.id, relation);
+    props.catalog.joinStatusByMessage = new Map([[relation.id, status]]);
+    if (status === 'valid') props.catalog.effectiveJoinRelationIds.add(relation.id);
+    const view = renderList(converted.messages, props);
+    expect(view.container.querySelector('[data-msgid="joining"]')).toHaveTextContent(label);
+  });
+
+  it.each([['personal','当前用户生效'],['recommended','推荐生效']] as const)('distinguishes %s JOIN ownership on the list', (source,label)=>{
+    const relation={id:'joining',relationType:'JOIN',sourceMessageId:'parent',targetRefs:[{kind:'message' as const,messageId:'leaf'}],createdAt:'',createdBy:{id:'author',username:'作者',createdAt:''}};
+    const converted=convertMessagesToDemoModel([],[relation]),props=listProps(converted.messages);
+    props.catalog.relationById.set(relation.id,relation);
+    props.catalog.effectiveJoinRelationIds.add(relation.id);
+    props.catalog.joinStatusByMessage=new Map([[relation.id,'valid']]);
+    props.catalog.joinEffectSourcesByMessage=new Map([[relation.id,new Set([source])]]);
+    expect(renderList(converted.messages,props).container.querySelector('[data-msgid="joining"]')).toHaveTextContent(label);
+  });
+
   it('reads native text, code and web parts without a projected body and preserves exact fragment references', () => {
     const target = message('future-native', { kind: 'relation', relationType: 'future-relation' as RelationType, content: '', targetRefs: [{ kind: 'message', messageId: 'native-target' }], parts: [
       { id: 'text', type: 'text', text: '未来原生正文，目标：保留原文' },

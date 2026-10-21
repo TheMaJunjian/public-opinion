@@ -86,6 +86,10 @@ export interface MessageState {
   supportCount: number; oppositionCount: number; recommendationTotal: number;
   executedStance?: ExecutedStance;
   membershipActive?: boolean;
+  /** An authorized revision retired this immutable placement. */
+  membershipDisabled?: boolean;
+  /** A migration-only Topic container is retained for history, with no current organization effect. */
+  organizationRetired?: boolean;
 }
 export interface Change {
   sequence: number;
@@ -96,6 +100,7 @@ export interface Change {
   states: MessageState[];
   ledger: LedgerEntry[];
   treasury: { operating: number; issued: number };
+  upgrade?: { kind: 'retire-legacy-topics'; version: 1; topicIds: string[]; releasedMemberships: Membership[]; retiredJoinIds: string[] };
 }
 export interface Page {
   messages: Message[]; users: User[]; memberships: Membership[];

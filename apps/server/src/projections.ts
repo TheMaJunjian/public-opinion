@@ -1,5 +1,6 @@
 import { organization, referenceKey, relations, type Message, type MessageState, type Reference } from '@gonglun/core';
 import type { Store } from './db.js';
+import { retiredTopicIds } from './retired-topics.js';
 /** Execution-time statements survive edits to their source messages and bounded views. */
 export async function initializeProjections(store: Store): Promise<void> {
     await store.db.exec(`
@@ -46,6 +47,7 @@ interface StanceRow {
 }
 /** Authoritative display state is independent of which relation messages a page includes. */
 export async function statesFor(store: Store, ids: string[]): Promise<MessageState[]> {
+    const retiredTopics = await retiredTopicIds(store);
     const uniqueIds = [...new Set(ids)];
     const result: MessageState[] = [];
     // Keep query results bounded even when a mutation touches many messages.
@@ -141,7 +143,16 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             LEFT JOIN memberships m ON m."memberId"=a.body->>'memberId' WHERE a.id=ANY($1::text[])`).all(batch);
         for (const row of placements) {
             const state = states.get(String(row.id));
-            if (state) { state.membershipActive = row.sourceId === row.id; if (row.disabled) state.suppressed = true; }
+            if (state) { state.membershipActive = row.sourceId === row.id; if (row.disabled) { state.suppressed = true; state.membershipDisabled = true; } }
+        }
+        for (const message of messages) {
+            const state = states.get(message.id)!;
+            if (retiredTopics.has(message.id)) { state.organizationRetired = true; state.suppressed = true; }
+            if (relations(message).some(part =>
+                part.relation === 'member-of' && part.roles.member?.length && (part.roles.parent?.some(binding => retiredTopics.has(binding.reference.messageId)) || part.roles.member.some(binding => retiredTopics.has(binding.reference.messageId)))
+                || part.relation === 'legacy-join' && part.roles.source?.some(binding => retiredTopics.has(binding.reference.messageId)))) {
+                state.membershipDisabled = true; state.membershipActive = false; state.suppressed = true;
+            }
         }
         result.push(...batch.flatMap(messageId => states.has(messageId) ? [states.get(messageId)!] : []));
     }

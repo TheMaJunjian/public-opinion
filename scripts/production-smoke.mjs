@@ -150,6 +150,25 @@ try {
   assert.equal(preserved.status,200);assert.equal(preserved.body.account.available,299);
   assert.ok((await request('/api/ui/snapshot?parent=legacy-topic')).body.messages.some(message=>message.id==='legacy-message'));
   assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'must remain read only'}]})).status,503);
+  // The shipped tools must inspect without running migrations, then retire an
+  // already imported Topic without replacing its messages or touching balances.
+  const imageTool=(file,toolArgs,input)=>{
+    const result=spawnSync('docker',[...args,'run','--rm','--no-deps','-T','api','node',`apps/server/dist/${file}.js`,...toolArgs],{encoding:'utf8',input,maxBuffer:16*1024*1024});
+    assert.equal(result.status,0,result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const retirementPlan=imageTool('retire-legacy-topics-cli',[]);
+  assert.equal(retirementPlan.topics,1);
+  const beforeRetirement=imageTool('topic-retirement-audit',['capture','-']);
+  const beforeRetirementView=imageTool('topic-retirement-view-audit',['capture','-']);
+  imageTool('retire-legacy-topics-cli',['--apply','--expect-region',retirementPlan.region]);
+  assert.equal(imageTool('topic-retirement-audit',['verify','-','-'],JSON.stringify(beforeRetirement)).verified,true);
+  assert.equal(imageTool('topic-retirement-view-audit',['verify','-','-'],JSON.stringify(beforeRetirementView)).verified,true);
+  assert.equal(imageTool('retire-legacy-topics-cli',[]).topics,0);
+  const retiredRoot=await request('/api/ui/snapshot');
+  assert.ok(retiredRoot.body.messages.some(message=>message.id==='legacy-topic'&&message.state.organizationRetired));
+  assert.ok(retiredRoot.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
+  console.log('PASS: packaged read-only retirement preflight, incremental upgrade, SQL/replay/all-viewer verification, idempotent rerun');
   console.log('PASS: prebuilt rehearsal image, empty target rejected, same PostgreSQL container/start time/volume, preserved login/balance/messages, read-only writes blocked');
   console.log('PASS: actual Prisma migration CLI → production image → Caddy HTTPS → bcrypt login, preserved message and balance, new write');
 } finally {

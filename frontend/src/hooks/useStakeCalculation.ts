@@ -16,13 +16,12 @@ interface StakeCalculationDeps {
   existingJoinCount?: number;
   joinOnlyAction?: boolean;
   reclassificationJoinCount?: number;
-  additionalAgreeTargetCount?: number;
   onRelStakeChange: (min: number) => void;
   stakeDefaultLoaded: React.MutableRefObject<boolean>;
 }
 
 const amount = (value: number | '' | undefined) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
-export function calculateSendCost(deps: Pick<StakeCalculationDeps, 'relationType' | 'secondaryRelationType' | 'draftUnits' | 'targetUnits' | 'sourceUnits' | 'newMessageContent' | 'stakeAmount' | 'relStakeAmount' | 'recommendationAmount' | 'joinOnlyAction' | 'additionalAgreeTargetCount'>, protocolFee: number) {
+export function calculateSendCost(deps: Pick<StakeCalculationDeps, 'relationType' | 'secondaryRelationType' | 'draftUnits' | 'targetUnits' | 'sourceUnits' | 'newMessageContent' | 'stakeAmount' | 'relStakeAmount' | 'recommendationAmount' | 'joinOnlyAction'>, protocolFee: number) {
   const targets = deps.draftUnits.length ? deps.draftUnits : deps.targetUnits;
   const relation = deps.relationType;
   const content = deps.newMessageContent.trim().length > 0;
@@ -33,7 +32,7 @@ export function calculateSendCost(deps: Pick<StakeCalculationDeps, 'relationType
   const sourceCount = usesSelectedSources
     ? ['agree', 'disagree'].includes(relation ?? '') ? new Set(deps.sourceUnits!.map(source => source.messageId)).size : deps.sourceUnits!.length : 1;
   const sourceMultiplier = ['annotation', 'reference', 'reply', 'notify', 'agree', 'disagree'].includes(relation ?? '') ? sourceCount : 1;
-  const relCount = relation ? (multi.has(relation) ? Math.max(1, targets.length + (deps.additionalAgreeTargetCount ?? 0)) * sourceMultiplier : 1) : 0;
+  const relCount = relation ? (multi.has(relation) ? Math.max(1, targets.length) * sourceMultiplier : 1) : 0;
   const joinCount = deps.joinOnlyAction ? new Set(targets.map(target => target.messageId)).size : 0;
   const refCount = !usesSelectedSources && ['proposal', 'code_change', 'operations'].includes(relation ?? '') ? targets.length : 0;
   const operations = deps.joinOnlyAction ? joinCount : Number(hasText) + relCount + refCount;

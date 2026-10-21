@@ -12,7 +12,7 @@ export interface MembershipAction {
 }
 
 /** Shared by the server index and client previews. One winning action per member. */
-export function resolveMemberships(actions: MembershipAction[], rejected: ReadonlySet<string>) {
+export function resolveMemberships(actions: MembershipAction[], rejected: ReadonlySet<string>, retiredParents: ReadonlySet<string> = new Set()) {
   const byId = new Map(actions.map(action => [action.id, action]));
   const latest = new Map<string, MembershipAction>();
   for (const action of actions) {
@@ -28,6 +28,9 @@ export function resolveMemberships(actions: MembershipAction[], rejected: Readon
       const seen = new Set<string>();
       while (action && !seen.has(action.id)) {
         seen.add(action.id);
+        // Removing a legacy boundary maps this placement to root. It is a
+        // terminal checkpoint, not permission to restore an earlier container.
+        if (retiredParents.has(action.parentId) || retiredParents.has(memberId)) break;
         if (!excluded.has(action.id) && !excluded.has(action.parentId)) {
           effective.set(memberId, action); break;
         }

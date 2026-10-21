@@ -6,6 +6,7 @@ import { createTestApp, cleanupTestDatabases } from './test-database.js';
 import { convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBridge.js';
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 import { initializeOrganizationMemberships } from './organizations.js';
+import { projectWorkbenchSnapshot } from '../../../frontend/src/utils/workbenchProjection.js';
 
 afterEach(cleanupTestDatabases);
 async function setup() {
@@ -31,6 +32,14 @@ async function setup() {
             const id = ref.messageId ?? ref.relationId; counts.set(id, (counts.get(id) ?? 0) + 1);
         }
         expect([...counts.values()].every(count => count === 1)).toBe(true);
+        const placements = await app.store.db.prepare('SELECT * FROM memberships').all();
+        for (const relation of snapshot.relations.filter((relation: any) => ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].includes(relation.relationType))) {
+            const members = effect.ownership.direct(relation.id);
+            expect(new Set([...members.textIds, ...members.relationIds])).toEqual(new Set(placements.filter(row => row.parentId === relation.id).map(row => String(row.memberId))));
+        }
+        for (const relation of snapshot.relations.filter((relation: any) => relation.payload?.membershipHistory)) {
+            expect(effect.context.joinStatusByMessage.get(relation.id) === 'valid').toBe(relation.state.membershipActive);
+        }
         return { snapshot, effect };
     }
     return { app, agent, session, post, content, group, join, stance, membership, parity };
@@ -154,6 +163,212 @@ it('does not resurrect an unrelated older JOIN when the recorded preceding posit
     await t.stance(current.id);
     expect(await t.membership(a.id)).toBeUndefined();
     await t.parity();
+});
+
+it.each(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'])('restoring %s and old JOIN approvals preserves subsequent moves and their recorded root fallback', async type => {
+    const t = await setup(), a = await t.content(), b = await t.content(), c = await t.group([a.id, b.id], type);
+    const original = (await t.membership(a.id))!, p = await t.group([]), q = await t.group([]);
+    await t.stance(c.id);
+    expect(await t.membership(a.id)).toBeUndefined();
+    const first = await t.join(a.id, p.id), second = await t.join(a.id, q.id);
+    await t.parity();
+    await t.stance(c.id, 'AGREE');
+    expect((await t.membership(a.id))?.sourceId).toBe(second.id);
+    expect((await t.membership(b.id))?.parentId).toBe(c.id);
+    await t.stance(String(original.sourceId), 'AGREE');
+    expect((await t.membership(a.id))?.sourceId).toBe(second.id);
+    let { effect } = await t.parity();
+    expect(effect.context.joinStatusByMessage.get(String(original.sourceId))).toBe('superseded');
+    await t.stance(second.id);
+    expect((await t.membership(a.id))?.sourceId).toBe(first.id);
+    await t.parity();
+    await t.stance(first.id);
+    expect(await t.membership(a.id)).toBeUndefined();
+    await t.parity();
+    await t.stance(c.id); await t.stance(c.id, 'AGREE');
+    expect(await t.membership(a.id)).toBeUndefined();
+    await t.stance(second.id, 'AGREE');
+    expect((await t.membership(a.id))?.sourceId).toBe(second.id);
+    ({ effect } = await t.parity());
+    expect(effect.ownership.direct(c.id).textIds).toEqual(new Set([b.id]));
+    expect(effect.ownership.direct(q.id).textIds).toEqual(new Set([a.id]));
+});
+
+it('requires container recovery before direct or indirect JOIN approval, without changing fees or memberships on failure', async () => {
+    const t = await setup(), a = await t.content(), b = await t.content(), c = await t.group([a.id, b.id]);
+    const joining = String((await t.membership(a.id))!.sourceId);
+    const rejection = await t.stance(joining);
+    await t.stance(c.id);
+    const before = await t.app.store.latestSequence(), account = await t.app.store.account(t.session.user.id);
+    const count = (await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM messages').get())!.n;
+    for (const [relationType, target] of [['AGREE', joining], ['DISAGREE', rejection.id]]) {
+        const response = await t.agent.post('/api/ui/relations').set('x-csrf-token', t.session.csrf).set('x-request-id', randomUUID()).send({
+            relationType, targetRefs: [{ kind: 'relation', relationId: target, part: 'decoration' }],
+        });
+        expect(response.status, response.text).toBe(409);
+        expect(response.body.error).toContain('请先赞同并恢复容器');
+    }
+    const failedJoin = await t.agent.post('/api/ui/relations').set('x-csrf-token', t.session.csrf).set('x-request-id', randomUUID()).send({
+        relationType: 'JOIN', sourceMessageId: c.id, targetRefs: [{ kind: 'message', messageId: a.id }],
+    });
+    expect(failedJoin.status, failedJoin.text).toBe(409);
+    const native = await t.agent.post('/api/messages').set('x-csrf-token', t.session.csrf).send({ requestId: randomUUID(), parts: [
+        { id: 'stance', type: 'relation', relation: 'agree', roles: { target: [{ id: 'target', reference: { messageId: joining } }] } },
+    ] });
+    expect(native.status, native.text).toBe(409);
+    const requestId = randomUUID(), draftId = randomUUID();
+    const batch = await t.agent.post('/api/ui/commands').set('x-csrf-token', t.session.csrf).set('x-request-id', requestId).send({ requestId, commands: [
+        { id: draftId, method: 'POST', path: '/messages', body: { content: '不能留下的半成品理由' } },
+        { id: randomUUID(), method: 'POST', path: '/relations', body: { relationType: 'AGREE', sourceMessageId: draftId, targetRefs: [{ kind: 'relation', relationId: joining }] } },
+    ] });
+    expect(batch.status, batch.text).toBe(409);
+    expect(await t.app.store.latestSequence()).toBe(before);
+    expect(await t.app.store.account(t.session.user.id)).toEqual(account);
+    expect((await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM messages').get())!.n).toBe(count);
+    expect(await t.membership(a.id)).toBeUndefined();
+    expect(await t.membership(b.id)).toBeUndefined();
+    await t.parity();
+    // Opposition is still allowed while the parent is rejected; container recovery
+    // does not clear the member's independent opposition.
+    await t.stance(joining);
+    await t.stance(c.id, 'AGREE');
+    expect(await t.membership(a.id)).toBeUndefined();
+    expect((await t.membership(b.id))?.parentId).toBe(c.id);
+    await t.stance(joining, 'AGREE');
+    expect((await t.membership(a.id))?.sourceId).toBe(joining);
+    await t.parity();
+});
+
+it('allows discussion of JOIN text while its container is rejected without restoring the placement', async () => {
+    const t = await setup(), a = await t.content(), c = await t.group([]);
+    const joining = await t.post('/relations', { relationType: 'JOIN', sourceMessageId: c.id, targetRefs: [{ kind: 'message', messageId: a.id }], payload: { content: '加入的理由' } });
+    await t.stance(c.id);
+    await t.post('/relations', { relationType: 'AGREE', targetRefs: [{ kind: 'relation', relationId: joining.id, part: 'label' }] });
+    expect(await t.membership(a.id)).toBeUndefined();
+    const { effect } = await t.parity();
+    expect(effect.context.joinStatusByMessage.get(joining.id)).toBe('container-rejected');
+});
+
+it('keeps personal JOIN approval available when another viewer opposes the container', async () => {
+    const t = await setup(), member = await t.content(), container = await t.group([member.id]);
+    const joining = String((await t.membership(member.id))!.sourceId);
+    const other = request.agent(t.app), session = (await other.post('/api/register').send({ name: 'other-viewer', password: 'long-test-password' })).body;
+    const response = await other.post('/api/ui/relations').set('x-csrf-token', session.csrf).set('x-request-id', randomUUID()).send({
+        relationType: 'DISAGREE', targetRefs: [{ kind: 'relation', relationId: container.id, part: 'decoration' }],
+    });
+    expect(response.status, response.text).toBe(201);
+    await t.stance(joining, 'AGREE');
+    const snapshot = (await t.agent.get('/api/ui/snapshot?limit=200')).body, projected = projectWorkbenchSnapshot(snapshot);
+    const mine = deriveContainerEffect({ ...projected, relations: projected.relations, username: 'membership-test', stakeCounts: projected.counts });
+    const theirs = deriveContainerEffect({ ...projected, relations: projected.relations, username: 'other-viewer', stakeCounts: projected.counts });
+    expect(mine.joinByTarget.get(member.id)).toBe(joining);
+    expect(mine.context.joinStatusByMessage.get(joining)).toBe('valid');
+    expect(theirs.joinByTarget.has(member.id)).toBe(false);
+    expect(theirs.context.joinStatusByMessage.get(joining)).toBe('container-rejected');
+});
+
+type ThreeContainerCase = {
+    type: string; name: string; beforeB: string[]; beforeC: string[];
+    rejectJoinB?: boolean; previousC: string | null; fallback: string | null;
+};
+const threeContainerCases = ['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'].flatMap<ThreeContainerCase>(type => [
+    { type, name: 'full chain', beforeB: [], beforeC: ['A'], previousC: 'B', fallback: 'B' },
+    { type, name: 'B starts from root', beforeB: ['A'], beforeC: [], previousC: 'B', fallback: 'B' },
+    { type, name: 'C skips rejected B', beforeB: [], beforeC: ['B'], previousC: 'A', fallback: 'A' },
+    { type, name: 'C starts from root', beforeB: [], beforeC: ['A', 'B'], previousC: null, fallback: null },
+    { type, name: 'C skips rejected JOIN B', beforeB: [], beforeC: [], rejectJoinB: true, previousC: 'A', fallback: 'A' },
+]);
+
+it.each(threeContainerCases)('$type / $name: recovering A and B before opposing the latest JOIN preserves its recorded fallback', async scenario => {
+    const t = await setup(), member = await t.content();
+    const containers = new Map<string, string>();
+    for (const name of ['A', 'B', 'C']) containers.set(name, (await t.group([], scenario.type)).id);
+    const joins = new Map<string, string>();
+    async function check(owner: string | null) {
+        const placement = await t.membership(member.id);
+        expect(placement?.parentId ?? null).toBe(owner ? containers.get(owner) : null);
+        expect(placement?.sourceId ?? null).toBe(owner ? joins.get(owner) : null);
+        const { effect } = await t.parity();
+        expect([...containers].filter(([, id]) => effect.ownership.direct(id).textIds.has(member.id)).map(([name]) => name)).toEqual(owner ? [owner] : []);
+        for (const [name, id] of joins) expect(effect.context.joinStatusByMessage.get(id) === 'valid').toBe(name === owner);
+    }
+    joins.set('A', (await t.join(member.id, containers.get('A')!)).id);
+    await check('A');
+    for (const name of scenario.beforeB) { await t.stance(containers.get(name)!); await check(null); }
+    joins.set('B', (await t.join(member.id, containers.get('B')!)).id);
+    await check('B');
+    for (const name of scenario.beforeC) {
+        await t.stance(containers.get(name)!);
+        await check(name === 'A' ? 'B' : scenario.beforeB.includes('A') || scenario.beforeC.includes('A') ? null : 'A');
+    }
+    if (scenario.rejectJoinB) { await t.stance(joins.get('B')!); await check('A'); }
+    joins.set('C', (await t.join(member.id, containers.get('C')!)).id);
+    const action = await t.app.store.db.prepare('SELECT body FROM membership_actions WHERE id=$1').get(joins.get('C')!);
+    expect(action!.body.previousId).toBe(scenario.previousC ? joins.get(scenario.previousC) : null);
+    await check('C');
+    for (const name of ['A', 'B']) { await t.stance(containers.get(name)!, 'AGREE'); await check('C'); }
+    await t.stance(joins.get('C')!);
+    await check(scenario.fallback);
+    // Approving a skipped old JOIN does not insert it into C's recorded chain.
+    for (const name of ['A', 'B']) { await t.stance(joins.get(name)!, 'AGREE'); await check(scenario.fallback); }
+    await t.stance(joins.get('C')!, 'AGREE');
+    await check('C');
+    await t.stance(containers.get('C')!);
+    await check(scenario.fallback);
+    await t.stance(containers.get('C')!, 'AGREE');
+    await check('C');
+    await t.stance(joins.get('C')!);
+    await check(scenario.fallback);
+});
+
+it('records A → B → A as separate moves, while approval adds no new placement history', async () => {
+    const t = await setup(), member = await t.content(), a = await t.group([]), b = await t.group([]);
+    const first = await t.join(member.id, a.id);
+    await t.stance(first.id, 'AGREE');
+    expect((await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM membership_actions WHERE body->>\'memberId\'=$1').get(member.id))!.n).toBe(1);
+    const middle = await t.join(member.id, b.id), returned = await t.join(member.id, a.id);
+    expect(returned.id).not.toBe(first.id);
+    const row = await t.app.store.db.prepare('SELECT body FROM membership_actions WHERE id=$1').get(returned.id);
+    expect(row!.body.previousId).toBe(middle.id);
+    expect((await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM membership_actions WHERE body->>\'memberId\'=$1').get(member.id))!.n).toBe(3);
+    await t.stance(returned.id);
+    expect((await t.membership(member.id))?.sourceId).toBe(middle.id);
+    await t.parity();
+    await t.stance(returned.id, 'AGREE');
+    expect((await t.membership(member.id))?.sourceId).toBe(returned.id);
+    await t.parity();
+});
+
+it('retains opposition records for C and B, and a subsequent JOIN D returns to A when opposed', async () => {
+    const t = await setup(), member = await t.content(), joins: string[] = [], oppositions: string[] = [];
+    for (const name of ['A', 'B', 'C']) {
+        const container = await t.post('/relations', { relationType: 'CLASSIFY', payload: { title: name }, targetRefs: [] });
+        joins.push((await t.join(member.id, container.id)).id);
+    }
+    for (const [targetIndex, expectedIndex] of [[2, 1], [1, 0]] as const) {
+        const opposition = await t.stance(joins[targetIndex]);
+        oppositions.push(opposition.id);
+        expect(opposition).toMatchObject({ relationType: 'DISAGREE', targetRefs: [{ kind: 'relation', relationId: joins[targetIndex] }] });
+        expect(opposition.payload?.membershipHistory).toBeUndefined();
+        expect((await t.membership(member.id))?.sourceId).toBe(joins[expectedIndex]);
+        expect((await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM membership_actions WHERE body->>\'memberId\'=$1').get(member.id))!.n).toBe(3);
+        await t.parity();
+    }
+    const d = await t.group([]), joinD = await t.join(member.id, d.id);
+    const actionD = await t.app.store.db.prepare('SELECT body FROM membership_actions WHERE id=$1').get(joinD.id);
+    expect(actionD!.body.previousId).toBe(joins[0]);
+    expect((await t.membership(member.id))?.sourceId).toBe(joinD.id);
+    await t.parity();
+    const opposeD = await t.stance(joinD.id);
+    expect((await t.membership(member.id))?.sourceId).toBe(joins[0]);
+    expect((await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM membership_actions WHERE body->>\'memberId\'=$1').get(member.id))!.n).toBe(4);
+    const { snapshot, effect } = await t.parity();
+    for (const id of [...joins, ...oppositions, joinD.id, opposeD.id]) {
+        expect(snapshot.messages.filter((message: any) => message.id === id)).toHaveLength(1);
+        expect(snapshot.relations.filter((relation: any) => relation.id === id)).toHaveLength(1);
+    }
+    expect(effect.context.joinStatusByMessage.get(joins[0])).toBe('valid');
+    for (const id of [joins[1], joins[2], joinD.id]) expect(effect.context.joinStatusByMessage.get(id)).toBe('rejected');
 });
 
 it('removes the entire descendant subtree from a former scope when an organization returns to root', async () => {

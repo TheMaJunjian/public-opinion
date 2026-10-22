@@ -4,6 +4,12 @@ import { MessageJumpOverlay } from '../components/PopupOverlay';
 import { createMessageJumpGroups, getMessageJumpDisplay, registerMessageJumpGroups } from '../utils/messageJumpDisplay';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 
+function firstGuide() {
+  const path = document.querySelector('.popup-guides')!.getAttribute('d')!;
+  const [x, y, endX, endY] = path.match(/^M([-\d.]+),([-\d.]+)L([-\d.]+),([-\d.]+)/)!.slice(1).map(Number);
+  return { x, y, endX, endY };
+}
+
 it('cuts the live message out of the entire prompt, including guides and hint text', () => {
   const canvas = document.createElement('div');
   canvas.setAttribute('data-jump-canvas', 'true');
@@ -24,7 +30,7 @@ it('cuts the live message out of the entire prompt, including guides and hint te
     expect(overlay.querySelector('.popup-guides')).not.toBeNull();
     expect(overlay.querySelector('.popup-backdrop-guides')).toBeNull();
     const mask = document.querySelector('mask')!;
-    expect(overlay.style.maskImage).toBe(`url(#${mask.id})`);
+    expect(overlay.querySelector('[data-message-jump-layer]')).toHaveAttribute('mask', `url(#${mask.id})`);
     const opening = mask.querySelector('[data-message-jump-region="message"]')!;
     expect(opening).toHaveAttribute('x', '20');
     expect(opening).toHaveAttribute('y', '120');
@@ -32,9 +38,11 @@ it('cuts the live message out of the entire prompt, including guides and hint te
     expect(opening).toHaveAttribute('height', '80');
     expect(opening).toHaveAttribute('fill', 'black');
     expect(mask).toHaveStyle({ maskType: 'luminance' });
-    expect(overlay.style.background).toBe('rgba(0, 0, 0, 0.42)');
+    expect(overlay.querySelector('[data-message-jump-backdrop]')).toHaveAttribute('fill', 'rgba(0,0,0,0.42)');
     expect(overlay.contains(screen.getByText('已定位目标消息'))).toBe(true);
-    expect(overlay.firstElementChild?.getAttribute('style')).toContain('z-index: 1');
+    expect(overlay.querySelector('[data-message-jump-layer]')?.contains(screen.getByText('已定位目标消息'))).toBe(true);
+    expect(overlay.style.maskImage).toBe('');
+    expect(document.querySelector('svg[width="0"][height="0"]')).toBeNull();
     expect(document.querySelector('[data-message-jump-clone]')).toBeNull();
     expect(screen.getAllByText('选择消息')).toHaveLength(1);
     expect(overlay.style.pointerEvents).toBe('none');
@@ -67,6 +75,7 @@ it.each([0.7, 1, 1.5])('unmasks a JOIN, its sibling decorations and dependent re
   document.body.append(canvas);
   Object.defineProperties(canvas, { offsetWidth: { value: 1000 }, offsetHeight: { value: 1000 } });
   const geometry = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    if (this.hasAttribute('data-message-jump-overlay')) return new DOMRect(0, 0, window.innerWidth, window.innerHeight);
     if (this === canvas) return new DOMRect(0, 0, 1000 * scale, 1000 * scale);
     if (this.getAttribute('data-msgid') === 'join' && !this.hasAttribute('data-rel-overlay')) return new DOMRect(20 * scale, 120 * scale, 240 * scale, 80 * scale);
     if (this.getAttribute('data-msgid') === 'join') return new DOMRect(270 * scale, 120 * scale, 60 * scale, 30 * scale);
@@ -138,6 +147,76 @@ it('clips openings to the pane and follows the original card when it scrolls', (
   } finally { view.unmount(); geometry.mockRestore(); viewport.mockRestore(); pane.remove(); vi.useRealTimers(); }
 });
 
+it('keeps the mask and guides on the live card when a mobile viewport pans and its toolbar resizes', () => {
+  vi.useFakeTimers();
+  const visual = Object.assign(new EventTarget(), { offsetLeft: 80, offsetTop: 240, width: 360, height: 420 });
+  vi.stubGlobal('visualViewport', visual);
+  const card = document.createElement('div');
+  card.dataset.msgid = 'corrected-category'; document.body.append(card);
+  let top = 600;
+  const bounds = vi.spyOn(card, 'getBoundingClientRect').mockImplementation(() => new DOMRect(160, top, 240, 80));
+  const view = render(<MessageJumpOverlay messageId={card.dataset.msgid} targetElement={card} targetRect={card.getBoundingClientRect()} />);
+  try {
+    const mask = document.querySelector('mask')!;
+    expect(Number(mask.getAttribute('width'))).toBeGreaterThanOrEqual(window.innerWidth);
+    expect(Number(mask.getAttribute('height'))).toBeGreaterThanOrEqual(window.innerHeight);
+    top = 440;
+    Object.assign(visual, { offsetLeft: 40, offsetTop: 120, width: 390, height: 500 });
+    act(() => { visual.dispatchEvent(new Event('scroll')); visual.dispatchEvent(new Event('resize')); vi.advanceTimersByTime(17); });
+    const opening = document.querySelector('[data-message-jump-region="corrected-category"]')!;
+    expect(opening).toHaveAttribute('y', '440');
+    expect(firstGuide().endX).toBeCloseTo(280);
+    expect(firstGuide().endY).toBeCloseTo(480);
+    expect(firstGuide().x).toBeCloseTo(40 + 0.5 / 25 * 390);
+    expect(firstGuide().y).toBe(132);
+    expect(document.querySelector('[data-message-jump-hint]')).toHaveAttribute('transform', 'translate(235,136)');
+    view.unmount();
+    const reads = bounds.mock.calls.length;
+    act(() => { visual.dispatchEvent(new Event('resize')); vi.advanceTimersByTime(100); });
+    expect(bounds).toHaveBeenCalledTimes(reads);
+  } finally { view.unmount(); bounds.mockRestore(); card.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+});
+
+it('aims at the category card while keeping its correction badge and distant attached relations visible', () => {
+  const canvas = document.createElement('div'); canvas.dataset.jumpCanvas = 'true';
+  canvas.innerHTML = '<div data-msgid="category"></div><div data-msgid="correction" data-rel-overlay></div>';
+  document.body.append(canvas);
+  const card = canvas.firstElementChild as HTMLElement;
+  const cardBounds = vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(new DOMRect(200, 500, 240, 100));
+  const badgeBounds = vi.spyOn(canvas.lastElementChild!, 'getBoundingClientRect').mockReturnValue(new DOMRect(200, 200, 80, 24));
+  const unregister = registerMessageJumpGroups(canvas, new Map([['category', new Set(['correction'])]]));
+  const display = getMessageJumpDisplay(card, 'category');
+  const view = render(<MessageJumpOverlay messageId="category" targetElement={card} targetRect={display.rect} />);
+  try {
+    expect(firstGuide().endY).toBeCloseTo(550);
+    expect(document.querySelector('[data-message-jump-region="correction"]')).not.toBeNull();
+  } finally { view.unmount(); unregister(); cardBounds.mockRestore(); badgeBounds.mockRestore(); canvas.remove(); }
+});
+
+it.each([0.7, 1, 1.5])('aligns the entire painted layer in a stationary offset mobile viewport at scale %s', scale => {
+  const visual = Object.assign(new EventTarget(), { offsetLeft: 80, offsetTop: 120, width: 360, height: 420 });
+  vi.stubGlobal('visualViewport', visual);
+  const card = document.createElement('div'); card.dataset.msgid = 'selected'; document.body.append(card);
+  const cardBounds = vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(new DOMRect(160, 440, 240, 80));
+  const overlayBounds = vi.spyOn(SVGSVGElement.prototype, 'getBoundingClientRect')
+    .mockReturnValue(new DOMRect(-80, -120, window.innerWidth * scale, window.innerHeight * scale));
+  const view = render(<MessageJumpOverlay messageId="selected" targetElement={card} targetRect={card.getBoundingClientRect()} />);
+  try {
+    const region = document.querySelector('[data-message-jump-region="selected"]')!;
+    expect(-80 + Number(region.getAttribute('x')) * scale).toBeCloseTo(160);
+    expect(-120 + Number(region.getAttribute('y')) * scale).toBeCloseTo(440);
+    expect(Number(region.getAttribute('width')) * scale).toBeCloseTo(240);
+    expect(Number(region.getAttribute('height')) * scale).toBeCloseTo(80);
+    expect(-80 + firstGuide().endX * scale).toBeCloseTo(280);
+    expect(-120 + firstGuide().endY * scale).toBeCloseTo(480);
+    const overlay = document.querySelector<SVGSVGElement>('[data-message-jump-overlay]')!;
+    expect(overlay.querySelector('mask')).toHaveAttribute('width', overlay.getAttribute('width'));
+    expect(overlay.querySelector('mask')).toHaveAttribute('height', overlay.getAttribute('height'));
+    expect(overlay.style.boxShadow).toBe('');
+    expect(overlay.style.filter).toBe('');
+  } finally { view.unmount(); overlayBounds.mockRestore(); cardBounds.mockRestore(); card.remove(); vi.unstubAllGlobals(); }
+});
+
 it('reveals the live SVG and card behind a relation hit area without duplicating their IDs or styles', () => {
   const canvas = document.createElement('div');
   canvas.dataset.jumpCanvas = 'true';
@@ -148,6 +227,7 @@ it('reveals the live SVG and card behind a relation hit area without duplicating
   document.body.appendChild(canvas);
   const bounds = new DOMRect(20, 120, 240, 80);
   const geometry = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    if (this.hasAttribute('data-message-jump-overlay')) return new DOMRect(0, 0, window.innerWidth, window.innerHeight);
     if (this.hasAttribute('data-card-wrapper')) return new DOMRect(0, 100, 300, 0);
     if (this.getAttribute('data-msgid') === 'outside') return new DOMRect(900, 900, 240, 80);
     return bounds;

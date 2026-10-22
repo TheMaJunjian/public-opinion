@@ -7,23 +7,6 @@ import { getMessageJumpRegions } from '../utils/messageJumpDisplay';
 const EDGE_ARROW_COUNT = 25;
 const GUIDE_EDGE_INSET = 12;
 
-export function PulseGuide({ start, end }: { start: { x: number; y: number }; end: { x: number; y: number } }) {
-  const deltaX = end.x - start.x;
-  const deltaY = end.y - start.y;
-  const length = Math.max(12, Math.hypot(deltaX, deltaY));
-  const angle = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
-  const lineStyle: CSSProperties = {
-    background: 'repeating-linear-gradient(90deg, rgba(250,204,21,0.5) 0 11px, transparent 11px 20px)',
-    backgroundSize: '20px 100%',
-    backgroundPosition: '0 0',
-    borderRadius: 3,
-  };
-  return <div style={{
-      position: 'absolute', left: start.x, top: start.y, width: length, height: 2,
-      transform: `rotate(${angle}deg)`, transformOrigin: '0 50%', ...lineStyle,
-    }} />;
-}
-
 export function MessageJumpOverlay({
   messageId,
   targetElement,
@@ -34,90 +17,123 @@ export function MessageJumpOverlay({
   targetRect: DOMRect;
 }) {
   const maskId = `jump-mask-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-  const [regions, setRegions] = useState<ReturnType<typeof getMessageJumpRegions>>([]);
-  const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-  const targetCenter = {
-    x: targetRect.left + targetRect.width / 2,
-    y: targetRect.top + targetRect.height / 2,
-  };
+  const overlayRef = useRef<SVGSVGElement>(null);
+  const [geometry, setGeometry] = useState(() => ({
+    width: window.innerWidth, height: window.innerHeight,
+    left: 0, top: 0, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+    centerX: targetRect.left + targetRect.width / 2, centerY: targetRect.top + targetRect.height / 2,
+    regions: [] as ReturnType<typeof getMessageJumpRegions>,
+  }));
+  const geometryRef = useRef(geometry);
 
   useLayoutEffect(() => {
+    const layer = overlayRef.current;
+    if (!layer) return;
     let frame = 0;
     const update = () => {
       frame = 0;
-      setRegions(targetElement.isConnected
-        ? getMessageJumpRegions(targetElement, messageId ?? targetElement.dataset.msgid ?? '') : []);
+      const overlay = overlayRef.current;
+      if (!overlay) return;
+      const width = window.innerWidth, height = window.innerHeight;
+      const bounds = overlay.getBoundingClientRect();
+      // Mobile browsers can pan a visual viewport inside a wider layout viewport.
+      // Measure the painted layer itself, so openings and guides share its origin
+      // and scale even when that viewport is stationary.
+      const scaleX = bounds.width > 0 ? bounds.width / geometryRef.current.width : 1;
+      const scaleY = bounds.height > 0 ? bounds.height / geometryRef.current.height : 1;
+      const localRect = (rect: DOMRect) => new DOMRect((rect.left - bounds.left) / scaleX,
+        (rect.top - bounds.top) / scaleY, rect.width / scaleX, rect.height / scaleY);
+      const card = localRect(targetElement.getBoundingClientRect());
+      const viewport = window.visualViewport;
+      const next = {
+        width, height,
+        left: ((viewport?.offsetLeft ?? 0) - bounds.left) / scaleX,
+        top: ((viewport?.offsetTop ?? 0) - bounds.top) / scaleY,
+        viewportWidth: (viewport?.width ?? width) / scaleX,
+        viewportHeight: (viewport?.height ?? height) / scaleY,
+        // Aim at the selected card/hit area, not the union with distant relations.
+        centerX: card.left + card.width / 2, centerY: card.top + card.height / 2,
+        regions: targetElement.isConnected
+          ? getMessageJumpRegions(targetElement, messageId ?? targetElement.dataset.msgid ?? '')
+            .map(region => ({ ...region, rect: localRect(region.rect) })) : [],
+      };
+      const previous = geometryRef.current;
+      if (next.width === previous.width && next.height === previous.height
+        && next.left === previous.left && next.top === previous.top
+        && next.viewportWidth === previous.viewportWidth && next.viewportHeight === previous.viewportHeight
+        && next.centerX === previous.centerX && next.centerY === previous.centerY
+        && next.regions.length === previous.regions.length
+        && next.regions.every(({ ids, rect }, index) => {
+          const before = previous.regions[index];
+          return ids === before.ids && rect.left === before.rect.left && rect.top === before.rect.top
+            && rect.width === before.rect.width && rect.height === before.rect.height;
+        })) return;
+      geometryRef.current = next;
+      setGeometry(next);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
     update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    observer?.observe(targetElement);
+    observer?.observe(layer);
+    const canvas = targetElement.closest('[data-jump-canvas]');
+    if (canvas) observer?.observe(canvas);
     window.addEventListener('scroll', schedule, true);
     window.addEventListener('resize', schedule);
+    const viewport = window.visualViewport;
+    viewport?.addEventListener('scroll', schedule);
+    viewport?.addEventListener('resize', schedule);
     return () => {
       cancelAnimationFrame(frame);
+      observer?.disconnect();
       window.removeEventListener('scroll', schedule, true);
       window.removeEventListener('resize', schedule);
+      viewport?.removeEventListener('scroll', schedule);
+      viewport?.removeEventListener('resize', schedule);
     };
   }, [messageId, targetElement, targetRect]);
 
   if (!targetElement.isConnected) return null;
 
   return createPortal((
-    <>
-    <svg width="0" height="0" aria-hidden="true" style={{ position: 'fixed', pointerEvents: 'none' }}>
-      <defs><mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width={viewportWidth} height={viewportHeight} style={{ maskType: 'luminance' }}>
-        <rect width={viewportWidth} height={viewportHeight} fill="white" />
-        {regions.map(({ rect, ids }, index) => <rect key={index} data-message-jump-region={ids}
-          x={rect.left} y={rect.top} width={rect.width} height={rect.height} fill="black" />)}
-      </mask></defs>
-    </svg>
-    <div
+    <svg
+      ref={overlayRef}
       aria-hidden="true"
       data-message-jump-overlay="true"
       data-message-jump-target={messageId ?? targetElement.getAttribute('data-msgid') ?? undefined}
+      width={geometry.width} height={geometry.height}
+      viewBox={`0 0 ${geometry.width} ${geometry.height}`}
       style={{
-        position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
-        width: '100dvw', height: '100dvh', minWidth: '100vw', minHeight: '100vh',
-        boxSizing: 'border-box', zIndex: Z_INDEX.popup,
-        background: 'rgba(0,0,0,0.42)',
-        pointerEvents: 'none',
-        // One cutout covers every part of the prompt, including guides and text.
-        // The original live message remains visible, even with translucent frames.
-        maskImage: `url(#${maskId})`,
-        WebkitMaskImage: `url(#${maskId})`,
+        position: 'fixed', left: 0, top: 0,
+        width: geometry.width, height: geometry.height,
+        zIndex: Z_INDEX.popup, overflow: 'hidden', pointerEvents: 'none',
       }}
     >
-      <div className="popup-guides" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
-        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
-          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`top-${index}`}
-            start={{ x: ratio * viewportWidth, y: GUIDE_EDGE_INSET }} end={targetCenter} />;
-        })}
-        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
-          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`bottom-${index}`}
-            start={{ x: ratio * viewportWidth, y: viewportHeight - GUIDE_EDGE_INSET }} end={targetCenter} />;
-        })}
-        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
-          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`left-${index}`}
-            start={{ x: GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
-        })}
-        {Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
-          const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
-          return <PulseGuide key={`right-${index}`}
-            start={{ x: viewportWidth - GUIDE_EDGE_INSET, y: ratio * viewportHeight }} end={targetCenter} />;
-        })}
-      </div>
-      <div style={{
-        position: 'fixed', left: '50%', top: 16, transform: 'translateX(-50%)',
-        zIndex: 2,
-        padding: '6px 12px', border: '1px solid rgba(250,204,21,0.7)', borderRadius: 4,
-        background: 'rgba(23,23,23,0.92)', color: '#fde68a', fontSize: 13, fontWeight: 600,
-        whiteSpace: 'nowrap', boxShadow: '0 2px 10px rgba(0,0,0,0.45)', pointerEvents: 'none',
-      }}>已定位目标消息</div>
-    </div>
-    </>
+      <defs><mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width={geometry.width} height={geometry.height} style={{ maskType: 'luminance' }}>
+        <rect width={geometry.width} height={geometry.height} fill="white" />
+        {geometry.regions.map(({ rect, ids }, index) => <rect key={index} data-message-jump-region={ids}
+          x={rect.left} y={rect.top} width={rect.width} height={rect.height} fill="black" />)}
+      </mask></defs>
+      {/* Keep the backdrop, guides, hint and openings in the same painted
+          viewport instead of mixing CSS viewport units with an SVG mask. */}
+      <g data-message-jump-layer="true" mask={`url(#${maskId})`}>
+        <rect data-message-jump-backdrop="true" width={geometry.width} height={geometry.height} fill="rgba(0,0,0,0.42)" />
+        <path className="popup-guides" fill="none" stroke="rgba(250,204,21,0.5)" strokeWidth="2" strokeDasharray="11 9" strokeLinecap="round"
+          d={Array.from({ length: EDGE_ARROW_COUNT }, (_, index) => {
+            const ratio = (index + 0.5) / EDGE_ARROW_COUNT;
+            return [
+              [geometry.left + ratio * geometry.viewportWidth, geometry.top + GUIDE_EDGE_INSET],
+              [geometry.left + ratio * geometry.viewportWidth, geometry.top + geometry.viewportHeight - GUIDE_EDGE_INSET],
+              [geometry.left + GUIDE_EDGE_INSET, geometry.top + ratio * geometry.viewportHeight],
+              [geometry.left + geometry.viewportWidth - GUIDE_EDGE_INSET, geometry.top + ratio * geometry.viewportHeight],
+            ].map(([x, y]) => `M${x},${y}L${geometry.centerX},${geometry.centerY}`).join(' ');
+          }).join(' ')} />
+        <g data-message-jump-hint="true" transform={`translate(${geometry.left + geometry.viewportWidth / 2},${geometry.top + 16})`}>
+          <rect x="-58" width="116" height="30" rx="4" fill="rgba(23,23,23,0.92)" stroke="rgba(250,204,21,0.7)" />
+          <text y="15" textAnchor="middle" dominantBaseline="central" fill="#fde68a" fontSize="13" fontWeight="600">已定位目标消息</text>
+        </g>
+      </g>
+    </svg>
   ), document.body);
 }
 

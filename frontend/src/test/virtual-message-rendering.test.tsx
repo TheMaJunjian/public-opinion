@@ -290,7 +290,8 @@ describe('viewport message rendering with measured browser geometry', () => {
     expect(host).toHaveTextContent('远处标注');
     expect(host.querySelector('[data-jump-visual-msgids~="tag"][title^="赞同"]')).not.toBeNull();
     expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).toBeNull();
-    expect(document.querySelector('[data-message-jump-overlay]')?.getAttribute('style')).toContain('mask-image');
+    const mask = document.querySelector('[data-message-jump-overlay] mask')!;
+    expect(document.querySelector('[data-message-jump-layer]')).toHaveAttribute('mask', `url(#${mask.id})`);
     overlay.unmount();
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
     expect(host.querySelector('[data-jump-msgids~="tag"]')).toBeNull();

@@ -35,7 +35,12 @@ function AppContent() {
     const updateVisibleHeight = () => {
       if (!appRootRef.current) return;
       const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
-      const visibleHeight = Math.max(layoutHeight, window.visualViewport?.height ?? 0);
+      const visualHeight = window.visualViewport?.height;
+      // clientHeight is rounded. A fractional excess can create a vertical
+      // scrollbar even when the page fits, especially with a horizontal bar.
+      // Keep the layout height as a fallback for pinch zoom and the keyboard.
+      const visibleHeight = visualHeight !== undefined && Math.abs(layoutHeight - visualHeight) < 1
+        ? visualHeight : Math.max(layoutHeight, visualHeight ?? 0);
       appRootRef.current.style.minHeight = `${visibleHeight / interfaceZoom}px`;
     };
     updateVisibleHeight();

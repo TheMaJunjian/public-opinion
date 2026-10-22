@@ -10,6 +10,7 @@ export function buildFrameBlocks(params: {
   keepEmptyFrameIds?: Set<string>;
   traceMode?: boolean;
   opaqueFrameIds?:ReadonlySet<string>;
+  cardFrameIds?:ReadonlySet<string>;
 }): FrameBlock[] {
   const { edges, visibleCardIds, msgMap, keepEmptyFrameIds = new Set<string>(), traceMode = false,opaqueFrameIds } = params;
   const grouped = new Map<string, DemoEdge[]>();
@@ -28,15 +29,19 @@ export function buildFrameBlocks(params: {
       || !(type.toUpperCase() in PRESENTATION_SPECS)&&declaration?.kind==='relation';
   };
   const blocks = new Map<string, FrameBlock>();
+  // A restored organization may have no effective membership edges left.
+  for (const id of keepEmptyFrameIds) if (!grouped.has(id) && msgMap.get(id)?.relationType) grouped.set(id, []);
   for (const [id, relations] of grouped) {
-    const type = relations[0]?.relationType;
+    const type = relations[0]?.relationType ?? msgMap.get(id)?.relationType;
     if (!type || !isFrame(type, id)) continue;
     const cardIds = new Set<string>();
-    const source = relations[0].from.messageId;
-    if (source !== id && visibleCardIds.has(source)) cardIds.add(source);
+    const source = relations[0]?.from.messageId;
+    if (source && source !== id && visibleCardIds.has(source)) cardIds.add(source);
     for (const relation of relations) {
       const target = relation.to.messageId;
-      if (target !== id && (visibleCardIds.has(target) || isFrame(grouped.get(target)?.[0]?.relationType ?? 'REPLY', target))) cardIds.add(target);
+      const targetType = grouped.get(target)?.[0]?.relationType
+        ?? (keepEmptyFrameIds.has(target) ? msgMap.get(target)?.relationType : undefined);
+      if (target !== id && (visibleCardIds.has(target) || isFrame(targetType ?? 'REPLY', target))) cardIds.add(target);
     }
     if (!cardIds.size && !keepEmptyFrameIds.has(id)) continue;
     const message = msgMap.get(id);
@@ -45,7 +50,8 @@ export function buildFrameBlocks(params: {
       ? display.layout === 'row' ? 'single-row' : display.layout === 'columns' ? 'multi-column' : 'single-column'
       : message?.relationPayload?.targetLayout;
     blocks.set(id, { relMsgId: id, cardIds, directCardIds: new Set(), childRelMsgIds: [],
-      isMerge: type === 'merge', hasGroupHeader: type === 'classify' || type === 'summary', targetLayout });
+      isMerge: type === 'merge', hasCardHeader: type === 'merge' || type === 'arrange' && !!params.cardFrameIds?.has(id),
+      hasGroupHeader: type === 'classify' || type === 'summary', targetLayout });
   }
   const parent = new Map<string, string>();
   const attach = (child: string, owner: string) => {

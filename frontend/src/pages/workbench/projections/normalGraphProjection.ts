@@ -25,14 +25,14 @@ interface DeriveNormalGraphProjectionInput {
 
 export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionInput): { messages: DemoMessage[]; scopedMessages: DemoMessage[]; edges: DemoEdge[]; } {
   const { graphMessagesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, messages, displayUser, graphEdgesToRender, relations, effectiveJoinRelationIds } = input;
-  const scopedCorrectedMessages = graphMessagesToRender.map(message => {
-    const correction = correctionVersions.get(message.id)?.current;
-    return correction ? withCorrectionContent(message, correction.content) : message;
+  const corrected = graphMessagesToRender.map(message => {
+    const version = correctionVersions.get(message.id)?.current;
+    return version ? withCorrectionContent(message, version.content, version.changes) : message;
   });
   const scopedCleanMessages = cleanVisibleIds
-    ? scopedCorrectedMessages.filter(message =>
+    ? corrected.filter(message =>
       cleanVisibleIds.visibleTextIds.has(message.id) || cleanVisibleIds.visibleRelIds.has(message.id))
-    : scopedCorrectedMessages;
+    : corrected;
   const homeScopedMessages = homeFilterResult
     ? scopedCleanMessages.filter(message => homeFilterResult.displayIds.has(message.id))
     : scopedCleanMessages;
@@ -62,6 +62,6 @@ export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionIn
   return {
     messages: filteredMessages,
     scopedMessages,
-    edges: homeEdges.filter(edge => !suppressedRelIds.has(edge.relationMessageId)),
+    edges: homeEdges.filter(edge => edge.relationType === 'correct' || !suppressedRelIds.has(edge.relationMessageId)),
   };
 }

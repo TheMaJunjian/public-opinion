@@ -2,7 +2,7 @@ import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
 import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import { getJoinStatusPresentation, type JoinStatus } from '../pages/workbench/model/membership';
@@ -13,7 +13,7 @@ import { useCardMeasurements } from '../hooks/useCardMeasurements';
 import { useVirtualMessageMounts } from '../hooks/useVirtualMessageMounts';
 import { intersectsViewport } from '../hooks/useCanvasViewport';
 import { createMessageJumpGroups, registerMessageJumpGroups } from '../utils/messageJumpDisplay';
-import { getMessageProminence, getOrganizationTitle, needsSeparateStanceCard } from '../utils/messageDisplay';
+import { getMessageProminence, getOrganizationTitle, isBodyCorrection, needsSeparateStanceCard } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
 import MessageTextPart from './MessageTextPart';
 import { describeUnit } from '../utils/selectionLabel';
@@ -21,6 +21,7 @@ import { PART_SELECTION_EVENT, isMessageElementSelected, isWholeMessageSelection
 import MessageElement from './MessageElement';
 import ClassificationCard from './graph/ClassificationCard';
 import OrganizationFrameHeader from './graph/OrganizationFrameHeader';
+import { MessageDisplayMarker, MessageDisplayHintsScope } from './MessageDisplayHints';
 import MessageSettlementActions from './MessageSettlementActions';
 import SettlementPanel from './SettlementPanel';
 import RoundHistory from './RoundHistory';
@@ -114,6 +115,7 @@ export interface GraphViewProps {
   comparisonSingle?: boolean;
   comparisonScopeHeader?: React.ReactNode;
   comparisonTargetId?: string | null;
+  excludedStanceEdges?: ReadonlySet<string>;
   comparisonDisplay?: 'agree' | 'disagree';
   comparisonRecommendedDisplay?: 'agree' | 'disagree';
   comparisonAgreeMessages?: DemoMessage[];
@@ -442,12 +444,29 @@ function GraphViewCanvas(props: GraphViewProps) {
   const contentRefs = useRef<Record<string,HTMLDivElement|null>>({});
   const headerRefs = useRef<Record<string,HTMLDivElement|null>>({});
   const textRefs = useRef<Record<string,SVGTextElement|null>>({});
+  const [expandedFrameIds, setExpandedFrameIds] = useState<string[]>([]);
+  const [revealedFrameIds, setRevealedFrameIds] = useState<string[]>([]);
+  const cardFrameIds = useMemo(() => new Set([...expandedFrameIds, ...revealedFrameIds,
+    ...(props.comparisonDisplay&&props.comparisonTargetId?[props.comparisonTargetId]:[])]), [expandedFrameIds, revealedFrameIds,props.comparisonDisplay,props.comparisonTargetId]);
+  const resolveRevealIds = useCallback((ids: string[]) => {
+    const targets = new Set(ids);
+    for (const edge of edges) {
+      if ((edge.relationType === 'agree' || edge.relationType === 'disagree') && targets.has(edge.relationMessageId)) {
+        targets.add(edge.to.messageId);
+      }
+    }
+    const frames = messages.filter(message => message.relationType === 'arrange' && targets.has(message.id)).map(message => message.id);
+    setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
+    // Mount the temporary card as well as the requested badge, including when
+    // navigation starts outside the viewport. Clearing the pulse collapses it.
+    return [...ids, ...frames];
+  }, [messages, edges]);
 
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
     layoutEdges, hiddenTargetIds, correctionsByTargetMsgId, frameBlocks, frameDepthMap,
     correctedEdgeIdsByRelMsg, pipelineCol, pipelineMaxCol } = useMemo(() => projectGraphScene({
-      messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,hiddenMessageIds:effectiveHideMessageIds,
-    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.standaloneMessageIds,props.rejectedContainerIds,props.hideMessageIds,comparisonSuppressedRelIds]);
+      messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds:props.standaloneMessageIds,rejectedContainerIds:props.rejectedContainerIds,hiddenMessageIds:effectiveHideMessageIds,cardFrameIds,
+    }), [messages, edges, traceExpandedFrameIds, isTraceWindow,props.standaloneMessageIds,props.rejectedContainerIds,props.hideMessageIds,comparisonSuppressedRelIds,cardFrameIds]);
 
   const measuredHeights = useCardMeasurements(canvasRef, cardRefs);
   useWorkbenchDrawingCommit();
@@ -526,7 +545,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const visibleEdges = useMemo(() => props.visibleEdgeIds ? edges.filter(edge => props.visibleEdgeIds!.has(edge.id)) : edges, [edges, props.visibleEdgeIds]);
   const measuredIds = useMemo(() => {
     const frameIds = new Set(visibleEdges.map(edge => edge.relationMessageId));
-    return [...visibleNormals.map(message => message.id), ...frameBlocks.filter(frame => (frame.isMerge || frame.hasGroupHeader)
+    return [...visibleNormals.map(message => message.id), ...frameBlocks.filter(frame => (frame.isMerge || frame.hasCardHeader || frame.hasGroupHeader)
       && (!props.visibleMessageIds || props.visibleMessageIds.has(frame.relMsgId) || frameIds.has(frame.relMsgId))).map(frame => frame.relMsgId)];
   }, [visibleNormals, visibleEdges, frameBlocks, props.visibleMessageIds]);
   const virtualBoxes = useMemo(() => {
@@ -534,7 +553,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     for (const frame of frameBlocks) {
       const rect = finalFrameRects[frame.relMsgId];
       if (!rect) continue;
-      if (frame.isMerge) boxes[frame.relMsgId] = { ...getMergeCardHeaderRect(rect), height: measuredHeights[frame.relMsgId] ?? MERGE_CARD_H };
+      if (frame.isMerge || frame.hasCardHeader) boxes[frame.relMsgId] = { ...getMergeCardHeaderRect(rect), height: measuredHeights[frame.relMsgId] ?? MERGE_CARD_H };
       else if (frame.hasGroupHeader) boxes[frame.relMsgId] = getGroupHeaderRect(rect, getGroupHeaderHeight(measuredHeights, frame.relMsgId));
     }
     return boxes;
@@ -546,7 +565,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   useLayoutEffect(() => {
     if (canvasRef.current) return registerMessageJumpGroups(canvasRef.current, revealGroups);
   }, [revealGroups]);
-  const virtual = useVirtualMessageMounts(canvasRef, measuredIds, virtualBoxes, measuredHeights, virtualPins, false, revealGroups);
+  const virtual = useVirtualMessageMounts(canvasRef, measuredIds, virtualBoxes, measuredHeights, virtualPins, false, revealGroups, resolveRevealIds);
   const mountedNormals = useMemo(() => visibleNormals.filter(message => virtual.mounted.has(message.id)), [visibleNormals, virtual.mounted]);
   const visibleBottom = useMemo(() => {
     let bottom = 0;
@@ -573,7 +592,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const anonCorrectedRelMsgIds = useMemo(() => {
     const ids = new Set<string>();
     for (const e of edges) {
-      if (e.relationType === 'correct' && !e.proposalOnly && e.from.messageId.startsWith('anon:')) {
+      if (e.relationType === 'correct' && !e.proposalOnly && !isBodyCorrection(e, msgMap) && e.from.messageId.startsWith('anon:')) {
         if (msgMap.get(e.to.messageId)?.kind === 'relation') {
           ids.add(e.to.messageId);
         }
@@ -583,6 +602,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [edges, msgMap]);
 
   const overlays = useGraphOverlays({
+    excludedStanceEdges:props.excludedStanceEdges,
     pendingMeasurements: virtual.pending,
     labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
@@ -649,10 +669,8 @@ function GraphViewCanvas(props: GraphViewProps) {
   ]), [draftUnits, lastClickedMessageId]);
 
   useLayoutEffect(() => {
-    if (!SHOW_SELECTED_ACTUAL_RECTS) {
-      setSelectedActualRects(prev => Object.keys(prev).length === 0 ? prev : {});
-      return;
-    }
+    // Disabled debug geometry must not enqueue state updates during drawing.
+    if (!SHOW_SELECTED_ACTUAL_RECTS) return;
     const canvasEl = canvasRef.current;
     if (!canvasEl) return;
     const canvasRect = canvasEl.getBoundingClientRect();
@@ -705,7 +723,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   const correctedRelMsgTargets = useMemo(() => {
     const map = new Map<string, Array<{corrRelMsgId: string; srcMsgId: string}>>();
     for (const e of edges) {
-      if (e.relationType !== 'correct') continue;
+      if (e.relationType !== 'correct' || isBodyCorrection(e, msgMap)) continue;
       const targetId = e.to.messageId;
       if (msgMap.get(targetId)?.kind !== 'relation') continue;
       const arr = map.get(targetId) ?? [];
@@ -783,6 +801,22 @@ function GraphViewCanvas(props: GraphViewProps) {
     return <pre style={{margin:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"Menlo,Monaco,Consolas,'Courier New',monospace",fontSize}}>{nodes}</pre>;
   }
 
+  function renderCorrectionRecords(messageId: string) {
+    const records = [...new Set((correctionsByTargetMsgId.get(messageId) ?? []).map(record => record.relMsgId))];
+    if (!records.length) return null;
+    const latest = records[records.length - 1];
+    const active = records.filter(id => !invalidCorrectionIds?.has(id)).length;
+    return <span style={{display:'inline-flex',alignItems:'center'}}><span data-msgid={latest} data-jump-msgids={records.join(' ')} data-rel-overlay="true"
+      title={`更正关系：${latest}；共${records.length}次更正，单击选中，双击查看历史`}
+      onClick={event => { event.stopPropagation(); onInlineBadgeClick?.(event, latest); }}
+      onDoubleClick={event => { event.stopPropagation(); onInlineBadgeDoubleClick?.(event, latest); }}
+      style={{background:isRelWholeSel(latest)?'#fbbf24':'rgba(170,110,0,0.9)',color:isRelWholeSel(latest)?'#111827':'#fff',
+        borderRadius:3,fontSize:9,padding:'0 4px',fontWeight:600,cursor:'pointer',pointerEvents:'auto',
+        whiteSpace:'nowrap',userSelect:'none',opacity:active ? 1 : 0.45}}>
+      ✏更正 {active}/{records.length}
+    </span><MessageDisplayMarker messageId={messageId} scope="corrections" /></span>;
+  }
+
   const homeRoleLabel = (messageId: string) => {
     if (props.homeMatchIds?.has(messageId)) return '命中';
     const role = props.homeContextRoleByMessageId?.get(messageId);
@@ -830,6 +864,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             const isActive = lastClickedMessageId === msg.id;
             const isClassificationStanceTarget = stanceHighlight?.stanceMsgId === msg.id;
             return <ClassificationCard key={msg.id} msg={msg} selectedUnits={draftUnits} box={box} targetCount={targetCount} title={classificationTitle}
+              correctionRecords={renderCorrectionRecords(msg.id)}
               activeText={activeTextSelectId === msg.id} isWhole={isWhole} isActive={isActive} isStanceTarget={isClassificationStanceTarget}
               homeLabel={homeRoleLabel(msg.id)} stakes={stakeCounts?.[msg.id]}
               relatedJoinRelations={relatedJoinRelations} outgoingJoinRelations={outgoingJoinRelations}
@@ -937,6 +972,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                       {correctionBadgeLabel}
                     </div>
                   )}
+                  {msg.kind!=="normal" && correctionBadge && <MessageDisplayMarker messageId={msg.id} scope="corrections" />}
                   {homeRoleLabel(msg.id) && <span style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:homeRoleLabel(msg.id)==='命中'?"#0e7490":"#374151",color:homeRoleLabel(msg.id)==='命中'?"#cffafe":"#d1d5db"}}>{homeRoleLabel(msg.id)}</span>}
                   {kindMeta && (
                     <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(draftUnits, messageTypeReference(msg))} label={kindMeta.label} style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:isWhole?"#fbbf24":`${kindMeta.color}22`,color:isWhole?"#111827":kindMeta.color,lineHeight:"16px",border:isWhole?"1px solid #fbbf24":`1px solid ${kindMeta.color}44`}}>
@@ -967,6 +1003,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                               whiteSpace:"nowrap",userSelect:"none",flexShrink:0,opacity:correctionBadgeOpacity}}>
                             {correctionBadgeLabel}
                           </div>
+                          <MessageDisplayMarker messageId={msg.id} scope="corrections" />
                           {corrDec && corrDec.agreeCount>0 && (
                             <div data-rel-overlay="true"
                               onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,b.relMsgId,"agree");}}
@@ -995,6 +1032,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   </div>
                 )}
                 <div style={{flex:1,display:"flex",justifyContent:"flex-end",flexDirection:"column",alignItems:"flex-end"}}>
+                  <span style={{display:'inline-flex',alignItems:'center'}}>
                   {msg.kind === "join" && onNavigateToMessage ? (
                     <span
                       data-rel-overlay="true"
@@ -1005,6 +1043,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                   ) : (
                     <span style={{opacity:0.7}}>{msg.id}</span>
                   )}
+                  <MessageDisplayMarker messageId={msg.id} />
+                  </span>
                   <MessageSettlementActions messageId={msg.id} counts={stakeCounts?.[msg.id]}
                     openMessageId={settlementOpenMsgId} openType={settlementOpenType}
                     onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />
@@ -1501,6 +1541,7 @@ function GraphViewCanvas(props: GraphViewProps) {
         const stripBase: React.CSSProperties={position:"absolute",zIndex:frameZ,cursor:"pointer",pointerEvents:"auto",background:"transparent"};
         const title=`排列关系：${sf.relMsgId}；单击选中，双击展开详情`;
         const sfCorrInfo=correctedRelMsgTargets.get(sf.relMsgId);
+        const cardHeaderRect = getMergeCardHeaderRect(sf.rect);
         return (
           <React.Fragment key={`supp-hit-${sf.relMsgId}`}>
             {/* Border strips — omitted when blank-corrected (no visible frame border) */}
@@ -1518,9 +1559,42 @@ function GraphViewCanvas(props: GraphViewProps) {
               <div data-msgid={sf.relMsgId} data-rel-overlay="true" onClick={handleClick} onDoubleClick={handleDblClick} title={title}
                 style={{...stripBase,left:x+width-HH,top:y+HH,width:HH*2,height:height-HH*2}}/>
             </>}
-            {(onJoinFilterClick || relatedConnections?.has(sf.relMsgId)) && <div data-msgid={sf.relMsgId} data-rel-overlay="true"
-              style={{position:'absolute',left:x+(sfCorrInfo?100:8),top:y-HH+1,zIndex:frameZ+1,pointerEvents:'auto',background:'#101010'}}>
-              {renderJoinRecords(sf.relMsgId,true,true)}
+            {!sf.isBlankCorrected && <button type="button" data-arrange-card-toggle={sf.relMsgId}
+              aria-label={`${cardFrameIds.has(sf.relMsgId) ? '收起' : '显示'}排列消息卡 ${sf.relMsgId}`}
+              aria-expanded={cardFrameIds.has(sf.relMsgId)} title={`${cardFrameIds.has(sf.relMsgId) ? '收起' : '显示'}排列消息卡`}
+              onMouseDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+              onClick={event => { event.stopPropagation(); setExpandedFrameIds(previous => previous.includes(sf.relMsgId)
+                ? previous.filter(id => id !== sf.relMsgId) : [...previous, sf.relMsgId]); }}
+              style={{position:'absolute',left:x+(sfCorrInfo?100:8),top:y-HH+1,zIndex:frameZ+2,
+                height:16,padding:'0 6px',border:'1px solid rgba(167,139,250,0.4)',borderRadius:4,
+                background:'#171324',color:'#c4b5fd',fontSize:10,cursor:'pointer',pointerEvents:'auto'}}>
+              {cardFrameIds.has(sf.relMsgId) ? '▾' : '▸'}
+            </button>}
+            {!cardFrameIds.has(sf.relMsgId) && <div data-rel-overlay="true"
+              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'#101010'}}>
+              <MessageDisplayMarker messageId={sf.relMsgId} />
+            </div>}
+            {!cardFrameIds.has(sf.relMsgId) && relatedConnections?.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true"
+              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+50,top:y-HH+1,zIndex:frameZ+1,pointerEvents:'auto',background:'#101010'}}>
+              {renderRelatedConnections(sf.relMsgId)}
+            </div>}
+            {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true"
+              data-measure-min-height={MERGE_CARD_H} ref={el => { cardRefs.current[sf.relMsgId] = el; }}
+              role="group" tabIndex={0} aria-label={`组织消息 ${sf.relMsgId}`} aria-keyshortcuts="Enter Space Shift+Enter"
+              onKeyDown={activateMessageFromKeyboard} onClick={handleClick} onDoubleClick={handleDblClick} title={title}
+              style={{ position: 'absolute', left: cardHeaderRect.x, top: cardHeaderRect.y, width: cardHeaderRect.width, minHeight: cardHeaderRect.height,
+                zIndex: frameZ + 1, cursor: 'pointer', pointerEvents: 'auto', userSelect: 'none', boxSizing: 'border-box',
+                color: '#f5f5f5', borderRadius: 6, padding: '4px 10px',
+                background: isRelWholeSel(sf.relMsgId) ? 'rgba(91,65,0,0.55)' : '#1f1f1f',
+                border: isRelWholeSel(sf.relMsgId) ? '2px solid #fbbf24' : lastClickedMessageId === sf.relMsgId ? '1px solid rgba(56,189,248,0.8)' : '1px solid #444',
+                outline: lastClickedMessageId === sf.relMsgId ? '1px dashed #0b84ff' : 'none',
+                boxShadow: '0 6px 14px rgba(0,0,0,0.35)' }}>
+              <OrganizationFrameHeader message={msgMap.get(sf.relMsgId)} messageId={sf.relMsgId} kind="arrange"
+                joinBadges={renderJoinRecords(sf.relMsgId,true,true)}
+                memberCount={new Set((edgesByRelMsg.get(sf.relMsgId) ?? []).filter(edge => !edge.to.messageId.startsWith('anon:')).map(edge => edge.to.messageId)).size}
+                selectedUnits={draftUnits} activeText={activeTextSelectId === sf.relMsgId} onTextMouseUp={onTextMouseUp}
+                counts={stakeCounts?.[sf.relMsgId]} openMessageId={settlementOpenMsgId} openType={settlementOpenType}
+                onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />
               {renderRelatedConnections(sf.relMsgId)}
             </div>}
             {/* Correction badge — embedded in frame top border when this arrange is a CORRECT target */}
@@ -1650,6 +1724,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                   boxSizing: "border-box",
                 }}>
                 <OrganizationFrameHeader message={msgMap.get(gf.relMsgId)} messageId={gf.relMsgId} kind={gf.relType} joinBadges={renderJoinRecords(gf.relMsgId,true,true)}
+                  correctionRecords={renderCorrectionRecords(gf.relMsgId)}
                   memberCount={new Set((edgesByRelMsg.get(gf.relMsgId) ?? []).filter(edge => !edge.to.messageId.startsWith('anon:')).map(edge => edge.to.messageId)).size}
                   selectedUnits={draftUnits} activeText={activeTextSelectId === gf.relMsgId} onTextMouseUp={onTextMouseUp}
                   counts={stakeCounts?.[gf.relMsgId]} openMessageId={settlementOpenMsgId} openType={settlementOpenType}
@@ -1670,8 +1745,8 @@ function GraphViewCanvas(props: GraphViewProps) {
         const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
         let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[];
-        // Phase 6: ⚖️ settlement entry at top-right of arrange frame
-        if (onSettlementToggleTruth) {
+        // Shown cards keep an arbitration entry even when offscreen.
+        if (onSettlementToggleTruth && cardFrameIds.has(sf.relMsgId) && !virtual.mounted.has(sf.relMsgId)) {
           const sc = stakeCounts?.[sf.relMsgId];
           const truthPro = sc?.truth.pro ?? 0;
           const truthCon = sc?.truth.con ?? 0;
@@ -1702,6 +1777,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           sfDecTop += DEC_H + DEC_GAP;
         }
         for (const kind of ["agree","disagree"] as const) {
+          if (!cardFrameIds.has(sf.relMsgId)) continue;
           const count=kind==="agree"?sf.relAgreeCount:sf.relDisagreeCount;
           if (count<=0) continue;
           const isSelected=isDecorationSelected(sf.relMsgId,kind);
@@ -1709,7 +1785,8 @@ function GraphViewCanvas(props: GraphViewProps) {
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
           nodes.push(
-            <div key={`sf-${kind}-${sf.relMsgId}`} data-jump-visual-msgids={sf.relMsgId} data-rel-overlay="true"
+            <div key={`sf-${kind}-${sf.relMsgId}`} data-msgid={sf.relMsgId}
+              data-jump-msgids={(kind === 'agree' ? sf.relAgreeMsgIds : sf.relDisagreeMsgIds).join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
@@ -1985,7 +2062,7 @@ function GraphViewCanvas(props: GraphViewProps) {
 }
 
 export default function GraphView(props: GraphViewProps) {
-  return props.comparisonPair
+  const content=props.comparisonPair
     ? <ComparisonGraphPair {...props} />
     : props.comparisonSingle && props.comparisonDisplay
       ? <ComparisonPane side={props.comparisonDisplay}>
@@ -1993,5 +2070,7 @@ export default function GraphView(props: GraphViewProps) {
           <div data-comparison-viewport={props.comparisonDisplay} style={{ minWidth: 0, minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}><GraphViewCanvas {...props} /></div>
         </ComparisonPane>
       : <GraphViewCanvas {...props} />;
+  return props.comparisonDisplay&&!props.comparisonSingle
+    ?<MessageDisplayHintsScope messageId={props.comparisonTargetId} side={props.comparisonDisplay}>{content}</MessageDisplayHintsScope>:content;
 }
 

@@ -14,10 +14,11 @@ export interface GraphProjectionInput {
   standaloneMessageIds?:ReadonlySet<string>;
   rejectedContainerIds?:ReadonlySet<string>;
   hiddenMessageIds?:ReadonlySet<string>;
+  cardFrameIds?:ReadonlySet<string>;
 }
 
 /** Derive visible cards, organization ownership and relative columns without DOM or UI state. */
-export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds,rejectedContainerIds,hiddenMessageIds }: GraphProjectionInput) {
+export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds,rejectedContainerIds,hiddenMessageIds,cardFrameIds }: GraphProjectionInput) {
   const msgMap = new Map(messages.map(message => [message.id, message]));
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
   const tagSources = new Set<string>();
@@ -73,9 +74,16 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
   const reply = applyReplyLayoutAdjustmentsWithConstraints({ normals, edges: layoutEdges, baseCol: base.col, baseMaxCol: base.maxCol, relIds });
   const stance = applyAgreeDisagreeColumnOverride({ normals, edges: layoutEdges, ...reply });
   const columns = applyGroupingColumnOverride({ normals, edges: layoutEdges, ...stance });
+  const keepEmptyFrameIds = new Set(traceExpandedFrameIds);
+  for (const message of messages) {
+    if (['merge', 'arrange'].includes(message.relationType ?? '') && !isRejectedContainer(message, rejectedContainerIds)
+      && !hiddenMessageIds?.has(message.id) && !hiddenTargetIds.has(message.id)
+      && !(edgesByRelMsg.get(message.id) ?? []).some(edge => edge.relationType === message.relationType
+        && hasActiveDisplayEffect(edge, msgMap))) keepEmptyFrameIds.add(message.id);
+  }
   const frameBlocks = buildFrameBlocks({ edges:edges.filter(edge=>!hiddenMessageIds?.has(edge.relationMessageId)), visibleCardIds: new Set(normalIds), msgMap,
     opaqueFrameIds:new Set([...classifyRelMsgIds,...summaryRelMsgIds].filter(id=>!isTraceWindow||!traceExpandedFrameIds.has(id))),
-    keepEmptyFrameIds: traceExpandedFrameIds, traceMode: isTraceWindow }).filter(block =>
+    keepEmptyFrameIds, cardFrameIds, traceMode: isTraceWindow }).filter(block =>
     !['classify', 'summary'].includes(msgMap.get(block.relMsgId)?.relationType ?? '')
     || isTraceWindow && traceExpandedFrameIds.has(block.relMsgId));
   const blocksById = new Map(frameBlocks.map(block => [block.relMsgId, block]));

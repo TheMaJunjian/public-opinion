@@ -1,4 +1,4 @@
-import { fireEvent, render, within } from '@testing-library/react';
+import { act, fireEvent, render, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import GraphView, { type GraphViewProps } from '../components/GraphView';
 import { projectGraphScene } from '../utils/graphProjection';
@@ -7,6 +7,8 @@ import MessageCard from '../components/MessageCard';
 import { GRID_TOP } from '../utils/layout';
 import type { Relation } from '../types';
 import { planMessageStructures } from '../utils/messageStructurePlan';
+import { findMessageElements } from '../pages/workbench/actions/scrollNavigation';
+import { REVEAL_VIRTUAL_MESSAGE } from '../hooks/useVirtualMessageMounts';
 
 const message = (id: string): DemoMessage => ({ id, author: 'tester', content: id, kind: 'normal', createdAt: '2026-01-01T00:00:00Z' });
 const relation = (id: string, type: DemoEdge['relationType'], source: string, target: string): DemoEdge => ({
@@ -24,6 +26,155 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it.each([false, true])('keeps arrangement controls visible independently of selection and restores their state after a pulse (empty=%s)', empty => {
+    const frame: DemoMessage = { ...message('arrange'), kind: 'relation', relationType: 'arrange' };
+    const join: Relation = { id: 'join', relationType: 'JOIN', sourceMessageId: 'parent',
+      targetRefs: [{ kind: 'message', messageId: frame.id }], createdAt: '', createdBy: { id: 'u', username: 'tester', createdAt: '' } };
+    const props: GraphViewProps = {
+      messages: [frame, ...(!empty ? [message('member')] : []), ...(['agree', 'disagree'] as const).map(kind =>
+        ({ ...message(kind), kind: 'relation' as const, relationType: kind }))],
+      edges: [...(!empty ? [relation(frame.id, 'arrange', `anon:${frame.id}`, 'member')] : []),
+        relation('agree', 'agree', 'anon:agree', frame.id), relation('disagree', 'disagree', 'anon:disagree', frame.id)],
+      draftUnits: [], activeTextSelectId: null, lastClickedMessageId: null, voteStats: {},
+      joinRelationsByTarget: new Map([[frame.id, [join]]]), onJoinFilterClick: vi.fn(),
+      onMessageClick: vi.fn(), onMessageDoubleClick: vi.fn(), onTextMouseUp: vi.fn(),
+      onSettlementToggleTruth: vi.fn(), onSettlementToggleValue: vi.fn(),
+      onEdgeLabelSingleClick: vi.fn(), onEdgeLabelDoubleClick: vi.fn(), onFragmentAnchorClick: vi.fn(), isFragmentSelected: () => false,
+    };
+    const view = render(<GraphView {...props} />);
+    const assertCollapsed = () => {
+      expect(view.queryByRole('group', { name: '组织消息 arrange' })).toBeNull();
+      expect(view.queryByRole('button', { name: '查看加入消息（1条）' })).toBeNull();
+      expect(view.container.querySelector('[data-guide-settlement-entry][data-guide-target-message="arrange"]')).toBeNull();
+      expect(view.queryByTitle(/^赞同：/)).toBeNull();
+      expect(view.queryByTitle(/^反对：/)).toBeNull();
+      for (const stance of ['agree', 'disagree']) {
+        expect(findMessageElements(view.container, stance)).toHaveLength(0);
+      }
+    };
+    assertCollapsed();
+    view.rerender(<GraphView {...props} draftUnits={[{ messageId: frame.id, selection: { kind: 'whole' } }]} />);
+    assertCollapsed();
+    fireEvent.click(view.getByRole('button', { name: '显示排列消息卡 arrange' }));
+    const header = view.getByRole('group', { name: '组织消息 arrange' });
+    expect(within(header).getByRole('button', { name: '查看加入消息（1条）' })).toBeInTheDocument();
+    expect(within(header).getByTitle('真假仲裁')).toBeInTheDocument();
+    expect(within(header).getByTitle('价值仲裁')).toBeInTheDocument();
+    expect(findMessageElements(view.container, 'agree')).toEqual([view.getByTitle(/^赞同：/)]);
+    expect(findMessageElements(view.container, 'disagree')).toEqual([view.getByTitle(/^反对：/)]);
+    view.rerender(<GraphView {...props} draftUnits={[{ messageId: 'agree', selection: { kind: 'whole' } }]} />);
+    expect(view.getByRole('group', { name: '组织消息 arrange' })).toBeInTheDocument();
+    expect(findMessageElements(view.container, 'agree')).toHaveLength(1);
+    view.rerender(<GraphView {...props} />);
+    expect(view.getByRole('group', { name: '组织消息 arrange' })).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: '收起排列消息卡 arrange' }));
+    assertCollapsed();
+    const canvas = view.container.querySelector('[data-jump-canvas]')!;
+    act(() => { canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['agree'] } })); });
+    expect(view.getByRole('group', { name: '组织消息 arrange' })).toBeInTheDocument();
+    expect(findMessageElements(view.container, 'agree')).toEqual([view.getByTitle(/^赞同：/)]);
+    expect(props.onMessageClick).not.toHaveBeenCalled();
+    act(() => { canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
+    assertCollapsed();
+    fireEvent.click(view.getByRole('button', { name: '显示排列消息卡 arrange' }));
+    act(() => { canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['agree'] } })); });
+    act(() => { canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: [] } })); });
+    expect(view.getByRole('group', { name: '组织消息 arrange' })).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it.each((['single-row', 'single-column'] as const).flatMap(targetLayout => [false, true].map(empty => ({ targetLayout, empty }))))(
+    'toggles the arrangement card without changing frame selection ($targetLayout, empty=$empty)', ({ targetLayout, empty }) => {
+    const frame: DemoMessage = { ...message('arrange'), kind: 'relation', relationType: 'arrange',
+      relationPayload: { title: '排列消息卡', targetLayout }, parts: [{ id: 'relation', type: 'relation', relation: 'arrange', roles: {} }] };
+    const props: GraphViewProps = { messages: empty ? [frame] : [frame, message('a'), message('b')],
+      edges: empty ? [] : ['a', 'b'].map(id => ({ ...relation(frame.id, 'arrange', `anon:${frame.id}`, id), id })),
+      draftUnits: [], activeTextSelectId: null, lastClickedMessageId: frame.id, voteStats: {},
+      onMessageClick: vi.fn(), onMessageDoubleClick: vi.fn(), onTextMouseUp: vi.fn(), onSettlementToggleTruth: vi.fn(),
+      onEdgeLabelSingleClick: vi.fn(), onEdgeLabelDoubleClick: vi.fn(), onFragmentAnchorClick: vi.fn(), isFragmentSelected: () => false };
+    const view = render(<GraphView {...props} />);
+    const card = () => view.queryByRole('group', { name: `组织消息 ${frame.id}` });
+    const memberTop = () => view.container.querySelector<HTMLElement>('[data-msgid="a"]')?.style.top;
+    const before = memberTop();
+    expect(card()).toBeNull();
+    const border = view.container.querySelector(`div[data-msgid="${frame.id}"]`)!;
+    expect(border).not.toBeNull();
+    fireEvent.click(border);
+    expect(props.onMessageClick).toHaveBeenCalledWith(expect.anything(), frame.id);
+    view.rerender(<GraphView {...props} draftUnits={[{ messageId: frame.id, selection: { kind: 'whole' } }]} />);
+    expect(card()).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: '显示排列消息卡 arrange' }));
+    expect(props.onMessageClick).toHaveBeenCalledTimes(1);
+    expect(card()).toHaveTextContent('排列消息卡');
+    expect(card()).toHaveTextContent(`💬${empty ? 0 : 2}`);
+    if (!empty) {
+      expect(parseFloat(memberTop()!)).toBeGreaterThan(parseFloat(before!));
+      const a = view.container.querySelector<HTMLElement>('[data-msgid="a"]')!, b = view.container.querySelector<HTMLElement>('[data-msgid="b"]')!;
+      if (targetLayout === 'single-row') expect(a.style.top).toBe(b.style.top);
+      else expect(a.style.left).toBe(b.style.left);
+    }
+    view.rerender(<GraphView {...props} draftUnits={[{ messageId: frame.id, selection: { kind: 'whole' },
+      reference: { messageId: frame.id, partId: 'relation', path: ['roles', 'members'] } }]} />);
+    expect(card()).not.toBeNull();
+    fireEvent.click(view.getByRole('button', { name: '收起排列消息卡 arrange' }));
+    expect(card()).toBeNull();
+    expect(memberTop()).toBe(before);
+    expect(view.container.querySelector(`rect[data-jump-visual-msgids="${frame.id}"]`)).not.toBeNull();
+    view.unmount();
+  });
+
+  it.each((['merge', 'arrange'] as const).flatMap(type => [false, true].map(nested => ({ type, nested }))))(
+    'renders an empty $type with its controls and keeps it inside its parent frame (nested=$nested)', ({ type, nested }) => {
+    const merge: DemoMessage = { ...message('empty-frame'), kind: 'relation', relationType: type,
+      relationPayload: { title: '原组织' }, parts: [{ id: 'relation', type: 'relation', relation: type, roles: {} }] };
+    const outer: DemoMessage = { ...message('outer'), kind: 'relation', relationType: 'arrange' };
+    const messages = nested ? [outer, merge] : [merge];
+    const edges = nested ? [relation('outer', 'arrange', 'anon:outer', merge.id)] : [];
+    const scene = projectGraphScene({ messages, edges, isTraceWindow: false, traceExpandedFrameIds: new Set() });
+    expect(scene.frameBlocks.find(frame => frame.relMsgId === merge.id)?.directCardIds).toEqual(new Set());
+    if (nested) expect(scene.frameBlocks.find(frame => frame.relMsgId === outer.id)?.childRelMsgIds).toEqual([merge.id]);
+    const select = vi.fn(), inspect = vi.fn(), vote = vi.fn();
+    const view = renderScene(messages, edges, { onMessageClick: select, onMessageDoubleClick: inspect, onSettlementToggleTruth: vote });
+    if (type === 'arrange') fireEvent.click(view.getByRole('button', { name: `显示排列消息卡 ${merge.id}` }));
+    const header = view.getByRole('group', { name: `组织消息 ${merge.id}` });
+    expect(header).toHaveTextContent('原组织');
+    expect(header).toHaveTextContent('💬0');
+    expect(view.container.querySelector(`rect[data-jump-visual-msgids="${merge.id}"]`)).not.toBeNull();
+    fireEvent.click(header);
+    expect(select).toHaveBeenCalledWith(expect.anything(), merge.id);
+    fireEvent.doubleClick(header);
+    expect(inspect).toHaveBeenCalledWith(expect.anything(), merge.id);
+    fireEvent.click(within(header).getByTitle('真假仲裁'));
+    expect(vote).toHaveBeenCalledWith(merge.id);
+    view.unmount();
+  });
+
+  it.each((['merge', 'arrange'] as const).flatMap(type => ['rejected', 'hidden'].map(status => ({ type, status }))))(
+    'does not display an empty $type when it is $status', ({ type, status }) => {
+    const merge: DemoMessage = { ...message('empty-frame'), kind: 'relation', relationType: type };
+    const extra = status === 'rejected' ? { rejectedContainerIds: new Set([merge.id]) } : { hideMessageIds: new Set([merge.id]) };
+    const view = renderScene([merge], [], extra);
+    expect(view.queryByRole('group', { name: `组织消息 ${merge.id}` })).toBeNull();
+    view.unmount();
+  });
+
+  it('keeps the empty summary card with its text and controls', () => {
+    const summary: DemoMessage = { ...message('summary'), kind: 'relation', relationType: 'summary',
+      relationPayload: { title: '原总结' }, content: '总结正文' };
+    const select = vi.fn(), inspect = vi.fn(), vote = vi.fn();
+    const view = renderScene([summary], [], { onMessageClick: select, onMessageDoubleClick: inspect, onSettlementToggleTruth: vote });
+    const card = view.container.querySelector<HTMLElement>('[data-msgid="summary"]:not([data-rel-overlay])')!;
+    expect(card).not.toBeNull();
+    expect(card).toHaveTextContent('总结正文');
+    fireEvent.click(card);
+    expect(select).toHaveBeenCalledWith(expect.anything(), summary.id);
+    fireEvent.doubleClick(card);
+    expect(inspect).toHaveBeenCalledWith(expect.anything(), summary.id);
+    fireEvent.click(within(card).getByTitle('真假仲裁'));
+    expect(vote).toHaveBeenCalledWith(summary.id);
+    view.unmount();
+  });
+
   it.each([['personal','当前用户生效'],['recommended','推荐生效']] as const)('distinguishes %s JOIN ownership on the graph',(source,label)=>{
     const joining:DemoMessage={...message('joining'),kind:'join',joinInfo:{containerId:'parent',containerType:'classify',targetIds:['leaf']}};
     const view=renderScene([joining],[],{joinStatusByMessage:new Map([['joining','valid']]),
@@ -65,17 +216,23 @@ describe('rendered graph scene', () => {
       expect(positions()).toEqual(before);
     } finally { height.mockRestore(); }
   });
-  it('renders corrected part text in both graph and list cards while retaining the original stored text',()=>{
+  it('shows the effective correction and its decoration while preserving the stored original',()=>{
     const original:DemoMessage={...message('corrected-target'),content:'好玩吗？',parts:[{id:'body',type:'text',text:'好玩吗？'}]};
-    const corrected=withCorrectionContent(original,'好玩1111');
-    const graph=renderScene([corrected],[]);
-    expect(graph.container.querySelector('[data-msgid="corrected-target"]')).toHaveTextContent('好玩1111');
-    expect(graph.container).not.toHaveTextContent('好玩吗？');graph.unmount();
-    const list=render(<MessageCard msg={corrected} ctx={{}}/>);
+    const correction:DemoMessage={...message('correction'),kind:'relation',relationType:'correct',content:'好玩1111',
+      relationPayload:{correctionBeforeContent:'好玩吗？',correctionAfterContent:'好玩1111',correctionContent:'好玩1111'},
+      parts:[{id:'corrected-body',type:'text',text:'好玩1111'},{id:'relation',type:'relation',relation:'correct',roles:{target:[{id:'t',reference:{messageId:original.id}}]}}]};
+    const relation:DemoEdge={id:'correction-edge',relationMessageId:correction.id,relationType:'correct',
+      from:{messageId:'anon:correction',selection:{kind:'whole'}},to:{messageId:original.id,selection:{kind:'whole'}},relationLabel:'更正'};
+    const shown=withCorrectionContent(original,'好玩1111');
+    const graph=renderScene([shown,correction],[relation]);
+    const card=graph.container.querySelector('[data-msgid="corrected-target"]')!;
+    expect(card).toHaveTextContent('好玩1111');expect(card).not.toHaveTextContent('好玩吗？');
+    expect(card.querySelector('[data-jump-msgids~="correction"]')).not.toBeNull();graph.unmount();
+    const list=render(<MessageCard msg={shown} ctx={{}}/>);
     expect(list.container).toHaveTextContent('好玩1111');expect(list.container).not.toHaveTextContent('好玩吗？');
     expect(original.parts![0]).toEqual({id:'body',type:'text',text:'好玩吗？'});
   });
-  it.each(['classify','summary','merge','arrange'] as const)('opens both JOIN directions on a nested %s without selecting the container',type=>{
+  it.each(['classify','summary','merge','arrange'] as const)('opens both JOIN directions from a nested %s message card',type=>{
     const group:DemoMessage={...message('group'),kind:'relation',relationType:type,relationPayload:{title:'容器'}};
     const join=(id:string,source:string,target:string):Relation=>({id,relationType:'JOIN',sourceMessageId:source,targetRefs:[{kind:'message',messageId:target}],createdAt:'2026-01-01',createdBy:{id:'u',username:'tester',createdAt:''}});
     const incoming=[join('current','outer','group'),join('historical','old','group')],outgoing=[join('member','group','leaf')];
@@ -85,6 +242,7 @@ describe('rendered graph scene', () => {
       joinStatusByMessage:new Map([['current','valid'],['historical','superseded'],['member','valid']]),
       onJoinFilterClick:open,onMessageClick:select,onMessageDoubleClick:navigate,
     });
+    if(type==='arrange')fireEvent.click(view.getByRole('button',{name:'显示排列消息卡 group'}));
     const memberBadge=view.getByRole('button',{name:'查看加入消息（2条）'}),containerBadge=view.getByRole('button',{name:'查看被加入消息（1条）'});
     expect(memberBadge.title).toContain('2 条，1 条生效');
     fireEvent.mouseDown(memberBadge);fireEvent.click(memberBadge);fireEvent.mouseUp(memberBadge);

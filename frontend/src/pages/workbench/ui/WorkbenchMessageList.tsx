@@ -6,6 +6,8 @@ import JoinRecordBadges from '../../../components/JoinRecordBadges';
 import {indexRelatedMessages,isRejectedContainer} from '../../../utils/relatedMessages';
 import { useNavigate } from 'react-router-dom';
 import MessageCard, { type MessageCardContext, type MessageCardProps } from '../../../components/MessageCard';
+import { MessageDisplayMarker } from '../../../components/MessageDisplayHints';
+import CorrectionTextComparison from '../../../components/CorrectionTextComparison';
 import RoundHistory from '../../../components/RoundHistory';
 import SettlementPanel from '../../../components/SettlementPanel';
 import type { Relation } from '../../../types';
@@ -81,6 +83,7 @@ interface Props {
   onRelatedRelationView?:(messageId:string)=>void;
   standaloneMessageIds?:ReadonlySet<string>;
   onCorrectionNavigate: (messageId: string, switchToList: boolean) => void;
+  onCorrectionHistory?: (event:React.MouseEvent,messageId:string)=>void;
   renderRelation: (message: DemoMessage) => ReactNode;
   renderContent: (message: DemoMessage) => ReactNode;
 }
@@ -263,18 +266,24 @@ export default function WorkbenchMessageList(props: Props) {
                   >
                     {msg.id}
                   </span>
+                  <MessageDisplayMarker messageId={msg.id} viewTag />
                   <span style={{
                     marginLeft: 5,
                     color: correctionVersion?.valid && !correctionVersion.conflicted ? '#4ade80' : '#f87171',
                     textDecoration: 'none',
                   }}>
-                    {correctionVersion?.valid && !correctionVersion.conflicted ? '（生效）' : '（未生效）'}
+                    {correctionVersion?.valid && !correctionVersion.conflicted ? '（有效）' : '（无效）'}
                   </span>
                 </span>
               ) : undefined}
-              headerAfterAuthor={correctionRecords.length > 0 && correctionVersions.get(msg.id)?.current ? (
-                <span style={{ color: '#fbbf24', fontWeight: 600 }} title="此消息已被更正">已被更正</span>
+              headerAfterAuthor={correctionRecords.length > 0 ? (
+                <span><span role="button" tabIndex={0} style={{ color: '#fbbf24', fontWeight: 600, cursor:'pointer' }} title="双击查看更正记录"
+                  onClick={event=>event.stopPropagation()} onDoubleClick={event=>{event.stopPropagation();props.onCorrectionHistory?.(event,correctionRecords[0].relationMessageId);}}
+                  onKeyDown={event=>{if(event.key==='Enter'){event.stopPropagation();props.onCorrectionHistory?.(event as unknown as React.MouseEvent,correctionRecords[0].relationMessageId);}}}>
+                  ✏更正 {correctionRecords.length}
+                </span><MessageDisplayMarker messageId={msg.id} scope="corrections" /></span>
               ) : undefined}
+              headerLeading={correctionFilterTargetId!==null && msg.relationType==='correct'?<></>:undefined}
               onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
               headerExtra={
                 <>
@@ -407,14 +416,17 @@ export default function WorkbenchMessageList(props: Props) {
                       </button>
                     )}
                   </div>
-                  <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px' }}>
+                  {typeof msg.relationPayload?.correctionBeforeContent === 'string' && typeof msg.relationPayload.correctionAfterContent === 'string'
+                    ? <CorrectionTextComparison before={msg.relationPayload.correctionBeforeContent} after={msg.relationPayload.correctionAfterContent}
+                      status={`附加关系：${msg.relationPayload.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · ${correctionVersion?.valid ? '当前对你有效' : '当前对你无效'}，消息卡按有效更正显示正文`} />
+                    : <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px' }}>
                     <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>具体更改</div>
                     <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
                       {correctionContent.length === 0
                         ? `删除${correctionTargetLabel}`
                         : `将${correctionTargetLabel}修改为「${correctionReplacement}」`}
                     </div>
-                  </div>
+                  </div>}
                 </div>
               ) : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
                 : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}

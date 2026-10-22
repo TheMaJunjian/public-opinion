@@ -11,23 +11,39 @@ export const READABLE_RELATION_TYPES = new Set([
 ]);
 
 /** Imported CORRECT records already used legacy voting; they are not new authorization proposals. */
-export function isCorrectionProposal(message: { parts?: Part[] }): boolean {
+export function isCorrectionProposal(message: { parts?: Part[]; relationPayload?: RelationPayload | null; payload?: RelationPayload }): boolean {
   const imported = message.parts?.some(part => part.type === 'data' && part.value && typeof part.value === 'object'
     && !Array.isArray(part.value) && typeof part.value.legacyTopicId === 'string' && part.value.uiType === 'CORRECT');
-  return !imported && !!message.parts?.some(part => part.type === 'relation' && part.relation === 'amend');
+  const payload = message.relationPayload ?? message.payload;
+  const nativeText = message.parts?.some(part => part.type === 'data' && part.value && typeof part.value === 'object' && !Array.isArray(part.value)
+    && part.value.uiType === 'CORRECT' && typeof part.value.value === 'string');
+  // Previously sent text amendments also get the lightweight display behavior
+  // once the server projects their full original/replacement bodies.
+  const textCorrection = nativeText || typeof payload?.correctionBeforeContent === 'string' && typeof payload.correctionAfterContent === 'string';
+  return !imported && !textCorrection && !!message.parts?.some(part => part.type === 'relation' && part.relation === 'amend');
 }
 
-/** Keep the displayed body consistent with legacy correction overlays without mutating stored parts. */
-export function withCorrectionContent(message: DemoMessage, content: string): DemoMessage {
+/** Project readable text for this viewer without changing the stored message or its identity. */
+export function withCorrectionContent(message: DemoMessage, content: string, changes?: CorrectionVersion['changes']): DemoMessage {
+  if (message.content === content) return message;
   const readable = message.parts?.filter(part => ['text', 'code', 'web'].includes(part.type));
-  return { ...message, content, ...(readable?.length === 1 ? { parts: message.parts!.map(part => {
-    if (part.id !== readable[0].id) return part;
-    if (part.type === 'text') return { ...part, text: content };
-    if (part.type === 'code') return { ...part, source: content };
-    if (part.type === 'web') return { ...part, excerpt: content };
-    return part;
-  }) } : {}) };
+  let offset = 0;
+  return { ...message, content,
+    ...(['classify', 'summary'].includes(message.relationType ?? '') ? { relationPayload: { ...message.relationPayload, title: content } } : {}),
+    ...(readable?.length ? { parts: message.parts!.map(part => {
+      if (part.type !== 'text' && part.type !== 'code' && part.type !== 'web') return part;
+      const original = part.type === 'text' ? part.text : part.type === 'code' ? part.source : part.excerpt || part.url;
+      let value = readable.length === 1 ? content : original;
+      if (readable.length > 1) for (const change of [...(changes ?? [])].sort((a,b) => b.start-a.start || b.end-a.end)) {
+        if (change.start >= offset && change.end <= offset + original.length) {
+          value = value.slice(0, change.start-offset) + change.replacement + value.slice(change.end-offset);
+        }
+      }
+      offset += original.length + 1;
+      return part.type === 'text' ? { ...part, text: value } : part.type === 'code' ? { ...part, source: value } : { ...part, excerpt: value };
+    }) } : {}) };
 }
+
 
 /** Message kinds that are rendered as readable cards in the graph. */
 export function hasReadableMessageContent(message: {relationType?:string;parts?:Part[]}) {
@@ -120,6 +136,11 @@ export type DemoMessage = {
 };
 
 export type CorrectionVersion = {
+  changes?: Array<{ start: number; end: number; replacement: string }>;
+  appliedCorrectionIds?: string[];
+  recommendationTied?: boolean;
+  reference?: Reference;
+  correctionKind?: 'TEXT' | 'MEANING';
   correctionId: string;
   targetId: string;
   baseContent: string;
@@ -363,10 +384,10 @@ export function convertMessagesToDemoModel(
       } else if (relType === 'correct') {
         content = rel.payload?.correctionContent ?? '';
       } else if (relType === 'classify') {
-        content = `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
+        content = persistedMessage?.content ?? rel.parts?.filter(part => part.type === 'text').map(part => part.text).join('\n') ?? `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'summary') {
         const summaryTitle = getRelationTitle(rel.payload) || `总结（${rel.targetRefs.length}）`;
-        content = `总结：${summaryTitle}`;
+        content = persistedMessage?.content ?? rel.parts?.filter(part => part.type === 'text').map(part => part.text).join('\n') ?? `总结：${summaryTitle}`;
       } else if (['proposal', 'delegation', 'code_change', 'operations'].includes(relType) && rel.payload?.content) {
         content = rel.payload.content;
       } else if (relType === 'tag' && tagLabel) {
@@ -511,36 +532,78 @@ export function convertMessagesToDemoModel(
   return { messages: demoMessages, edges: demoEdges };
 }
 
-/** Resolve the latest valid CORRECT version for each target message. */
+/** Resolve effective edits on the original, using personal choices before public counts. */
 export function computeCorrectionVersions(
   messages: DemoMessage[],
   edges: DemoEdge[],
   invalidCorrectionIds: Set<string> = new Set(),
+  currentUsername: string | null = null,
+  options: { previewCorrectionId?: string } = {},
 ): Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }> {
   const msgMap = new Map(messages.map(message => [message.id, message]));
+  const personal = computeUserActiveStanceRelIds(edges, messages, currentUsername);
+  const statistics = computeTransitiveVoteStats(edges, messages);
+  const score = (version: CorrectionVersion) => {
+    const state = msgMap.get(version.correctionId)?.state;
+    const pro = state?.supportCount ?? statistics[version.correctionId]?.agreeCount ?? 0;
+    const con = state?.oppositionCount ?? statistics[version.correctionId]?.disagreeCount ?? 0;
+    const stance = personal.get(version.correctionId);
+    const chosenAt = stance?.type === 'agree' ? Date.parse(msgMap.get(stance.relMsgId)?.createdAt ?? '') || 0 : 0;
+    return [version.correctionId === options.previewCorrectionId ? 1 : 0, stance?.type === 'agree' ? 1 : 0, chosenAt, pro - con, pro];
+  };
+  const compare = (left: CorrectionVersion, right: CorrectionVersion) => {
+    const a = score(left), b = score(right);
+    for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return a[index] - b[index];
+    return left.createdAt.localeCompare(right.createdAt) || left.correctionId.localeCompare(right.correctionId);
+  };
   const result = new Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>();
+  const correctionTargets = new Map(edges.filter(edge => edge.relationType === 'correct').map(edge => [edge.relationMessageId, edge.to.messageId]));
+  const rootTarget = (id: string) => {
+    const seen = new Set<string>();
+    while (correctionTargets.has(id) && !seen.has(id)) { seen.add(id); id = correctionTargets.get(id)!; }
+    return id;
+  };
   for (const edge of edges) {
     if (edge.relationType !== 'correct') continue;
     const correction = msgMap.get(edge.relationMessageId);
     const target = msgMap.get(edge.to.messageId);
     if (!correction || !target) continue;
-    const content = correction.relationPayload?.correctionContent ?? correction.content;
+    const content = correction.relationPayload?.correctionAfterContent ?? correction.relationPayload?.correctionContent ?? correction.content;
     const version: CorrectionVersion = {
+      correctionKind: correction.relationPayload?.correctionKind ?? 'TEXT',
       correctionId: correction.id,
-      targetId: edge.to.messageId,
-      baseContent: target.content,
+      targetId: rootTarget(edge.to.messageId),
+      baseContent: correction.relationPayload?.correctionBeforeContent ?? target.content,
       content,
-      valid: !edge.proposalOnly && !isCorrectionProposal(correction) && !invalidCorrectionIds.has(correction.id),
+      valid: !edge.proposalOnly && !isCorrectionProposal(correction) && (!invalidCorrectionIds.has(correction.id) || correction.id === options.previewCorrectionId)
+        && ((edge.to.reference?.revision) === undefined || target.revision === undefined
+          || (edge.to.reference?.revision) === target.revision),
       createdAt: correction.createdAt,
       selection: edge.to.selection,
+      reference: edge.to.reference,
     };
-    const entry = result.get(edge.to.messageId) ?? { versions: [] };
+    // Part addresses have local ranges. Resolve each readable field into the
+    // original body's coordinates so independent fields compose without conflict.
+    if (edge.to.reference?.partId && !edge.to.reference.memberId) {
+      let offset = 0;
+      for (const part of target.parts ?? []) {
+        if (part.type !== 'text' && part.type !== 'code' && part.type !== 'web') continue;
+        const value = part.type === 'text' ? part.text : part.type === 'code' ? part.source : part.excerpt || part.url;
+        if (part.id === edge.to.reference.partId) {
+          const range = edge.to.reference.range ?? { start: 0, end: value.length };
+          version.selection = { kind: 'text', start: offset + range.start, len: range.end-range.start, text: value.slice(range.start,range.end) };
+          break;
+        }
+        offset += value.length + 1;
+      }
+    }
+    const entry = result.get(version.targetId) ?? { versions: [] };
     if (!entry.versions.some(item => item.correctionId === version.correctionId)) entry.versions.push(version);
-    result.set(edge.to.messageId, entry);
+    result.set(version.targetId, entry);
   }
   for (const entry of result.values()) {
     entry.versions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const originalContent = entry.versions[0]?.baseContent ?? '';
+    const originalContent = msgMap.get(entry.versions[0]?.targetId ?? '')?.content ?? entry.versions[0]?.baseContent ?? '';
     for (const version of entry.versions) {
       version.baseContent = originalContent;
       version.conflicted = false;
@@ -553,18 +616,31 @@ export function computeCorrectionVersions(
       const change = changes[index];
       if (!version.valid || !change) continue;
       const fieldKey = correctionFieldKey(version.selection, originalContent);
-      effectiveChanges.set(fieldKey, { version, change });
+      const previous = effectiveChanges.get(fieldKey);
+      if (!previous || compare(version, previous.version) > 0) effectiveChanges.set(fieldKey, { version, change });
     }
-    const orderedChanges = Array.from(effectiveChanges.values())
-      .sort((left, right) => right.change.start - left.change.start);
+    const chosen: Array<{ version: CorrectionVersion; change: CorrectionChange }> = [];
+    for (const candidate of [...effectiveChanges.values()].sort((a, b) => compare(b.version, a.version))) {
+      if (!chosen.some(({ change }) => candidate.change.start < change.end && candidate.change.end > change.start
+        || candidate.change.start === change.start && candidate.change.end === change.end)) chosen.push(candidate);
+    }
+    const orderedChanges = chosen.sort((left, right) => right.change.start - left.change.start || right.change.end - left.change.end);
     let currentContent = originalContent;
     for (const { change } of orderedChanges) {
       currentContent = currentContent.slice(0, change.start)
         + change.replacement
         + currentContent.slice(change.end);
     }
-    const latest = [...effectiveChanges.values()].sort((left, right) => right.version.createdAt.localeCompare(left.version.createdAt))[0]?.version;
-    entry.current = latest ? { ...latest, content: currentContent } : undefined;
+    const latest = [...chosen].sort((left, right) => compare(right.version, left.version))[0]?.version;
+    const eligible = entry.versions.flatMap((version,index) => version.valid && changes[index] ? [{version,change:changes[index]!}] : []);
+    const recommendationTied = chosen.some(candidate => eligible.some(other => {
+      if (other.version.correctionId === candidate.version.correctionId || other.change.replacement === candidate.change.replacement) return false;
+      const a = score(candidate.version), b = score(other.version);
+      return a.every((value,index) => value === b[index]) && (candidate.change.start < other.change.end && candidate.change.end > other.change.start
+        || candidate.change.start === other.change.start && candidate.change.end === other.change.end);
+    }));
+    entry.current = latest ? { ...latest, content: currentContent, changes: orderedChanges.map(({ change }) => change),
+      appliedCorrectionIds: chosen.map(({version}) => version.correctionId), recommendationTied } : undefined;
   }
   return result;
 }
@@ -786,9 +862,16 @@ function resolveUltimateStance(
 /** Whole-message badges must never reinterpret a vote on a reason or member field. */
 export function resolveDisplayedStance(edge: DemoEdge, msgMap: Map<string, DemoMessage>, stanceMap: Map<string, { targetId: string; type: 'agree' | 'disagree' }>) {
   const executed = msgMap.get(edge.relationMessageId)?.executedStance;
-  const addressKey = (reference: Reference) => reference.partId || reference.memberId || reference.path?.length || reference.range
-    || (reference.revision !== undefined && reference.revision !== msgMap.get(reference.messageId)?.revision)
-    ? `reference:${JSON.stringify(reference)}` : reference.messageId;
+  const addressKey = (reference: Reference) => {
+    const target = msgMap.get(reference.messageId);
+    const correction = target?.relationType === 'correct' && !isCorrectionProposal(target);
+    const relationPart = target?.parts?.find(part => part.type === 'relation' && ['correct', 'amend'].includes(part.relation));
+    const correctionLabel = correction && reference.partId === relationPart?.id
+      && !reference.memberId && !reference.path?.length && !reference.range;
+    return (reference.partId && !correctionLabel) || reference.memberId || reference.path?.length || reference.range
+      || (reference.revision !== undefined && reference.revision !== target?.revision)
+      ? `reference:${JSON.stringify(reference)}` : reference.messageId;
+  };
   if (executed) return { targetId: addressKey(executed.target), type: executed.side === 'pro' ? 'agree' as const : 'disagree' as const };
   if (edge.to.reference) {
     const side = edge.relationType === 'agree' ? 'pro' : 'con';
@@ -1038,7 +1121,8 @@ export function computeUserFilteredEdges(
  */
 export function computeTransitiveRelDecStats(
   edges: DemoEdge[],
-  messages: DemoMessage[]
+  messages: DemoMessage[],
+  excludedEdges?: ReadonlySet<string>,
 ): Map<string, { agreeCount: number; disagreeCount: number; agreeRelMsgIds: string[]; disagreeRelMsgIds: string[] }> {
   const msgMap = new Map(messages.map(m => [m.id, m]));
   const stanceMap = buildStanceTargetMap(edges, msgMap);
@@ -1051,6 +1135,7 @@ export function computeTransitiveRelDecStats(
   };
 
   for (const e of edges) {
+    if (excludedEdges?.has(e.id)) continue;
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
     if (e.to.selection.kind !== 'whole' && !e.to.reference && !msgMap.get(e.relationMessageId)?.executedStance) continue;
     const toMsg = msgMap.get(e.to.messageId);
@@ -1094,7 +1179,8 @@ export function computeTransitiveRelDecStats(
  */
 export function computeTransitiveVoteStats(
   edges: DemoEdge[],
-  messages: DemoMessage[]
+  messages: DemoMessage[],
+  excludedEdges?: ReadonlySet<string>,
 ): Record<string, { agreeCount: number; disagreeCount: number; agreeKey: string; disagreeKey: string }> {
   const msgMap = new Map(messages.map(m => [m.id, m]));
   const stanceMap = buildStanceTargetMap(edges, msgMap);
@@ -1106,6 +1192,7 @@ export function computeTransitiveVoteStats(
   };
 
   for (const e of edges) {
+    if (excludedEdges?.has(e.id)) continue;
     if (e.relationType !== 'agree' && e.relationType !== 'disagree') continue;
     if (e.to.selection.kind !== 'whole' && !e.to.reference && !msgMap.get(e.relationMessageId)?.executedStance) continue;
 
@@ -1138,7 +1225,8 @@ export function computeGloballySuppressedRelIds(
   );
   for (const message of messages) {
     if (!message.state) continue;
-    if (message.state.suppressed) suppressed.add(message.id);
+    const correction = message.relationType === 'correct' && !isCorrectionProposal(message);
+    if (correction ? message.state.oppositionCount > message.state.supportCount : message.state.suppressed) suppressed.add(message.id);
     else suppressed.delete(message.id);
   }
   return suppressed;
@@ -1158,7 +1246,8 @@ export function computeEffectiveSuppressedRelIds(
   const activeStances = computeUserActiveStanceRelIds(edges, messages, currentUsername);
   for (const [targetId, stance] of activeStances) {
     if (!relationIds.has(targetId)) continue;
-    if (messages.find(message => message.id === targetId)?.state) continue;
+    const target = messages.find(message => message.id === targetId);
+    if (target?.state && !(target.relationType === 'correct' && !isCorrectionProposal(target))) continue;
     if (stance.type === 'agree') suppressed.delete(targetId);
     else suppressed.add(targetId);
   }

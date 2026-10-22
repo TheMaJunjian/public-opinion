@@ -40,6 +40,7 @@ export async function recordStance(store: Store, source: Message, resolved: {
 }
 
 interface StanceRow {
+  authorId: string;
   targetId: string;
   targetPartId: string | null;
   wholeComponent: number;
@@ -85,7 +86,7 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             };
         }
         const stances = (await store.db.prepare(`
-      SELECT "targetId", "targetPartId", "wholeComponent", side FROM (
+      SELECT "authorId", "targetId", "targetPartId", "wholeComponent", side FROM (
         SELECT stance.*, ROW_NUMBER() OVER (
           PARTITION BY stance."authorId", stance."targetKey"
           ORDER BY stance.sequence DESC, stance."sourceId" DESC
@@ -94,13 +95,25 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
         JOIN messages target ON target.id = stance."targetId"
         WHERE stance."targetId" IN (${placeholders})
           AND stance."targetRevision" = (target.body::jsonb #>> '{revision}')::integer
-      ) ranked WHERE position = 1
+      ) ranked WHERE position = 1 ORDER BY sequence DESC, "sourceId" DESC
     `).all(...batch)) as unknown as StanceRow[];
+        const correctionVoters = new Set<string>();
+        const correctionIds = new Set<string>();
         for (const stance of stances) {
             const state = states.get(stance.targetId);
             const message = byId.get(stance.targetId);
             if (!state || !message)
                 continue;
+            const correction = relations(message).find(part => part.relation === 'correct' || part.relation === 'amend');
+            if (correction) {
+                // Whole-card and relation-label votes express the same decision;
+                // body fragments are separate subjects and do not choose the display.
+                if (!stance.wholeComponent || stance.targetPartId !== null && stance.targetPartId !== correction.id) continue;
+                correctionIds.add(message.id);
+                const voter = JSON.stringify([message.id, stance.authorId]);
+                if (correctionVoters.has(voter)) continue;
+                correctionVoters.add(voter);
+            }
             if (stance.side === 'pro')
                 state.supportCount++;
             else
@@ -109,6 +122,10 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             if (stance.side === 'con' && stance.wholeComponent && group
                 && (stance.targetPartId === null || stance.targetPartId === group.id))
                 state.suppressed = true;
+        }
+        for (const messageId of correctionIds) {
+            const state = states.get(messageId)!;
+            state.suppressed = state.oppositionCount > state.supportCount;
         }
         const recommendations = await store.db.prepare(`
       SELECT DISTINCT source.id, source.body FROM refs

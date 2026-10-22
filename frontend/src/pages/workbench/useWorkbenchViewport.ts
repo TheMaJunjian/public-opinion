@@ -1,6 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useInterfaceZoom } from '../../context/InterfaceZoomContext';
-import { useWorkbenchDrawingTask } from '../../context/WorkbenchDrawingContext';
 import {
   handleLeftPanelTouchEnd as runHandleLeftPanelTouchEnd,
   handleLeftPanelTouchMove as runHandleLeftPanelTouchMove,
@@ -9,29 +8,23 @@ import {
   handleSplitterPointerDown as runHandleSplitterPointerDown,
 } from './actions/panelGestures';
 import type { LeftPanelTouchGesture } from './actions/panelGestures';
-import type { ViewMode } from './types';
 
 export interface WorkbenchViewportInput {
-  comparisonReviewed: boolean;
-  viewMode: ViewMode;
   loading: boolean;
 }
 
-type FixedHorizontalScroll = { left: number; bottom: number; width: number; contentWidth: number; scale: number };
+// clientWidth rounds to an integer. At browser zoom that can add a fraction of
+// a pixel to the shell and create a second, page-wide horizontal scrollbar.
+const getViewportWidth = () => document.documentElement.getBoundingClientRect().width
+  || document.documentElement.clientWidth || window.innerWidth;
 
 /** Owns panel sizing, scrollbars and pointer/touch gestures; selections and view history stay outside. */
-export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: WorkbenchViewportInput) {
-  const startMeasurement = useWorkbenchDrawingTask('measurement');
+export function useWorkbenchViewport({ loading }: WorkbenchViewportInput) {
   const interfaceZoom = useInterfaceZoom();
-  const [viewportWidth, setViewportWidth] = useState(() => document.documentElement.clientWidth || window.innerWidth);
+  const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
   const leftPanelRef = useRef<HTMLDivElement | null>(null);
 
   const leftPanelTouchRef = useRef<LeftPanelTouchGesture | null>(null);
-
-  const fixedHorizontalScrollRef = useRef<HTMLDivElement | null>(null);
-
-  const [fixedHorizontalScroll, setFixedHorizontalScroll] = useState<FixedHorizontalScroll | null>(null);
-  const fixedHorizontalScrollValueRef = useRef<FixedHorizontalScroll | null>(null);
 
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
 
@@ -79,13 +72,19 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
     );
   });
 
-  const effectiveContainerWidth = Math.max(containerWidth, getMinimumContainerWidth());
+  const minimumContainerWidth = getMinimumContainerWidth();
+  // Also discard the subpixel excess in widths saved by the old rounded measurement.
+  const effectiveContainerWidth = Math.abs(containerWidth - minimumContainerWidth) < 1
+    ? minimumContainerWidth : Math.max(containerWidth, minimumContainerWidth);
 
   const [splitterActive, setSplitterActive] = useState(false);
 
   const panelContainerRef = useRef<HTMLDivElement | null>(null);
 
   const splitterDragRef = useRef<{ startX: number; startLeftPx: number; containerW: number } | null>(null);
+  const splitterCleanupRef = useRef<(() => void) | undefined>(undefined);
+
+  useEffect(() => () => splitterCleanupRef.current?.(), []);
 
   useEffect(() => { localStorage.setItem('workbenchWidth', String(containerWidth)); }, [containerWidth]);
 
@@ -93,7 +92,7 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
 
   useLayoutEffect(() => {
     const syncContainerWidth = () => {
-      setViewportWidth(document.documentElement.clientWidth || window.innerWidth);
+      setViewportWidth(getViewportWidth());
     };
     syncContainerWidth();
     window.addEventListener('resize', syncContainerWidth);
@@ -102,129 +101,9 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
     };
   }, []);
 
-  useEffect(() => {
-    const updateFixedHorizontalScroll = () => {
-      const hideFixedScroll = () => {
-        if (fixedHorizontalScrollValueRef.current === null) return;
-        fixedHorizontalScrollValueRef.current = null;
-        setFixedHorizontalScroll(null);
-      };
-      const panel = leftPanelRef.current;
-      const isTouchDevice = navigator.maxTouchPoints > 0
-        || window.matchMedia('(hover: none) and (pointer: coarse), (max-width: 768px)').matches;
-      if (!panel || isTouchDevice) {
-        hideFixedScroll();
-        return;
-      }
-      const rect = panel.getBoundingClientRect();
-      const visibleTop = Math.max(rect.top, 0);
-      const visibleBottom = Math.min(rect.bottom, window.innerHeight);
-      const scale = panel.offsetWidth > 0 ? rect.width / panel.offsetWidth : 1;
-      const visibleLeft = Math.max(rect.left, 0);
-      const visibleRight = Math.min(rect.right, document.documentElement.clientWidth || window.innerWidth);
-      const visibleWidth = Math.max(0, visibleRight - visibleLeft);
-      const comparisonWidths = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'))
-        .map(viewport => viewport.scrollWidth);
-      const contentWidth = Math.max(panel.scrollWidth, ...comparisonWidths, 0) * scale;
-      if (visibleBottom <= visibleTop || visibleWidth <= 0 || contentWidth <= rect.width + 1) {
-        hideFixedScroll();
-        return;
-      }
-      const next = {
-        left: visibleLeft,
-        bottom: 0,
-        width: visibleWidth,
-        contentWidth,
-        scale,
-      };
-      const current = fixedHorizontalScrollValueRef.current;
-      if (current
-        && current.left === next.left
-        && current.bottom === next.bottom
-        && current.width === next.width
-        && current.contentWidth === next.contentWidth
-        && current.scale === next.scale) return;
-      fixedHorizontalScrollValueRef.current = next;
-      setFixedHorizontalScroll(next);
-    };
-    let frame: number | null = null;
-    let task: ReturnType<typeof startMeasurement> | null = null;
-    const scheduleUpdate = () => {
-      if (frame !== null) return;
-      task = startMeasurement();
-      const currentTask = task;
-      currentTask.onCancel(() => { if (frame !== null) cancelAnimationFrame(frame); frame = null; });
-      frame = window.requestAnimationFrame(() => {
-        frame = null;
-        currentTask.run(() => { updateFixedHorizontalScroll(); currentTask.complete(); });
-        if (task === currentTask) task = null;
-      });
-    };
-    scheduleUpdate();
-    window.addEventListener('resize', scheduleUpdate);
-    window.addEventListener('scroll', scheduleUpdate, { passive: true });
-    const observer = new ResizeObserver(scheduleUpdate);
-    if (leftPanelRef.current) {
-      observer.observe(leftPanelRef.current);
-      Array.from(leftPanelRef.current.children).forEach(element => observer.observe(element));
-      leftPanelRef.current.querySelectorAll<HTMLElement>('[data-comparison-viewport], [data-jump-canvas]')
-        .forEach(element => observer.observe(element));
-    }
-    const mutationObserver = new MutationObserver(scheduleUpdate);
-    if (leftPanelRef.current) mutationObserver.observe(leftPanelRef.current, { childList: true, subtree: true });
-    return () => {
-      window.removeEventListener('resize', scheduleUpdate);
-      window.removeEventListener('scroll', scheduleUpdate);
-      observer.disconnect();
-      mutationObserver.disconnect();
-      if (frame !== null) window.cancelAnimationFrame(frame);
-      task?.cancel();
-    };
-  }, [comparisonReviewed, viewMode, containerWidth, leftFlex, loading, interfaceZoom, viewportWidth, startMeasurement]);
-
-  useEffect(() => {
-    const panel = leftPanelRef.current;
-    const fixedScroll = fixedHorizontalScrollRef.current;
-    if (!panel || !fixedScroll) return;
-    const getHorizontalMax = (element: HTMLElement) => Math.max(0, element.scrollWidth - element.clientWidth);
-    const getScrollProgress = (element: HTMLElement) => {
-      const max = getHorizontalMax(element);
-      return max > 0 ? element.scrollLeft / max : 0;
-    };
-    const getFixedProgress = () => {
-      const max = getHorizontalMax(fixedScroll);
-      return max > 0 ? fixedScroll.scrollLeft / max : 0;
-    };
-    const syncPanelToFixedScroll = () => {
-      const progress = Math.max(0, Math.min(1, getFixedProgress()));
-      panel.scrollLeft = getHorizontalMax(panel) * progress;
-      for (const viewport of panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]')) {
-        viewport.scrollLeft = getHorizontalMax(viewport) * progress;
-      }
-    };
-    const syncFixedScrollToPanel = () => {
-      const comparisonViewport = panel.querySelector<HTMLElement>('[data-comparison-viewport]');
-      const source = comparisonViewport && getHorizontalMax(comparisonViewport) > 0
-        ? comparisonViewport
-        : panel;
-      if (!source) return;
-      const progress = Math.max(0, Math.min(1, getScrollProgress(source)));
-      fixedScroll.scrollLeft = getHorizontalMax(fixedScroll) * progress;
-    };
-    fixedScroll.addEventListener('scroll', syncPanelToFixedScroll, { passive: true });
-    panel.addEventListener('scroll', syncFixedScrollToPanel, { passive: true });
-    const comparisonViewports = Array.from(panel.querySelectorAll<HTMLElement>('[data-comparison-viewport]'));
-    comparisonViewports.forEach(viewport => viewport.addEventListener('scroll', syncFixedScrollToPanel, { passive: true }));
-    syncFixedScrollToPanel();
-    return () => {
-      fixedScroll.removeEventListener('scroll', syncPanelToFixedScroll);
-      panel.removeEventListener('scroll', syncFixedScrollToPanel);
-      comparisonViewports.forEach(viewport => viewport.removeEventListener('scroll', syncFixedScrollToPanel));
-    };
-  }, [fixedHorizontalScroll]);
-
   function handleSplitterPointerDown(e: React.PointerEvent<HTMLDivElement>): void {
-    return runHandleSplitterPointerDown({ setSplitterActive, panelContainerRef, splitterDragRef, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, BASE_WIDTH, getMinimumContainerWidth, setContainerWidth, setLeftFlex, TOTAL_FLEX }, e);
+    if (splitterDragRef.current) return;
+    splitterCleanupRef.current = runHandleSplitterPointerDown({ setSplitterActive, panelContainerRef, splitterDragRef, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, BASE_WIDTH, getMinimumContainerWidth, setContainerWidth, setLeftFlex, TOTAL_FLEX }, e);
   }
 
   function handleLeftPanelTouchStart(e: React.TouchEvent<HTMLDivElement>): void {
@@ -249,8 +128,8 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
       const left = leftPanelRef.current, right = rightPanelRef.current;
       const target = event.composedPath()[0] ?? event.target;
       if (!(target instanceof Node)) return;
-      if (right?.contains(target)) handlePanelWheel(right, left, event, page);
-      else if (left && (left.closest('[data-workbench-panel-surface]') ?? left).contains(target)) handlePanelWheel(left, right, event, page);
+      if (right?.contains(target)) handlePanelWheel(right, event, [left, page]);
+      else if (left && (left.closest('[data-workbench-panel-surface]') ?? left).contains(target)) handlePanelWheel(left, event, [right, page]);
     };
     // React delegates wheel events passively, so preventDefault must run here.
     container.addEventListener('wheel', scrollPanel, { passive: false });
@@ -259,5 +138,5 @@ export function useWorkbenchViewport({ comparisonReviewed, viewMode, loading }: 
     };
   }, [loading]);
 
-  return { leftPanelRef, fixedHorizontalScrollRef, fixedHorizontalScroll, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd };
+  return { leftPanelRef, rightPanelRef, viewModeScrollRef, TOTAL_FLEX, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, leftFlex, effectiveContainerWidth, splitterActive, panelContainerRef, handleSplitterPointerDown, handleLeftPanelTouchStart, handleLeftPanelTouchMove, handleLeftPanelTouchEnd };
 }

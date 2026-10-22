@@ -5,8 +5,8 @@ import { describeUnit as describeVisibleSelection } from '../utils/selectionLabe
 import { isWholeMessageSelection } from '../utils/messageElementSelection';
 import type { User } from '../types';
 import { getPresentationSpec } from '../types';
+import WorkbenchScrollViewport from './WorkbenchScrollViewport';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
-import { useInterfaceZoom } from '../context/InterfaceZoomContext';
 import MessageRelationsView from './MessageRelationsView';
 import OperationLogView from './OperationLogView';
 import StagedMessageLabel from './StagedMessageLabel';
@@ -35,7 +35,7 @@ interface WorkbenchPanelProps {
   // Mode
   isPreviewMode: boolean;
   previewNotice?: string;
-  singleSideReview?: { title: string; onExit: () => void };
+  singleSideReview?: { title: string; kind?:'container'|'correction'; onExit: () => void };
   isViewerMode?: boolean;
   viewerUsers?: User[];
   viewerUsername?: string;
@@ -180,8 +180,6 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
     return isWholeMessageSelection(unit, unit.messageId) && !historic ? undefined : describeSelection(unit);
   };
   const navigate = useNavigate();
-  const interfaceZoom = useInterfaceZoom();
-  const stickyTop = typeof p.stickyTop === 'number' ? `${p.stickyTop}px` : p.stickyTop ?? '0px';
   const touchStartXRef = useRef<number | null>(null);
   const showContributionControls = !p.isPreviewMode;
   const handlePanelTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -212,25 +210,24 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   const handlePanelTouchEnd = () => {
     touchStartXRef.current = null;
   };
-  const panelStyle = {
+  // 悬浮视口承接滚动，真实内容始终自然展开，禁止给内容层添加 height/maxHeight 上限。
+  // 可视范围由 WorkbenchScrollViewport 跟随 visualViewport 测量，避免手机缩放后的截短问题。
+  const viewportStyle = {
     flex: p.TOTAL_FLEX - p.leftFlex,
+    minWidth: p.minWidth,
+    maxWidth: p.maxWidth,
+    alignSelf: "flex-start",
+    position: "sticky" as const,
+    top: p.stickyTop ?? 0,
+    zIndex: 0,
+  };
+  const panelStyle = {
     padding: 8,
     display: "flex",
     flexDirection: "column" as const,
     gap: 8,
-    overflowY: "auto" as const,
-    overflowX: "auto" as const,
-    minWidth: p.minWidth,
-    maxWidth: p.maxWidth,
-    maxHeight: `calc(${100 / interfaceZoom}dvh - ${stickyTop} - 8px)`,
     boxSizing: "border-box" as const,
     overflowWrap: "anywhere" as const,
-    alignSelf: "flex-start",
-    touchAction: "pan-x pan-y pinch-zoom" as const,
-    overscrollBehaviorY: "auto" as const,
-    position: "sticky" as const,
-    top: p.stickyTop ?? 0,
-    zIndex: 0,
   };
 
   const renderSendControls = () => (
@@ -296,14 +293,15 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
   );
 
   return (
-    <div ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" data-workbench-panel-surface="true" style={panelStyle}>
+    <WorkbenchScrollViewport ref={p.rightPanelRef as React.Ref<HTMLDivElement>} className="workbench-right-panel" role="region" aria-label="发言与关系操作" tabIndex={-1} onTouchStart={handlePanelTouchStart} onTouchMove={handlePanelTouchMove} onTouchEnd={handlePanelTouchEnd} onTouchCancel={handlePanelTouchEnd} data-guide-right-panel="true" data-workbench-scroll-panel="true" data-workbench-panel-surface="true" style={viewportStyle}>
+    <div data-workbench-panel-content="true" style={panelStyle}>
       {p.singleSideReview && <div role="region" aria-label="单侧对比" style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ fontWeight: 600 }}>容器查看</div>
+        <div style={{ fontWeight: 600 }}>{p.singleSideReview.kind==='correction'?'更正查看':'容器查看'}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>当前目标：{p.singleSideReview.title}</div>
       </div>}
       {(p.singleSideReview || p.canExitTrace) && <button onClick={p.canExitTrace ? p.exitAllTrace : p.singleSideReview?.onExit}
         style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #666', background: '#333', color: '#eee', cursor: 'pointer' }}
-        title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前容器查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
+        title={p.canExitTrace ? '退出全部追溯并恢复进入第一次追溯前的现场' : '退出当前查看'}>{p.singleSideReview || p.isRelatedView ? '退出查看' : '退出追溯'}</button>}
       {p.isViewerMode && <div style={{ border: "1px solid #444", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontWeight: 600 }}>阅览操作</span>
@@ -454,8 +452,8 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
               <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
                 <span style={{ opacity: 0.85 }}>附加关系：</span>
                 {opts.map(t => (
-                  <button key={t} onClick={() => {
-                    p.setSecondaryRelationType(prev => (prev === t && t !== "none") ? "none" : t);
+                  <button key={t} aria-pressed={p.secondaryRelationType === t} onClick={() => {
+                    p.setSecondaryRelationType(prev => p.relationType === 'correct' ? t : (prev === t && t !== "none") ? "none" : t);
                   }}
                     style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid #666", background: p.secondaryRelationType === t ? "#0b84ff" : "#222", color: p.secondaryRelationType === t ? "#fff" : "rgba(255,255,255,0.7)", cursor: "pointer" }}>
                     {p.secondaryRelationLabel(t)}
@@ -464,6 +462,9 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
               </div>
             );
           })()}
+          {p.relationType === 'correct' && <div style={{ fontSize: 11, color: '#9ca3af' }}>
+            正文按本人立场优先、公共统计其次显示有效更正。选字可基于显示内容，更正始终以原文为准。
+          </div>}
           {/* SubType selector */}
           {((p.relationType === "tag" && (p.secondaryRelationType === "recommend" || p.secondaryRelationType === "archive")) || p.relationType === "recommend" || p.relationType === "archive") && (
             <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
@@ -639,5 +640,6 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
       </>}
 
     </div>
+    </WorkbenchScrollViewport>
   );
 }

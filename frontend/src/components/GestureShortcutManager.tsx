@@ -55,8 +55,10 @@ interface GesturePosition {
 }
 
 function isExcludedTarget(target: EventTarget | null) {
+  // 工作区分隔条也是手机绘制快捷符的入口，允许明确启用的分隔条参与识别。
+  // 排行榜等其他调整手柄仍排除，避免它们的拖动误开快捷符蒙版。
   return target instanceof Element && Boolean(target.closest(
-    'input, textarea, select, button, a, [role="separator"], [contenteditable="true"], [data-gesture-disabled="true"]',
+    'input, textarea, select, button, a, [role="separator"]:not([data-gesture-enabled="true"]), [contenteditable="true"], [data-gesture-disabled="true"]',
   ));
 }
 

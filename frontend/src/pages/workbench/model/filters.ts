@@ -13,10 +13,10 @@ export function getLatestUserReadStatusByMessageId(
     const type = relation.relationType?.toUpperCase();
     if ((type !== 'READ' && type !== 'UNREAD') || !isCurrentUser(relation)) continue;
     for (const target of relation.targetRefs) {
-      if (target.kind !== 'message' && target.kind !== 'text-fragment') continue;
-      const previous = latest.get(target.messageId);
+      const targetId = target.kind === 'relation' ? target.relationId : target.messageId;
+      const previous = latest.get(targetId);
       if (!previous || new Date(relation.createdAt).getTime() >= new Date(previous.createdAt).getTime()) {
-        latest.set(target.messageId, { type, createdAt: relation.createdAt });
+        latest.set(targetId, { type, createdAt: relation.createdAt });
       }
     }
   }
@@ -146,6 +146,10 @@ export function deriveHomeContentMatchSetsBySender(params: {
       continue;
     }
     if (!relation || relation.author === params.currentUsername) continue;
+    if (params.contentIds.has(edge.relationMessageId)
+      && (selfContentIds.has(edge.to.messageId) || selfContentIds.has(edge.from.messageId))) {
+      unreadRelatedContentIds.add(edge.relationMessageId);
+    }
     if (selfContentIds.has(edge.from.messageId) && params.contentIds.has(edge.to.messageId)) {
       unreadRelatedContentIds.add(edge.to.messageId);
     }
@@ -171,15 +175,17 @@ export function buildHomeFilterDisplayIds(
 ): Set<string> {
   const displayIds = new Set(matchIds);
   for (const edge of edges) {
-    if (!matchIds.has(edge.from.messageId) && !matchIds.has(edge.to.messageId)) continue;
+    const correctionMatch = edge.relationType === 'correct' && matchIds.has(edge.relationMessageId);
+    if (!matchIds.has(edge.from.messageId) && !matchIds.has(edge.to.messageId)
+      && !correctionMatch && !(options.includeRelationContext && matchIds.has(edge.relationMessageId))) continue;
     if (READ_STATUS_RELATION_TYPES.has(edge.relationType.toLowerCase())) continue;
     const isContainer = getPresentationSpec(edge.relationType).isContainer;
-    if (!isContainer && !options.includeRelationContext) continue;
+    if (!isContainer && !options.includeRelationContext && !correctionMatch) continue;
     displayIds.add(edge.relationMessageId);
     if (!isContainer) {
       for (const endpointId of [edge.from.messageId, edge.to.messageId]) {
         if (!endpointId.startsWith('anon:')
-          && !options.excludedContentContextIds?.has(endpointId)) {
+          && (correctionMatch || !options.excludedContentContextIds?.has(endpointId))) {
           displayIds.add(endpointId);
         }
       }

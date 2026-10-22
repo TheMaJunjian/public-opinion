@@ -48,6 +48,7 @@ export interface GraphOverlayInput {
   headerRefs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   contentRefs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   edges: DemoEdge[];
+  excludedStanceEdges?: ReadonlySet<string>;
   messages: DemoMessage[];
   isTraceWindow: boolean;
   anonCorrectedRelMsgIds: Set<string>;
@@ -152,7 +153,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
       return cnt;
     }
 
-    const decorationsByMsg = computeTransitiveVoteStats(edges, messages);
+    const decorationsByMsg = computeTransitiveVoteStats(edges, messages, input.excludedStanceEdges);
 
     // Decorations are placed to the RIGHT of the card, stacked vertically (agree on top, disagree below).
     // Each badge is split into icon area (left DEC_ICON_W px) and body area (rest).
@@ -256,7 +257,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
           const relationTargetBounds = msgMap.get(e.to.messageId)?.kind === "relation"
             ? getRelationBoundsFromLayout({ relMsgId: e.to.messageId, edgesByRelMsg, layout, msgMap, relationCardMsgIds, boxFn: domBoxFn })
             : null;
-          const targetBox = relationTargetBounds?.rect ?? endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
+          const targetBox = finalFrameRects[e.to.messageId] ?? relationTargetBounds?.rect ?? endpointBoxForNormal(e.to.messageId)?.box ?? layout[e.to.messageId];
           if (!targetBox) continue;
           anyTarget = true;
           minX = Math.min(minX, targetBox.x); minY = Math.min(minY, targetBox.y);
@@ -293,6 +294,19 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
 
     computeFramesForRelType(isArrangeFrameRel, f => newArrangeFrames.push({ targetId:f.targetId, sourceId:f.sourceId, relMsgId:f.relMsgId, isBlankCorrected:f.isBlankCorrected, rect:f.rect, relAgreeCount:f.relAgreeCount, relDisagreeCount:f.relDisagreeCount, relAgreeMsgIds:f.relAgreeMsgIds, relDisagreeMsgIds:f.relDisagreeMsgIds }));
     computeFramesForRelType(t => !isArrangeFrameRel(t) && isAnyFrameRel(t), f => newGroupFrames.push(f));
+    const renderedGroupIds = new Set(newGroupFrames.map(frame => frame.relMsgId));
+    const renderedArrangeIds = new Set(newArrangeFrames.map(frame => frame.relMsgId));
+    for (const [relMsgId, rect] of Object.entries(finalFrameRects)) {
+      const relType = msgMap.get(relMsgId)?.relationType;
+      const base = { targetId: relMsgId, sourceId: `anon:${relMsgId}`, relMsgId,
+        isBlankCorrected: anonCorrectedRelMsgIds.has(relMsgId), rect,
+        relAgreeCount: 0, relDisagreeCount: 0, relAgreeMsgIds: [], relDisagreeMsgIds: [] };
+      if (relType === 'arrange' && !renderedArrangeIds.has(relMsgId)) newArrangeFrames.push(base);
+      if (relType === 'merge' && !renderedGroupIds.has(relMsgId)) {
+        const spec = getPresentationSpec(relType);
+        newGroupFrames.push({ ...base, relType, relKind: spec.kind, relLabel: spec.label, relColor: spec.color });
+      }
+    }
     for (const frame of newGroupFrames) {
       const layoutRect = finalFrameRects[frame.relMsgId];
       if (layoutRect) frame.rect = layoutRect;
@@ -338,7 +352,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
     // Compute AGREE/DISAGREE decorations targeting relation messages (relDecByRelMsgId)
     // These are displayed next to the relation's visual element (tag badge, arrange frame, edge label).
     // Uses transitive resolution: disagree-on-disagree projects as agree on the original target.
-    const relDecByRelMsgId = computeTransitiveRelDecStats(edges, messages);
+    const relDecByRelMsgId = computeTransitiveRelDecStats(edges, messages, input.excludedStanceEdges);
     // Propagate counts and IDs to tag groups, arrange frames, and group frames
     for (const groups of Object.values(newTagDecorationsByMsg)) {
       for (const group of groups) {

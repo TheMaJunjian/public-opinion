@@ -9,8 +9,13 @@ import type {
   UnitSelection
 } from "../../../utils/modelBridge";
 import { isContentKind, unitSelectionToTargetRef } from "../../../utils/modelBridge";
-import { collectOwnedByRelation, getContainerAncestorChain } from '../model/ownership';
+import { createContainerOwnership, getContainerAncestorChain } from '../model/ownership';
+import type { ContainerEffect } from '../model/containerEffect';
 import { mergeUnits } from '../model/selection';
+
+interface ContainerTargetDependencies {
+  containerEffect?: Pick<ContainerEffect, 'ownership' | 'rejectedContainerIds' | 'joinByTarget'>;
+}
 
 function wholeMessageUnits(units: UnitSelection[]): UnitSelection[] {
   return mergeUnits([], units.filter(unit => isWholeMessageSelection(unit, unit.messageId)));
@@ -67,7 +72,7 @@ export function collectExclusiveRelationMsgIds(context: CollectExclusiveRelation
   return ids;
 }
 
-interface GetGroupedTargetTextMessageIdsDependencies {
+interface GetGroupedTargetTextMessageIdsDependencies extends ContainerTargetDependencies {
   msgMap: Map<string, DemoMessage>;
   relationTypeByRelMsgId: Map<string, RelationType>;
   relationById: Map<string, Relation>;
@@ -75,6 +80,7 @@ interface GetGroupedTargetTextMessageIdsDependencies {
 
 export function getGroupedTargetTextMessageIds(context: GetGroupedTargetTextMessageIdsDependencies, units: UnitSelection[]): string[] {
   const { msgMap, relationTypeByRelMsgId, relationById } = context;
+  const ownership = context.containerEffect?.ownership ?? createContainerOwnership([...relationById.values()]);
   const ids = new Set<string>();
   for (const unit of wholeMessageUnits(units)) {
     if (msgMap.get(unit.messageId)?.kind && isContentKind(msgMap.get(unit.messageId)!.kind)) {
@@ -83,13 +89,13 @@ export function getGroupedTargetTextMessageIds(context: GetGroupedTargetTextMess
     }
     const relType = relationTypeByRelMsgId.get(unit.messageId);
     if (relType !== "classify" && relType !== "merge" && relType !== "arrange" && relType !== "summary") continue;
-    const owned = collectOwnedByRelation(unit.messageId, relationById);
+    const owned = ownership.owned(unit.messageId);
     owned.textIds.forEach(id => ids.add(id));
   }
   return [...ids];
 }
 
-interface PromoteCompleteContainerSelectionsDependencies {
+interface PromoteCompleteContainerSelectionsDependencies extends ContainerTargetDependencies {
   relations: Relation[];
 }
 
@@ -98,8 +104,9 @@ export function promoteCompleteContainerSelections(context: PromoteCompleteConta
   let selected = mergeUnits([], units);
   const containerRelations = relations.filter(relation =>
     ['ARRANGE', 'MERGE', 'SUMMARY'].includes(relation.relationType?.toUpperCase() ?? '')
+    && !context.containerEffect?.rejectedContainerIds.has(relation.id)
   );
-  const relationById = new Map(relations.map(relation => [relation.id, relation]));
+  const ownership = context.containerEffect?.ownership ?? createContainerOwnership(relations);
 
   const selectedContainerIds = new Set(
     selected
@@ -109,7 +116,7 @@ export function promoteCompleteContainerSelections(context: PromoteCompleteConta
   if (selectedContainerIds.size > 0) {
     const nestedSelectedIds = new Set<string>();
     for (const containerId of selectedContainerIds) {
-      const owned = collectOwnedByRelation(containerId, relationById);
+      const owned = ownership.owned(containerId);
       owned.textIds.forEach(id => nestedSelectedIds.add(id));
       owned.relationIds.forEach(id => nestedSelectedIds.add(id));
     }
@@ -125,7 +132,7 @@ export function promoteCompleteContainerSelections(context: PromoteCompleteConta
     const selectedIds = new Set(wholeMessageUnits(selected).filter(unit => unit.reference?.revision === undefined).map(unit => unit.messageId));
     for (const container of containerRelations) {
       if (selectedIds.has(container.id)) continue;
-      const owned = collectOwnedByRelation(container.id, relationById);
+      const owned = ownership.owned(container.id);
       if (owned.textIds.size === 0 || ![...owned.textIds].every(id => selectedIds.has(id))) continue;
       selected = [
         ...selected.filter(unit => !isWholeMessageSelection(unit, unit.messageId) || unit.reference?.revision !== undefined || !owned.textIds.has(unit.messageId)),
@@ -146,14 +153,14 @@ interface ResolveEffectiveTargetUnitsDependencies {
 export function resolveEffectiveTargetUnits(context: ResolveEffectiveTargetUnitsDependencies, draft: UnitSelection[], targets: UnitSelection[], currentRelationType: string | null): UnitSelection[] {
   const { msgMap, promoteCompleteContainerSelections } = context;
   const rawTargets = draft.length > 0 ? draft : targets;
-  if (rawTargets.some(unit => unit.reference || msgMap.get(unit.messageId)?.parts)) return rawTargets;
   if (currentRelationType === 'correct') {
     const textTargets = rawTargets.filter(unit => unit.selection.kind === 'text');
-    if (textTargets.length === 1 && rawTargets.every(unit => unit.messageId === textTargets[0].messageId)) {
+    if (textTargets.length === 1 && rawTargets.every(unit => unit === textTargets[0] || isWholeMessageSelection(unit, textTargets[0].messageId))) {
       return textTargets;
     }
     return rawTargets;
   }
+  if (rawTargets.some(unit => unit.reference || msgMap.get(unit.messageId)?.parts)) return rawTargets;
   return ['classify', 'summary', 'merge', 'arrange'].includes(currentRelationType ?? '')
     ? promoteCompleteContainerSelections(rawTargets) : rawTargets;
 }
@@ -217,7 +224,7 @@ export function organizationTargetRef(context: OrganizationTargetRefDependencies
     ? { ...ref, reference: { messageId: unit.messageId } } : ref;
 }
 
-interface GetContainerMembershipTargetErrorDependencies {
+interface GetContainerMembershipTargetErrorDependencies extends ContainerTargetDependencies {
   relations: Relation[];
 }
 
@@ -230,16 +237,19 @@ export function getContainerMembershipTargetError(context: GetContainerMembershi
   const blockedContainerIds = new Set(
     relations
       .filter(relation => ['ARRANGE', 'MERGE', 'SUMMARY'].includes(relation.relationType?.toUpperCase() ?? ''))
+      .filter(relation => !context.containerEffect?.rejectedContainerIds.has(relation.id))
       .map(relation => relation.id)
   );
+  const isSelectedMember = (ref: TargetRef, joinId: string): boolean => {
+    const targetId = ref.kind === 'relation' ? ref.relationId : ref.messageId;
+    return selectedIds.has(targetId)
+      && (!context.containerEffect || context.containerEffect.joinByTarget.get(targetId) === joinId);
+  };
   const memberships = relations.filter(relation => {
     if (relation.relationType?.toUpperCase() !== 'JOIN'
       || !relation.sourceMessageId
       || !blockedContainerIds.has(relation.sourceMessageId)) return false;
-    return relation.targetRefs.some(ref =>
-      (ref.kind === 'relation' && selectedIds.has(ref.relationId))
-      || (ref.kind !== 'relation' && selectedIds.has(ref.messageId))
-    );
+    return relation.targetRefs.some(ref => isSelectedMember(ref, relation.id));
   });
   const errors = memberships.flatMap(membership => {
     if (!membership.sourceMessageId) return [];
@@ -249,10 +259,7 @@ export function getContainerMembershipTargetError(context: GetContainerMembershi
         : containerType === 'SUMMARY' ? '总结'
           : containerType ?? '未知';
     return membership.targetRefs
-      .filter(ref =>
-        (ref.kind === 'relation' && selectedIds.has(ref.relationId))
-        || (ref.kind !== 'relation' && selectedIds.has(ref.messageId))
-      )
+      .filter(ref => isSelectedMember(ref, membership.id))
       .map(ref => {
         const targetId = ref.kind === 'relation' ? ref.relationId : ref.messageId;
         return `消息(${targetId})已加入${containerTypeLabel}关系消息(${membership.sourceMessageId})，不能作为独立目标。`;
@@ -358,7 +365,7 @@ export function getDependentDisplayTarget(context: GetDependentDisplayTargetDepe
   return getDependentDisplayTargets([{ messageId, selection: { kind: 'whole' } }])[0] ?? null;
 }
 
-interface HasCrossNonReferenceTextLinkForClassifyTargetsDependencies {
+interface HasCrossNonReferenceTextLinkForClassifyTargetsDependencies extends ContainerTargetDependencies {
   effectiveTargetUnits: UnitSelection[];
   msgMap: Map<string, DemoMessage>;
   relationTypeByRelMsgId: Map<string, RelationType>;
@@ -369,6 +376,7 @@ interface HasCrossNonReferenceTextLinkForClassifyTargetsDependencies {
 
 export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCrossNonReferenceTextLinkForClassifyTargetsDependencies, targetTextIds: string[], selectionUnits: UnitSelection[] = context.effectiveTargetUnits): string | null {
   const { msgMap, relationTypeByRelMsgId, relationById, relations, edges } = context;
+  const ownership = context.containerEffect?.ownership ?? createContainerOwnership([...relationById.values()]);
   const selected = new Set(targetTextIds);
   const selectedRelationIds = new Set<string>();
   const selectedContainerOwnedIds: Set<string>[] = [];
@@ -382,7 +390,7 @@ export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCross
       // A selected container is an opaque target. Its nested messages are
       // not individually selected, but relations entirely inside it do not
       // cross the classification boundary.
-      const owned = collectOwnedByRelation(unit.messageId, relationById);
+      const owned = ownership.owned(unit.messageId);
       selectedContainerOwnedIds.push(new Set([
         unit.messageId,
         ...owned.textIds,
@@ -404,7 +412,7 @@ export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCross
     return selectedIds.has(fromId) !== selectedIds.has(toId);
   };
 
-  // A directly selected text message inside an unselected MERGE container
+  // A directly selected text message inside an active, unselected MERGE container
   // cannot be classified independently. Do not expand selected containers
   // here, because their members are opaque targets.
   const directlySelectedTextIds = new Set(
@@ -414,8 +422,9 @@ export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCross
   );
   for (const merge of relations.filter(relation =>
     relation.relationType.toUpperCase() === 'MERGE' && !selectedRelationIds.has(relation.id)
+    && !context.containerEffect?.rejectedContainerIds.has(relation.id)
   )) {
-    const owned = collectOwnedByRelation(merge.id, relationById);
+    const owned = ownership.owned(merge.id);
     const selectedId = [...directlySelectedTextIds].find(id => owned.textIds.has(id));
     if (selectedId) {
       return `消息(${selectedId})已在归并消息(${merge.id})中，不能建立分类关系。`;
@@ -423,6 +432,7 @@ export function hasCrossNonReferenceTextLinkForClassifyTargets(context: HasCross
   }
 
   for (const e of edges) {
+    if (context.containerEffect?.rejectedContainerIds.has(e.relationMessageId)) continue;
     // Citations and stances can cross scopes; they do not require shared membership.
     if (['reference', 'agree', 'disagree'].includes(e.relationType.toLowerCase())) continue;
     if (crossesBoundary(e.from.messageId, e.to.messageId)) {

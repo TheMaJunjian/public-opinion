@@ -9,7 +9,7 @@ export const REVEAL_VIRTUAL_MESSAGE = 'workbench:reveal-virtual-message';
 /** Measure new records in bounded batches; keep their cached geometry after unmounting. */
 export function useVirtualMessageMounts(ref: RefObject<HTMLElement>, ids: string[], boxes: Record<string, Box>,
   heights: Record<string, number>, pinned: ReadonlySet<string>, verticalOnly = false,
-  revealGroups?: ReadonlyMap<string, ReadonlySet<string>>) {
+  revealGroups?: ReadonlyMap<string, ReadonlySet<string>>, resolveRevealIds?: (ids: string[]) => string[]) {
   const viewport = useCanvasViewport(ref);
   const [batch, setBatch] = useState<string[]>([]);
   const [revealed, setRevealed] = useState<string[]>([]);
@@ -40,13 +40,15 @@ export function useVirtualMessageMounts(ref: RefObject<HTMLElement>, ids: string
       // Nested frames need their descendants too; a Set also breaks malformed cycles.
       const expanded = new Set(detail.ids);
       for (const id of expanded) for (const member of revealGroups?.get(id) ?? []) expanded.add(member);
+      for (const id of resolveRevealIds?.([...expanded]) ?? []) expanded.add(id);
+      for (const id of expanded) for (const member of revealGroups?.get(id) ?? []) expanded.add(member);
       const ids = [...expanded];
       setRevealed(previous => previous.length === ids.length && previous.every((id, index) => id === ids[index]) ? previous : ids);
     };
     const host = surface.closest('[data-workbench-left-panel]') ?? surface;
     host.addEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
     return () => host.removeEventListener(REVEAL_VIRTUAL_MESSAGE, reveal);
-  }, [ref, ids, revealGroups]);
+  }, [ref, ids, revealGroups, resolveRevealIds]);
   useLayoutEffect(() => {
     const surface = ref.current;
     if (!surface) return;

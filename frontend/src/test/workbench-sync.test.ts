@@ -2,11 +2,58 @@ import { describe, expect, it, vi } from 'vitest';
 import { WorkbenchStore, syncWorkbench, type WorkbenchSnapshot } from '../data/workbench';
 import type { Message } from '../types';
 import { queueCommand, runCommandBatch } from '../api/commandBatch';
+import { computeCorrectionVersions, computeEffectiveSuppressedRelIds, convertMessagesToDemoModel } from '../utils/modelBridge';
+import type { Relation } from '../types';
 
 const message = (id: string, revision = 1, content = id): Message => ({ id, revision, content, kind: 'TEXT', contentType: 'TEXT', createdAt: '', createdBy: { id: 'u', username: '用户', createdAt: '' } });
 const page = (sequence: number, messages: Message[] = []): WorkbenchSnapshot => ({ sequence, messages, relations: [], users: [], stakes: {}, tagCounts: {}, attentionUsers: {}, scope: { messageId: null, title: '公论' } });
 
 describe('authoritative workbench records', () => {
+  it('updates two connected viewers on incoming corrections and applies personal choices over public statistics', async () => {
+    const original: Message = { ...message('original', 1, '原文'), parts: [{ id: 'body', type: 'text', text: '原文' }] };
+    const correction: Relation = { id: 'correction', revision: 1, relationType: 'CORRECT', sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: original.id }], createdAt: '2026-01-02', createdBy: { id: 'editor', username: 'editor', createdAt: '' },
+      payload: { correctionBeforeContent: '原文', correctionAfterContent: '更正正文', correctionContent: '更正正文' },
+      parts: [{ id: 'corrected-body', type: 'text', text: '更正正文' }, { id: 'relation', type: 'relation', relation: 'correct', roles: {} }] };
+    const opposition: Relation = { id: 'against', relationType: 'DISAGREE', sourceMessageId: null,
+      targetRefs: [{ kind: 'relation', relationId: correction.id }], createdAt: '2026-01-03', createdBy: { id: 'alice', username: 'alice', createdAt: '' } };
+    const approval: Relation = { ...opposition, id: 'for', relationType: 'AGREE', createdAt: '2026-01-04', createdBy: { id: 'bob', username: 'bob', createdAt: '' } };
+    let stage = 0;
+    const state = () => ({ messageId: correction.id, revision: 1, supportCount: stage === 3 ? 1 : 0,
+      oppositionCount: stage >= 2 ? 1 : 0, recommendationTotal: 0, suppressed: stage === 2 });
+    const load = vi.fn(async ({ after }: { after?: number }) => {
+      if (after === undefined) return page(1, [original]);
+      if (!stage || after === stage + 1) return page(stage + 1);
+      const relations = [{ ...correction, state: state() }, ...(stage >= 2 ? [opposition] : []), ...(stage === 3 ? [approval] : [])];
+      const messages = relations.map(record => ({ ...message(record.id), kind: 'RELATION', revision: 1,
+        relationType: record.relationType, createdAt: record.createdAt, createdBy: record.createdBy,
+        parts: record.parts, relationPayload: record.payload, state: record.state }));
+      return { ...page(stage + 1, messages), relations };
+    });
+    const connections: EventSource[] = [], visible = new Map<string, string>(), snapshots = new Map<string, WorkbenchSnapshot>();
+    const viewers = ['alice', 'bob'].map(username => syncWorkbench({ parent: 'root', load,
+      events: () => { const event = { close() {} } as EventSource; connections.push(event); return event; },
+      onError: error => { throw error; }, onSnapshot(snapshot) {
+        snapshots.set(username, snapshot);
+        const model = convertMessagesToDemoModel(snapshot.messages, snapshot.relations);
+        const rejected = computeEffectiveSuppressedRelIds(model.edges, model.messages, username);
+        const current = computeCorrectionVersions(model.messages, model.edges, rejected, username).get(original.id)?.current;
+        visible.set(username, current?.content ?? '原文');
+      } }));
+    const incoming = () => connections.forEach(connection => connection.onmessage?.({ data: JSON.stringify({ sequence: stage + 1 }) } as MessageEvent));
+    try {
+      await vi.waitFor(() => expect(connections).toHaveLength(2));
+      stage = 1; incoming();
+      await vi.waitFor(() => expect([...visible.values()]).toEqual(['更正正文', '更正正文']));
+      stage = 2; incoming();
+      await vi.waitFor(() => expect([...visible.values()]).toEqual(['原文', '原文']));
+      stage = 3; incoming();
+      await vi.waitFor(() => expect([...visible.values()]).toEqual(['原文', '更正正文']));
+      expect(snapshots.get('alice')!.relations.some(record => record.id === correction.id)).toBe(true);
+      expect(load.mock.calls.filter(([query]) => query.after === undefined)).toHaveLength(2);
+    } finally { viewers.forEach(viewer => viewer.stop()); }
+  });
+
   it('manual refresh reuses the incremental cursor and connection, skips unchanged projections, and waits for every delta page', async () => {
     let changes = false;
     const load = vi.fn(async ({ after }: { after?: number }) => after === undefined ? page(10, [message('old')])

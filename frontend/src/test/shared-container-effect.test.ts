@@ -86,6 +86,28 @@ it('does not resurrect a declared member moved to a different active owner in ei
   expect(scene(comparison.disagree).ids).not.toContain('leaf');
 });
 
+it.each(['MERGE', 'ARRANGE', 'SUMMARY'])('keeps a restored %s visible and empty when both original members have a later classification', type => {
+  const relations = [rel('merge', type, ['B', 'C']), rel('category', 'CLASSIFY', ['B', 'C']),
+    ...['B', 'C'].flatMap(id => [rel(`old-${id}`, 'JOIN', [id], 'merge'), rel(`new-${id}`, 'JOIN', [id], 'category')])];
+  for (const container of relations.slice(0, 2)) container.payload = { independentMemberships: true };
+  for (const [index, join] of relations.slice(2).entries()) {
+    const memberId = join.targetRefs[0].kind === 'relation' ? join.targetRefs[0].relationId : join.targetRefs[0].messageId;
+    join.payload = { membershipHistory: { id: join.id, memberId, parentId: join.sourceMessageId!,
+      previousId: null, previousParentId: null, order: join.id.startsWith('old-') ? index : index + 10 } };
+  }
+  const model = convertMessagesToDemoModel(['B', 'C'].map(text), relations);
+  model.messages.find(message => message.id === 'merge')!.state = state('merge', true);
+  const before = JSON.stringify({ relations, ...model });
+  const restored = deriveContainerEffect({ ...model, relations, username: 'tester', assumption: { messageId: 'merge', side: 'agree' } });
+  expect(restored.rejectedContainerIds.has('merge')).toBe(false);
+  expect(restored.ownership.direct('merge').textIds.size).toBe(0);
+  expect(restored.ownership.direct('category').textIds).toEqual(new Set(['B', 'C']));
+  const restoredScene = scene(projectContainerCanvas(restored, { kind: 'root' }));
+  if (type === 'SUMMARY') expect(restoredScene.ids).toContain('merge');
+  else expect(restoredScene.frames).toContainEqual({ id: 'merge', members: [] });
+  expect(JSON.stringify({ relations, ...model })).toBe(before);
+});
+
 it('honors authoritative active JOIN state despite historical opposing records',()=>{
   const relations=[rel('C','CLASSIFY'),rel('joined','JOIN',['leaf'],'C'),rel('historical-against','DISAGREE',['joined'])];
   const model=convertMessagesToDemoModel([text('leaf')],relations);

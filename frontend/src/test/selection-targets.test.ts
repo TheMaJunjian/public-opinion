@@ -7,6 +7,7 @@ import { mergeUnits } from '../pages/workbench/model/selection';
 import { handleTagBodyClick } from '../pages/workbench/actions/relationActions';
 import type { MouseEvent } from 'react';
 import { sendClassificationDraft } from '../pages/workbench/actions/sendClassificationDraft';
+import { deriveContainerEffect } from '../pages/workbench/model/containerEffect';
 
 const whole=(messageId:string):UnitSelection=>({messageId,selection:{kind:'whole'}});
 const element=(messageId:string):UnitSelection=>({messageId,selection:{kind:'whole'},reference:{messageId,revision:3,partId:'relation',path:['roles','members'],memberId:'member'}});
@@ -15,6 +16,51 @@ const messages:DemoMessage[]=[{id:'a',content:'正文 A',author:'用户',created
 const msgMap=new Map(messages.map(message=>[message.id,message]));
 const relationById=new Map([[relation.id,relation]]);
 const relationTypeByRelMsgId=new Map([['group','merge' as const]]);
+
+describe('organization targets use current membership state', () => {
+  function contextFor(relations: Relation[], assumption?: { messageId: string; side: 'agree' | 'disagree' }) {
+    const records: DemoMessage[] = [messages[0], messages[1], ...relations.map(record => ({
+      ...messages[2], id: record.id, relationType: record.relationType.toLowerCase() as DemoMessage['relationType'],
+    }))];
+    const containerEffect = deriveContainerEffect({ messages: records, relations, edges: [], username: null, assumption });
+    return { effectiveTargetUnits: [], msgMap: containerEffect.msgMap, relationTypeByRelMsgId,
+      relationById: containerEffect.relationById, relations, edges: [], containerEffect };
+  }
+
+  it.each(['MERGE', 'ARRANGE', 'SUMMARY'])('keeps released members selected individually after %s is rejected', type => {
+    const relations = [{ ...relation, relationType: type }];
+    const active = contextFor(relations);
+    const rejected = contextFor(relations, { messageId: relation.id, side: 'disagree' });
+    const units = [whole('a'), whole('b')];
+    expect(promoteCompleteContainerSelections(active, units)).toEqual([whole('group')]);
+    expect(promoteCompleteContainerSelections(rejected, units)).toEqual(units);
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets(rejected, ['a'], [whole('a')])).toBeNull();
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets(rejected, ['a', 'b'], units)).toBeNull();
+  });
+
+  it('blocks active merge members again when the merge is restored', () => {
+    const restored = contextFor([relation], { messageId: relation.id, side: 'agree' });
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets(restored, ['a'], [whole('a')]))
+      .toContain('已在归并消息(group)中');
+  });
+
+  it.each(['container', 'join', 'superseded'])('ignores a historical JOIN after it is %s', status => {
+    const join: Relation = { ...relation, id: 'join-a', relationType: 'JOIN', sourceMessageId: relation.id,
+      targetRefs: [{ kind: 'message', messageId: 'a' }], createdAt: '2024-01-01T00:00:00Z' };
+    const destination: Relation = { ...relation, id: 'destination', relationType: 'CLASSIFY', targetRefs: [] };
+    const moved: Relation = { ...join, id: 'moved-a', sourceMessageId: destination.id, createdAt: '2026-10-21T00:00:00Z' };
+    const relations = [relation, join, ...(status === 'superseded' ? [destination, moved] : [])];
+    const active = contextFor([relation, join]);
+    expect(getContainerMembershipTargetError(active, [whole('a')])).toContain('已加入归并关系消息(group)');
+    const context = contextFor(relations, status === 'superseded' ? undefined : {
+      messageId: status === 'container' ? relation.id : join.id, side: 'disagree',
+    });
+    expect(getContainerMembershipTargetError(context, [whole('a')])).toBeNull();
+    expect(hasCrossNonReferenceTextLinkForClassifyTargets(context, ['a'], [whole('a')])).toBeNull();
+    expect(promoteCompleteContainerSelections(context, [whole('a')])).toEqual([whole('a')]);
+    if (status !== 'container') expect(getGroupedTargetTextMessageIds(context, [whole('group')])).toEqual(['b']);
+  });
+});
 
 describe('classification boundaries for agreement on an organization', () => {
   const reason: DemoMessage = { ...messages[0], id: 'reason', content: '测试' };

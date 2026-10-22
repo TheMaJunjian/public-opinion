@@ -10,13 +10,13 @@ import type {
   RelationType,
   UnitSelection
 } from "../../../utils/modelBridge";
-import { hasActiveCorrectionForSelection, unitSelectionToTargetRef } from "../../../utils/modelBridge";
+import { isCorrectionProposal, unitSelectionToTargetRef } from "../../../utils/modelBridge";
 import { nextId, unitEquals } from '../model/selection';
 import type { ViewMode } from '../types';
 
 interface ConfirmReverseCorrectionDependencies {
   sendInFlightRef: React.MutableRefObject<boolean>;
-  comparisonPopup: { relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; }; } | null;
+  comparisonPopup: { relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; correctionKind?: 'TEXT' | 'MEANING'; }; } | null;
   scopeMessageId: string;
   setSendInFlight: React.Dispatch<React.SetStateAction<boolean>>;
   createRel: (scopeMessageId: string, data: Parameters<typeof api.createRelation>[1]) => Promise<Relation>;
@@ -31,7 +31,7 @@ interface ConfirmReverseCorrectionDependencies {
   setRelationType: React.Dispatch<React.SetStateAction<RelationType | null>>;
   setSecondaryRelationType: React.Dispatch<React.SetStateAction<string>>;
   setRecommendationAmount: React.Dispatch<React.SetStateAction<number | "">>;
-  setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; }; } | null>>;
+  setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; correctionKind?: 'TEXT' | 'MEANING'; }; } | null>>;
   showAlert: (message: string) => void;
   onCreated?: (messageId: string) => void;
 }
@@ -48,16 +48,16 @@ export async function confirmReverseCorrection(dependencies: ConfirmReverseCorre
       relationType: 'CORRECT',
       sourceMessageId: null,
       targetRefs: [unitSelectionToTargetRef(preview.target, msgMap)],
-      payload: { correctionContent: preview.after, ...(preview.value !== undefined ? { correctionValue: preview.value } : {}) },
+      payload: { correctionContent: preview.after, correctionKind: preview.correctionKind ?? 'TEXT', ...(preview.value !== undefined ? { correctionValue: preview.value } : {}) },
     });
     await registerCreatedRelationInCurrentClassify(backendRel);
-    setEdges(prev => [...prev, {
+    setEdges(prev => prev.some(edge => edge.relationMessageId === backendRel.id) ? prev : [...prev, {
       id: nextId('edge'),
       relationMessageId: backendRel.id,
       relationType: 'correct',
       from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
       to: preview.target,
-      proposalOnly: true,
+      proposalOnly: isCorrectionProposal(backendRel),
       relationLabel: relationTypeName('correct'),
     }]);
     setDraftUnits([]); setSourceUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
@@ -84,24 +84,11 @@ interface HandleDecorationIconClickDependencies {
 }
 
 export async function handleDecorationIconClick(dependencies: HandleDecorationIconClickDependencies, messageId: string, kind: "agree" | "disagree"): Promise<void> {
-  const { comparisonReviewed, scopeMessageId, msgMap, correctionVersions, showAlert, createRel, registerCreatedRelationInCurrentClassify } = dependencies;
+  const { comparisonReviewed, scopeMessageId, msgMap, showAlert, createRel, registerCreatedRelationInCurrentClassify } = dependencies;
   // Quick send: pure-stance agree/disagree — relation messages are first-class, persist to backend
   if (comparisonReviewed) return;
   if (!scopeMessageId) return;
-  if (kind === 'agree' && msgMap.get(messageId)?.relationType === 'correct') {
-    const correctionVersion = Array.from(correctionVersions.values())
-      .flatMap(entry => entry.versions)
-      .find(version => version.correctionId === messageId);
-    if (correctionVersion && hasActiveCorrectionForSelection(
-      correctionVersion.targetId,
-      correctionVersion.selection,
-      correctionVersions,
-      correctionVersion.correctionId,
-    )) {
-      showAlert('该字段已有其他有效更正，不能赞同这条更正');
-      return;
-    }
-  }
+
   try {
     const backendRel = await createRel(scopeMessageId, {
       relationType: kind.toUpperCase(),
@@ -368,7 +355,7 @@ interface HandleInlineBadgeDoubleClickDependencies {
   setJoinFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setCorrectionFilterTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
-  setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; }; } | null>>;
+  setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; correctionKind?: 'TEXT' | 'MEANING'; }; } | null>>;
 }
 
 export function handleInlineBadgeDoubleClick(dependencies: HandleInlineBadgeDoubleClickDependencies, e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{ subType: string; customLabel?: string; count: number }> }): void {

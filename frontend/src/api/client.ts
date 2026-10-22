@@ -399,7 +399,7 @@ export function getRoundDetail(roundId: string) {
   return request<import('../types').SettlementRoundItem>(`/rounds/${roundId}`);
 }
 
-export function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; amount: number }) {
+export function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; amount: number; stanceCorrections?:Record<string,string[]> }) {
   // Voting now creates an AGREE/DISAGREE relation message (Phase 5 unification)
   return request<import('../types').Relation & { message: string }>(`/rounds/${roundId}/votes`, {
     method: 'POST',

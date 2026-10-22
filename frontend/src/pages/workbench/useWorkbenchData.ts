@@ -68,7 +68,7 @@ export function useWorkbenchData({ user, authLoading, scopeMessageId, navigate, 
   const displayUser = isPreloaded ? viewerUser : user;
   const correctionVersions = useMemo(() => {
     const invalidCorrectionIds = computeEffectiveSuppressedRelIds(viewEdges, viewMessages, displayUser?.username ?? null);
-    return computeCorrectionVersions(viewMessages, viewEdges, invalidCorrectionIds);
+    return computeCorrectionVersions(viewMessages, viewEdges, invalidCorrectionIds, displayUser?.username ?? null);
   }, [viewMessages, viewEdges, displayUser?.username]);
   useEffect(() => { setRelatedTraceContext(null); }, [scopeMessageId]);
   useEffect(() => { edgesRef.current = viewEdges; }, [viewEdges]);

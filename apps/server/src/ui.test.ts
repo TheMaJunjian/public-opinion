@@ -226,17 +226,34 @@ describe('保留操作方式的消息 API',()=>{
     expect((await post(user,'/commands',failed)).status).toBe(404);await expect(app.store.message(failedId)).rejects.toThrow();expect((await app.store.account(user.session.user.id))).toEqual(account);expect((await app.store.latestSequence())).toBe(seq);
     const view=await user.agent.get(`/api/ui/snapshot?parent=${classification.id}`);expect(view.status,view.text).toBe(200);expect(view.body.messages.some((m:any)=>m.id===firstId)).toBe(true);expect(view.body.stakes[firstId].counts.pro).toBe(8);
   });
-  it('文本片段、分类标题和历史版本可引用；修改提案授权后生效',async()=>{
+  it('正文更正保存全文对比，原文和历史引用保持不变',async()=>{
     const app=(await make()),founder=await actor(app,'发起人'),other=await actor(app,'参与者');
     const classification=await good(post(founder,'/relations',{relationType:'CLASSIFY',targetRefs:[],payload:{title:'是否应该试点'}}));
     const fragment={messageId:classification.id,revision:1,partId:'body',range:{start:0,end:2}};
     const correction=await good(post(other,'/relations',{relationType:'CORRECT',targetRefs:[{kind:'text-fragment',messageId:classification.id,text:'是否',hash:'x',reference:fragment}],payload:{correctionContent:'为何'}}));
     expect((await app.store.message(classification.id)).revision).toBe(1);
-    expect((await post(other,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:correction.id}]})).status).toBe(403);
-    await good(post(founder,'/relations',{relationType:'AUTHORIZE',targetRefs:[{kind:'relation',relationId:correction.id}]}));
-    expect((await app.store.message(classification.id)).revision).toBe(2);expect((await app.store.message(classification.id,1)).parts[0]).toMatchObject({text:'是否应该试点'});
-    expect((await founder.agent.get(`/api/ui/snapshot?parent=${classification.id}`)).body.scope.title).toBe('为何应该试点');
+    expect((await app.store.message(classification.id,1)).parts[0]).toMatchObject({text:'是否应该试点'});
+    expect(correction.parts).toContainEqual(expect.objectContaining({type:'relation',relation:'correct'}));
+    expect(correction.parts.some((part:any)=>part.relation==='amend')).toBe(false);
+    expect(correction.relationPayload).toMatchObject({correctionBeforeContent:'是否应该试点',correctionAfterContent:'为何应该试点',correctionContent:'为何应该试点',correctionValue:'为何'});
+    await good(post(founder,'/relations',{relationType:'DISAGREE',targetRefs:[{kind:'relation',relationId:correction.id}]}));
+    const snapshot=(await founder.agent.get('/api/ui/snapshot')).body;
+    const record=snapshot.messages.find((message:any)=>message.id===correction.id);
+    expect(record.relationPayload.correctionAfterContent).toBe('为何应该试点');
+    expect(record.state.suppressed).toBe(true);
+    expect((await app.store.message(classification.id)).revision).toBe(1);
     const reply=await good(post(other,'/relations',{relationType:'REPLY',targetRefs:[{kind:'text-fragment',messageId:classification.id,text:'是否',hash:'x',reference:fragment}],payload:{content:'讨论原来的用词'}}));expect(reply.targetRefs[0].reference).toEqual(fragment);
+  });
+  it('总结正文更正保留所有上下文，仅替换所选范围并拒绝无效替换',async()=>{
+    const app=await make(),user=await actor(app,'总结作者'),editor=await actor(app,'更正者');
+    const before='全文开头\n总结中的旧内容\n全文结尾',after=before.replace('旧内容','新的总结内容');
+    const summary=await good(post(user,'/relations',{relationType:'SUMMARY',targetRefs:[],payload:{title:before}}));
+    const start=before.indexOf('旧内容'),reference={messageId:summary.id,revision:1,partId:'body',range:{start,end:start+3}};
+    const correction=await good(post(editor,'/relations',{relationType:'CORRECT',targetRefs:[{kind:'text-fragment',messageId:summary.id,text:'旧内容',hash:'x',reference}],payload:{correctionContent:after,correctionValue:'新的总结内容'}}));
+    expect(correction.relationPayload).toMatchObject({correctionBeforeContent:before,correctionAfterContent:after,correctionContent:after,correctionValue:'新的总结内容'});
+    expect((await app.store.message(summary.id)).parts[0]).toMatchObject({text:before});
+    const invalid=await post(editor,'/relations',{relationType:'CORRECT',targetRefs:[{kind:'relation',relationId:summary.id,reference}],payload:{correctionValue:42}});
+    expect(invalid.status).toBe(400);
   });
   it('单边结算保持操作、结算消息可评价，账本与导出可追溯',async()=>{
     const app=(await make()),user=await actor(app,'发起人'),message=await good(post(user,'/messages',{content:'一个提议'}));

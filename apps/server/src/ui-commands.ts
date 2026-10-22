@@ -1,4 +1,4 @@
-import { bindRoles, organization, relations, type Json, type Part, type Reference, type User } from '@gonglun/core';
+import { bindRoles, organization, relations, replaceReference, textOf, type Json, type Part, type Reference, type User } from '@gonglun/core';
 import { z } from 'zod';
 import { DomainError, id, Store } from './db.js';
 import { send } from './messages.js';
@@ -19,6 +19,7 @@ export interface CommandContext {
     signature?: Signature;
 }
 const object = z.record(z.unknown());
+const stanceCorrectionsSchema = z.record(z.string().max(100), z.array(z.string().max(100)).max(200));
 const number = (value: unknown) => { if (value === undefined)
     return 0; if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
     throw new DomainError('贡献点数量须为非负整数'); return value; };
@@ -127,16 +128,40 @@ export async function createRelation(context: CommandContext, parent: string, bo
         name = 'low-quality';
     const parts: Part[] = [relation(name, roles)];
     const content = text(payload.content ?? payload.title ?? payload.label);
-    if (content)
+    if (content && type !== 'CORRECT')
         parts.unshift({ id: 'body', type: 'text', text: content });
     const data: RecordData = { ...payload, uiType: type };
+    if (payload.stanceCorrections !== undefined) data.stanceCorrections = stanceCorrectionsSchema.parse(payload.stanceCorrections);
+    if (type === 'CORRECT') data.correctionKind = z.enum(['TEXT', 'MEANING']).parse(payload.correctionKind ?? 'TEXT');
     delete data.membershipHistory;
     if (['CLASSIFY', 'MERGE', 'SUMMARY', 'ARRANGE'].includes(type)) data.independentMemberships = true;
     if (name === 'amend') {
         if (refs.length !== 1)
             throw new DomainError('修改需要一个明确目标');
-        data.expectedRevision = (await store.message(refs[0]!.messageId)).revision;
+        const target = await store.message(refs[0]!.messageId, refs[0]!.revision);
+        data.expectedRevision = target.revision;
         data.value = Object.hasOwn(payload, 'correctionValue') ? payload.correctionValue : text(payload.correctionContent);
+        const reference = refs[0]!, part = target.parts.find(part => part.id === reference.partId);
+        let before: string | undefined, after: string | undefined;
+        if (part && ['text', 'code', 'web'].includes(part.type) && !reference.memberId
+            && (!reference.path?.length || reference.path.length === 1 && ['text', 'source', 'excerpt'].includes(String(reference.path[0])))) {
+            if (relations(target).some(part => part.relation === 'correct' || part.relation === 'amend'))
+                throw new DomainError('请基于原消息的正文发送更正');
+            reference.revision ??= target.revision;
+            let replacement: Part[];
+            try { replacement = replaceReference(target, reference, data.value); }
+            catch (error) { throw new DomainError(error instanceof Error ? error.message : '修改内容无效'); }
+            before = textOf(target); after = textOf({ ...target, parts: replacement });
+        }
+        if (part && before !== undefined && after !== undefined) {
+            // A text correction records a suggested edit without changing the original message.
+            const correction = parts.find(part => part.type === 'relation' && part.relation === 'amend');
+            if (correction?.type === 'relation') correction.relation = 'correct';
+            data.correctionBeforeContent = before;
+            parts.unshift({ id: 'corrected-body', type: 'text', text: after });
+            // The correction keeps its own content and uses the existing vote/settlement flow.
+            delete data.correctionContent; delete data.correctionAfterContent; delete data.correctionValue;
+        } else delete data.correctionKind;
     }
     if (name === 'delegate')
         data.reward = number(payload.rewardAmount);
@@ -202,7 +227,8 @@ async function executeWithinTransaction(context: CommandContext, method: string,
         const round = (await roundView(store, match[1]!, context.user.id));
         if (round.status === 'SETTLED')
             throw new DomainError('该轮已结束', 409);
-        return (await messageView(store, (await publish(context, [relation(body.vote === 'TRUE' ? 'agree' : 'disagree', { target: [round.reference] }), { id: 'data', type: 'data', value: { roundId: round.id } }], { wager: number(body.amount) }))));
+        const stanceCorrections=body.stanceCorrections===undefined?undefined:stanceCorrectionsSchema.parse(body.stanceCorrections);
+        return (await messageView(store, (await publish(context, [relation(body.vote === 'TRUE' ? 'agree' : 'disagree', { target: [round.reference] }), { id: 'data', type: 'data', value: { roundId: round.id,...(stanceCorrections?{stanceCorrections}:{}) } }], { wager: number(body.amount) }))));
     }
     if ((match = path.match(/^\/rounds\/([^/]+)\/close-and-settle$/)) && method === 'POST') {
         const round = (await roundView(store, match[1]!, context.user.id));

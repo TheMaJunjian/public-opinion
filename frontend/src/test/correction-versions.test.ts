@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { computeCorrectionVersions, correctionSelectionIsStale, hasActiveCorrectionForSelection, type DemoEdge, type DemoMessage } from '../utils/modelBridge';
+import { computeCorrectionVersions, computeEffectiveSuppressedRelIds, correctionSelectionIsStale, hasActiveCorrectionForSelection, withCorrectionContent, type DemoEdge, type DemoMessage } from '../utils/modelBridge';
 import { formatCorrectionRange, generateCorrectionContent, isCorrectableCorrectionTarget } from '../pages/workbench/model/correction';
 import CorrectionComparisonPopup, { computeReplacementDiff, getCorrectionBaseContent, rebuildCorrectionContent } from '../components/CorrectionComparisonPopup';
 
@@ -21,6 +21,116 @@ function correctionEdge(id: string, correctionId: string): DemoEdge {
 }
 
 describe('correction versions', () => {
+  it('combines independent part fields and only resolves competing corrections within the same original field', () => {
+    const target: DemoMessage = { ...message('original','2026-01-01','旧标题\n旧正文','normal'), revision:1,
+      parts:[{id:'title',type:'text',text:'旧标题'},{id:'body',type:'text',text:'旧正文'}] };
+    const correction = (id: string, content: string, day: number): DemoMessage => ({...message(id,`2026-01-0${day}`,content,'relation'),relationType:'correct',
+      relationPayload:{correctionBeforeContent:target.content,correctionAfterContent:content}});
+    const title=correction('title','新标题\n旧正文',2),body=correction('body','旧标题\n新正文',3),otherTitle=correction('other-title','另一标题\n旧正文',4);
+    const field = (id: string,partId: string): DemoEdge => ({...correctionEdge(`edge-${id}`,id),to:{messageId:target.id,selection:{kind:'whole'},
+      reference:{messageId:target.id,revision:1,partId,path:['text']}}});
+    const votes = [['body',5],['other-title',6],['title',7]].map(([targetId,day]) => {
+      const id=`vote-${targetId}`,record={...message(id,`2026-01-0${day}`,'','relation'),relationType:'agree' as const,author:'alice'};
+      const edge: DemoEdge={id,relationMessageId:id,relationType:'agree',relationLabel:'赞同',from:{messageId:`anon:${id}`,selection:{kind:'whole'}},
+        to:{messageId:String(targetId),selection:{kind:'whole'}}};
+      return {record,edge};
+    });
+    const records=[target,title,body,otherTitle,...votes.map(v=>v.record)],edges=[field(title.id,'title'),field(body.id,'body'),field(otherTitle.id,'title'),...votes.map(v=>v.edge)];
+    const current=computeCorrectionVersions(records,edges,new Set(),'alice').get(target.id)?.current;
+    expect(current?.content).toBe('新标题\n新正文');
+    expect(current?.appliedCorrectionIds?.sort()).toEqual(['body','title']);
+    const rendered=withCorrectionContent(target,current!.content,current!.changes);
+    expect(rendered.parts).toEqual([{id:'title',type:'text',text:'新标题'},{id:'body',type:'text',text:'新正文'}]);
+    expect(withCorrectionContent(rendered,current!.content,current!.changes)).toBe(rendered);
+    expect(target.parts?.[0]).toMatchObject({text:'旧标题'});
+    const preview=computeCorrectionVersions(records,edges,new Set([otherTitle.id]),'alice',{previewCorrectionId:otherTitle.id}).get(target.id)?.current;
+    expect(preview?.content).toBe('另一标题\n新正文');
+    const previewMessage=withCorrectionContent(target,preview!.content,preview!.changes);
+    expect(withCorrectionContent(previewMessage,preview!.content,preview!.changes).parts).toEqual([
+      {id:'title',type:'text',text:'另一标题'},{id:'body',type:'text',text:'新正文'},
+    ]);
+  });
+
+  it('reports a public tie while choosing the newer correction deterministically', () => {
+    const original=message('original','2026-01-01','原文','normal');
+    const corrections=['older','newer'].map((id,index)=>({...message(id,`2026-01-0${index+2}`,id,'relation'),relationType:'correct' as const}));
+    const edges=corrections.map(item=>correctionEdge(`edge-${item.id}`,item.id));
+    const current=computeCorrectionVersions([original,...corrections],edges).get(original.id)?.current;
+    expect(current).toMatchObject({correctionId:'newer',recommendationTied:true,content:'newer'});
+    expect(computeCorrectionVersions([original,...corrections].reverse(),[...edges].reverse()).get(original.id)?.current).toEqual(current);
+  });
+
+  it('uses public statistics by default and prioritizes a viewer’s explicit correction choice', () => {
+    const original = message('original', '2026-01-01', '原文', 'normal');
+    const correction = (id: string, date: string, pro: number, con: number): DemoMessage => ({
+      ...message(id, date, id, 'relation'), relationType: 'correct', revision: 1,
+      parts: [{ id: 'corrected-body', type: 'text', text: id }, { id: 'relation', type: 'relation', relation: 'correct', roles: {} }],
+      relationPayload: { correctionBeforeContent: '原文', correctionAfterContent: id },
+      state: { messageId: id, revision: 1, suppressed: false, supportCount: pro, oppositionCount: con, recommendationTotal: 0 },
+    });
+    const older = correction('older', '2026-01-02', 1, 0), newer = correction('newer', '2026-01-03', 5, 0);
+    const vote: DemoMessage = { ...message('choice', '2026-01-04', '', 'relation'), author: 'alice', relationType: 'agree' };
+    const voteEdge: DemoEdge = { id: 'choice-edge', relationMessageId: vote.id, relationType: 'agree', relationLabel: '赞同',
+      from: { messageId: 'anon:choice', selection: { kind: 'whole' } },
+      to: { messageId: older.id, reference: { messageId: older.id, revision: 1, partId: 'relation' }, selection: { kind: 'whole' } } };
+    const records = [original, older, newer, vote], links = [correctionEdge('a', older.id), correctionEdge('b', newer.id), voteEdge];
+    const current = (user: string | null, data = records, edges = links) => computeCorrectionVersions(data, edges,
+      computeEffectiveSuppressedRelIds(edges, data, user), user).get(original.id)?.current;
+    expect(current('bob')?.correctionId).toBe(newer.id);
+    expect(current('alice')?.correctionId).toBe(older.id);
+    const rejected = { ...newer, state: { ...newer.state!, oppositionCount: 6 } };
+    expect(current('bob', [original, older, rejected, vote])?.correctionId).toBe(older.id);
+    const chooseRejected = { ...voteEdge, to: { ...voteEdge.to, messageId: newer.id,
+      reference: { messageId: newer.id, revision: 1, partId: 'relation' } } };
+    expect(current('alice', [original, older, rejected, vote], [links[0], links[1], chooseRejected])?.correctionId).toBe(newer.id);
+    const empty = [original, correction('older', '2026-01-02', 0, 0), correction('newer', '2026-01-03', 0, 0)];
+    expect(current('bob', empty, links.slice(0, 2))?.correctionId).toBe(newer.id);
+  });
+
+  it('tracks a native correction’s personal validity without rewriting the original body or title', () => {
+    const original: DemoMessage = { ...message('original', '2026-01-01', '正文开头，旧内容，结尾', 'relation'), relationType: 'summary', revision: 1,
+      parts: [{ id: 'body', type: 'text', text: '正文开头，旧内容，结尾' }], relationPayload: { title: '正文开头，旧内容，结尾' } };
+    const after = original.content.replace('旧内容', '新内容');
+    const correction: DemoMessage = { ...message('correction', '2026-01-02', after, 'relation'), relationType: 'correct', revision: 1,
+      parts: [{ id: 'relation', type: 'relation', relation: 'correct', roles: {} }],
+      relationPayload: { correctionContent: after, correctionBeforeContent: original.content, correctionAfterContent: after },
+      state: { messageId: 'correction', revision: 1, suppressed: false, supportCount: 0, oppositionCount: 0, recommendationTotal: 0 } };
+    const opposition = { ...message('opposition', '2026-01-03', '', 'relation'), relationType: 'disagree' as const, author: 'alice' };
+    const edges: DemoEdge[] = [correctionEdge('e', correction.id), { id: 'opp', relationMessageId: opposition.id, relationType: 'disagree',
+      from: { messageId: 'anon:opposition', selection: { kind: 'whole' } }, to: { messageId: correction.id, selection: { kind: 'whole' } }, relationLabel: '反对' }];
+    const records = [original, correction, opposition];
+    for (const username of [null, 'bob', 'alice']) {
+      const rejected = computeEffectiveSuppressedRelIds(edges, records, username);
+      const current = computeCorrectionVersions(records, edges, rejected).get(original.id)?.current;
+      expect(current?.content).toBe(username === 'alice' ? undefined : after);
+    }
+    const approval = { ...opposition, id: 'approval', relationType: 'agree' as const, createdAt: '2026-01-04' };
+    const restoredEdges = [...edges, { ...edges[1], id: 'approve', relationMessageId: approval.id, relationType: 'agree' as const,
+      from: { messageId: 'anon:approval', selection: { kind: 'whole' as const } } }];
+    const restoredRecords = [...records, approval];
+    expect(computeCorrectionVersions(restoredRecords, restoredEdges, computeEffectiveSuppressedRelIds(restoredEdges, restoredRecords, 'alice')).get(original.id)?.current?.content).toBe(after);
+    const shown = withCorrectionContent(original, after);
+    expect(shown.content).toBe(after);
+    expect(shown.relationPayload?.title).toBe(after);
+    expect(shown.parts![0]).toMatchObject({ text: after });
+    expect(original.content).not.toBe(after);
+    expect(original.relationPayload?.title).toBe(original.content);
+    expect(original.parts![0]).toMatchObject({ text: original.content });
+  });
+
+  it.each([false, true])('shows full before/after bodies for a text correction record (opposed=%s)', opposed => {
+    const before = '开头\n' + '完整总结。'.repeat(100) + '\n旧内容\n结尾';
+    const after = before.replace('旧内容', '新内容');
+    const target: DemoMessage = { ...message('original', '2026-01-01', after, 'relation'), relationType: 'summary' };
+    const correction: DemoMessage = { ...message('correction', '2026-01-02', after, 'relation'), relationType: 'correct',
+      relationPayload: { correctionBeforeContent: before, correctionAfterContent: after } };
+    const view = render(React.createElement(CorrectionComparisonPopup, { popup: { relMsgId: correction.id, x: 0, y: 0 },
+      messages: [target, correction], edges: [correctionEdge('e', correction.id)], invalidCorrectionIds: new Set(opposed ? [correction.id] : []), onClose: vi.fn() }));
+    expect(screen.getByRole('region', { name: '修改前全文' }).querySelector('pre')?.textContent).toBe(before);
+    expect(screen.getByRole('region', { name: '修改后全文' }).querySelector('pre')?.textContent).toBe(after);
+    expect(screen.getByText(opposed ? /当前对你无效/ : /当前对你有效/)).toBeInTheDocument();
+    view.unmount();
+  });
   const messages = [
     message('original', '2026-01-01T00:00:00.000Z', '原文', 'normal'),
     { ...message('correction-1', '2026-01-01T00:01:00.000Z', '第一次', 'relation'), relationPayload: { correctionContent: '第一次' } },

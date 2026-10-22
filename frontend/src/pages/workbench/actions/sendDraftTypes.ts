@@ -61,7 +61,7 @@ export interface DraftSendDependencies {
   sendTagRelation: (target: UnitSelection, tagLabel: string, subType?: string, customLabel?: string) => Promise<DemoEdge | null>;
   subTypeCustomBufferRef: React.MutableRefObject<string>;
   setSubTypeCustomLabel: React.Dispatch<React.SetStateAction<string>>;
-  setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; }; } | null>>;
+  setComparisonPopup: React.Dispatch<React.SetStateAction<{ relMsgId: string; x: number; y: number; reversePreview?: { before: string; after: string; target: UnitSelection; mode?: "direct"; label?: string; value?: Json; correctionKind?: 'TEXT' | 'MEANING'; }; } | null>>;
   correctionVersions: Map<string, { current?: import("../../../utils/modelBridge").CorrectionVersion; versions: import("../../../utils/modelBridge").CorrectionVersion[]; }>;
   blockCorrectionForSecondBettor: (messageId: string) => Promise<boolean>;
   edges: DemoEdge[];

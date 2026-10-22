@@ -4,6 +4,7 @@ import { useAuth, useOptionalAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
 import { operationLog } from '../utils/debugLog';
 import PromptModal from './PromptModal';
+import { useStanceCorrections } from './MessageDisplayHints';
 
 interface Props {
   messageId: string;
@@ -376,6 +377,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   }) => void;
   onSettled: (settledId: string) => void;
 }) {
+  const stanceCorrections=useStanceCorrections(messageId);
   const { user: currentUser } = useAuth();
   const [voteDirection, setVoteDirection] = useState<'TRUE' | 'FALSE'>('TRUE');
   const [voteAmount, setVoteAmount] = useState<number | ''>(1);
@@ -445,7 +447,8 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       setSettleError(null);
       setSettleNotice(null);
       setVoting(true);
-      const result = await api.castVote(localRound.id, { vote: voteDirection, amount: voteAmount });
+      const result = await api.castVote(localRound.id, { vote: voteDirection, amount: voteAmount,
+        ...(stanceCorrections?{stanceCorrections:{[messageId]:stanceCorrections}}:{}) });
       operationLog('投票', `round=${localRound.id} vote=${voteDirection} amount=${voteAmount}`);
       setVoteAmount(1);
       window.dispatchEvent(new Event('points-refresh'));

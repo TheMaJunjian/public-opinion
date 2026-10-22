@@ -49,12 +49,12 @@ export function useGraphOverlays(input: Omit<GraphOverlayInput, 'labelBboxes'> &
     const task = startOverlays();
     task.run(() => {
       const startedAt = performance.now();
-      const measured = measureGraphOverlays({ canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, anchorCache: anchorCache.current, skipRouting: input.pendingMeasurements });
+      const measured = measureGraphOverlays({ canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, anchorCache: anchorCache.current, skipRouting: input.pendingMeasurements, excludedStanceEdges:input.excludedStanceEdges });
       reportWorkbenchDrawingDuration(performance.now() - startedAt);
       if (measured) setOverlays(measured);
       task.complete();
     });
-  }, [canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, input.pendingMeasurements]);
+  }, [canvasRef, normalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals, headerRefs, contentRefs, edges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, labelBboxes, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, input.pendingMeasurements,input.excludedStanceEdges]);
   useLayoutEffect(() => {
     const canvasEl=canvasRef.current; if (!canvasEl) return;
     const task = startOverlays();

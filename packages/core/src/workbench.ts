@@ -99,6 +99,15 @@ export interface RelationPayload {
   /** CORRECT stores the complete replacement content directly on the correction relation. */
   correctionContent?: string;
   correctionValue?: Json;
+  correctionKind?: 'TEXT' | 'MEANING';
+  /** Full readable content around a suggested text edit, for comparison only. */
+  correctionBeforeContent?: string;
+  correctionAfterContent?: string;
+  /** Display fingerprints on an explicitly sent READ annotation; no separate system messages. */
+  readDisplay?: Record<string,string>;
+  readDisplayParts?: Record<string,{ message: string; corrections?: string }>;
+  /** Meaning corrections present in the body when this stance was sent. Text edits share votes. */
+  stanceCorrections?: Record<string,string[]>;
 }
 
 export interface RelationView {

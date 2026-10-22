@@ -1,4 +1,4 @@
-import { organization, relations, textOf, type Message, type Reference, type Change, type MessageState, type UserView, type TargetRef, type NativeMessageView, type NativeMessageStakes, type ScopeView, type WorkbenchSnapshot, isRelationView } from '@gonglun/core';
+import { organization, relations, replaceReference, textOf, type Message, type Reference, type Change, type MessageState, type UserView, type TargetRef, type NativeMessageView, type NativeMessageStakes, type ScopeView, type WorkbenchSnapshot, isRelationView } from '@gonglun/core';
 import { DomainError, Store } from './db.js';
 import { dataOf } from './economy.js';
 import { statesFor } from './projections.js';
@@ -116,10 +116,38 @@ export async function messageView(store: Store, message: Message, parent?: strin
     delete payload.uiType;
     delete payload.kind;
     delete payload.contentType;
+    if (type === 'CORRECT') {
+        payload.correctionKind = data.correctionKind === 'MEANING' ? 'MEANING' : 'TEXT';
+        const body = message.parts.find(part => part.id === 'corrected-body' && part.type === 'text');
+        if (body?.type === 'text') {
+            payload.correctionAfterContent = body.text; payload.correctionContent = body.text;
+            if (data.value !== undefined) payload.correctionValue = data.value;
+        } else if (relation?.relation === 'amend' && typeof data.value === 'string' && !relation.roles.target?.[0]?.reference.partId) {
+            const reference = relation.roles.target?.[0]?.reference;
+            if (reference) payload.correctionBeforeContent = textOf(await cachedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context));
+            payload.correctionAfterContent = data.value; payload.correctionContent = data.value;
+        }
+    }
     if (relation && ['classify', 'summary'].includes(relation.relation))
         payload.title = organizationTitle(message);
-    if (relation?.relation === 'amend' && data.value !== undefined)
+    if (relation?.relation === 'amend' && data.value !== undefined) {
         payload.correctionContent = data.value;
+        const reference = relation.roles.target?.[0]?.reference;
+        if (reference?.partId && !data.legacyTopicId) {
+            const target = await cachedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context);
+            const part = target.parts.find(part => part.id === reference.partId);
+            if (part && ['text', 'code', 'web'].includes(part.type) && !reference.memberId
+                && (!reference.path?.length || reference.path.length === 1 && ['text', 'source', 'excerpt'].includes(String(reference.path[0])))) {
+                // Preview the immutable proposal against its original revision.
+                // Invalid proposals remain readable and can still be rejected.
+                try {
+                    const parts = replaceReference(target, reference, data.value);
+                    payload.correctionBeforeContent = textOf(target);
+                    payload.correctionAfterContent = textOf({ ...target, parts });
+                } catch { /* Authorization validates the proposed replacement. */ }
+            }
+        }
+    }
     if (relation?.relation === 'delegate') {
         payload.delegationKind = 'CREATE';
         payload.rewardAmount = data.reward;

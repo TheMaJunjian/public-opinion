@@ -6,12 +6,13 @@ import MessageTextPart from '../components/MessageTextPart';
 import MessageCard from '../components/MessageCard';
 import { PART_SELECTION_EVENT, isWholeMessageSelection, type PartSelectionDetail } from '../utils/messageElementSelection';
 import { capturePartSelection } from '../utils/partSelection';
-import { preparePartCorrection } from '../utils/partCorrection';
+import { mapCorrectionSelection, preparePartCorrection } from '../utils/partCorrection';
+import { prepareAddressedCorrection } from '../pages/workbench/actions/sendCorrectionDraft';
 import { calculateSendCost } from '../hooks/useStakeCalculation';
 import {
   computeCorrectedEdgeMap, computeCorrectionVersions, computeTransitiveVoteStats, computeEffectiveSuppressedRelIds,
   convertMessagesToDemoModel, referenceToUnit, targetRefToUnit, unitSelectionToReference,
-  unitSelectionToTargetRef, type DemoMessage, type DemoEdge,
+  unitSelectionToTargetRef, withCorrectionContent, type DemoMessage, type DemoEdge,
 } from '../utils/modelBridge';
 
 const body: Part = { id: 'body', type: 'text', text: '重复 / 重复' };
@@ -25,6 +26,45 @@ const makeEdge = (id: string, to: Reference, relationType: 'agree' | 'disagree' 
 afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); });
 
 describe('versioned part selection through the original composer', () => {
+  it.each([
+    { start: 4, end: 5, text: 'b', originalStart: 1, originalEnd: 2, value: 'B', after: 'AA\naBc' },
+    { start: 1, end: 4, text: 'ong', originalStart: 0, originalEnd: 1, value: 'lB', after: 'AA\nlBbc' },
+  ])('maps a later selection in a corrected second part back to its original address ($text)', async ({ start, end, text, originalStart, originalEnd, value, after }) => {
+    const original = { ...message([{ id: 'first', type: 'text', text: 'AA' }, { id: 'second', type: 'text', text: 'abc' }]), content: 'AA\nabc' };
+    const current = { correctionId: 'edit', targetId: original.id, baseContent: original.content, content: 'AA\nlongbc', valid: true,
+      createdAt: '2026-01-02', changes: [{ start: 3, end: 4, replacement: 'long' }] };
+    const target = referenceToUnit({ messageId: original.id, revision: 3, partId: 'second', range: { start, end } }, text);
+    const setComparisonPopup = vi.fn(), setSendError = vi.fn();
+    await prepareAddressedCorrection({ msgMap: new Map([[original.id, original]]), newMessageContent: 'B',
+      correctionVersions: new Map([[original.id, { current, versions: [current] }]]), secondaryRelationType: 'text-correction',
+      setComparisonPopup, setSendError }, { effectiveTargets: [target] });
+    expect(setSendError).not.toHaveBeenCalled();
+    expect(setComparisonPopup).toHaveBeenCalledWith(expect.objectContaining({ reversePreview: expect.objectContaining({
+      before: original.content, after, value, target: expect.objectContaining({ reference: {
+        messageId: original.id, revision: 3, partId: 'second', range: { start: originalStart, end: originalEnd },
+      } }),
+    }) }));
+  });
+
+  it('keeps corrected text visible while selecting, then maps its range back to the original', () => {
+    const original = message(), shown = withCorrectionContent(original, '重复 / 新正文');
+    const { container, rerender } = render(<MessageTextPart message={shown} activeText />);
+    const text = container.querySelector('[data-message-part-id]')!.firstChild!;
+    expect(text.textContent).toBe('重复 / 新正文');
+    const range = document.createRange(); range.setStart(text, 6); range.setEnd(text, 8);
+    window.getSelection()!.addRange(range);
+    const selected = capturePartSelection(container, original)!;
+    const mapped = mapCorrectionSelection(original.content, shown.content, [{ start: 5, end: 7, replacement: '新正文' }], selected.reference!.range!, '修正');
+    expect(mapped).toEqual({ range: { start: 5, end: 7 }, value: '新修正' });
+    const prepared = preparePartCorrection(original, { ...selected, reference: { ...selected.reference!, range: mapped.range } }, mapped.value);
+    expect(prepared.before).toBe('重复 / 重复');
+    expect(prepared.after).toBe('重复 / 新修正');
+    expect(prepared.target.messageId).toBe('m');
+    rerender(<MessageTextPart message={shown} />);
+    expect(container).toHaveTextContent('重复 / 新正文');
+    expect(original.parts![0]).toEqual(body);
+  });
+
   it('keeps the second occurrence and its exact range through the API projection', () => {
     const m = message();
     const { container } = render(<MessageTextPart message={m} />);
@@ -103,7 +143,8 @@ describe('versioned part selection through the original composer', () => {
     const target = referenceToUnit({ messageId: 'm', revision: 3, partId: 'body', range: { start: 5, end: 7 } });
     const correction = preparePartCorrection(message(), target, '修改');
     expect(correction.value).toBe('修改');
-    expect(correction.before).toBe('重复');
+    expect(correction.before).toBe('重复 / 重复');
+    expect(correction.after).toBe('重复 / 修改');
     expect(correction.target.reference).toEqual(target.reference);
     expect(() => preparePartCorrection(message(), referenceToUnit({ messageId: 'm', revision: 2, partId: 'body' }), '错误')).toThrow('版本已变化');
   });
@@ -138,6 +179,19 @@ describe('core message identity and execution state', () => {
     const versions = computeCorrectionVersions([m, ...converted.messages], converted.edges).get(m.id)!;
     expect(versions.current).toBeUndefined(); expect(versions.versions).toHaveLength(1);
     expect(versions.versions[0].valid).toBe(false); expect(computeCorrectedEdgeMap(converted.edges).size).toBe(0);
+  });
+
+  it('shows previously sent text amendments as corrections once their full bodies are projected', () => {
+    const m = message();
+    const before = m.content, after = before.replace('重复', '修改');
+    const relation: Relation = { id: 'earlier-correction', relationType: 'CORRECT', sourceMessageId: null,
+      targetRefs: [{ kind: 'text-fragment', messageId: m.id, text: '重复', hash: 'x', reference: { messageId: m.id, revision: 3, partId: 'body', range: { start: 0, end: 2 } } }],
+      parts: [{ id: 'relation', type: 'relation', relation: 'amend', roles: {} }],
+      payload: { correctionContent: '修改', correctionBeforeContent: before, correctionAfterContent: after }, createdBy: user, createdAt: '2026-01-02' };
+    const converted = convertMessagesToDemoModel([], [relation]);
+    expect(converted.edges[0].proposalOnly).toBe(false);
+    expect(computeCorrectionVersions([m, ...converted.messages], converted.edges).get(m.id)?.current?.content).toBe(after);
+    expect(computeCorrectionVersions([{ ...m, revision: 4 }, ...converted.messages], converted.edges).get(m.id)?.current).toBeUndefined();
   });
 
   it('keeps an imported effective correction active even when its stored relation name is amend', () => {

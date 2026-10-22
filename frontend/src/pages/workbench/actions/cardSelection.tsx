@@ -223,6 +223,11 @@ export function handleMessageDoubleClick(dependencies: HandleMessageDoubleClickD
       return;
     }
     if (relType === "classify" || relType === "summary") {
+      if (relationType === "correct") {
+        if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
+        else { setActiveTextSelectId(messageId); clearBrowserSelection(); }
+        return;
+      }
       if (traceFrameIds.has(messageId)) {
         setTraceExpandedFrameIds(prev => {
           const next = new Set(prev);
@@ -231,13 +236,6 @@ export function handleMessageDoubleClick(dependencies: HandleMessageDoubleClickD
           return next;
         });
         setTraceKey(key => key + 1);
-        return;
-      }
-      if (relationType === "correct") {
-        // In correction mode, the container card is the selectable text target;
-        // do not navigate away from the current canvas.
-        if (currentlyActive) { setActiveTextSelectId(null); clearBrowserSelection(); }
-        else setActiveTextSelectId(messageId);
         return;
       }
       // Always clear any text selection before entering classification to prevent

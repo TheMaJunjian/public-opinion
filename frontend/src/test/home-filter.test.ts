@@ -3,9 +3,36 @@ import type { Relation } from '../types';
 import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, filterUnreadRelatedTraceMatchIds, getLatestUserReadStatusByMessageId, partitionHomeContentMatchIds, partitionHomeFilterMatchIds } from '../pages/workbench/model/filters';
 import { getContainerAncestorChain } from '../pages/workbench/model/ownership';
 import { buildTraceProjection } from '../utils/traceProjection';
+import { deriveHomeFilterResult } from '../pages/workbench/projections/homeFilterResult';
+import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
 
 const user = { id: 'user-1', username: 'alice', createdAt: '2026-01-01T00:00:00.000Z' };
 const otherUser = { id: 'user-2', username: 'bob', createdAt: '2026-01-01T00:00:00.000Z' };
+
+describe('correction discovery for the original author', () => {
+  it.each(['normal', 'classify', 'summary'] as const)('shows a direct correction to my %s in unread-related, then moves it to read-related', type => {
+    const original: DemoMessage = { id: 'original', author: user.username, content: '原文', createdAt: '',
+      kind: type === 'normal' ? 'normal' : 'relation', ...(type !== 'normal' ? { relationType: type } : {}),
+      parts: [{ id: 'body', type: 'text', text: '原文' }] };
+    const correction: DemoMessage = { id: 'correction', author: otherUser.username, content: '更正后', createdAt: '',
+      kind: 'relation', relationType: 'correct', parts: [{ id: 'relation', type: 'relation', relation: 'correct', roles: {} }] };
+    const edges: DemoEdge[] = [{ id: 'e', relationMessageId: correction.id, relationType: 'correct', relationLabel: '更正',
+      from: { messageId: 'anon:correction', selection: { kind: 'whole' } }, to: { messageId: original.id, selection: { kind: 'whole' } } }];
+    const input = { displayUser: user, msgMap: new Map([[original.id, original], [correction.id, correction]]),
+      messages: [original, correction], edges, traceContainerMemberships: [], readStatusByMessageId: new Map<string, 'READ' | 'UNREAD'>() };
+    const unread = deriveHomeFilterResult({ ...input, homeFilterMode: 'unread-related' })!;
+    expect(unread.matchIds).toEqual(new Set([correction.id]));
+    expect(unread.displayIds).toEqual(new Set([correction.id, original.id]));
+    expect(deriveHomeFilterResult({ ...input, displayUser: { ...user, username: 'unrelated' }, homeFilterMode: 'unread-related' })!.matchIds.size).toBe(0);
+    const mark: Relation = { id: 'read-correction', relationType: 'READ', sourceMessageId: null,
+      targetRefs: [{ kind: 'relation', relationId: correction.id }], createdAt: '2026-10-21', createdBy: user };
+    const readStatusByMessageId = getLatestUserReadStatusByMessageId([mark], record => record.createdBy.id === user.id);
+    expect(deriveHomeFilterResult({ ...input, readStatusByMessageId, homeFilterMode: 'unread-related' })!.matchIds.size).toBe(0);
+    const read = deriveHomeFilterResult({ ...input, readStatusByMessageId, homeFilterMode: 'read-related' })!;
+    expect(read.matchIds.has(correction.id)).toBe(true);
+    expect(read.displayIds.has(original.id)).toBe(true);
+  });
+});
 
 function relation(
   relationType: 'READ' | 'UNREAD',

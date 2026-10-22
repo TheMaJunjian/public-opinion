@@ -4,6 +4,7 @@ import { getPresentationSpec } from '../types';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import MessageTextPart from './MessageTextPart';
 import MessageElement from './MessageElement';
+import { MessageDisplayMarker } from './MessageDisplayHints';
 import { isMessageElementSelected, messageMembersReference, messageTypeReference } from '../utils/messageElementSelection';
 import { getMessageProminence } from '../utils/messageDisplay';
 import { activateMessageFromKeyboard } from '../utils/messageKeyboard';
@@ -194,6 +195,7 @@ export default function MessageCard({
             </span>
           )}
           {headerLabel ?? defaultHeaderLabel}
+          {headerLeading === undefined && <MessageDisplayMarker messageId={msg.id} />}
         </span>
         <span style={{ textAlign: 'right' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
@@ -206,11 +208,6 @@ export default function MessageCard({
           {headerExtra}
         </div>
       </div>
-      {readStatus && (
-        <div title={readStatus === 'READ' ? '已读' : '未读'} style={{ position: 'absolute', right: 8, bottom: 6, fontSize: 13, color: readStatus === 'READ' ? '#86efac' : '#fca5a5' }}>
-          {readStatus === 'READ' ? '✓' : '○'}
-        </div>
-      )}
 
       {badges}
       {isOrganizationMessage && (
@@ -225,7 +222,7 @@ export default function MessageCard({
             cursor: isActiveText ? 'text' : 'inherit',
           }}>
           <MessageTextPart message={msg} activeText={isActiveText} onMouseUp={onContentMouseUp}>
-            {isSummary && organizationTitle ? (
+            {isActiveText && msg.parts ? undefined : isSummary && organizationTitle ? (
               <>
                 <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{organizationTitle}</div>
               </>

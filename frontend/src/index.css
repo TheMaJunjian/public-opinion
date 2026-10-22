@@ -158,6 +158,34 @@ html, body, #root {
   display: none;
 }
 
+.workbench-splitter {
+  width: 12px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a2a2a;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.workbench-splitter[data-active="true"] { background: #0b84ff; }
+.workbench-splitter-grip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+.workbench-splitter-grip i { width: 3px; height: 3px; border-radius: 50%; background: #888; }
+.workbench-splitter[data-active="true"] .workbench-splitter-grip { opacity: 1; }
+.workbench-splitter[data-active="true"] .workbench-splitter-grip i { background: #fff; }
+@media (hover: hover) and (pointer: fine) {
+  .workbench-splitter[data-active="false"]:hover { background: #4a4a4a; }
+}
+
 @media (max-width: 768px), (hover: none) and (pointer: coarse) {
   .guide-bubble {
     padding-bottom: 64px !important;

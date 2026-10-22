@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
-import CleanFilterPanel from '../../../components/CleanFilterPanel';
+import DeferredWorkbench from '../../../components/DeferredWorkbench';
 import HomeFilterPanel from '../../../components/HomeFilterPanel';
 import MessageFilterPanel from '../../../components/MessageFilterPanel';
 import { Z_INDEX } from '../../../constants/zIndex';
@@ -8,6 +8,7 @@ import type { DemoMessage, UnitSelection } from '../../../utils/modelBridge';
 import { resolveNavigationTargetId } from '../model/navigation';
 import type { ExportData } from '../../../api/client';
 const ExportModal = lazy(() => import('../../../components/ExportModal'));
+const CleanFilterPanel = lazy(() => import('../../../components/CleanFilterPanel'));
 type ViewMode = 'list' | 'graph';
 interface ViewNavigation {
   viewMode: ViewMode; setViewMode: Dispatch<SetStateAction<ViewMode>>;
@@ -53,7 +54,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
             导出
           </button>
           <HomeFilterPanel {...home} />
-          <CleanFilterPanel {...clean} />
+          <DeferredWorkbench label="过滤选项" blocksDrawing><CleanFilterPanel {...clean} /></DeferredWorkbench>
           <MessageFilterPanel {...filter} />
           {!comparisonMode && !comparisonReviewed && <button
             onClick={onStartComparison}

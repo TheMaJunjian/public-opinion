@@ -3,6 +3,7 @@ import type {
   UnitSelection
 } from "../../../utils/modelBridge";
 import { subTypeLabel } from '../model/relationComposition';
+import { isCorrectableCorrectionTarget } from '../model/correction';
 import { sendAuthorizationDraft, sendNotifyDraft, sendSelectedTagDraft, sendWrittenTagDraft } from './sendAnnotationDraft';
 import { sendArrangeDraft } from './sendArrangementDraft';
 import { sendClassificationDraft } from './sendClassificationDraft';
@@ -156,7 +157,7 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
     return;
   }
   // Legacy exported messages retain their original correction preview.
-  const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === 'relation');
+  const hasRelationTarget = effectiveTargets.some(u => msgMap.get(u.messageId)?.kind === 'relation' && !isCorrectableCorrectionTarget(msgMap.get(u.messageId)));
   if (relationType === 'correct' && hasRelationTarget) {
     setSendError('关系消息不能更正，请选择普通文本消息');
     return;

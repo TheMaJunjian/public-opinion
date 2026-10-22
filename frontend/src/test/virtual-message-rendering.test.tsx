@@ -24,6 +24,7 @@ describe('viewport message rendering with measured browser geometry', () => {
     vi.useFakeTimers();
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
       const id = this.dataset.measureId ?? this.dataset.msgid;
+      if (this.dataset.frameHeader) return parseFloat(this.style.minHeight) || 64;
       if (id === 'merge') return 36;
       if (id?.startsWith('m-')) return 100 + Number(id.slice(2)) % 7 * 20;
       return parseFloat(this.style.height) || 500;

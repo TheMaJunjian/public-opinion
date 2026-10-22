@@ -5,6 +5,7 @@ import { computeCharDiff, renderDiffParts, type DiffPart } from './CharDiffText'
 import PopupOverlay from './PopupOverlay';
 import PromptModal from './PromptModal';
 import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
+import CorrectionTextComparison from './CorrectionTextComparison';
 
 type ComparisonPopupState = {
   relMsgId: string;
@@ -20,6 +21,7 @@ type Props = {
   onClose: () => void;
   isSending?: boolean;
   reversePreview?: {
+    correctionKind?: 'TEXT' | 'MEANING';
     before: string;
     after: string;
     onConfirm: () => void | Promise<void>;
@@ -37,28 +39,32 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
   const relType = relEdges[0]?.relationType ?? '';
 
   if (reversePreview) {
-    const { origParts, nextParts } = computeCharDiff(reversePreview.before, reversePreview.after);
-    const previewMessage = messages[0] ?? {
-      id: 'correction-preview', content: '', kind: 'normal', author: '', createdAt: '',
-    } as DemoMessage;
     return (
-      <PromptModal open title="✏ 反向更正预览" confirmText={isSending ? '发送中…' : '确认发送更正'}
+      <PromptModal open title="✏ 更正预览" confirmText={isSending ? '发送中…' : '确认发送更正'}
         confirmDisabled={isSending} onConfirm={() => void reversePreview.onConfirm()} onCancel={onClose}
         lockScroll={false} dialogProps={{ style: { width: 'min(700px, 100%)' } }} message={
-          <div style={{ display: 'flex', gap: 10 }}>
-            <MessageDiffColumn title="发送前最新内容" message={{ ...previewMessage, content: reversePreview.before }} border="#554" background="#211e14">
-              {renderDiffParts(origParts, 'orig')}
-            </MessageDiffColumn>
-            <MessageDiffColumn title="发送后显示内容" message={{ ...previewMessage, content: reversePreview.after }} border="#255" background="#14201e">
-              {renderDiffParts(nextParts, 'next')}
-            </MessageDiffColumn>
-          </div>
+          <CorrectionTextComparison before={reversePreview.before} after={reversePreview.after}
+            status={`附加关系：${reversePreview.correctionKind === 'MEANING' ? '修改原意' : '修正文字'}。发送后其他用户即可查看，并按本人立场及公共统计决定正文显示。`} />
         } />
     );
   }
 
   if (relType === 'correct' && targetMsgs.length > 0) {
     const origMsg = targetMsgs[0];
+    const payload = msgMap.get(popup.relMsgId)?.relationPayload;
+    if (typeof payload?.correctionBeforeContent === 'string' && typeof payload.correctionAfterContent === 'string') {
+      const active = !invalidCorrectionIds.has(popup.relMsgId);
+      return <PopupOverlay contentRef={contentRef} zIndex={200} background={DIALOG_BACKDROP} onClick={onClose}>
+        <div ref={contentRef} style={{ ...dialogStyles.panel, padding: 16, width: 'min(700px, calc(100vw - 32px))',
+          maxHeight: 'calc(100% - 32px)', overflow: 'auto', position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
+          onClick={event => event.stopPropagation()}>
+          <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
+          <CorrectionTextComparison before={payload.correctionBeforeContent} after={payload.correctionAfterContent}
+            status={`附加关系：${payload.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · ${active ? '当前对你有效' : '当前对你无效'}。以下展示更正前后全文；消息卡按本人立场及公共统计显示有效正文。`} />
+          <CloseRow onClose={onClose} />
+        </div>
+      </PopupOverlay>;
+    }
     const selectedVersion = computeCorrectionVersions(messages, edges, invalidCorrectionIds)
       .get(origMsg.id)?.versions.find(version => version.correctionId === popup.relMsgId);
     const beforeContent = origMsg.content;
@@ -138,11 +144,14 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
             position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
+            <div style={{ fontSize: 11, color: '#fbbf24', marginBottom: 8 }}>
+              附加关系：{payload?.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · {selectedVersion.valid ? '当前对你有效' : '当前对你无效'}。以下展示更正前后全文；消息卡按本人立场及公共统计显示有效正文。
+            </div>
             <div style={{ display: 'flex', gap: 10 }}>
               <MessageDiffColumn title="原文" message={{ ...origMsg, content: beforeContent }} isCorrected={false} border="#554" background="#211e14">
                 {renderHighlightedContent(beforeContent, 'before')}
               </MessageDiffColumn>
-              <MessageDiffColumn title="本次更正有效后的最新内容" message={{ ...origMsg, content: afterContent }} border="#255" background="#14201e">
+              <MessageDiffColumn title="更正影响预览" message={{ ...origMsg, content: afterContent }} border="#255" background="#14201e">
                 {renderHighlightedContent(afterContent, 'after')}
               </MessageDiffColumn>
             </div>

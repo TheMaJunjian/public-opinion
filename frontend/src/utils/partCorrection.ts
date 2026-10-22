@@ -1,5 +1,29 @@
-import { replaceReference, resolveReference, type Json, type Message as CoreMessage } from '@gonglun/core';
+import { replaceReference, resolveReference, textOf, type Json, type Message as CoreMessage } from '@gonglun/core';
 import { unitSelectionToReference, type DemoMessage, type UnitSelection } from './modelBridge';
+
+/** Translate a visible selection through effective edits back to the immutable original. */
+export function mapCorrectionSelection(original: string, displayed: string,
+  changes: Array<{ start: number; end: number; replacement: string }>, range: { start: number; end: number }, replacement: string) {
+  if (range.start < 0 || range.end <= range.start || range.end > displayed.length) throw new Error('当前选择已变化，请重新选字');
+  const spans: Array<{ start: number; end: number; visibleStart: number; visibleEnd: number; changed: boolean }> = [];
+  let cursor = 0, visible = 0;
+  for (const change of [...changes].sort((a, b) => a.start - b.start || a.end - b.end)) {
+    const length = change.start - cursor;
+    if (length > 0) spans.push({ start: cursor, end: change.start, visibleStart: visible, visibleEnd: visible + length, changed: false });
+    visible += length;
+    spans.push({ start: change.start, end: change.end, visibleStart: visible, visibleEnd: visible + change.replacement.length, changed: true });
+    cursor = change.end; visible += change.replacement.length;
+  }
+  if (cursor < original.length) spans.push({ start: cursor, end: original.length, visibleStart: visible, visibleEnd: displayed.length, changed: false });
+  const selected = spans.filter(span => range.start < span.visibleEnd && range.end > span.visibleStart);
+  if (!selected.length) throw new Error('无法定位对应原文，请重新选字');
+  const first = selected[0], last = selected.at(-1)!;
+  const start = first.changed ? first.start : first.start + range.start - first.visibleStart;
+  const end = last.changed ? last.end : last.start + range.end - last.visibleStart;
+  const visibleStart = first.changed ? first.visibleStart : range.start;
+  const visibleEnd = last.changed ? last.visibleEnd : range.end;
+  return { range: { start, end }, value: displayed.slice(visibleStart, range.start) + replacement + displayed.slice(range.end, visibleEnd) };
+}
 
 export function preparePartCorrection(message: DemoMessage, selection: UnitSelection, content: string) {
   if (!message.parts) throw new Error('请重新加载消息后选择要修改的部件');
@@ -20,7 +44,12 @@ export function preparePartCorrection(message: DemoMessage, selection: UnitSelec
   } else {
     try { value = JSON.parse(content) as Json; } catch { throw new Error(reference.partId ? '此字段需要有效的 JSON 值' : '整条消息的修改内容需要是部件数组'); }
   }
-  replaceReference(coreMessage, reference, value);
+  const parts = replaceReference(coreMessage, reference, value);
   const display = (input: unknown) => typeof input === 'string' ? input : JSON.stringify(input, null, 2);
+  const part = message.parts.find(candidate => candidate.id === reference.partId);
+  if (part && ['text', 'code', 'web'].includes(part.type)
+    && !reference.memberId && (!reference.path?.length || reference.path.length === 1 && ['text', 'source', 'excerpt'].includes(String(reference.path[0])))) {
+    return { before: textOf(coreMessage), after: textOf({ ...coreMessage, parts }), value, target: { ...selection, reference } };
+  }
   return { before: display(reference.partId ? current : message.parts), after: display(value), value, target: { ...selection, reference } };
 }

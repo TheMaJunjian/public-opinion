@@ -223,23 +223,26 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
       ? ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetRelation.relationType.toUpperCase())
       || getPresentationSpec(targetRelation.relationType).kind === 'inline-badge'
       : ['AGREE', 'DISAGREE', 'CORRECT'].includes(targetEdge?.relationType?.toUpperCase() ?? '');
-    const candidates = findMessageElements(container, targetId);
-    const comparisonPair = container.querySelector('[data-comparison-pair]');
-    const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
-    const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
-    const directOverlayCandidates = overlayCandidates.filter(candidate => candidate.getAttribute('data-msgid') === targetId);
-    const overlayComparisonCandidates = comparisonCandidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
-    const preferredCandidates = isDecorationTarget
-      ? (directOverlayCandidates.length > 0 ? directOverlayCandidates : overlayCandidates.length > 0 ? overlayCandidates : candidates)
-      : candidates;
-    const preferredComparisonCandidates = isDecorationTarget && overlayComparisonCandidates.length > 0
-      ? overlayComparisonCandidates
-      : comparisonCandidates;
-    const el = comparisonPair
-      ? preferredComparisonCandidates[0] ?? null
-      : isDecorationTarget
-        ? preferredCandidates[0] ?? null
-        : preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
+    const findTargetElement = () => {
+      const candidates = findMessageElements(container, targetId);
+      const comparisonPair = container.querySelector('[data-comparison-pair]');
+      const comparisonCandidates = candidates.filter(candidate => candidate.closest('[data-comparison-view="agree"]'));
+      const overlayCandidates = candidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
+      const directOverlayCandidates = overlayCandidates.filter(candidate => candidate.getAttribute('data-msgid') === targetId);
+      const overlayComparisonCandidates = comparisonCandidates.filter(candidate => candidate.hasAttribute('data-rel-overlay'));
+      const preferredCandidates = isDecorationTarget
+        ? (directOverlayCandidates.length > 0 ? directOverlayCandidates : overlayCandidates.length > 0 ? overlayCandidates : candidates)
+        : candidates;
+      const preferredComparisonCandidates = isDecorationTarget && overlayComparisonCandidates.length > 0
+        ? overlayComparisonCandidates
+        : comparisonCandidates;
+      return comparisonPair
+        ? preferredComparisonCandidates[0] ?? null
+        : isDecorationTarget
+          ? preferredCandidates[0] ?? null
+          : preferredCandidates.find(candidate => !candidate.hasAttribute('data-rel-overlay')) ?? preferredCandidates[0] ?? null;
+    };
+    const el = findTargetElement();
     if (!el) { scrollRafRef.current = nextFrame(tryScroll); return; }
     const elRect = el.getBoundingClientRect();
     if (elRect.width === 0 || elRect.height === 0) {
@@ -274,16 +277,10 @@ export function scrollMsgToCenter(dependencies: ScrollMsgToCenterDependencies, m
     // still outside the actual viewport before creating the jump overlay.
     const verify = (afterNativeScroll = false) => {
       if (requestId !== scrollRequestIdRef.current) { complete(false); return; }
-      let currentElement = el;
-      if (!currentElement.isConnected) {
-        const currentCandidates = findMessageElements(container, targetId);
-        currentElement = currentCandidates.find(candidate =>
-          isDecorationTarget && candidate.hasAttribute('data-rel-overlay')
-          && candidate.getAttribute('data-msgid') === targetId,
-        ) ?? currentCandidates.find(candidate => isDecorationTarget && candidate.hasAttribute('data-rel-overlay'))
-          ?? currentCandidates[0];
-      }
-      if (!currentElement?.isConnected) { scrollRafRef.current = nextFrame(tryScroll); return; }
+      // Revealing an arrangement can mount its card after the border was
+      // already found. Center that committed card before showing the pulse.
+      const currentElement = findTargetElement();
+      if (!currentElement?.isConnected || currentElement !== el) { scrollRafRef.current = nextFrame(tryScroll); return; }
       if (!viewportContainsTarget(currentElement, container)) {
         if (afterNativeScroll) { scrollRafRef.current = nextFrame(tryScroll); return; }
         currentElement.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });

@@ -81,6 +81,7 @@ export default function RelationToolbar({ barRef: relationBarRef, leftControlsRe
               setRelationType(prev => prev === rt ? null : rt);
               if (newType === "tag") { setSecondaryRelationType(lastTagSecondaryRef.current || "recommend"); }
               else if (newType === "delegation") { setSecondaryRelationType(lastDelegationSecondaryRef.current); }
+              else if (newType === "correct") { setSecondaryRelationType('text-correction'); }
               else { setSecondaryRelationType(newType === "arrange" ? "vertical" : "none"); }
               if (guideTargetIdRef.current && (rt === 'agree' || rt === 'disagree')) {
                 window.dispatchEvent(new Event('guide-stance-selected'));

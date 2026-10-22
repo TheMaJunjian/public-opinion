@@ -14,10 +14,13 @@ interface HandleSplitterPointerDownDependencies {
   TOTAL_FLEX: 4;
 }
 
-export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDownDependencies, e: React.PointerEvent<HTMLDivElement>): void {
+export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDownDependencies, e: React.PointerEvent<HTMLDivElement>): (() => void) | undefined {
   const { setSplitterActive, panelContainerRef, splitterDragRef, MIN_LEFT_PX, MIN_RIGHT_PX, MAX_RIGHT_PX, BASE_WIDTH, getMinimumContainerWidth, setContainerWidth, setLeftFlex, TOTAL_FLEX } = dependencies;
+  if (e.isPrimary === false || e.button > 0 || splitterDragRef.current || !panelContainerRef.current) return;
   e.preventDefault();
-  e.currentTarget.setPointerCapture(e.pointerId);
+  const splitter = e.currentTarget;
+  const pointerId = e.pointerId;
+  splitter.setPointerCapture(pointerId);
   setSplitterActive(true);
   const panelContainer = panelContainerRef.current;
   const containerRect = panelContainer?.getBoundingClientRect();
@@ -31,6 +34,7 @@ export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDow
     : 0;
   splitterDragRef.current = { startX: e.clientX, startLeftPx, containerW };
   function onPointerMove(ev: PointerEvent) {
+    if (ev.pointerId !== pointerId) return;
     if (!splitterDragRef.current || !panelContainerRef.current) return;
     const pointerDelta = ev.clientX - splitterDragRef.current.startX;
     // A click (including small pointer jitter) must not normalize the current
@@ -48,16 +52,25 @@ export function handleSplitterPointerDown(dependencies: HandleSplitterPointerDow
     setContainerWidth(nextWidth);
     setLeftFlex(TOTAL_FLEX * desiredLeftPx / (effectiveNextWidth - 12));
   }
-  function onPointerUp() {
+  function cleanup() {
     setSplitterActive(false);
     splitterDragRef.current = null;
     document.removeEventListener('pointermove', onPointerMove);
     document.removeEventListener('pointerup', onPointerUp);
     document.removeEventListener('pointercancel', onPointerUp);
+    splitter.removeEventListener('lostpointercapture', onPointerUp);
+    window.removeEventListener('blur', cleanup);
+    if (splitter.hasPointerCapture?.(pointerId)) splitter.releasePointerCapture(pointerId);
+  }
+  function onPointerUp(ev: PointerEvent) {
+    if (ev.pointerId === pointerId) cleanup();
   }
   document.addEventListener('pointermove', onPointerMove);
   document.addEventListener('pointerup', onPointerUp);
   document.addEventListener('pointercancel', onPointerUp);
+  splitter.addEventListener('lostpointercapture', onPointerUp);
+  window.addEventListener('blur', cleanup);
+  return cleanup;
 }
 
 export interface LeftPanelTouchGesture {
@@ -148,7 +161,7 @@ function consumeWheelDelta(element: HTMLElement, delta: number, axis: 'top' | 'l
 }
 
 /** Own the entire wheel sequence so handoff does not depend on the browser's latched scroll target. */
-export function handlePanelWheel(panel: HTMLElement, otherPanel: HTMLElement | null, event: WheelEvent, page: HTMLElement | null = null): void {
+export function handlePanelWheel(panel: HTMLElement, event: WheelEvent, fallbacks: readonly (HTMLElement | null)[] = []): void {
   if (event.defaultPrevented || !event.cancelable || event.ctrlKey || (event.deltaX === 0 && event.deltaY === 0)) return;
   event.preventDefault();
   const unitY = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? panel.clientHeight : 1;
@@ -170,12 +183,13 @@ export function handlePanelWheel(panel: HTMLElement, otherPanel: HTMLElement | n
   const target = event.composedPath()[0] ?? event.target;
   let ancestor = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
   if (!ancestor || !surface.contains(ancestor)) ancestor = panel;
-  while (ancestor && ancestor !== page) {
+  while (ancestor) {
     if (ancestor instanceof HTMLElement) consume(ancestor, ancestor === panel);
     if (ancestor === surface) break;
     ancestor = ancestor.parentElement;
   }
   consume(panel, true);
-  if (otherPanel) consume(otherPanel, true);
-  if (page) consume(page, true);
+  // 当前侧还有余量时，另一侧必须冻结；只有到边界后才将剩余距离
+  // 依次传给另一侧和整页。不能把“优先滚动自身”误改为“禁止边界传递”。
+  for (const fallback of fallbacks) if (fallback) consume(fallback, true);
 }

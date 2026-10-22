@@ -4,7 +4,7 @@ import type {
   DemoEdge,
   DemoMessage
 } from "../../../utils/modelBridge";
-import { isContentKind } from "../../../utils/modelBridge";
+import { isCardMessage } from "../../../utils/modelBridge";
 import { type TraceContainerMembership } from "../../../utils/traceProjection";
 import { buildHomeFilterDisplayIds, deriveHomeContentMatchSetsBySender, partitionHomeContentMatchIds } from '../model/filters';
 
@@ -24,7 +24,7 @@ export function deriveHomeFilterResult(input: DeriveHomeFilterResultInput): { ma
   if (homeFilterMode === null) return null;
   const allMessageIds = new Set(msgMap.keys());
   const contentIds = new Set(
-    messages.filter(message => isContentKind(message.kind)).map(message => message.id),
+    messages.filter(message => isCardMessage(message) || message.relationType === 'correct').map(message => message.id),
   );
   const readContentIds = new Set(
     [...readStatusByMessageId]

@@ -43,6 +43,15 @@ export function getMessageProminence(message: Pick<DemoMessage, 'state' | 'spend
 
 const organizations = new Set(['classify', 'summary', 'merge', 'arrange']);
 
+/** Editing readable content must not replace the container or hide its frame. */
+export function isBodyCorrection(edge: DemoEdge, messages: ReadonlyMap<string, DemoMessage>): boolean {
+  if (edge.relationType !== 'correct') return false;
+  const correction = messages.get(edge.relationMessageId);
+  if (correction?.relationPayload?.correctionBeforeContent !== undefined) return true;
+  const part = messages.get(edge.to.messageId)?.parts?.find(part => part.id === edge.to.reference?.partId);
+  return !!part && ['text', 'code', 'web'].includes(part.type);
+}
+
 /** Votes on an addressed component/history need their own visible identity, not a whole-card badge. */
 export function needsSeparateStanceCard(message: DemoMessage, messages: ReadonlyMap<string, DemoMessage>): boolean {
   const target = message.executedStance?.target;

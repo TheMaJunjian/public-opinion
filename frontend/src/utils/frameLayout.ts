@@ -8,6 +8,7 @@ export interface FrameBlock {
   directCardIds: Set<string>;
   childRelMsgIds: string[];
   isMerge: boolean;
+  hasCardHeader?: boolean;
   hasGroupHeader: boolean;
   targetLayout?: RelationTargetLayout;
 }
@@ -120,7 +121,7 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     item.column = columns[0] ?? item.column;
     item.time = children.length ? Math.min(item.time, ...children.map(child => child.time)) : item.time;
     item.header = frame.hasGroupHeader ? Math.max(56, input.measuredHeights[id] ?? 56) : 0;
-    const insideHeader = frame.isMerge ? Math.max(MERGE_CARD_H, input.measuredHeights[id] ?? MERGE_CARD_H) + 8 : 0;
+    const insideHeader = frame.isMerge || frame.hasCardHeader ? Math.max(MERGE_CARD_H, input.measuredHeights[id] ?? MERGE_CARD_H) + 8 : 0;
     const top = item.header + FRAME_PAD + insideHeader;
     const frontier = new Frontier();
     let right = GRID_LEFT + CARD_W;

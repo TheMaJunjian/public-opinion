@@ -1,14 +1,17 @@
 import type { DemoMessage } from '../../../utils/modelBridge';
+import type { ReactNode } from 'react';
+import { MessageDisplayMarker } from '../../../components/LazyMessageDisplayHints';
 interface Props {
   isInsideClassify: boolean; isRouteScope?: boolean; isTemporaryJoinCategory: boolean; correctionFilterTargetId: string | null; comparisonMode: boolean;
   comparisonTargetCount: number; correctionCount: number; temporaryJoinCount: number; classificationTitle: string; classifyKindLabel: string;
   comparisonTargetId: string | null; joinFilterTargetId: string | null; currentClassifyRelMsg: DemoMessage | null | undefined;
   joinFilterDirection?: 'incoming' | 'outgoing';
+  correctionRecords?:ReactNode;
   classifyTargetCount: number; classifyExitLabel: string; onExitTemporary: () => void; onExitClassify: () => void;
 }
 export default function ClassificationHeader({ isInsideClassify, isRouteScope = false, isTemporaryJoinCategory, correctionFilterTargetId, comparisonMode,
   comparisonTargetCount, correctionCount, temporaryJoinCount, classificationTitle, classifyKindLabel, comparisonTargetId, joinFilterTargetId, joinFilterDirection = 'incoming', currentClassifyRelMsg,
-  classifyTargetCount, classifyExitLabel, onExitTemporary: exitTemporaryCategory, onExitClassify: handleExitClassification }: Props) {
+  classifyTargetCount, classifyExitLabel, correctionRecords, onExitTemporary: exitTemporaryCategory, onExitClassify: handleExitClassification }: Props) {
   return (<>
     {(isInsideClassify || isTemporaryJoinCategory || correctionFilterTargetId !== null || comparisonMode) && (
       <div style={{ flex: "0 0 auto", padding: "8px 8px 12px 8px", background: "#101010" }}>
@@ -37,6 +40,8 @@ export default function ClassificationHeader({ isInsideClassify, isRouteScope = 
                 <span>{joinFilterDirection === 'outgoing' ? `成员加入容器 ${joinFilterTargetId} 的全部记录` : `消息 ${joinFilterTargetId} 加入容器的全部记录`}（含生效和未生效记录）</span>
               ) : (
                 <>
+                  {currentClassifyRelMsg && <span><span>{currentClassifyRelMsg.id}</span><MessageDisplayMarker messageId={currentClassifyRelMsg.id} /></span>}
+                  {correctionRecords}
                   {!isRouteScope && <span>由 <span style={{ fontWeight: 600, color: "#cbd5e1" }}>{currentClassifyRelMsg?.author ?? "系统"}</span> 发起</span>}
                   <span>💬 {classifyTargetCount} 条观点</span>
                   {!isRouteScope && currentClassifyRelMsg && <span>{new Date(currentClassifyRelMsg.createdAt).toLocaleDateString('zh-CN')}</span>}

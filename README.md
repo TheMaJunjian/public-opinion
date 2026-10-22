@@ -17,6 +17,20 @@ npm run dev
 
 已有 PostgreSQL 时，在根目录 `.env` 或环境变量中设置 `DATABASE_URL`，开发脚本会直接连接该数据库。变量示例见 [.env.example](.env.example)。首次连接时自动建立表，不导入旧数据库数据。
 
+### 雷电模拟器测试
+
+Windows 下双击仓库根目录的 `start-android.cmd`，或桌面的“公论手机测试”快捷方式。它会自动启动缺少的开发服务、启动雷电、等待安卓就绪、建立端口连接，并在雷电的 Chrome 中打开测试页面。已有服务和模拟器会直接复用；重复双击可恢复模拟器重启后丢失的连接。开发服务在后台运行，启动日志保存在 `artifacts/android-dev/`。需要本地数据库时会尝试启动已安装的 Docker Desktop。
+
+也可以在仓库根目录运行同一个一键启动流程：
+
+```sh
+npm run dev:android
+```
+
+测试地址为 http://localhost:5173/messages，即可测试注册、登录和发送消息。端口通过 ADB 连接电脑；浏览器把 `localhost` 视为安全上下文，因此支持 WebCrypto，无需配置 HTTPS 或开放防火墙。
+
+首次使用时，在雷电设置 → 其他设置 → ADB 调试中开启本地连接。脚本优先选择雷电14，自动查找常见安装位置；可通过 `LDPLAYER_HOME` 指定包含 `ldconsole.exe` 和 `adb.exe` 的目录，`LDPLAYER_INDEX` 指定实例编号（默认 0）。也可通过 `ADB_PATH` 指向同一安装目录的 `adb.exe`，通过 `ANDROID_SERIAL` 或 `npm run dev:android -- emulator-5554` 指定连接编号。
+
 ```sh
 npm test
 npm run build

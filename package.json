@@ -15,6 +15,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:server": "tsx watch --env-file-if-exists=.env apps/server/src/main.ts",
     "dev:web": "npm --workspace frontend run dev",
+    "dev:android": "node scripts/start-android.mjs",
     "typecheck": "tsc --noEmit && npm --workspace frontend run typecheck",
     "build": "node scripts/build.mjs",
     "start": "node --env-file-if-exists=.env apps/server/dist/main.js",

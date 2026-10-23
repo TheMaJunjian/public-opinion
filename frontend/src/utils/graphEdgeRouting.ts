@@ -6,11 +6,12 @@ import { selectionIsText, relationTypeName } from './graphTextSelection';
 import type { LayoutBox, Rect } from './layout';
 import type { Box } from './frameLayout';
 import type { Point, LabelSeed } from './graphEdgeGeometry';
-import { DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, MAX_RELATION_NESTING_DEPTH } from './graphPresentationGeometry';
+import { getEdgeDecorationLeft, getDecorationColumnWidth, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_MAX_LABEL_CHARS, MAX_RELATION_NESTING_DEPTH } from './graphPresentationGeometry';
 import { quadAt, rayRectIntersectionFirst, samplePerimeterCandidates, computeLabelPlacementsAlongCurve } from './graphEdgeGeometry';
 import type { PositionedEdge } from './graphOverlays';
 
 export interface GraphRoutingInput {
+  visibleDecorationIds?: ReadonlySet<string>;
   getCachedFragment?: (messageId: string, key: string) => Rect | undefined;
   newTagDecorationsByMsg: Record<string, { label: string; relMsgIds: string[]; rect: Rect; relAgreeCount: number; relDisagreeCount: number; relAgreeMsgIds: string[]; relDisagreeMsgIds: string[]; }[]>;
   edgesByRelMsg: Map<string, DemoEdge[]>;
@@ -89,6 +90,10 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       }
       if (relType === "tag") {
         const tagInfo = tagBadgeByRelMsgId.get(relId);
+        if(tagInfo&&input.visibleDecorationIds&&!input.visibleDecorationIds.has(tagInfo.mid)){
+          const box=endpointBoxForNormal(tagInfo.mid)?.box??layout[tagInfo.mid];
+          return {x:tagInfo.rect.x-EDGE_HINT_W-DEC_GAP,y:box?box.y+DEC_RIGHT_TOP:tagInfo.rect.y,width:EDGE_HINT_W,height:EDGE_HINT_W};
+        }
         return tagInfo ? { x: tagInfo.rect.x, y: tagInfo.rect.y, width: tagInfo.rect.width, height: tagInfo.rect.height } : null;
       }
       if (relType === "agree" || relType === "disagree") {
@@ -105,10 +110,14 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
           for (const r1e of targetRelEdges) {
             const bb = labelBboxes[r1e.id] ?? labelBboxes[`${r1e.id}__toRel__${r1e.to.messageId}`];
             if (bb) {
-              const hasAgree = (relDecByRelMsgId.get(targetMid)?.agreeCount ?? 0) > 0;
-              let badgeY = bb.y + Math.floor((bb.height - DEC_H) / 2);
-              if (relType === "disagree" && hasAgree) badgeY += DEC_H + DEC_GAP;
-              return { x: bb.x + bb.width + DEC_RIGHT_GAP, y: badgeY, width: DEC_W, height: DEC_H };
+              const left=getEdgeDecorationLeft(bb,!normalSet.has(targetMid));
+              if(input.visibleDecorationIds&&!input.visibleDecorationIds.has(targetMid))
+                return {x:left,y:bb.y+(bb.height-EDGE_HINT_W)/2,width:EDGE_HINT_W,height:EDGE_HINT_W};
+              const votes=relDecByRelMsgId.get(targetMid);
+              const hasAgree=(votes?.agreeCount??0)>0;
+              const count=(hasAgree?1:0)+((votes?.disagreeCount??0)>0?1:0);
+              const top=bb.y+bb.height/2-(count*DEC_H+Math.max(0,count-1)*DEC_GAP)/2;
+              return {x:left+EDGE_HINT_W+DEC_GAP,y:top+(relType==='disagree'&&hasAgree?DEC_H+DEC_GAP:0),width:DEC_W,height:DEC_H};
             }
           }
           // No label bbox available yet (first render) — fall back to recursive approximation
@@ -117,6 +126,10 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
         // Point to the decoration badge rect so the arrow targets the badge, not the whole card
         const decKey = `${targetMid}::${relType}`;
         const decRect = decorationRects[decKey];
+        if(decRect&&input.visibleDecorationIds&&!input.visibleDecorationIds.has(targetMid)){
+          const first=decorationRects[`${targetMid}::agree`]??decRect;
+          return {x:first.rect.x-EDGE_HINT_W-DEC_GAP,y:first.rect.y,width:EDGE_HINT_W,height:EDGE_HINT_W};
+        }
         if (decRect) return { x: decRect.rect.x, y: decRect.rect.y, width: decRect.rect.width, height: decRect.rect.height };
         const ep = endpointBoxForNormal(targetMid);
         return ep?.box ?? null;
@@ -180,8 +193,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const names = users
         .filter(user => user && typeof user.username === 'string')
         .map(user => user.username);
-      const legacyIds = relationMessage?.relationPayload?.notifyUserIds ?? [];
-      return `${names.length > 0 ? names.join('、') : legacyIds.length > 0 ? legacyIds.join('、') : '与会者'}：通知`;
+      return `${names.length > 0 ? names.join('、') : '与会者'}：通知`;
     }
     const labelText = (e: DemoEdge, author: string) => {
       if (e.relationType === "notify") return notifyEdgeLabel(e);
@@ -338,6 +350,26 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       });
     }
 
+    const decoratedLabels=new Set<string>();
+    const relationTags=new Map<string,Map<string,number>>();
+    for(const edge of edges){
+      if(edge.relationType!=='tag'||edge.to.selection.kind!=='whole')continue;
+      const label=(edge.relationLabel&&edge.relationLabel!=='tag'?edge.relationLabel:msgMap.get(edge.from.messageId)?.content??'标注').slice(0,TAG_MAX_LABEL_CHARS);
+      const groups=relationTags.get(edge.to.messageId)??new Map<string,number>();
+      groups.set(label,(groups.get(label)??0)+1);relationTags.set(edge.to.messageId,groups);
+    }
+    const correctionVotesByReplacement=new Map<string,string[]>();
+    const voteBadgeCount=(relId:string)=>{
+      const votes=relDecByRelMsgId.get(relId);
+      return ((votes?.agreeCount??0)>0?1:0)+((votes?.disagreeCount??0)>0?1:0);
+    };
+    for(const edge of edges){
+      if(edge.relationType!=='correct'||edge.proposalOnly
+        ||msgMap.get(edge.from.messageId)?.kind!=='relation'||msgMap.get(edge.to.messageId)?.kind!=='relation')continue;
+      const id=edge.from.messageId;
+      if(voteBadgeCount(edge.relationMessageId)>0)
+        correctionVotesByReplacement.set(id,[...(correctionVotesByReplacement.get(id)??[]),edge.relationMessageId]);
+    }
     for (let idx=0;idx<rawEdges.length;idx++) {
       const pe=rawEdges[idx];
       const { fromBox, toBox, fragRectCanvas, edge } = pe;
@@ -451,7 +483,30 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
         }
       }
       pe.start=finalS; pe.ctrl=chosenCurve.c; pe.end=finalE;
-      labelSeeds.push({drawId:pe.drawId,text:pe.edgeLabelText,p0:pe.start,p1:pe.ctrl,p2:pe.end});
+      let rightWidth=0,rightHeight=EDGE_HINT_W;
+      const relId=edge.relationMessageId;
+      if(!decoratedLabels.has(relId)){
+        decoratedLabels.add(relId);
+        const hasHint=!normalSet.has(relId);
+        const owners=[...(['annotation','reference','reply'].includes(edge.relationType)&&(voteBadgeCount(relId)>0||relationTags.has(relId))?[relId]:[]),
+          ...(correctionVotesByReplacement.get(relId)??[])];
+        rightWidth=hasHint?DEC_RIGHT_GAP+EDGE_HINT_W:0;
+        for(const owner of owners){
+          const expanded=!input.visibleDecorationIds||input.visibleDecorationIds.has(owner);
+          const count=voteBadgeCount(owner);
+          rightWidth+=(rightWidth>0?DEC_GAP:DEC_RIGHT_GAP)+getDecorationColumnWidth(expanded);
+          if(expanded)rightHeight=Math.max(rightHeight,count*DEC_H+Math.max(0,count-1)*DEC_GAP);
+        }
+        const tags=relationTags.get(relId);
+        if(tags?.size&&(!input.visibleDecorationIds||input.visibleDecorationIds.has(relId))){
+          const widths=[...tags].map(([label,count])=>Math.max(TAG_MIN_W,(count>1?`${label}（${count}人）`:label).length*8+36));
+          rightWidth=Math.max(rightWidth,DEC_RIGHT_GAP+(hasHint?EDGE_HINT_W+DEC_GAP:0)+EDGE_HINT_W+DEC_GAP+Math.max(...widths));
+          const tagHeight=tags.size*TAG_H+(tags.size-1)*TAG_V_GAP;
+          rightHeight=voteBadgeCount(relId)>0||owners.length>1
+            ? rightHeight+2*(DEC_GAP+tagHeight) : Math.max(rightHeight,tagHeight);
+        }
+      }
+      labelSeeds.push({drawId:pe.drawId,text:pe.edgeLabelText,p0:pe.start,p1:pe.ctrl,p2:pe.end,rightWidth,rightHeight});
     }
 
     const placements=computeLabelPlacementsAlongCurve({seeds:labelSeeds,forbiddenRects:globalForbiddenRects});

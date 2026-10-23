@@ -15,7 +15,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const user = { id: 'u2', username: '当前用户', createdAt: '' };
 const time = '2026-10-18T10:00:00.000Z';
-const message = (id: string): Message => ({ id, kind: 'TEXT', content: id, contentType: 'TEXT', createdBy: user, createdAt: time });
+const message = (id: string): Message => ({ id, kind: 'TEXT', content: id, contentType: 'TEXT', createdBy: user, createdAt: time,revision:1,parts:[{id:'body',type:'text',text:id}] });
 
 it('preserves messages, pinned references, relation states, order and display counts across export and viewing', () => {
   const relation: Relation = { id: 'relation', relationType: 'REFERENCE', sourceMessageId: 'b', createdAt: time, createdBy: user,

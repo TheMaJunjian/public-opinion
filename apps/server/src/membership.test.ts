@@ -5,7 +5,7 @@ import { resolveMemberships, type MembershipAction } from '@gonglun/core';
 import { createTestApp, cleanupTestDatabases } from './test-database.js';
 import { convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBridge.js';
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
-import { initializeOrganizationMemberships } from './organizations.js';
+import { initializeOrganizationMemberships } from '../../migrate/src/migrate-organization-memberships.js';
 import { projectWorkbenchSnapshot } from '../../../frontend/src/utils/workbenchProjection.js';
 
 afterEach(cleanupTestDatabases);

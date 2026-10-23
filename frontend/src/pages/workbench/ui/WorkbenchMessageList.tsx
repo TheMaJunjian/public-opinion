@@ -7,7 +7,6 @@ import {indexRelatedMessages,isRejectedContainer} from '../../../utils/relatedMe
 import { useNavigate } from 'react-router-dom';
 import MessageCard, { type MessageCardContext, type MessageCardProps } from '../../../components/MessageCard';
 import { MessageDisplayMarker } from '../../../components/MessageDisplayHints';
-import CorrectionTextComparison from '../../../components/CorrectionTextComparison';
 import RoundHistory from '../../../components/RoundHistory';
 import SettlementPanel from '../../../components/SettlementPanel';
 import type { Relation } from '../../../types';
@@ -15,7 +14,6 @@ import { getOrganizationTitle } from '../../../utils/messageDisplay';
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import { messageScopePath } from '../../../utils/messageRoutes';
 import { type CorrectionVersion, type DemoEdge, type DemoMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
-import { formatCorrectionRange } from '../model/correction';
 import { collectOwnedByRelation } from '../model/ownership';
 import { getJoinStatusPresentation, type JoinStatus } from '../model/membership';
 import type { JoinEffectSource } from '../model/joinDisplay';
@@ -39,7 +37,7 @@ interface MessageCatalog {
   correctionVersions: Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>;
 }
 interface MessageDisplay {
-  tagSourceIdsForList: Set<string>;
+  embeddedMessageIds: Set<string>;
   suppressedRelIds: Set<string>;
   rejectedContainerIds: Set<string>;
   overriddenStanceRelIds: Set<string>;
@@ -94,17 +92,17 @@ export default function WorkbenchMessageList(props: Props) {
     onNavigate: handleNavigateToMessage, onCorrectionNavigate: handleNavigateFromCorrectionTemporaryCategory,
     renderRelation: renderRelationContentWithTargets, renderContent: renderMessageContentWithAnchorsForList } = props;
   const { messages, edges, msgMap, relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds, summaryCoverageByMessageId, correctionVersions } = props.catalog;
-  const { tagSourceIdsForList, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts, correctionFilterTargetId } = props.display;
+  const { embeddedMessageIds, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts, correctionFilterTargetId } = props.display;
   const { comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap, stanceEffectByRelMsgId } = props.comparison;
   const { draftUnits, activeTextSelectId, lastClickedMessageId } = props.selection;
   const relatedByTarget=useMemo(()=>indexRelatedMessages(messages,rejectedContainerIds),[messages,rejectedContainerIds]);
   const standaloneMessageIds = props.standaloneMessageIds;
   const listMessages = useMemo(() => filterMessageListContext(
     messagesToRenderFiltered
-      .filter(msg => !tagSourceIdsForList.has(msg.id))
+      .filter(msg => !embeddedMessageIds.has(msg.id))
       .filter(msg => !isRejectedContainer(msg,rejectedContainerIds) || standaloneMessageIds?.has(msg.id)),
     messages, edges, standaloneMessageIds,
-  ), [messagesToRenderFiltered, messages, edges, tagSourceIdsForList, rejectedContainerIds, standaloneMessageIds]);
+  ), [messagesToRenderFiltered, messages, edges, embeddedMessageIds, rejectedContainerIds, standaloneMessageIds]);
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
   const rowIds = useMemo(() => listMessages.map(message => message.id), [listMessages]);
   const rowMap = useMemo(() => new Map(listMessages.map(message => [message.id, message])), [listMessages]);
@@ -176,24 +174,33 @@ export default function WorkbenchMessageList(props: Props) {
             ? correctionTargetEdge
             : undefined;
           const correctionSource = correctionSourceEdge ? msgMap.get(correctionSourceEdge.from.messageId) : undefined;
-          const correctionContent = msg.relationPayload?.correctionContent ?? correctionSource?.content ?? msg.content;
-          const correctionTargetText = correctionTargetEdge?.to.selection.kind === 'text'
-            ? correctionTargetEdge.to.selection.text
-            : correctionTargetOriginal?.content ?? '';
-          const correctionTargetLabel = correctionTargetEdge?.to.selection.kind === 'text'
-            ? formatCorrectionRange(correctionTargetEdge.to.selection.start, correctionTargetEdge.to.selection.len, correctionTargetText)
-            : formatCorrectionRange(0, correctionTargetText.length, correctionTargetText);
-          const correctionReplacement = correctionTargetEdge?.to.selection.kind === 'text' && correctionTargetOriginal
-            ? (() => {
-              const selection = correctionTargetEdge.to.selection;
-              const suffixLength = correctionTargetOriginal.content.length - selection.start - selection.len;
-              const replacementEnd = correctionContent.length - suffixLength;
-              return selection.start >= 0 && selection.len >= 0 && suffixLength >= 0 &&
-                replacementEnd >= selection.start && replacementEnd <= correctionContent.length
-                ? correctionContent.slice(selection.start, replacementEnd)
-                : correctionContent;
-            })()
-            : correctionContent;
+          const correctionContent = msg.relationPayload?.correctionAfterContent ?? msg.relationPayload?.correctionContent ?? correctionSource?.content ?? msg.content;
+          const correctionBefore = msg.relationPayload?.correctionBeforeContent ?? correctionTargetOriginal?.content ?? '';
+          const correctionSelection = correctionTargetEdge?.to.selection;
+          const correctionPart = correctionTargetOriginal?.parts?.find(part => part.id === correctionTargetEdge?.to.reference?.partId);
+          const correctionField = correctionPart?.type === 'text' ? correctionPart.text : correctionPart?.type === 'code' ? correctionPart.source
+            : correctionPart?.type === 'web' ? correctionPart.excerpt || correctionPart.url : correctionBefore;
+          const correctionTargetText = correctionSelection?.kind === 'text'
+            ? correctionSelection.text || correctionField.slice(correctionSelection.start, correctionSelection.start + correctionSelection.len)
+            : correctionField;
+          const correctionRange = correctionSelection?.kind === 'text' ? correctionSelection : { start: 0, len: correctionTargetText.length };
+          const correctionTargetLabel = correctionTargetText ? `「${correctionTargetText}」` : '所选内容';
+          const correctionReplacement = (() => {
+            if (typeof msg.relationPayload?.correctionValue === 'string') return msg.relationPayload.correctionValue;
+            if (correctionSelection?.kind !== 'text') return correctionContent;
+            let start = correctionSelection.start;
+            if (correctionPart) for (const part of correctionTargetOriginal?.parts ?? []) {
+              if (part.id === correctionPart.id) break;
+              if (part.type === 'text' || part.type === 'code' || part.type === 'web')
+                start += (part.type === 'text' ? part.text : part.type === 'code' ? part.source : part.excerpt || part.url).length + 1;
+            }
+            const end = start + correctionSelection.len;
+            const prefix = correctionBefore.slice(0, start), suffix = correctionBefore.slice(end);
+            return start >= 0 && end <= correctionBefore.length && correctionContent.length >= prefix.length + suffix.length
+              && correctionContent.startsWith(prefix) && correctionContent.endsWith(suffix)
+              ? correctionContent.slice(start, correctionContent.length - suffix.length)
+              : msg.relationPayload?.correctionContent ?? correctionContent;
+          })();
           const activeStanceInfo = activeStanceByRelMsgId.get(msg.id);
           const stanceEffect = stanceEffectByRelMsgId.get(msg.id);
           const activeTargetStanceInfo = activeStanceMap.get(msg.id);
@@ -236,12 +243,12 @@ export default function WorkbenchMessageList(props: Props) {
                   )}
                   {activeStanceInfo && activeStanceInfo.targetRelId === comparisonTargetId && comparisonReviewed && (
                     <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
-                      当前推荐显示：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
+                      当前统计结果：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
                     </span>
                   )}
                   {!activeStanceInfo && isCurrentComparisonTarget && activeTargetStanceInfo && (
                     <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
-                      当前推荐显示：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
+                      当前统计结果：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
                     </span>
                   )}
                 </>
@@ -404,7 +411,7 @@ export default function WorkbenchMessageList(props: Props) {
               ) : msg.relationType === 'correct' ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontSize: 12, color: '#fbbf24' }}>
-                    ✏ {msg.author} 更正了消息
+                    目标：
                     {correctionTarget && (
                       <button
                         type="button"
@@ -412,21 +419,19 @@ export default function WorkbenchMessageList(props: Props) {
                         style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 11 }}
                         title={`跳转到目标消息 ${correctionTarget.id}`}
                       >
-                        目标消息 · {correctionTarget.id}
+                        {correctionTarget.id}
                       </button>
                     )}
                   </div>
-                  {typeof msg.relationPayload?.correctionBeforeContent === 'string' && typeof msg.relationPayload.correctionAfterContent === 'string'
-                    ? <CorrectionTextComparison before={msg.relationPayload.correctionBeforeContent} after={msg.relationPayload.correctionAfterContent}
-                      status={`附加关系：${msg.relationPayload.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · ${correctionVersion?.valid ? '当前对你有效' : '当前对你无效'}，消息卡按有效更正显示正文`} />
-                    : <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px' }}>
-                    <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>具体更改</div>
+                  <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px' }}>
+                    <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>{msg.relationPayload?.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · start={correctionRange.start} len={correctionRange.len}</div>
                     <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
-                      {correctionContent.length === 0
+                      {correctionReplacement.length === 0
                         ? `删除${correctionTargetLabel}`
-                        : `将${correctionTargetLabel}修改为「${correctionReplacement}」`}
+                        : correctionTargetText.length === 0 ? `在所选位置插入「${correctionReplacement}」`
+                          : `将${correctionTargetLabel}修改为「${correctionReplacement}」`}
                     </div>
-                  </div>}
+                  </div>
                 </div>
               ) : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
                 : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}

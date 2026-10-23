@@ -65,23 +65,6 @@ export function buildFrameBlocks(params: {
   for (const block of blocks.values()) for (const relation of grouped.get(block.relMsgId) ?? []) {
     if (blocks.has(relation.to.messageId)) attach(relation.to.messageId, block.relMsgId);
   }
-  // Exported snapshots predating membership parts represented nesting with shared
-  // target sets. Keep their replay behavior; never infer ownership for new messages.
-  if (!traceMode) {
-    const legacy = [...blocks.values()].filter(block => !msgMap.get(block.relMsgId)?.parts);
-    const sets = new Map(legacy.map(block => [block.relMsgId, new Set([...block.cardIds].filter(id => !blocks.has(id)))]));
-    const candidates = [...legacy].sort((a, b) => sets.get(a.relMsgId)!.size - sets.get(b.relMsgId)!.size);
-    for (const child of candidates) {
-      if (parent.has(child.relMsgId)) continue;
-      const childSet = sets.get(child.relMsgId)!;
-      if (!childSet.size) continue;
-      for (const owner of candidates) {
-        const ownerSet = sets.get(owner.relMsgId)!;
-        if (ownerSet.size <= childSet.size || ![...childSet].every(id => ownerSet.has(id))) continue;
-        if (attach(child.relMsgId, owner.relMsgId)) break;
-      }
-    }
-  }
   const descendants = new Map<string, Set<string>>();
   const collect = (id: string): Set<string> => {
     const known = descendants.get(id);

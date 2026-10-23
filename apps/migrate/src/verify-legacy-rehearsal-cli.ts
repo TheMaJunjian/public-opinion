@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { replayArchive, type Message } from '@gonglun/core';
-import { Postgres } from './postgres.js';
+import { Postgres } from '../../server/src/postgres.js';
 import { legacyTimestamp } from './legacy-time.js';
 import { legacyOrganizationState } from './legacy-organizations.js';
 
@@ -52,7 +52,7 @@ try {
       const row=await target.prepare('SELECT body FROM messages WHERE id=$1').get(topic.id),converted=row?JSON.parse(String(row.body)) as Message:undefined;
       const body=converted?.parts.find(part=>part.id==='body'),data=converted?.parts.find(part=>part.type==='data');
       const meta=data?.type==='data'?data.value as Record<string,any>:undefined;
-      if(body?.type!=='text'||body.text!==topic.id||meta?.title!==topic.id||meta?.legacyTitle!==topic.title||meta?.legacyBody!==(topic.body??null)||!converted?.parts.some(part=>part.type==='relation'&&part.relation==='classify')) throw new Error(`Topic 分类内容或原元数据不一致: ${topic.id}`);
+      if(body?.type!=='text'||body.text!==topic.id||meta?.title!==topic.id||meta?.origin?.kind!=='topic-classification'||meta?.origin?.id!==topic.id||!converted?.parts.some(part=>part.type==='relation'&&part.relation==='classify')) throw new Error(`Topic 分类内容或原元数据不一致: ${topic.id}`);
     }
     for(const message of oldMessages) {
       const actual=await target.prepare('SELECT body FROM messages WHERE id=$1').get(message.id);
@@ -62,7 +62,8 @@ try {
       if(!converted||text!==String(message.content??'')) throw new Error(`消息正文不匹配: ${message.id}`);
       if(converted.createdAt!==legacyTimestamp(message.createdAt)||converted.updatedAt!==legacyTimestamp(message.updatedAt)) throw new Error(`消息时间不匹配: ${message.id}`);
       const data=converted.parts.find(part=>part.type==='data'),meta=data?.type==='data'?data.value as Record<string,any>:undefined;
-      if(json(meta?.legacyTargetRefs)!==json(message.targetRefs??[])) throw new Error(`原始容器/关系引用不匹配: ${message.id}`);
+      const original=await target.prepare('SELECT body FROM legacy_records WHERE \"tableName\"=$1 AND body->>\'id\'=$2').get('Message',message.id);
+      if(json(original?.body?.targetRefs??[])!==json(message.targetRefs??[])) throw new Error(`原始容器/关系引用不匹配: ${message.id}`);
       let parent=parents.get(String(message.id));const visited=new Set<string>([message.id]);
       while(parent&&!topicIds.has(parent)){
         if(visited.has(parent)) throw new Error(`容器归属循环: ${message.id}`);
@@ -91,7 +92,8 @@ try {
       for(const row of sourceRounds) {
         const converted=await target.prepare('SELECT body FROM rounds WHERE id=$1').get(row.id);
         const actual=converted?JSON.parse(String(converted.body)):undefined;
-        if(!actual||actual.legacyStatus!==row.status||actual.previousRoundId!==row.previousRoundId||actual.createdAt!==legacyTimestamp(row.openedAt)||actual.endsAt!==(row.closedAt?legacyTimestamp(row.closedAt):null)) throw new Error(`轮次生命周期不一致: ${row.id}`);
+        const report=(await target.prepare('SELECT body FROM published_round_reports WHERE id=$1').get(row.id))?.body;
+        if(!actual||(!report&&actual.status!=='open')||(report&&report.status!==row.status)||actual.previousRoundId!==row.previousRoundId||actual.createdAt!==legacyTimestamp(row.openedAt)||actual.endsAt!==(row.closedAt?legacyTimestamp(row.closedAt):null)) throw new Error(`轮次生命周期不一致: ${row.id}`);
       }
       structured.SettlementRound=sourceRounds.length;
       if(migration.mode==='native-rehearsal') {
@@ -100,7 +102,7 @@ try {
         let principal=0;
         for(const round of active) {
           const body=JSON.parse(String((await target.prepare('SELECT body FROM rounds WHERE id=$1').get(round.id))!.body));
-          if(body.status!=='open'||!body.legacyActiveBoundary||body.target.messageId!==round.messageId||(round.settlementType==='VALUE'&&body.target.partId!=='body')) throw new Error(`活动轮次执行边界不一致: ${round.id}`);
+          if(body.status!=='open'||typeof body.targetKey!=='string'||body.target.messageId!==round.messageId||(round.settlementType==='VALUE'&&body.target.partId!=='body')) throw new Error(`活动轮次执行边界不一致: ${round.id}`);
           const expected:Record<string,any>[]=[...stakes.filter(row=>row.roundId===round.id).map(row=>({...row,side:row.side==='PRO'?'pro':'con'})),...votes.filter(row=>row.roundId===round.id).map(row=>({...row,messageId:round.messageId,side:row.vote==='TRUE'?'pro':'con'}))];
           const actual=await target.prepare('SELECT * FROM bets WHERE "roundId"=$1').all(round.id);
           if(expected.length!==actual.length) throw new Error(`活动本金记录数量不一致: ${round.id}`);
@@ -120,7 +122,7 @@ try {
       }
       const rawUsers=(await source.prepare('SELECT row_to_json(t) AS body FROM "User" t').all()).map(row=>row.body);
       for(const user of rawUsers) {
-        const converted=await target.prepare('SELECT "createdAt" FROM legacy_users WHERE id=$1').get(user.id);
+        const converted=await target.prepare('SELECT "createdAt" FROM users WHERE id=$1').get(user.id);
         if(converted?.createdAt!==legacyTimestamp(user.createdAt)) throw new Error(`用户时间不一致: ${user.id}`);
       }
       const organizations=legacyOrganizationState(oldMessages,rawUsers);

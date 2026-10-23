@@ -1,12 +1,13 @@
+import type {MigrationChange as Change} from './migration-types.js';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import pg from 'pg';
-import { replayArchive, type Change, type Message, type Membership } from '@gonglun/core';
+import { replayArchive, type Message, type Membership } from '@gonglun/core';
 
 // Deliberately uses direct, read-only SQL, without Store.open or migration helpers.
 const [mode, baselinePath, reportPath] = process.argv.slice(2);
 if (!['capture', 'verify'].includes(mode) || !baselinePath || mode === 'verify' && !reportPath)
-  throw new Error('Usage: tsx --env-file=.env scripts/topic-retirement-audit.ts capture BASELINE | verify BASELINE REPORT');
+  throw new Error('Usage: tsx --env-file=.env apps/migrate/src/topic-retirement-audit.ts capture BASELINE | verify BASELINE REPORT');
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL required');
 const schema = process.env.DATABASE_SCHEMA ?? 'public';
 if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) throw new Error('Invalid schema');
@@ -23,7 +24,7 @@ try {
     for (const table of tables) rows[table] = (await client.query(`SELECT row_to_json(t) AS row FROM "${table.replaceAll('"', '""')}" t`)).rows.map(row => row.row);
     const messages = rows.messages.map(row => JSON.parse(row.body) as Message);
     const topicIds = messages.filter(message => message.parts.some(part => part.type === 'data' && part.value && typeof part.value === 'object'
-      && !Array.isArray(part.value) && part.value.legacyTopicId === message.id && part.value.uiType === 'CLASSIFY')).map(message => message.id).sort();
+      && !Array.isArray(part.value) && (part.value.legacyTopicId === message.id || (part.value.origin as any)?.kind==='topic-classification' && (part.value.origin as any)?.id===message.id) && part.value.uiType === 'CLASSIFY')).map(message => message.id).sort();
     const changes = rows.changes.sort((a, b) => Number(a.sequence) - Number(b.sequence));
     const replay = replayArchive({ format: 'gonglun-2', changes: changes.map(row => JSON.parse(row.body)) });
     const same = (a: unknown, b: unknown) => stable(a) === stable(b);
@@ -66,7 +67,7 @@ try {
         retirementStatesExported: before.topicIds.every(id => replay.states.find(state => state.messageId === id)?.organizationRetired === true),
         noRetiredMembershipRemaining: !memberships.some(row => ids.has(row.parentId) || ids.has(row.memberId)),
         noMoneyMovement: upgrade.ledger.length === 0,
-        settingsPreserved: same(sorted(before.settings), sorted(rows.settings.filter(row => row.key !== 'retired-legacy-topics'))),
+        settingsPreserved: same(sorted(before.settings.filter(row=>row.key!=='retired-organizations')), sorted(rows.settings.filter(row => row.key !== 'retired-organizations'))),
         replayAccountsMatch: accountMatch, replayMembershipsMatch: membershipMatch, replayMessagesMatch: messageMatch,
         schemaVersionRecorded: rows.schema_migrations.some(row => row.version === 3 && row.name === 'retire-converted-topic-containers'),
         priorSchemaVersionsPreserved: hash(sorted(rows.schema_migrations.filter(row => row.version <= before.tables.schema_migrations.count))) === before.tables.schema_migrations.digest,

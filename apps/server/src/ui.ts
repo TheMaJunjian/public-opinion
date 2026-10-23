@@ -8,7 +8,7 @@ import { dataOf } from './economy.js';
 import { executeBatch, executeCommand } from './ui-commands.js';
 import { sendSnapshot } from './snapshot-response.js';
 import { windowSnapshot } from './window-snapshot.js';
-import { accountView, allUsers, attentionUsers, legacyType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, tagCountsFor, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
+import { accountView, allUsers, attentionUsers, relationViewType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, tagCountsFor, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
 /** Transport views for the established interaction model. The domain contains messages only. */
 export function createUiRouter(store: Store, publish: () => Promise<void>) {
     const router = Router();
@@ -109,7 +109,7 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
                 const view = (await messageView(store, message)), parent = (await parentOf(store, message.id)), scope = (await scopeView(store, parent)), targets = view.targetRefs.map((r: RecordData) => r.reference.messageId), target = targets[0] ? (await store.message(targets[0])) : null;
                 const base = { id: message.id, relationMessageId: message.id, scopeMessageId: parent === 'root' ? null : parent, scopeTitle: scope.title, createdAt: message.createdAt, amount: message.spending.wager, targetMessageId: target?.id ?? null, content: target ? textOf(target) : textOf(message) };
                 if (['AGREE', 'DISAGREE'].includes(view.relationType ?? ''))
-                    stanceRows.push({ ...base, kind: 'relation', type: view.relationType, messageKind: target ? (await messageView(store, target)).kind : 'TEXT', targetRelationType: target ? legacyType(target) : null });
+                    stanceRows.push({ ...base, kind: 'relation', type: view.relationType, messageKind: target ? (await messageView(store, target)).kind : 'TEXT', targetRelationType: target ? relationViewType(target) : null });
                 if (['TAG', 'RECOMMEND', 'ARCHIVE'].includes(view.relationType ?? ''))
                     tagRows.push({ ...base, kind: 'tag', relationType: view.relationType, label: view.payload.label ?? view.payload.title ?? view.relationType, subType: view.payload.subType ?? null, customLabel: view.payload.customLabel ?? null, amount: message.spending.recommendation });
                 if (message.spending.wager)
@@ -175,7 +175,7 @@ export function createUiRouter(store: Store, publish: () => Promise<void>) {
                 messages = messages.filter(m => m.authorId === req.query.actorId);
             if (req.query.entityId)
                 messages = messages.filter(m => m.id === req.query.entityId || m.parts.some(p => p.type === 'relation' && Object.values(p.roles).flat().some(b => b.reference.messageId === req.query.entityId)));
-            let rows = (await Promise.all(messages.reverse().map(async (m) => { const type = legacyType(m), signature = (await store.db.prepare("SELECT \"publicKey\",signature,payload,\"deviceId\" FROM signatures WHERE \"messageId\"=$1").get(m.id)); return { id: m.id, actorId: m.authorId, actor: (await userView(store, m.authorId)), action: type ? `${type}_CREATED` : 'MESSAGE_CREATED', entityType: 'Message', entityId: m.id, scopeMessageId: (await parentOf(store, m.id)) === 'root' ? null : (await parentOf(store, m.id)), createdAt: m.createdAt, signature, data: { summary: textOf(m) || type, details: { parts: m.parts, spending: m.spending, ruleVersion: m.ruleVersion, programVersion: m.programVersion, revision: m.revision } } }; })));
+            let rows = (await Promise.all(messages.reverse().map(async (m) => { const type = relationViewType(m), signature = (await store.db.prepare("SELECT \"publicKey\",signature,payload,\"deviceId\" FROM signatures WHERE \"messageId\"=$1").get(m.id)); return { id: m.id, actorId: m.authorId, actor: (await userView(store, m.authorId)), action: type ? `${type}_CREATED` : 'MESSAGE_CREATED', entityType: 'Message', entityId: m.id, scopeMessageId: (await parentOf(store, m.id)) === 'root' ? null : (await parentOf(store, m.id)), createdAt: m.createdAt, signature, data: { summary: textOf(m) || type, details: { parts: m.parts, spending: m.spending, ruleVersion: m.ruleVersion, programVersion: m.programVersion, revision: m.revision } } }; })));
             if (req.query.action)
                 rows = rows.filter(row => row.action === req.query.action);
             if (req.query.entityType)

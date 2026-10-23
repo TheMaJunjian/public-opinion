@@ -101,7 +101,7 @@ try {
       for(const row of rows) await pool.query(`INSERT INTO legacy_fixture."${table}" VALUES (${fields.map((_,index)=>`$${index+1}`).join(',')})`,fields.map(field=>row[field]));
     }
   } finally {await pool.end();}
-  const migrated=spawnSync(process.execPath,[resolve('node_modules/tsx/dist/cli.mjs'),resolve('apps/server/src/migrate-legacy-cli.ts'),'--founder-id','legacy-user','--apply','--accept-checkpoint'],{stdio:'inherit',env:{...process.env,LEGACY_DATABASE_URL:databaseUrl,LEGACY_DATABASE_SCHEMA:'legacy_fixture',MIGRATION_TARGET_DATABASE_URL:databaseUrl,MIGRATION_TARGET_SCHEMA:'migrated_fixture'}});
+  const migrated=spawnSync(process.execPath,[resolve('node_modules/tsx/dist/cli.mjs'),resolve('apps/migrate/src/migrate-legacy-cli.ts'),'--founder-id','legacy-user','--apply','--accept-checkpoint'],{stdio:'inherit',env:{...process.env,LEGACY_DATABASE_URL:databaseUrl,LEGACY_DATABASE_SCHEMA:'legacy_fixture',MIGRATION_TARGET_DATABASE_URL:databaseUrl,MIGRATION_TARGET_SCHEMA:'migrated_fixture'}});
   assert.equal(migrated.status,0);
   writeFileSync(override,readFileSync(override,'utf8')+'  api:\n    environment:\n      DATABASE_SCHEMA: migrated_fixture\n');
   compose('up','-d','--wait','api','caddy');
@@ -140,7 +140,7 @@ try {
   const checking=new Pool({connectionString:databaseUrl});
   try {
     assert.equal((await checking.query("SELECT to_regnamespace('missing_target') AS name")).rows[0].name,null);
-    await checking.query("UPDATE migrated_fixture.settings SET value=(value::jsonb || '{\"mode\":\"read-only-rehearsal\"}'::jsonb)::text WHERE key='migration'");
+    await checking.query("UPDATE migrated_fixture.settings SET value='\"read-only\"' WHERE key='access-mode'");
   } finally {await checking.end();}
   writeFileSync(migrationEnv,migrationText('migrated_fixture'));
   compose('run','--rm','--no-deps','-T','api','node','scripts/start-existing.mjs','--check');
@@ -153,7 +153,7 @@ try {
   // The shipped tools must inspect without running migrations, then retire an
   // already imported Topic without replacing its messages or touching balances.
   const imageTool=(file,toolArgs,input)=>{
-    const result=spawnSync('docker',[...args,'run','--rm','--no-deps','-T','api','node',`apps/server/dist/${file}.js`,...toolArgs],{encoding:'utf8',input,maxBuffer:16*1024*1024});
+    const result=spawnSync('docker',[...args,'run','--rm','--no-deps','-T','api','node',`apps/migrate/dist/${file}.js`,...toolArgs],{encoding:'utf8',input,maxBuffer:16*1024*1024});
     assert.equal(result.status,0,result.stderr);
     return JSON.parse(result.stdout);
   };

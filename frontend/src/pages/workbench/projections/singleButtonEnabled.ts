@@ -100,6 +100,7 @@ export function deriveSingleButtonEnabled(input: DeriveSingleButtonEnabledInput)
   // TAG with recommend/archive (inline badge): needs targets; if CUSTOM subType, also needs text
   if (isTagWithInlineBadge) {
     if (!hasTargetsAvailable) return false;
+    if (['attention','block'].includes(secondaryRelationType) && subType !== 'YES' && subType !== 'NO') return false;
     if (subType === 'CUSTOM') return newMessageContent.trim().length > 0;
     return true;
   }

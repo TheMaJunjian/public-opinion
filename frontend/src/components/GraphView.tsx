@@ -1,6 +1,6 @@
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
-import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
+import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
@@ -61,7 +61,6 @@ export interface GraphViewProps {
   draftUnits: UnitSelection[];
   activeTextSelectId: string | null;
   lastClickedMessageId: string | null;
-  voteStats: Record<string,{agreeCount:number;disagreeCount:number;agreeKey:string;disagreeKey:string}>;
   onMessageClick: (e: React.MouseEvent, messageId: string) => void;
   onMessageDoubleClick: (e: React.MouseEvent, messageId: string) => void;
   onTextMouseUp: (e: React.MouseEvent, messageId: string) => void;
@@ -412,7 +411,6 @@ function GraphViewCanvas(props: GraphViewProps) {
     joinRelationsBySource,
     onJoinFilterClick,
     joinStatusByMessage,
-    // voteStats is accepted for API compatibility but decoration counts are derived internally from edges
   } = props;
 
   const isJoinEffective = (record: Relation) => joinStatusByMessage
@@ -446,20 +444,52 @@ function GraphViewCanvas(props: GraphViewProps) {
   const textRefs = useRef<Record<string,SVGTextElement|null>>({});
   const [expandedFrameIds, setExpandedFrameIds] = useState<string[]>([]);
   const [revealedFrameIds, setRevealedFrameIds] = useState<string[]>([]);
+  const [expandedDecorationIds,setExpandedDecorationIds]=useState<Set<string>>(()=>new Set());
+  const [revealedDecorationIds,setRevealedDecorationIds]=useState<Set<string>>(()=>new Set());
+  const visibleDecorationIds=useMemo(()=>new Set([...expandedDecorationIds,...revealedDecorationIds]),[expandedDecorationIds,revealedDecorationIds]);
+  const renderDecorationToggle=(ids:string|string[],style?:React.CSSProperties)=>{
+    const messageIds=typeof ids==='string'?[ids]:ids;
+    const expanded=messageIds.some(id=>visibleDecorationIds.has(id));
+    return <button key={`decoration-toggle-${messageIds[0]}`} type="button" data-decoration-toggle={messageIds[0]} data-rel-overlay="true"
+      aria-label={`${expanded?'收起':'显示'}装饰 ${messageIds[0]}`} aria-expanded={expanded}
+      title={`${expanded?'收起':'显示'}装饰`}
+      onMouseDown={event=>event.stopPropagation()} onMouseUp={event=>event.stopPropagation()}
+      onKeyDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}
+      onClick={event=>{
+        event.stopPropagation();
+        setExpandedDecorationIds(previous=>{
+          const next=new Set(previous);
+          for(const id of messageIds){
+            if(expanded)next.delete(id);
+            else next.add(id);
+          }
+          return next;
+        });
+        if(expanded)setRevealedDecorationIds(previous=>new Set([...previous].filter(id=>!messageIds.includes(id))));
+      }}
+      style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:EDGE_HINT_W,height:EDGE_HINT_W,
+        padding:0,border:'1px solid #444',borderRadius:3,background:'#1f1f1f',color:'#cbd5e1',fontSize:10,
+        lineHeight:1,flexShrink:0,cursor:'pointer',pointerEvents:'auto',...style}}>{expanded?'▾':'▸'}</button>;
+  };
   const cardFrameIds = useMemo(() => new Set([...expandedFrameIds, ...revealedFrameIds,
     ...(props.comparisonDisplay&&props.comparisonTargetId?[props.comparisonTargetId]:[])]), [expandedFrameIds, revealedFrameIds,props.comparisonDisplay,props.comparisonTargetId]);
   const resolveRevealIds = useCallback((ids: string[]) => {
     const targets = new Set(ids);
-    for (const edge of edges) {
-      if ((edge.relationType === 'agree' || edge.relationType === 'disagree') && targets.has(edge.relationMessageId)) {
-        targets.add(edge.to.messageId);
-      }
+    const decorationEdges=new Map<string,DemoEdge[]>();
+    for(const edge of edges)if(['agree','disagree','tag'].includes(edge.relationType))
+      decorationEdges.set(edge.relationMessageId,[...(decorationEdges.get(edge.relationMessageId)??[]),edge]);
+    const revealedDecorations=new Set<string>(),queue=[...ids];
+    for(let index=0;index<queue.length;index++)for(const edge of decorationEdges.get(queue[index])??[]){
+      const target=edge.to.messageId;
+      if(revealedDecorations.has(target))continue;
+      revealedDecorations.add(target);targets.add(target);queue.push(target);
     }
     const frames = messages.filter(message => message.relationType === 'arrange' && targets.has(message.id)).map(message => message.id);
+    setRevealedDecorationIds(previous=>previous.size===revealedDecorations.size&&[...previous].every(id=>revealedDecorations.has(id))?previous:revealedDecorations);
     setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
     // Mount the temporary card as well as the requested badge, including when
     // navigation starts outside the viewport. Clearing the pulse collapses it.
-    return [...ids, ...frames];
+    return [...new Set([...ids,...revealedDecorations,...frames])];
   }, [messages, edges]);
 
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
@@ -602,7 +632,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [edges, msgMap]);
 
   const overlays = useGraphOverlays({
-    excludedStanceEdges:props.excludedStanceEdges,
+    excludedStanceEdges:props.excludedStanceEdges, visibleDecorationIds,
     pendingMeasurements: virtual.pending,
     labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
@@ -981,15 +1011,14 @@ function GraphViewCanvas(props: GraphViewProps) {
                   )}
                   <span>{msg.author}</span>
                 </div>
-                {/* For text messages, correction badges are centered between author and msgId,
-                    with AGREE/DISAGREE mini-badges rendered inline to the right of each correction badge. */}
+                {/* Correction votes expand as a vertical column to the right of the correction badge. */}
                 {msg.kind==="normal" && correctionBadge && (
                   <div style={{flex:1,display:"flex",justifyContent:"center",gap:4,flexWrap:"wrap"}}>
                     {(() => {
                       const b = correctionBadge;
                       const corrDec=relDecByRelMsgState?.get(b.relMsgId);
                       return (
-                        <React.Fragment key={`corr-hdr-${b.relMsgId}`}>
+                        <div key={`corr-hdr-${b.relMsgId}`} style={{display:'inline-flex',alignItems:'center',gap:4,flexShrink:0,whiteSpace:'nowrap'}}>
                           <div
                             data-msgid={b.relMsgId} data-jump-msgids={correctionBadgeJumpIds} data-rel-overlay="true"
                             onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,b.relMsgId);}}
@@ -1004,8 +1033,10 @@ function GraphViewCanvas(props: GraphViewProps) {
                             {correctionBadgeLabel}
                           </div>
                           <MessageDisplayMarker messageId={msg.id} scope="corrections" />
+                          {corrDec&&(corrDec.agreeCount>0||corrDec.disagreeCount>0)&&renderDecorationToggle(b.relMsgId)}
+                          {visibleDecorationIds.has(b.relMsgId)&&<div style={{display:'inline-flex',flexDirection:'column',gap:2}}>
                           {corrDec && corrDec.agreeCount>0 && (
-                            <div data-rel-overlay="true"
+                            <div data-msgid={b.relMsgId} data-jump-msgids={corrDec.agreeRelMsgIds.join(' ')} data-rel-overlay="true"
                               onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,b.relMsgId,"agree");}}
                               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,b.relMsgId,"agree");}}
                               title={`赞同更正：${b.relMsgId}；单击选中，双击展开详情`}
@@ -1016,7 +1047,7 @@ function GraphViewCanvas(props: GraphViewProps) {
                             </div>
                           )}
                           {corrDec && corrDec.disagreeCount>0 && (
-                            <div data-rel-overlay="true"
+                            <div data-msgid={b.relMsgId} data-jump-msgids={corrDec.disagreeRelMsgIds.join(' ')} data-rel-overlay="true"
                               onClick={ev=>{ev.stopPropagation();onDecorationBodyClick?.(ev,b.relMsgId,"disagree");}}
                               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,b.relMsgId,"disagree");}}
                               title={`反对更正：${b.relMsgId}；单击选中，双击展开详情`}
@@ -1026,7 +1057,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                               👎{corrDec.disagreeCount}
                             </div>
                           )}
-                        </React.Fragment>
+                          </div>}
+                        </div>
                       );
                     })()}
                   </div>
@@ -1308,10 +1340,13 @@ function GraphViewCanvas(props: GraphViewProps) {
       {/* Edge label HTML hit areas */}
       {(()=>{
         const corrRendered=new Set<string>();
+        const statusRendered=new Set<string>();
         return positionedEdges.map(pe=>{
           const bb=labelBboxes[pe.drawId]; if (!bb) return null;
           const CORR_BADGE_W_EDGE=44;
           const relId=pe.edge.relationMessageId;
+          const showStatisticalStatus=!statusRendered.has(relId)&&!visibleNormalIds.includes(relId);
+          if(showStatisticalStatus)statusRendered.add(relId);
           // A correction badge is shown either when this relation's edge label has been corrected
           // (correctedRelMsgTargets: R1 is corrected) OR when this relation IS the replacement
           // (correctionSrcByNewRelMsg: R2 replaced R1).
@@ -1326,12 +1361,15 @@ function GraphViewCanvas(props: GraphViewProps) {
           if (showCorrBadge) corrRendered.add(relId);
           const padX=8,padY=6;
           const extraLeft=showCorrBadge?CORR_BADGE_W_EDGE+4:0;
-          const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft,height:bb.height+padY*2};
+          const box:LayoutBox={x:bb.x-padX-extraLeft,y:bb.y-padY,width:bb.width+padX*2+extraLeft+(showStatisticalStatus?DEC_RIGHT_GAP+EDGE_HINT_W:0),height:bb.height+padY*2};
           const isWhole=isRelWholeSel(relId),isFrag=isEdgeLabelFragSel(relId,pe.edge.id);
           return (
             <div key={`hit-${pe.drawId}`} role="group" tabIndex={0} aria-label={`关系消息 ${relId}`} aria-keyshortcuts="Enter Space Shift+Enter" onKeyDown={activateMessageFromKeyboard} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true" onClick={e=>onEdgeLabelSingleClick(e,relId,pe.edge.id)} onDoubleClick={e=>onEdgeLabelDoubleClick(e,relId)}
               style={{position:"absolute",left:box.x,top:box.y,width:box.width,height:box.height,zIndex:13,cursor:"pointer",pointerEvents:"auto",background:isWhole||isFrag?"rgba(91,65,0,0.35)":"transparent",borderRadius:6,border:isWhole||isFrag?"1px solid rgba(251,191,36,0.95)":"1px solid transparent",boxShadow:isWhole||isFrag?"0 1px 4px rgba(251,191,36,0.35)":"none"}}
               title={`relation=${pe.edge.relationMessageId} edge=${pe.edge.id}`}>
+              {showStatisticalStatus&&<div style={{position:'absolute',left:extraLeft+padX+bb.width+DEC_RIGHT_GAP,top:'50%',transform:'translateY(-50%)',display:'flex',alignItems:'center',background:'#101010',borderRadius:3}}>
+                <MessageDisplayMarker messageId={relId} />
+              </div>}
               {showCorrBadge&&(()=>{
                 // Prefer newCorrInfo (this relation IS the replacement) over corrInfo (this relation was corrected)
                 const corrRelMsgId = newCorrInfo?.length
@@ -1362,7 +1400,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       })()}
 
       {/* Edge-label relation decoration badges — AGREE/DISAGREE + TAG badges on annotation/reference/reply
-          relations, shown to the RIGHT of the edge label, stacked vertically (agree → disagree → tags). */}
+          relations, with collapsible vote columns to the RIGHT of the status marker. */}
       {(()=>{
         const rendered=new Set<string>();
         const items: React.ReactNode[]=[];
@@ -1377,30 +1415,17 @@ function GraphViewCanvas(props: GraphViewProps) {
           const tagItems=tagsByRelMsgState.get(relId)??[];
           if ((!dec||(dec.agreeCount===0&&dec.disagreeCount===0))&&tagItems.length===0) continue;
           rendered.add(relId);
-          // Default: right side of label, stacked vertically
-          let decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
-          let decTop=bb.y+Math.floor((bb.height-DEC_H)/2);
-          let useBelow = false;
-          // Check if right-side decorations would overlap any card; if so, shift below the label
-          const hasAgree=dec&&dec.agreeCount>0, hasDisagree=dec&&dec.disagreeCount>0;
-          const decCount=(hasAgree?1:0)+(hasDisagree?1:0);
-          if (decCount>0) {
-            const rightDecRect = { x: decLeft, y: decTop, width: DEC_W, height: decCount * DEC_H + (decCount-1) * DEC_GAP };
-            useBelow = normals.some(m => {
-              const cardBox = layout[m.id];
-              if (!cardBox) return false;
-              return rightDecRect.x < cardBox.x + cardBox.width &&
-                     rightDecRect.x + rightDecRect.width > cardBox.x &&
-                     rightDecRect.y < cardBox.y + cardBox.height &&
-                     rightDecRect.y + rightDecRect.height > cardBox.y;
-            });
-            if (useBelow) {
-              const totalW = (hasAgree?DEC_W:0) + (hasDisagree?DEC_W:0) + (hasAgree&&hasDisagree?4:0);
-              decLeft = bb.x + Math.floor((bb.width - totalW) / 2);
-              decTop = bb.y + bb.height + 2;
-            }
-          }
+          const rowLeft=getEdgeDecorationLeft(bb,!visibleNormalIds.includes(relId));
+          const decLeft=rowLeft+EDGE_HINT_W+DEC_GAP;
+          const voteCount=((dec?.agreeCount??0)>0?1:0)+((dec?.disagreeCount??0)>0?1:0);
+          const expanded=visibleDecorationIds.has(relId);
+          const stackHeight=voteCount*DEC_H+Math.max(0,voteCount-1)*DEC_GAP;
+          let decTop=bb.y+bb.height/2-stackHeight/2;
+          if(voteCount>0||tagItems.length>0)items.push(<React.Fragment key={`reldec-toggle-${relId}`}>
+            {renderDecorationToggle(relId,{position:'absolute',left:rowLeft,top:bb.y+(bb.height-EDGE_HINT_W)/2,zIndex:15})}
+          </React.Fragment>);
           for (const kind of ["agree","disagree"] as const) {
+            if(!expanded)continue;
             const count=kind==="agree"?dec?.agreeCount??0:dec?.disagreeCount??0;
             if (count<=0) continue;
             const isSelected=isDecorationSelected(relId,kind);
@@ -1408,7 +1433,8 @@ function GraphViewCanvas(props: GraphViewProps) {
             const icon=kind==="agree"?"👍":"👎";
             const label=kind==="agree"?"赞":"反";
             items.push(
-              <div key={`reldec-${kind}-${relId}`} data-msgid={relId} data-jump-msgids={relId} data-rel-overlay="true"
+              <div key={`reldec-${kind}-${relId}`} data-msgid={relId}
+                data-jump-msgids={(kind==='agree'?dec?.agreeRelMsgIds:dec?.disagreeRelMsgIds)?.join(' ')} data-rel-overlay="true"
                 onClick={ev=>{ev.stopPropagation();}}
                 onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,relId,kind);}}
                 title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
@@ -1427,9 +1453,17 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </div>
               </div>
             );
-            if (useBelow) { decLeft += DEC_W + 4; }
-            else { decTop += DEC_H + DEC_GAP; }
+            decTop+=DEC_H+DEC_GAP;
           }
+          let correctionHeight=0;
+          for(const ci of correctionSrcByNewRelMsg.get(relId)??[]){
+            if(!visibleDecorationIds.has(ci.corrRelMsgId))continue;
+            const correctionDec=relDecByRelMsgState.get(ci.corrRelMsgId);
+            const count=((correctionDec?.agreeCount??0)>0?1:0)+((correctionDec?.disagreeCount??0)>0?1:0);
+            correctionHeight=Math.max(correctionHeight,count*DEC_H+Math.max(0,count-1)*DEC_GAP);
+          }
+          decTop=bb.y+bb.height/2+Math.max(expanded?stackHeight:EDGE_HINT_W,correctionHeight)/2+DEC_GAP;
+          if(voteCount===0&&correctionHeight===0)decTop=bb.y+(bb.height-TAG_H)/2;
           // TAG badges on this relation message — aggregated by label text
           const tagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
           for (const {label:itemLabel,relMsgId:tagRelMsgId} of tagItems) {
@@ -1438,6 +1472,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             else { tagGroupMap.set(itemLabel,{label:itemLabel,relMsgIds:[tagRelMsgId]}); }
           }
           for (const {label:tagLabel,relMsgIds} of tagGroupMap.values()) {
+            if(!expanded)continue;
             const count=relMsgIds.length;
             const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
             const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
@@ -1482,15 +1517,25 @@ function GraphViewCanvas(props: GraphViewProps) {
           if (!newCorrInfo?.length) continue;
           if (corrDecRendered.has(relId)) continue;
           corrDecRendered.add(relId);
-          const decLeft=bb.x+bb.width+DEC_RIGHT_GAP;
-          // Start below any R2-targeting agree/disagree decorations already placed at this position
+          // Keep each correction's votes in its own collapsible column.
           const r2Dec=relDecByRelMsgState.get(relId);
-          const r2Lines=((r2Dec?.agreeCount??0)>0?1:0)+((r2Dec?.disagreeCount??0)>0?1:0);
-          let decTop=bb.y+Math.floor((bb.height-DEC_H)/2)+r2Lines*(DEC_H+DEC_GAP);
+          const hasR2Votes=['annotation','reference','reply'].includes(pe.edge.relationType);
+          const r2Count=hasR2Votes?((r2Dec?.agreeCount??0)>0?1:0)+((r2Dec?.disagreeCount??0)>0?1:0)+(tagsByRelMsgState.get(relId)?.length??0):0;
+          let columnLeft=getEdgeDecorationLeft(bb,!visibleNormalIds.includes(relId))
+            +(r2Count>0?getDecorationColumnWidth(visibleDecorationIds.has(relId))+DEC_GAP:0);
           for (const ci of newCorrInfo) {
             const dec=relDecByRelMsgState.get(ci.corrRelMsgId);
             if (!dec||(dec.agreeCount===0&&dec.disagreeCount===0)) continue;
+            const expanded=visibleDecorationIds.has(ci.corrRelMsgId);
+            items.push(<React.Fragment key={`corr-reldec-toggle-${ci.corrRelMsgId}`}>
+              {renderDecorationToggle(ci.corrRelMsgId,{position:'absolute',left:columnLeft,top:bb.y+(bb.height-EDGE_HINT_W)/2,zIndex:15})}
+            </React.Fragment>);
+            const decLeft=columnLeft+EDGE_HINT_W+DEC_GAP;
+            const count=(dec.agreeCount>0?1:0)+(dec.disagreeCount>0?1:0);
+            let decTop=bb.y+bb.height/2-(count*DEC_H+(count-1)*DEC_GAP)/2;
+            columnLeft+=getDecorationColumnWidth(expanded)+DEC_GAP;
             for (const kind of ["agree","disagree"] as const) {
+              if(!expanded)continue;
               const count=kind==="agree"?dec.agreeCount:dec.disagreeCount;
               if (count<=0) continue;
               const isSelected=isDecorationSelected(ci.corrRelMsgId,kind);
@@ -1498,7 +1543,8 @@ function GraphViewCanvas(props: GraphViewProps) {
               const icon=kind==="agree"?"👍":"👎";
               const label=kind==="agree"?"赞":"反";
               items.push(
-                <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-msgid={ci.corrRelMsgId} data-jump-msgids={ci.corrRelMsgId} data-rel-overlay="true"
+                <div key={`corr-reldec-${kind}-${ci.corrRelMsgId}`} data-msgid={ci.corrRelMsgId}
+                  data-jump-msgids={(kind==='agree'?dec.agreeRelMsgIds:dec.disagreeRelMsgIds).join(' ')} data-rel-overlay="true"
                   onClick={ev=>{ev.stopPropagation();}}
                   onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,ci.corrRelMsgId,kind);}}
                   title={`${kind==="agree"?"赞同":"反对"}更正：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
@@ -1571,12 +1617,11 @@ function GraphViewCanvas(props: GraphViewProps) {
               {cardFrameIds.has(sf.relMsgId) ? '▾' : '▸'}
             </button>}
             {!cardFrameIds.has(sf.relMsgId) && <div data-rel-overlay="true"
-              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'#101010'}}>
+              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+26,top:y-HH+1,zIndex:frameZ+2,pointerEvents:'auto',background:'#101010',display:'flex',alignItems:'center',gap:6}}>
               <MessageDisplayMarker messageId={sf.relMsgId} />
-            </div>}
-            {!cardFrameIds.has(sf.relMsgId) && relatedConnections?.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true"
-              style={{position:'absolute',left:x+(sfCorrInfo?100:8)+50,top:y-HH+1,zIndex:frameZ+1,pointerEvents:'auto',background:'#101010'}}>
-              {renderRelatedConnections(sf.relMsgId)}
+              {relatedConnections?.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true">
+                {renderRelatedConnections(sf.relMsgId)}
+              </div>}
             </div>}
             {cardFrameIds.has(sf.relMsgId) && virtual.mounted.has(sf.relMsgId) && <div data-msgid={sf.relMsgId} data-rel-overlay="true" data-frame-header="true"
               data-measure-min-height={MERGE_CARD_H} ref={el => { cardRefs.current[sf.relMsgId] = el; }}
@@ -1776,8 +1821,13 @@ function GraphViewCanvas(props: GraphViewProps) {
           );
           sfDecTop += DEC_H + DEC_GAP;
         }
+        if(sf.relAgreeCount>0||sf.relDisagreeCount>0||sfTagItems.length>0){
+          nodes.push(<React.Fragment key={`sf-vote-toggle-${sf.relMsgId}`}>
+            {renderDecorationToggle(sf.relMsgId,{position:'absolute',left:sfDecLeft,top:sfDecTop,zIndex:8})}
+          </React.Fragment>);
+        }
         for (const kind of ["agree","disagree"] as const) {
-          if (!cardFrameIds.has(sf.relMsgId)) continue;
+          if (!visibleDecorationIds.has(sf.relMsgId)) continue;
           const count=kind==="agree"?sf.relAgreeCount:sf.relDisagreeCount;
           if (count<=0) continue;
           const isSelected=isDecorationSelected(sf.relMsgId,kind);
@@ -1790,7 +1840,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,sf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-              style={{position:"absolute",left:sfDecLeft,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
+              style={{position:"absolute",left:sfDecLeft+EDGE_HINT_W+DEC_GAP,top:sfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
                 background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
                 fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
                 overflow:"hidden"}}>
@@ -1807,6 +1857,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           );
           sfDecTop+=DEC_H+DEC_GAP;
         }
+        if(!visibleDecorationIds.has(sf.relMsgId)&&(sf.relAgreeCount>0||sf.relDisagreeCount>0))sfDecTop+=EDGE_HINT_W+DEC_GAP;
         // TAG badges on this arrange relation message — aggregated by label text
         const sfTagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
         for (const {label:itemLabel,relMsgId:tagRelMsgId} of sfTagItems) {
@@ -1815,6 +1866,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           else { sfTagGroupMap.set(itemLabel,{label:itemLabel,relMsgIds:[tagRelMsgId]}); }
         }
         for (const {label:tagLabel,relMsgIds} of sfTagGroupMap.values()) {
+          if(!visibleDecorationIds.has(sf.relMsgId))continue;
           const count=relMsgIds.length;
           const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
           const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
@@ -1823,7 +1875,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
               title={`标注：${displayLabel}；单击选中，双击展开详情`}
-              style={{position:"absolute",left:sfDecLeft-TAG_HIT_PAD,top:sfDecTop-TAG_HIT_PAD,
+              style={{position:"absolute",left:sfDecLeft+EDGE_HINT_W+DEC_GAP-TAG_HIT_PAD,top:sfDecTop-TAG_HIT_PAD,
                 width:tagW+2*TAG_HIT_PAD,height:TAG_H+2*TAG_HIT_PAD,
                 zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
                 display:"flex",alignItems:"center",justifyContent:"center",
@@ -1845,11 +1897,12 @@ function GraphViewCanvas(props: GraphViewProps) {
 
       {/* GROUP frame decoration badges — AGREE/DISAGREE badges to the RIGHT of the group frame */}
       {visibleGroupFrames.map(gf=>{
-        if (gf.relAgreeCount===0&&gf.relDisagreeCount===0) return null;
+        if (gf.relAgreeCount===0&&gf.relDisagreeCount===0&&!(tagsByRelMsgState.get(gf.relMsgId)?.length)) return null;
         const gfDecLeft=gf.rect.x+gf.rect.width+DEC_RIGHT_GAP;
         let gfDecTop=gf.rect.y+DEC_RIGHT_TOP;
-        const nodes: React.ReactNode[]=[];
+        const nodes: React.ReactNode[]=[renderDecorationToggle(gf.relMsgId,{position:'absolute',left:gfDecLeft,top:gfDecTop,zIndex:8})];
         for (const kind of ["agree","disagree"] as const) {
+          if(!visibleDecorationIds.has(gf.relMsgId))continue;
           const count=kind==="agree"?gf.relAgreeCount:gf.relDisagreeCount;
           if (count<=0) continue;
           const isSelected=isDecorationSelected(gf.relMsgId,kind);
@@ -1857,11 +1910,12 @@ function GraphViewCanvas(props: GraphViewProps) {
           const icon=kind==="agree"?"👍":"👎";
           const label=kind==="agree"?"赞":"反";
           nodes.push(
-            <div key={`gf-${kind}-${gf.relMsgId}`} data-jump-visual-msgids={gf.relMsgId} data-rel-overlay="true"
+            <div key={`gf-${kind}-${gf.relMsgId}`} data-msgid={gf.relMsgId}
+              data-jump-msgids={(kind==='agree'?gf.relAgreeMsgIds:gf.relDisagreeMsgIds).join(' ')} data-jump-visual-msgids={gf.relMsgId} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();}}
               onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,gf.relMsgId,kind);}}
               title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
-              style={{position:"absolute",left:gfDecLeft,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
+              style={{position:"absolute",left:gfDecLeft+EDGE_HINT_W+DEC_GAP,top:gfDecTop,width:DEC_W,height:DEC_H,zIndex:7,
                 background:isSelected?"#fbbf24":bgColor,color:isSelected?"#111827":"#fff",borderRadius:4,display:"flex",alignItems:"center",
                 fontSize:11,pointerEvents:"auto",boxShadow:isSelected?"0 2px 6px rgba(0,0,0,0.5)":"0 2px 6px rgba(0,0,0,0.5)",border:isSelected?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.08)",
                 overflow:"hidden"}}>
@@ -1884,6 +1938,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       {/* TAG decoration labels — aggregated by label text, interactive */}
       {Object.entries(tagDecorationsByMsg).map(([_mid,groups])=>
         groups.map(group=>{
+          if(!visibleDecorationIds.has(_mid))return null;
           const count=group.relMsgIds.length;
           const displayLabel=count>1?`${group.label}（${count}人）`:group.label;
           // Full-size agree/disagree decoration badges to the right of the tag badge, stacked vertically.
@@ -1938,8 +1993,11 @@ function GraphViewCanvas(props: GraphViewProps) {
                 </span>
               </div>
               {/* Full-size AGREE/DISAGREE decoration badges on this TAG relation group, stacked vertically */}
+              {(group.relAgreeCount>0||group.relDisagreeCount>0)&&renderDecorationToggle(group.relMsgIds,
+                {position:'absolute',left:tagBadgeRight+DEC_RIGHT_GAP,top:group.rect.y+(group.rect.height-EDGE_HINT_W)/2,zIndex:8})}
               {(()=>{
-                const tagDecLeft=tagBadgeRight+DEC_RIGHT_GAP;
+                if(!group.relMsgIds.some(id=>visibleDecorationIds.has(id)))return null;
+                const tagDecLeft=tagBadgeRight+DEC_RIGHT_GAP+EDGE_HINT_W+DEC_GAP;
                 let curTop=group.rect.y+Math.floor((group.rect.height-DEC_H)/2);
                 return (["agree","disagree"] as const).map(kind=>{
                   const cnt=kind==="agree"?group.relAgreeCount:group.relDisagreeCount;
@@ -1951,7 +2009,8 @@ function GraphViewCanvas(props: GraphViewProps) {
                   const icon=kind==="agree"?"👍":"👎";
                   const label=kind==="agree"?"赞":"反";
                   return (
-                    <div key={`tag-dec-${kind}-${_mid}-${group.label}`} data-jump-visual-msgids={[...group.relMsgIds, ...selectedDecorationIds].join(' ')} data-rel-overlay="true"
+                    <div key={`tag-dec-${kind}-${_mid}-${group.label}`} data-msgid={tagIconRelMsgId} data-jump-msgids={selectedDecorationIds.join(' ')}
+                      data-jump-visual-msgids={[...group.relMsgIds, ...selectedDecorationIds].join(' ')} data-rel-overlay="true"
                       onClick={ev=>{ev.stopPropagation();}}
                       onDoubleClick={ev=>{ev.stopPropagation();onDecorationDoubleClick?.(ev,tagIconRelMsgId,kind);}}
                       title={`${kind==="agree"?"赞同":"反对"}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
@@ -1978,7 +2037,22 @@ function GraphViewCanvas(props: GraphViewProps) {
       )}
 
       {/* Decoration badges (agree/disagree) — right side, with icon + body areas */}
+      {(()=>{
+        const anchors=new Map<string,{x:number;y:number}>();
+        const frames=new Set([...visibleArrangeFrames,...visibleGroupFrames].map(frame=>frame.relMsgId));
+        for(const value of Object.values(decorationRectsState??{}))if(!anchors.has(value.messageId))
+          anchors.set(value.messageId,{x:value.rect.x-EDGE_HINT_W-DEC_GAP,y:value.rect.y});
+        for(const [id,groups] of Object.entries(tagDecorationsByMsg))if(groups.length&&!anchors.has(id))
+          anchors.set(id,{x:groups[0].rect.x-EDGE_HINT_W-DEC_GAP,y:groups[0].rect.y});
+        return [...anchors].map(([id,anchor])=>{
+          if(frames.has(id))return null;
+          return <React.Fragment key={`dec-toggle-${id}`}>
+            {renderDecorationToggle(id,{position:'absolute',left:anchor.x,top:anchor.y,zIndex:8})}
+          </React.Fragment>;
+        });
+      })()}
       {decorationRectsState&&decorationsByMsgState&&Object.entries(decorationRectsState).map(([,v])=>{
+        if(!visibleDecorationIds.has(v.messageId))return null;
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
         const cnt=v.kind==="agree"?counts.agreeCount:counts.disagreeCount;
         const baseBg=v.kind==="agree"?"rgba(2,150,80,0.9)":"rgba(200,40,40,0.9)";
@@ -2030,17 +2104,39 @@ function GraphViewCanvas(props: GraphViewProps) {
       })}
 
       {/* INLINE BADGES (RECOMMEND/ARCHIVE) — small badge anchored to target message card */}
-      {Array.from(inlineBadgesByMsg.entries()).map(([, badges]) =>
-        badges.map(badge => {
+      {Array.from(inlineBadgesByMsg.entries()).map(([targetId, badges]) => {
+        let voteColumn=0;
+        return badges.map(badge => {
           const isWholeSel = isRelWholeSel(badge.relMsgId);
           const bg = INLINE_BADGE_COLOR[badge.relColor] ?? 'rgba(100,100,120,0.9)';
+          const badgeIds=badge.relMsgIds??[badge.relMsgId];
+          const voteGroups=badgeIds.flatMap(id=>{
+            const votes=relDecByRelMsgState.get(id);
+            return votes&&(votes.agreeCount>0||votes.disagreeCount>0)?[{id,votes}]:[];
+          });
+          let voteLeft=badge.rect.x+badge.rect.width+DEC_RIGHT_GAP*3+EDGE_HINT_W;
+          if(visibleDecorationIds.has(targetId)){
+            for(const decoration of Object.values(decorationRectsState??{}))if(decoration.messageId===targetId)
+              voteLeft=Math.max(voteLeft,decoration.rect.x+decoration.rect.width+DEC_RIGHT_GAP);
+            for(const group of tagDecorationsByMsg[targetId]??[]){
+              const tagVotes=group.relAgreeCount>0||group.relDisagreeCount>0;
+              const expanded=group.relMsgIds.some(id=>visibleDecorationIds.has(id));
+              voteLeft=Math.max(voteLeft,group.rect.x+group.rect.width+DEC_RIGHT_GAP
+                +(tagVotes?getDecorationColumnWidth(expanded):0)+DEC_RIGHT_GAP);
+            }
+            const frame=[...visibleArrangeFrames,...visibleGroupFrames].find(item=>item.relMsgId===targetId);
+            if(frame&&(frame.relAgreeCount>0||frame.relDisagreeCount>0))
+              voteLeft=Math.max(voteLeft,frame.rect.x+frame.rect.width+DEC_RIGHT_GAP+getDecorationColumnWidth(true)+DEC_RIGHT_GAP);
+          }
+          const firstColumn=voteColumn;
+          voteColumn+=voteGroups.length;
           const tooltip = badge.subDetails && badge.subDetails.length > 0
             ? `${badge.relLabel}\n${badge.subDetails.map(d => {
                 const stLabels: Record<string,string> = { SPAM:'垃圾', OFFTOPIC:'跑题', LOWVALUE:'低质', IMPORTANT:'重要', CUSTOM:'自定义' };
                 return `  ${d.customLabel || stLabels[d.subType] || d.subType}: ${d.count}人`;
               }).join('\n')}\n双击查看详情`
             : `${badge.relLabel}；双击展开操作详情`;
-          return (
+          return <React.Fragment key={`inline-${badge.relMsgId}`}>
             <div key={`badge-${badge.relMsgId}`} data-msgid={badge.relMsgId} data-jump-msgids={[badge.relMsgId, ...(badge.relMsgIds ?? [])].join(' ')} data-rel-overlay="true"
               onClick={ev=>{ev.stopPropagation();onInlineBadgeClick?.(ev,badge.relMsgId);}}
               onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId, { relMsgIds: badge.relMsgIds, subDetails: badge.subDetails });}}
@@ -2051,11 +2147,40 @@ function GraphViewCanvas(props: GraphViewProps) {
                 boxShadow:isWholeSel?"0 2px 8px rgba(251,191,36,0.35)":"0 1px 4px rgba(0,0,0,0.5)",
                 border:isWholeSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:600}}>
-              {badge.relLabel}
+              <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis'}}>{badge.relLabel}</span>
+              {voteGroups.length>0&&renderDecorationToggle(badgeIds,{marginLeft:2,border:0,background:'transparent',color:'inherit'})}
             </div>
-          );
-        })
-      )}
+            {voteGroups.flatMap(({id,votes},index)=>{
+              if(!visibleDecorationIds.has(id))return [];
+              let top=badge.rect.y;
+              return (['agree','disagree'] as const).flatMap(kind=>{
+                const ids=kind==='agree'?votes.agreeRelMsgIds:votes.disagreeRelMsgIds;
+                const count=kind==='agree'?votes.agreeCount:votes.disagreeCount;
+                if(!count)return [];
+                const y=top;top+=DEC_H+DEC_GAP;
+                const selected=ids.some(isRelWholeSel);
+                return <div key={`inline-vote-${id}-${kind}`} data-msgid={id} data-jump-msgids={ids.join(' ')} data-rel-overlay="true"
+                  onClick={event=>event.stopPropagation()}
+                  onDoubleClick={event=>{event.stopPropagation();onDecorationDoubleClick?.(event,id,kind);}}
+                  title={`${kind==='agree'?'赞同':'反对'}：点击图标快速发送，点击数字区域切换选中，双击展开详情`}
+                  style={{position:'absolute',left:voteLeft+(firstColumn+index)*(DEC_W+DEC_GAP),top:y,width:DEC_W,height:DEC_H,zIndex:14,
+                    background:selected?'#fbbf24':kind==='agree'?'rgba(2,150,80,0.9)':'rgba(200,40,40,0.9)',color:selected?'#111827':'#fff',
+                    display:'flex',alignItems:'center',borderRadius:4,fontSize:11,pointerEvents:'auto',overflow:'hidden',
+                    border:selected?'2px solid #fbbf24':'1px solid rgba(255,255,255,0.08)',boxShadow:'0 2px 6px rgba(0,0,0,0.5)'}}>
+                  <div onClick={event=>{event.stopPropagation();onDecorationIconClick?.(id,kind);}}
+                    title={`点击：快速发送${kind==='agree'?'赞同':'反对'}`}
+                    style={{width:DEC_ICON_W,height:'100%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',
+                      flexShrink:0,background:'rgba(0,0,0,0.15)',fontSize:12}}>{kind==='agree'?'👍':'👎'}</div>
+                  <div onClick={event=>{event.stopPropagation();onDecorationBodyClick?.(event,id,kind);}}
+                    style={{flex:1,height:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:2,cursor:'pointer'}}>
+                    <span style={{fontWeight:700}}>{count}</span><span style={{fontSize:9,opacity:0.85}}>{kind==='agree'?'赞':'反'}</span>
+                  </div>
+                </div>;
+              });
+            })}
+          </React.Fragment>;
+        });
+      })}
 
     </div>
   );

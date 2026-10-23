@@ -19,8 +19,8 @@ interface ViewContext {
 const cachedMessage = async (store: Store, id: string, revision?: number, context?: ViewContext) => context?.messages.get(`${id}:${revision ?? 'current'}`) ?? (await store.message(id, revision));
 const cachedUser = async (store: Store, id: string, context?: ViewContext) => context?.users.get(id) ?? (await userView(store, id));
 export const primaryRelation = (message: Message) => relations(message).find(part => part.relation !== 'member-of'||!!part.roles.member?.length);
-const legacyTypes: Record<string, string> = { follow: 'ATTENTION', unfollow: 'ATTENTION', amend: 'CORRECT', 'rule-change': 'PROPOSAL', recharge: 'PROPOSAL', 'revenue-injection': 'PROPOSAL', delegate: 'DELEGATION', fulfill: 'DELEGATION', 'member-of': 'JOIN', 'low-quality': 'ARCHIVE', 'open-settlement': 'ROUND', settlement: 'ROUND', distribution: 'ROUND_RESULT', terminate: 'OPERATIONS', release: 'CODE_CHANGE' };
-export function legacyType(message: Message): string | null { const relation = primaryRelation(message); return String(dataOf(message).uiType ?? (relation ? (legacyTypes[relation.relation] ?? relation.relation.toUpperCase()) : '')) || null; }
+const relationViewTypes: Record<string, string> = { follow: 'ATTENTION', amend: 'CORRECT', 'rule-change': 'PROPOSAL', recharge: 'PROPOSAL', 'revenue-injection': 'PROPOSAL', delegate: 'DELEGATION', fulfill: 'DELEGATION', 'member-of': 'JOIN', 'low-quality': 'ARCHIVE', 'open-settlement': 'ROUND', settlement: 'ROUND', distribution: 'ROUND_RESULT', terminate: 'OPERATIONS', release: 'CODE_CHANGE' };
+export function relationViewType(message: Message): string | null { const relation = primaryRelation(message); return String(dataOf(message).uiType ?? (relation ? (relationViewTypes[relation.relation] ?? relation.relation.toUpperCase()) : '')) || null; }
 export async function referenceView(store: Store, reference: Reference, context?: ViewContext): Promise<TargetRef & { reference: Reference }> {
     const target = (await cachedMessage(store, reference.messageId, reference.revision, context)), relation = primaryRelation(target);
     if (reference.range) {
@@ -53,11 +53,11 @@ export async function scopeMessages(store: Store, parent = 'root'): Promise<Mess
     return (await store.db.prepare(`${scope.cte} SELECT m.body FROM messages m WHERE ${scope.predicate} ORDER BY m."createdAt",m.id`).all(...scope.params)).map(row => JSON.parse(String(row.body)) as Message);
 }
 export async function parentOf(store: Store, messageId: string): Promise<string> { return String((await store.db.prepare("SELECT \"parentId\" FROM memberships WHERE \"memberId\"=$1").get(messageId))?.parentId ?? 'root'); }
-/** Imported organization bodies may describe the action (e.g. 建立分类).
+/** Organization titles are saved independently from their descriptive bodies.
  * Use the same saved name for cards, scope headers, deltas and archives. */
 function organizationTitle(message: Message): string {
     const relation = primaryRelation(message), data = dataOf(message);
-    if (relation && ['classify', 'summary'].includes(relation.relation) && data.legacyTopicId && typeof data.title === 'string')
+    if (relation && ['classify', 'summary'].includes(relation.relation) && typeof data.title === 'string')
         return data.title;
     return textOf(message);
 }
@@ -81,34 +81,23 @@ async function contentView(store: Store, message: Message, context?: ViewContext
     }
     const target = relation?.roles.target?.[0]?.reference;
     const targetMessage = target ? (await cachedMessage(store, target.messageId, target.revision, context)) : undefined;
-    const labels: Record<string, string> = { settlement: '发起结算', 'open-settlement': '请求发起结算', terminate: '请求终止结算', agree: '赞同', disagree: '反对', amend: '提出修改', authorize: '授权生效', follow: '关注', unfollow: '取消关注', read: '标记已读', unread: '标记未读', recommend: '推荐', archive: '冷藏', 'low-quality': '低质量评价', 'rule-change': '规则修改', distribute: '请求分配运营收入', recharge: '充值分账申请', 'member-of': '加入组织' };
-    return `${relation ? labels[relation.relation] ?? legacyType(message) ?? relation.relation : '消息'}${targetMessage ? `：「${textOf(targetMessage).slice(0, 120) || legacyType(targetMessage) || '消息'}」` : ''}`;
+    if (relation?.relation === 'follow' || relation?.relation === 'block') return `${relation.relation === 'follow' ? '关注' : '拉黑'}－${relation.reason === 'YES' ? '是' : '否'}${targetMessage ? `：「${textOf(targetMessage).slice(0,120)}」` : ''}`;
+    const labels: Record<string, string> = { settlement: '发起结算', 'open-settlement': '请求发起结算', terminate: '请求终止结算', agree: '赞同', disagree: '反对', amend: '提出修改', authorize: '授权生效', follow: '关注', read: '标记已读', unread: '标记未读', recommend: '推荐', archive: '冷藏', 'low-quality': '低质量评价', 'rule-change': '规则修改', distribute: '请求分配运营收入', recharge: '充值分账申请', 'member-of': '加入组织' };
+    return `${relation ? labels[relation.relation] ?? relationViewType(message) ?? relation.relation : '消息'}${targetMessage ? `：「${textOf(targetMessage).slice(0, 120) || relationViewType(targetMessage) || '消息'}」` : ''}`;
 }
 export async function messageView(store: Store, message: Message, parent?: string, state?: MessageState, context?: ViewContext): Promise<NativeMessageView> {
-    const relation = primaryRelation(message), data = dataOf(message), type = legacyType(message) ?? (['ROUND','ROUND_RESULT'].includes(String(data.kind))?String(data.kind):null);
+    const relation = primaryRelation(message), data = dataOf(message), type = relationViewType(message) ?? (['ROUND','ROUND_RESULT'].includes(String(data.kind))?String(data.kind):null);
     const sources = relation?.roles.source ?? relation?.roles.reason ?? (relation?.relation==='member-of'?relation.roles.parent:undefined) ?? [];
     let references = (relation?.roles.target ?? relation?.roles.members ?? relation?.roles.member ?? []).map(b => b.reference);
     const declaredTargetRefs = references;
-    const legacyRefs: RecordData[] | undefined = Array.isArray(data.legacyTargetRefs) ? data.legacyTargetRefs as RecordData[] : undefined;
     if (relation && ['classify', 'summary', 'merge', 'arrange'].includes(relation.relation)) {
         const members=context ? context.members.get(message.id) ?? [] : (await store.db.prepare("SELECT \"memberId\" FROM memberships WHERE \"parentId\"=$1 ORDER BY position").all(message.id)).map(row=>String(row.memberId));
         const current=new Set(members),ordered=[...new Set(declaredTargetRefs.map(ref=>ref.messageId).filter(id=>current.has(id)))],declared=new Set(ordered);
-        // Membership insertion order is an index detail, not the user's layout order.
-        // Imported containers keep their declarations. Legacy JOINs and personal
-        // stances still determine their visible members in the workbench.
-        // Replacing declarations with the single-parent index loses that history.
-        if(legacyRefs){
-            const additions=await Promise.all(members.filter(id=>!declaredTargetRefs.some(ref=>ref.messageId===id)).map(async id=>{
-                const member=await cachedMessage(store,id,undefined,context);
-                // Imported JOINs already carry the historical reference kind.
-                // Adding their index entries again can display one target twice.
-                return dataOf(member).legacyTopicId ? undefined : {messageId:id};
-            }));
-            references=[...declaredTargetRefs,...additions.filter((ref):ref is Reference=>!!ref)];
-        }else references=[...ordered,...members.filter(id=>!declared.has(id))].map(messageId=>({messageId}));
+        references=[...ordered,...members.filter(id=>!declared.has(id))].map(messageId=>({messageId}));
     }
     let kind = String(data.kind ?? (type === 'ROUND' ? 'ROUND' : type === 'ROUND_RESULT' ? 'ROUND_RESULT' : type === 'PROPOSAL' ? 'GOVERNANCE' : type === 'CODE_CHANGE' ? 'CODE' : type === 'OPERATIONS' ? 'OPERATIONS' : relation ? 'RELATION' : 'TEXT'));
     const payload: RecordData = { ...data };
+    if (relation?.relation === 'follow' || relation?.relation === 'block') payload.subType = relation.reason;
     if (message.parts.some(part => part.id === 'organization-memberships')) payload.independentMemberships = true;
     const history = message.parts.find(part => part.id === 'membership-history' && part.type === 'data');
     if (history?.type === 'data' && history.value && typeof history.value === 'object' && !Array.isArray(history.value))
@@ -133,7 +122,7 @@ export async function messageView(store: Store, message: Message, parent?: strin
     if (relation?.relation === 'amend' && data.value !== undefined) {
         payload.correctionContent = data.value;
         const reference = relation.roles.target?.[0]?.reference;
-        if (reference?.partId && !data.legacyTopicId) {
+        if (reference?.partId) {
             const target = await cachedMessage(store, reference.messageId, reference.revision ?? (typeof data.expectedRevision === 'number' ? data.expectedRevision : undefined), context);
             const part = target.parts.find(part => part.id === reference.partId);
             if (part && ['text', 'code', 'web'].includes(part.type) && !reference.memberId
@@ -164,7 +153,7 @@ export async function messageView(store: Store, message: Message, parent?: strin
             payload.roundId = roundId;
             payload.targetMessageId = round.target.messageId;
             payload.settlementType=round.settlementType??'TRUTH';
-            if(!references.length) references=[round.legacyOriginalTarget??{messageId:round.subjectId??round.target.messageId}];
+            if(!references.length) references=[{messageId:round.subjectId??round.target.messageId}];
         }
     }
     if (relation?.relation === 'notify') {
@@ -172,18 +161,8 @@ export async function messageView(store: Store, message: Message, parent?: strin
         payload.notifyUsers = (await Promise.all(payload.notifyUserIds.map(async (id: string) => (await cachedUser(store, id, context)))));
     }
     const stateValue = state ?? (await statesFor(store, [message.id]))[0];
-    const projectRef = async (ref:Reference,index:number): Promise<TargetRef> => {
-        const view=await referenceView(store,ref,context),raw=legacyRefs?.[index];
-        // Old JOIN selection distinguished message and relation targets, even
-        // when both addressed the same container. Preserve the original kind.
-        if(raw&&(raw.messageId??raw.relationId)===ref.messageId) {
-            if(raw.kind==='message') return {kind:'message',messageId:ref.messageId,reference:ref};
-            if(raw.kind==='relation') return {kind:'relation',relationId:ref.messageId,reference:ref,
-                part:['label','decoration','frame','whole'].includes(raw.part) ? raw.part : 'whole'};
-        }
-        return view;
-    };
-    return { id: message.id, kind, contentType: data.contentType === 'MARKDOWN' ? 'MARKDOWN' : 'TEXT', content: (await contentView(store, message, context)), createdAt: message.createdAt, updatedAt: message.updatedAt, createdBy: (await cachedUser(store, message.authorId, context)), relationType: type, relSourceId: sources[0]?.reference.messageId ?? null, sourceMessageId: sources[0]?.reference.messageId ?? null, sourceRefs: sources.map(b => b.reference), targetRefs: (await Promise.all(references.map(projectRef))), declaredTargetRefs: (await Promise.all(declaredTargetRefs.map(projectRef))), relationPayload: payload, payload, revision: message.revision, parts: message.parts, sequence: message.sequence, spending: message.spending, state: stateValue, executedStance: stateValue?.executedStance, supersededBy: typeof data.legacySupersededBy === 'string' ? data.legacySupersededBy : null };
+    const projectRef = (ref:Reference) => referenceView(store,ref,context);
+    return { id: message.id, kind, contentType: data.contentType === 'MARKDOWN' ? 'MARKDOWN' : 'TEXT', content: (await contentView(store, message, context)), createdAt: message.createdAt, updatedAt: message.updatedAt, createdBy: (await cachedUser(store, message.authorId, context)), relationType: type, relSourceId: sources[0]?.reference.messageId ?? null, sourceMessageId: sources[0]?.reference.messageId ?? null, sourceRefs: sources.map(b => b.reference), targetRefs: (await Promise.all(references.map(projectRef))), declaredTargetRefs: (await Promise.all(declaredTargetRefs.map(projectRef))), relationPayload: payload, payload, revision: message.revision, parts: message.parts, sequence: message.sequence, spending: message.spending, state: stateValue, executedStance: stateValue?.executedStance, supersededBy: typeof data.supersededBy === 'string' ? data.supersededBy : null };
 }
 export async function viewsFor(store: Store, messages: Message[], parent?: string, knownUsers?: UserView[]) {
     const ids = messages.map(m => m.id), states = new Map((await statesFor(store, ids)).map(s => [s.messageId, s])), context: ViewContext = { users: new Map((knownUsers ?? await usersFor(store, messages.map(message => message.authorId))).map(user => [user.id, user])), messages: new Map(), members: new Map(), rounds: new Map(), recipients: new Map() };
@@ -232,7 +211,7 @@ export async function viewsFor(store: Store, messages: Message[], parent?: strin
 export function paginate<T>(data: T[], query: RecordData, max = 200) { const page = Math.max(1, Number(query.page) || 1), limit = Math.min(max, Math.max(1, Number(query.limit) || 50)); return { data: data.slice((page - 1) * limit, page * limit), pagination: { page, limit, total: data.length, totalPages: Math.ceil(data.length / limit) } }; }
 async function queryUsers(store: Store, ids?: string[]): Promise<UserView[]> {
     if (ids && !ids.length) return [];
-    return (await store.db.prepare('SELECT u.id,u.name,u.founder,COALESCE(old."createdAt",MIN(l."createdAt")) AS "createdAt" FROM users u LEFT JOIN ledger l ON l."userId"=u.id LEFT JOIN legacy_users old ON old.id=u.id' + (ids ? ' WHERE u.id=ANY($1::text[])' : '') + ' GROUP BY u.id,old."createdAt" ORDER BY u.position').all(...(ids ? [ids] : [])))
+    return (await store.db.prepare('SELECT u.id,u.name,u.founder,u."createdAt" FROM users u' + (ids ? ' WHERE u.id=ANY($1::text[])' : '') + ' ORDER BY u.position').all(...(ids ? [ids] : [])))
         .map(row => ({ id: String(row.id), name: String(row.name), username: String(row.name), founder: !!row.founder, createdAt: String(row.createdAt ?? '') }));
 }
 export const allUsers = (store: Store) => queryUsers(store);
@@ -246,8 +225,8 @@ export async function accountView(store: Store, userId: string) {
         latest.set(round.targetKey, round);
     }
     let totalEarned = 0, totalLost = 0;
-    const legacyAccount=await store.db.prepare('SELECT body FROM legacy_accounts WHERE "userId"=$1').get(userId);
-    if(legacyAccount) {totalEarned=Number(legacyAccount.body.totalEarned??0);totalLost=Number(legacyAccount.body.totalLost??0);}
+    const baseline=await store.db.prepare('SELECT earned,lost FROM account_baselines WHERE "userId"=$1').get(userId);
+    totalEarned=Number(baseline?.earned??0);totalLost=Number(baseline?.lost??0);
     for (const round of latest.values()) {
         const principal = (round.betIds as string[]).reduce((sum, id) => sum + (bets.get(id) ?? 0), 0), payout = (round.payouts as RecordData[]).filter(a => a.userId === userId).reduce((sum, a) => sum + Number(a.amount), 0), net = payout - principal;
         totalEarned += Math.max(0, net);
@@ -256,72 +235,45 @@ export async function accountView(store: Store, userId: string) {
     return { points: { available: account.available, locked: account.locked }, balance: { amount: account.available, debtFrozen: account.available < 0 }, breakdown: { initialMinted: sum(r => r.reason === '初始发放' ? Number(r.amount) : 0), totalEarned, totalLost, totalProtocolFees: sum(r => r.reason === '协议费' ? -Number(r.amount) : 0) } };
 }
 export async function stakesFor(store: Store, ids: string[], knownUsers?: UserView[]): Promise<Record<string, NativeMessageStakes>> {
-    const users = new Map((knownUsers ?? []).map(user => [user.id, user])), result: Record<string, NativeMessageStakes> = {};
-    const loadUsers = async (rows: RecordData[]) => {
-        const missing = [...new Set(rows.map(row => String(row.userId)).filter(id => !users.has(id)))];
-        for (const user of await usersFor(store, missing)) users.set(user.id, user);
-    };
-    for (const id of ids)
-        result[id] = { messageId: id, pool: { lockedPro: 0, lockedCon: 0 }, pools: { TRUTH: { lockedPro: 0, lockedCon: 0 }, VALUE: { lockedPro: 0, lockedCon: 0 } }, stakes: [], counts: { pro: 0, con: 0 }, countsByType: { TRUTH: { pro: 0, con: 0 }, VALUE: { pro: 0, con: 0 } } };
-    for (let offset = 0; offset < ids.length; offset += 200) {
-        const chunk = ids.slice(offset, offset + 200);
-        if (!chunk.length)
-            continue;
-        const rows = (await store.db.prepare(`SELECT bets.*,m."createdAt",r.body AS "roundBody",EXISTS(SELECT 1 FROM legacy_stakes old WHERE old.id=bets.id) AS imported FROM bets JOIN messages m ON m.id=bets."messageId" JOIN rounds r ON r.id=bets."roundId" WHERE COALESCE((r.body::jsonb #>> '{subjectId}'),(r.body::jsonb #>> '{target,messageId}'))=ANY($1::text[]) ORDER BY bets.position`).all(chunk));
-        await loadUsers(rows);
-        for (const row of rows) {
-            const round = JSON.parse(String(row.roundBody)), value = result[round.subjectId ?? round.target.messageId];
-            if (!value)
-                continue;
-            const side = row.side === 'pro' ? 'pro' : 'con', type = round.settlementType === 'VALUE' ? 'VALUE' : 'TRUTH';
-            if(!row.imported) {
-            value.counts[side] += Number(row.amount);
-            value.countsByType[type][side] += Number(row.amount);
-            value.stakes.push({ id: row.id, side: side==='pro'?'PRO':'CON', amount: row.amount, createdAt: row.createdAt, roundId: row.roundId, settlementType: type, user: users.get(String(row.userId))!, reference: round.target });
-            }
-            if (round.status !== 'settled') {
-                value.pool[side === 'pro' ? 'lockedPro' : 'lockedCon'] += Number(row.amount);
-                value.pools[type][side === 'pro' ? 'lockedPro' : 'lockedCon'] += Number(row.amount);
-            }
-        }
+  const users=new Map((knownUsers??[]).map(user=>[user.id,user])),result:Record<string,NativeMessageStakes>={};
+  for(const id of ids)result[id]={messageId:id,pool:{lockedPro:0,lockedCon:0},pools:{TRUTH:{lockedPro:0,lockedCon:0},VALUE:{lockedPro:0,lockedCon:0}},
+    stakes:[],counts:{pro:0,con:0},countsByType:{TRUTH:{pro:0,con:0},VALUE:{pro:0,con:0}}};
+  for(let offset=0;offset<ids.length;offset+=200){
+    const batch=ids.slice(offset,offset+200);
+    const positions=await store.db.prepare('SELECT * FROM stake_positions WHERE "subjectId"=ANY($1::text[]) ORDER BY "createdAt",id').all(batch);
+    for(const user of await usersFor(store,[...new Set(positions.map(row=>String(row.userId)).filter(id=>!users.has(id)))]))users.set(user.id,user);
+    for(const row of positions){
+      const value=result[row.subjectId],type=row.settlementType==='VALUE'?'VALUE':'TRUTH',side=row.side==='pro'?'pro':'con';
+      value.counts[side]+=Number(row.amount);value.countsByType[type][side]+=Number(row.amount);
+      value.stakes.push({id:row.id,side:side==='pro'?'PRO':'CON',amount:row.amount,createdAt:row.createdAt,roundId:row.roundId,
+        settlementType:type,user:users.get(row.userId)!,...(row.reference?{reference:row.reference}:{})});
     }
-    for(let offset=0;offset<ids.length;offset+=200) {
-        const batch=ids.slice(offset,offset+200);
-        const imported=await store.db.prepare('SELECT * FROM legacy_stakes WHERE "messageId"=ANY($1::text[]) ORDER BY "createdAt",id').all(batch);
-        await loadUsers(imported);
-        for(const row of imported) {
-            const value=result[String(row.messageId)],type=row.settlementType==='VALUE'?'VALUE':'TRUTH',side=row.side==='PRO'?'pro':'con';
-            if(!value.countsByType[type]) value.countsByType[type]={pro:0,con:0};
-            if(!value.pools[type]) value.pools[type]={lockedPro:0,lockedCon:0};
-            value.countsByType[type][side]+=Number(row.amount);
-            value.counts[side]+=Number(row.amount);
-            value.stakes.push({id:row.id,side:row.side,amount:row.amount,createdAt:row.createdAt,roundId:row.roundId,settlementType:type,user:users.get(String(row.userId))!,legacy:true});
-        }
-        const pools=await store.db.prepare('SELECT * FROM legacy_pools WHERE "messageId"=ANY($1::text[])').all(batch);
-        const native=await store.db.prepare(`SELECT body::jsonb ->> 'subjectId' AS subject,body::jsonb ->> 'settlementType' AS type FROM rounds WHERE body::jsonb ->> 'legacyActive'='true' AND body::jsonb ->> 'subjectId'=ANY($1::text[])`).all(batch);
-        for(const row of pools) {
-            const value=result[String(row.messageId)],type=String(row.settlementType);
-            if(native.some(round=>round.subject===row.messageId&&round.type===type)) continue;
-            value.pools[type]={lockedPro:row.lockedPro,lockedCon:row.lockedCon};
-            value.pool.lockedPro+=Number(row.lockedPro);value.pool.lockedCon+=Number(row.lockedCon);
-        }
+    const pools=await store.db.prepare(`SELECT COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}') AS subject,
+      COALESCE(r.body::jsonb->>'settlementType','TRUTH') AS type,b.side,SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
+      WHERE COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}')=ANY($1::text[])
+      AND r.body::jsonb->>'status'<>'settled' GROUP BY subject,type,b.side`).all(batch);
+    for(const row of pools){
+      const value=result[row.subject],type=String(row.type),key=row.side==='pro'?'lockedPro':'lockedCon';
+      value.pools[type]??={lockedPro:0,lockedCon:0};value.pools[type][key]+=Number(row.amount);value.pool[key]+=Number(row.amount);
     }
-    return result;
+    for(const row of await store.db.prepare('SELECT "messageId",amount FROM escrows WHERE "messageId"=ANY($1::text[]) AND "recipientId" IS NULL').all(batch)){
+      const value=result[row.messageId];value.pools.DELEGATION??={lockedPro:0,lockedCon:0};
+      value.pools.DELEGATION.lockedPro+=Number(row.amount);value.pool.lockedPro+=Number(row.amount);
+    }
+    for(const row of await store.db.prepare('SELECT * FROM pool_checkpoints WHERE "messageId"=ANY($1::text[])').all(batch)){
+      const value=result[row.messageId],type=String(row.settlementType);value.pools[type]??={lockedPro:0,lockedCon:0};
+      for(const key of ['lockedPro','lockedCon'] as const){value.pools[type][key]+=Number(row[key]);value.pool[key]+=Number(row[key]);}
+    }
+  }
+  return result;
 }
 export async function roundView(store: Store, id: string, userId?: string): Promise<RecordData> {
     const row = (await store.db.prepare("SELECT body FROM rounds WHERE id=$1").get(id));
     if (!row)
         throw new DomainError('结算不存在', 404);
     const round = JSON.parse(String(row.body)), declaration = (await store.message(id)), basis = dataOf(declaration), authorId = String(basis.openedBy ?? declaration.authorId);
-    if(round.legacyHistory&&!round.legacyActive) {
-        const votes=round.legacyVotes??[];
-        const stakes=await store.db.prepare('SELECT side,amount,"roundId" FROM legacy_stakes WHERE "messageId"=$1 AND "settlementType"=$2 ORDER BY "createdAt",id').all(round.subjectId,round.settlementType);
-        const weight=(side:string,onlyRound=false)=>stakes.filter(row=>row.side===side&&(!onlyRound||row.roundId===id)).reduce((sum,row)=>sum+Number(row.amount),0);
-        const sum=(vote:string)=>votes.filter((row:RecordData)=>row.vote===vote).reduce((total:number,row:RecordData)=>total+row.amount,0)+(vote==='TRUE'?weight('PRO'):vote==='FALSE'?weight('CON'):0);
-        const pool=await store.db.prepare('SELECT "lockedPro","lockedCon" FROM legacy_pools WHERE "messageId"=$1 AND "settlementType"=$2').get(round.subjectId,round.settlementType);
-        const roundWeights={TRUE:weight('PRO',true)+votes.filter((row:RecordData)=>row.vote==='TRUE').reduce((total:number,row:RecordData)=>total+row.amount,0),FALSE:weight('CON',true)+votes.filter((row:RecordData)=>row.vote==='FALSE').reduce((total:number,row:RecordData)=>total+row.amount,0),UNKNOWN:votes.filter((row:RecordData)=>row.vote==='UNKNOWN').reduce((total:number,row:RecordData)=>total+row.amount,0)};
-        return {id,roundMessageId:id,messageId:round.subjectId,reference:round.target,createdByUserId:authorId,createdBy:await userView(store,authorId),status:round.legacyStatus,settlementType:round.settlementType,result:round.result==='pro'?'TRUE':round.result==='con'?'FALSE':round.result==='tie'?'UNKNOWN':null,previousRoundId:round.previousRoundId,openedAt:round.createdAt,closedAt:round.endsAt,note:round.legacyNote,settlementPro:round.pro,settlementCon:round.con,totalProAtSettlement:round.pro,totalConAtSettlement:round.con,weights:{TRUE:sum('TRUE'),FALSE:sum('FALSE'),UNKNOWN:sum('UNKNOWN')},roundWeights,pool:pool??null,totalWeight:sum('TRUE')+sum('FALSE')+sum('UNKNOWN'),votes:await Promise.all(votes.map(async(vote:RecordData)=>({id:vote.id,vote:vote.vote,amount:vote.amount,createdAt:vote.createdAt,user:await userView(store,vote.userId)}))),_count:{votes:votes.length},legacyHistory:true};
-    }
+    const published = await store.db.prepare('SELECT body FROM published_round_reports WHERE id=$1').get(id);
+    if (published) return published.body;
     const bets = (await store.db.prepare("SELECT b.*,m.\"createdAt\",m.body FROM bets b JOIN messages m ON m.id=b.\"messageId\" WHERE b.\"targetKey\"=$1 ORDER BY b.position").all(round.targetKey)).filter(b => round.status !== 'settled' || round.betIds.includes(b.id));
     const active = bets.filter(b => b.roundId === id), sum = (side: string, rows = bets) => rows.filter(b => b.side === side).reduce((s, b) => s + Number(b.amount), 0);
     let personalSettlement: RecordData | undefined;
@@ -339,7 +291,7 @@ export async function roundView(store: Store, id: string, userId?: string): Prom
             personalSettlement = { principal: principal + protocolFee, stakePrincipal: principal, protocolFee, after, change: after - (previousAfter ?? 0), ...(previousAfter === undefined ? {} : { previousAfter }) };
         }
     }
-    return { id, roundMessageId: id, messageId: round.subjectId ?? round.target.messageId, reference: round.target, createdByUserId: authorId, createdBy: (await userView(store, authorId)), status: round.status === 'settled' ? 'SETTLED' : round.status === 'waiting' || round.legacyActive ? 'VOTING' : 'OPEN', settlementType: round.settlementType ?? 'TRUTH', result: round.result === 'pro' ? 'TRUE' : round.result === 'con' ? 'FALSE' : round.result === 'tie' ? 'UNKNOWN' : null, previousRoundId: round.previousRoundId, openedAt: round.createdAt, closedAt: round.status === 'settled' ? round.endsAt : null, endsAt: round.endsAt, note: null, settlementPro: round.pro, settlementCon: round.con, totalProAtSettlement: round.pro, totalConAtSettlement: round.con, weights: { TRUE: sum('pro'), FALSE: sum('con'), UNKNOWN: 0 }, roundWeights: { TRUE: sum('pro', active), FALSE: sum('con', active), UNKNOWN: 0 }, totalWeight: sum('pro') + sum('con'), votes: (await Promise.all(active.map(async (b) => ({ id: b.messageId, vote: b.side === 'pro' ? 'TRUE' : 'FALSE', amount: b.amount, createdAt: b.createdAt, user: (await userView(store, String(b.userId))) })))), _count: { votes: active.length }, personalSettlement, distributionId: round.distributionId };
+    return { id, roundMessageId: id, messageId: round.subjectId ?? round.target.messageId, reference: round.target, createdByUserId: authorId, createdBy: (await userView(store, authorId)), status: round.status === 'settled' ? 'SETTLED' : round.status === 'waiting' ? 'VOTING' : 'OPEN', settlementType: round.settlementType ?? 'TRUTH', result: round.result === 'pro' ? 'TRUE' : round.result === 'con' ? 'FALSE' : round.result === 'tie' ? 'UNKNOWN' : null, previousRoundId: round.previousRoundId, openedAt: round.createdAt, closedAt: round.status === 'settled' ? round.endsAt : null, endsAt: round.endsAt, note: null, settlementPro: round.pro, settlementCon: round.con, totalProAtSettlement: round.pro, totalConAtSettlement: round.con, weights: { TRUE: sum('pro'), FALSE: sum('con'), UNKNOWN: 0 }, roundWeights: { TRUE: sum('pro', active), FALSE: sum('con', active), UNKNOWN: 0 }, totalWeight: sum('pro') + sum('con'), votes: (await Promise.all(active.map(async (b) => ({ id: b.messageId, vote: b.side === 'pro' ? 'TRUE' : 'FALSE', amount: b.amount, createdAt: b.createdAt, user: (await userView(store, String(b.userId))) })))), _count: { votes: active.length }, personalSettlement, distributionId: round.distributionId };
 }
 export function tagCounts(views: RecordData[]) { const counts: Record<string, Record<string, number>> = {}; for (const message of views) {
     if (!['TAG', 'RECOMMEND', 'ARCHIVE'].includes(message.relationType))
@@ -366,7 +318,7 @@ export async function tagCountsFor(store: Store, ids: string[]) {
         }
     }
     for (const source of sources.values()) {
-        const type = legacyType(source);
+        const type = relationViewType(source);
         if (!type || !['TAG', 'RECOMMEND', 'ARCHIVE'].includes(type))
             continue;
         const data = dataOf(source), targets = new Set((primaryRelation(source)?.roles.target ?? []).map(b => b.reference.messageId));

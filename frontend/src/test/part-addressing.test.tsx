@@ -181,12 +181,12 @@ describe('core message identity and execution state', () => {
     expect(versions.versions[0].valid).toBe(false); expect(computeCorrectedEdgeMap(converted.edges).size).toBe(0);
   });
 
-  it('shows previously sent text amendments as corrections once their full bodies are projected', () => {
+  it('shows native text corrections using their projected before and after bodies', () => {
     const m = message();
     const before = m.content, after = before.replace('重复', '修改');
     const relation: Relation = { id: 'earlier-correction', relationType: 'CORRECT', sourceMessageId: null,
       targetRefs: [{ kind: 'text-fragment', messageId: m.id, text: '重复', hash: 'x', reference: { messageId: m.id, revision: 3, partId: 'body', range: { start: 0, end: 2 } } }],
-      parts: [{ id: 'relation', type: 'relation', relation: 'amend', roles: {} }],
+      parts: [{ id: 'relation', type: 'relation', relation: 'correct', roles: {} }],
       payload: { correctionContent: '修改', correctionBeforeContent: before, correctionAfterContent: after }, createdBy: user, createdAt: '2026-01-02' };
     const converted = convertMessagesToDemoModel([], [relation]);
     expect(converted.edges[0].proposalOnly).toBe(false);
@@ -194,13 +194,13 @@ describe('core message identity and execution state', () => {
     expect(computeCorrectionVersions([{ ...m, revision: 4 }, ...converted.messages], converted.edges).get(m.id)?.current).toBeUndefined();
   });
 
-  it('keeps an imported effective correction active even when its stored relation name is amend', () => {
+  it('keeps a native correction active using its exact range and replacement', () => {
     const target = { ...message(), content: '好玩吗？', parts: [{ id: 'body', type: 'text' as const, text: '好玩吗？' }] };
     const correction: Relation = { id: 'legacy-correction', revision: 1, relationType: 'CORRECT', sourceMessageId: null,
       targetRefs: [{ kind: 'text-fragment', messageId: target.id, text: '吗？', hash: 'old', reference: { messageId: target.id, revision: 3, partId: 'body', range: { start: 2, end: 4 } } }],
-      parts: [{ id: 'relation', type: 'relation', relation: 'amend', roles: { target: [{ id: 't', reference: { messageId: target.id } }] } },
-        { id: 'data', type: 'data', value: { kind: 'RELATION', uiType: 'CORRECT', legacyTopicId: 'old-topic', correctionContent: '好玩1111' } }],
-      payload: { correctionContent: '好玩1111' }, createdBy: user, createdAt: '2026-01-02T00:00:00Z' };
+      parts: [{id:'corrected-body',type:'text',text:'好玩1111'},{ id: 'relation', type: 'relation', relation: 'correct', roles: { target: [{ id: 't', reference: { messageId: target.id,revision:3,partId:'body',range:{start:2,end:4} } }] } },
+        { id: 'data', type: 'data', value: { kind: 'RELATION', uiType: 'CORRECT', value:'1111',correctionKind:'TEXT' } }],
+      payload: { correctionContent: '好玩1111',correctionBeforeContent:'好玩吗？',correctionAfterContent:'好玩1111',correctionValue:'1111',correctionKind:'TEXT' }, createdBy: user, createdAt: '2026-01-02T00:00:00Z' };
     const converted = convertMessagesToDemoModel([], [correction]);
     expect(converted.edges[0].proposalOnly).toBe(false);
     const messages = [target, ...converted.messages];

@@ -58,7 +58,7 @@ npm run db:migrate-legacy -- --founder-id 旧用户ID --apply --accept-checkpoin
 
 ```sh
 npm run db:migrate-legacy -- --founder-id 旧用户ID --apply --read-only-rehearsal --report migration-reports/readonly-applied.json
-npx tsx apps/server/src/verify-legacy-rehearsal-cli.ts migration-reports/verification.json
+npx tsx apps/migrate/src/verify-legacy-rehearsal-cli.ts migration-reports/verification.json
 ```
 
 此模式保留账户 available/locked 和全部源原文，但不续接旧版资金执行语义；新版 API 读取 settings.migration.mode 后禁用业务写入及自动结算，仅允许登录/退出用于检查。进行中轮次以 legacy-pending 保存，UI 保留原 VOTING 状态，不能伪装成已结算。报告仍保留 blockers，CLI 仍返回阻断退出码；`applied: true` 仅表示只读演练库生成成功，绝不表示可上线。引用断链、身份冲突、账户不一致等完整性问题仍阻止生成。确认模式的行为有专门集成测试。验证 CLI 比较每条归档内容和摘要、用户与密码哈希、消息正文、账户及新版账本重放，不输出密码哈希。
@@ -110,7 +110,7 @@ bash export-production.sh --final
 
 ```sh
 npm run db:migrate-legacy -- --founder-id 旧用户ID --apply --read-only-rehearsal --preserve-active-state --lock-available --native-rehearsal --report migration-reports/native.json
-npx tsx apps/server/src/verify-legacy-rehearsal-cli.ts migration-reports/verification.json
+npx tsx apps/migrate/src/verify-legacy-rehearsal-cli.ts migration-reports/verification.json
 ```
 
 该组合生成 `settings.migration.mode=native-rehearsal`，允许隔离环境业务写入。`--read-only-rehearsal` 在此组合中是保留源锁定状态的显式安全选项，最终模式以报告为准。TRUTH 和 VALUE 使用不同目标键，活动本金导入 bets，VOTING 保持 open，没有截止计时，不自动结算。委托奖励导入 escrow，超出 rewardAmount 的原池积分继续锁定保留；只有之后的显式完成认定才能支付奖励。历史记录、签名、组织执行状态及所有源表原文继续保留。

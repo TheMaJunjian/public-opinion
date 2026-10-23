@@ -6,5 +6,5 @@
     "resolveJsonModule": true, "isolatedModules": true, "noEmit": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["apps/server/**/*.ts", "packages/**/*.ts", "vitest.config.ts"]
+  "include": ["apps/**/*.ts", "packages/**/*.ts", "vitest.config.ts"]
 }

@@ -1,26 +1,25 @@
-import { archiveChangeFingerprint, normalizeArchiveChange, replayArchive, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
+import { archiveChangeFingerprint, replayArchive, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
 import type { ExportData, ExportUpdateData } from '../api/client';
 
-/** Normalize historical view metadata at the file boundary, keeping replay checks intact. */
+/** Accept the current view contract; historical conversion belongs to the standalone migrator. */
 export function validateExportForViewing(input: unknown): { data: ExportData; verification: string | null } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('导出文件格式无效');
-  const archive = input as ExportData & { topic?: { title?: unknown } };
+  const archive = input as ExportData;
   let verification: string | null = null;
   if (archive.format === 'gonglun-2') {
     const replay = replayArchive(archive);
     verification = `记录连续性及资金守恒校验通过：${replay.changeCount} 次变更，${replay.messages.length} 条消息，${replay.accounts.size} 个账户。运营余额 ${replay.operating}，发行总量 ${replay.issued}。`;
   }
-  // Historical topic IDs are not message IDs and must not become navigation targets.
-  const data = archive.scope == null && typeof archive.topic?.title === 'string'
-    ? { ...archive, scope: { messageId: null, title: archive.topic.title } }
-    : archive;
+  const data = archive;
   if (!data.scope || typeof data.scope.title !== 'string') {
     throw new Error(archive.format === 'gonglun-2'
       ? '缺少阅览范围信息（scope）；仅含执行记录的文件请改用消息视图中的“导出”生成阅览文件'
-      : '缺少阅览范围信息（scope 或旧版 topic）');
+      : '缺少阅览范围信息（scope），请先使用独立迁移程序转换文件');
   }
   if (!Array.isArray(data.messages)) throw new Error('缺少消息列表（messages）');
   if (!Array.isArray(data.relations)) throw new Error('缺少关系列表（relations）');
+  if(data.messages.some(message=>!Array.isArray(message.parts)||!Number.isSafeInteger(message.revision)))
+    throw new Error('消息文件需要先使用独立迁移程序转换为最新版');
   const view = data.view;
   if (view !== undefined && (!view || typeof view !== 'object'
     || !(view.username === null || typeof view.username === 'string')
@@ -39,7 +38,7 @@ export type UpdatableExportData = ExportData & Archive;
 /** Verify the selected file locally; send only a digest and cursor to the server. */
 export async function prepareExportUpdate(input: unknown): Promise<{ data: UpdatableExportData; checkpoint: ArchiveCheckpoint }> {
   const { data } = validateExportForViewing(input);
-  if (data.format !== 'gonglun-2') throw new Error('此旧版文件不含完整执行记录，请先完整导出一次');
+  if (data.format !== 'gonglun-2') throw new Error('此阅览文件不含完整执行记录，请先完整导出一次');
   const archive = data as UpdatableExportData;
   if (typeof archive.regionId !== 'string' || !archive.regionId || typeof archive.ledgerId !== 'string' || !archive.ledgerId) {
     throw new Error('文件缺少数据来源信息，请先完整导出一次');
@@ -62,7 +61,7 @@ export function mergeExportUpdate(original: UpdatableExportData, checkpoint: Arc
   }
   if ((update.scope?.messageId ?? null) !== (original.scope.messageId ?? null)) throw new Error('增量记录的阅览范围不一致');
   const merged: UpdatableExportData = { ...original, ...fresh, format: 'gonglun-2',
-    changes: [...original.changes.map(normalizeArchiveChange), ...update.changes],
+    changes: [...original.changes, ...update.changes],
     viewerUsername: original.viewerUsername, view: original.view,
   };
   validateExportForViewing(merged);

@@ -4,7 +4,7 @@ import { recordStance } from './projections.js';
 import { validateJoinApproval } from './organizations.js';
 
 type Bet={id:string;roundId:string;targetKey:string;userId:string;messageId:string;side:'pro'|'con';amount:number};
-type SavedRound=Round&{targetKey:string;payouts:Allocation[];betIds:string[];createdAt:string;settlementType?:'TRUTH'|'VALUE';subjectId?:string;legacyActive?:boolean;legacyActiveBoundary?:boolean};
+type SavedRound=Round&{targetKey:string;payouts:Allocation[];betIds:string[];createdAt:string;settlementType?:'TRUTH'|'VALUE';subjectId?:string};
 type QualityEffect={userId:string;messageId:string;amount:number;active:boolean};
 type Escrow={messageId:string;ownerId:string;amount:number;recipientId:string|null;fulfillmentId:string|null};
 export function dataOf(message:Message):Record<string,Json> {
@@ -53,7 +53,7 @@ async function newRound(tx: Mutation, selected: {
         { id: 'settlement', type: 'relation', relation: 'settlement', roles: bindRoles({ target: [selected.target], trigger: [{ messageId: trigger.id }] }) },
         { id: 'basis', type: 'data', value: { openedBy: trigger.authorId, triggerId: trigger.id, previousRoundId: previous?.id ?? null, settlementType: subjectId ? 'VALUE' : 'TRUTH', subjectId: subjectId ?? selected.target.messageId } },
     ]);
-    return { id: declaration.id, target: selected.target, targetRevision: selected.revision, status: 'open', pro: previous?.pro ?? 0, con: previous?.con ?? 0, result: null, previousRoundId: previous?.id ?? null, distributionId: null, endsAt: null, targetKey: selected.key, payouts: [], betIds: [], createdAt: now(), settlementType: subjectId ? 'VALUE' : previous?.settlementType??'TRUTH', subjectId: subjectId ?? previous?.subjectId??selected.target.messageId,...(previous?.legacyActive?{legacyActive:true,legacyActiveBoundary:false}:{}) };
+    return { id: declaration.id, target: selected.target, targetRevision: selected.revision, status: 'open', pro: previous?.pro ?? 0, con: previous?.con ?? 0, result: null, previousRoundId: previous?.id ?? null, distributionId: null, endsAt: null, targetKey: selected.key, payouts: [], betIds: [], createdAt: now(), settlementType: subjectId ? 'VALUE' : previous?.settlementType??'TRUTH', subjectId: subjectId ?? previous?.subjectId??selected.target.messageId };
 }
 export async function openSettlement(tx: Mutation, message: Message) {
     const valueRelation = relations(message).find(part => part.relation === 'open-value-settlement');
@@ -70,12 +70,8 @@ async function targetKey(store: Store, target: Reference): Promise<{
 }> {
     const revision = (await store.message(target.messageId, target.revision)).revision;
     const pinned = { ...target, revision };
-    const imported=await getEffect<{activeTargets?:Array<{reference:Reference;targetKey:string}>}>(store,`legacy-settlement:${target.messageId}`);
-    if(imported) {
-        const active=imported.activeTargets?.find(row=>referenceKey(row.reference)===referenceKey(pinned));
-        if(active)return {key:active.targetKey,target:pinned,revision};
-        throw new DomainError('该消息只有旧版已完成资金历史，不能跨迁移边界追溯结算；请创建新消息',409);
-    }
+    const policy=await store.db.prepare('SELECT allowed_keys FROM settlement_access WHERE "messageId"=$1').get(target.messageId);
+    if(policy && !policy.allowed_keys.includes(referenceKey(pinned))) throw new DomainError('该消息已关闭资金操作，请创建新消息',409);
     return { key: referenceKey(pinned), target: pinned, revision };
 }
 export async function roundsFor(store: Store, messageId: string): Promise<Round[]> {
@@ -123,7 +119,7 @@ export async function placeWager(tx: Mutation, message: Message, amount: number)
         throw new DomainError('押注必须对应一项明确的赞同或反对');
     const resolved = await resolveExecutedStance(tx.store, stance[0]!.roles.target![0]!.reference, stance[0]!.relation === 'agree' ? 'pro' : 'con');
     await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
-    if(amount===0 && await hasEffect(tx.store,`legacy-settlement:${resolved.target.messageId}`)) {
+    if(amount===0 && await tx.store.db.prepare('SELECT 1 FROM settlement_access WHERE "messageId"=$1').get(resolved.target.messageId)) {
         const target={...resolved.target,revision:(await tx.store.message(resolved.target.messageId,resolved.target.revision)).revision};
         await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id,message.revision,stance[0]!.id,JSON.stringify(target),resolved.side);
         tx.affected.add(await recordStance(tx.store,message,{target,side:resolved.side}));
@@ -145,6 +141,8 @@ export async function placeWager(tx: Mutation, message: Message, amount: number)
         await tx.store.ledger(message.authorId, message.id, -amount, amount, '对赌锁定');
         const betId = id();
         await tx.store.db.prepare(`INSERT INTO bets(id,"roundId","targetKey","userId","messageId",side,amount) VALUES ($1,$2,$3,$4,$5,$6,$7)`).run(betId, round.id, selected.key, message.authorId, message.id, resolved.side, amount);
+        await tx.store.db.prepare('INSERT INTO stake_positions VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)').run(betId,message.authorId,
+          round.subjectId??round.target.messageId,round.id,round.settlementType??'TRUTH',resolved.side,amount,message.createdAt,JSON.stringify(round.target));
     }
     await saveRound(tx.store, round);
 }
@@ -200,7 +198,7 @@ async function settle(tx: Mutation, round: SavedRound, triggerId: string) {
     if (round.status === 'settled')
         return;
     const bets = (await store.db.prepare(`SELECT * FROM bets WHERE "targetKey"=$1 ORDER BY position`).all(round.targetKey)) as unknown as Bet[];
-    if (round.previousRoundId && !round.legacyActiveBoundary) {
+    if (round.previousRoundId && (await savedRounds(store,round.targetKey)).find(item=>item.id===round.previousRoundId)?.distributionId) {
         const previous = (await savedRounds(store, round.targetKey)).find(r => r.id === round.previousRoundId)!;
         const reverse = await distribution(tx, round.target, { source: 'reversal', total: -previous.payouts.reduce((s, a) => s + a.amount, 0), ruleVersion: (await store.rules()).version, inputs: { roundId: previous.id, distributionId: previous.distributionId }, allocations: previous.payouts.map(a => ({ ...a, amount: -a.amount, reason: '后续结算撤回先前分配' })) });
         for (const allocation of previous.payouts)
@@ -222,7 +220,6 @@ async function settle(tx: Mutation, round: SavedRound, triggerId: string) {
         await store.ledger(allocation.userId, output.id, allocation.amount, 0, allocation.reason, true);
     Object.assign(round, { pro, con, result, status: 'settled', endsAt: now(), distributionId: output.id, payouts, betIds: bets.map(b => b.id) });
     await saveRound(store, round);
-    if(round.legacyActive) await store.db.prepare('UPDATE legacy_pools SET "lockedPro"=0,"lockedCon"=0 WHERE "messageId"=$1 AND "settlementType"=$2').run(round.subjectId??round.target.messageId,round.settlementType??'TRUTH');
     await applyResultEffects(tx, round, output.id);
 }
 async function applyResultEffects(tx: Mutation, round: SavedRound, distributionId: string) {
@@ -266,14 +263,12 @@ async function applyResultEffects(tx: Mutation, round: SavedRound, distributionI
             await tx.store.ledger(escrow.ownerId, output.id, 0, -escrow.amount, '委托报酬支付', true);
             await tx.store.ledger(evaluated.authorId, output.id, escrow.amount, 0, '委托完成报酬', true);
             await tx.store.db.prepare(`UPDATE escrows SET "recipientId"=$1,"fulfillmentId"=$2 WHERE "messageId"=$3`).run(evaluated.authorId, fulfillmentKey, task.messageId);
-            await tx.store.db.prepare('UPDATE legacy_pools SET "lockedPro"=GREATEST(0,"lockedPro"-$1),"lockedCon"=GREATEST(0,"lockedCon"-GREATEST(0,$1-"lockedPro")) WHERE "messageId"=$2 AND "settlementType"=\'DELEGATION\'').run(escrow.amount,task.messageId);
         }
         else if (round.result !== 'pro' && escrow.fulfillmentId === fulfillmentKey && escrow.recipientId) {
             const output = await distribution(tx, task, { source: 'reversal', total: -escrow.amount, ruleVersion: (await tx.store.rules()).version, inputs: { fulfillmentId: evaluated.id, distributionId }, allocations: [{ userId: escrow.recipientId, amount: -escrow.amount, reason: '撤回委托完成认定', messageIds: [task.messageId, evaluated.id] }] });
             await tx.store.ledger(escrow.recipientId, output.id, -escrow.amount, 0, '追回委托报酬', true);
             await tx.store.ledger(escrow.ownerId, output.id, 0, escrow.amount, '恢复委托锁定报酬', true);
             await tx.store.db.prepare(`UPDATE escrows SET "recipientId"=NULL,"fulfillmentId"=NULL WHERE "messageId"=$1`).run(task.messageId);
-            await tx.store.db.prepare('UPDATE legacy_pools SET "lockedPro"="lockedPro"+$1 WHERE "messageId"=$2 AND "settlementType"=\'DELEGATION\'').run(escrow.amount,task.messageId);
         }
     }
 }

@@ -80,7 +80,7 @@ export function deriveContainerEffect(input: {
     filterContainerEdgesByEffectiveJoins(input.edges,relations,effectiveJoinIds,joinByTarget),relations,effectiveJoinIds,containerIds,joinByTarget,
   );
   const edges = traceEdges.filter(edge=>!suppressed.has(edge.relationMessageId));
-  // Resolve each target independently, including older multi-target JOINs.
+  // Resolve each target independently from its saved membership history.
   // Use declarations for this index: display edges may already point at a
   // corrected version while the original message still owns the membership.
   const memberships:TraceContainerMembership[] = [...containerIds].map(containerId=>{

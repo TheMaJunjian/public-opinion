@@ -50,7 +50,24 @@ describe('computed display hints',()=>{
       rel('new','JOIN',['m'],'B','2026-01-03'),rel('choice','AGREE',['old'],null,'2026-01-04','alice')];
     const input=fixture([text('m')],relations),{hints}=deriveDisplayHints(input);
     expect(hints.get('m')).toMatchObject({source:'personal',different:true,personal:{parentIds:['A']},recommended:{parentIds:['B']}});
+    expect(hints.get('old')).toMatchObject({personal:{membershipActive:true},recommended:{membershipActive:false},matchesRecommended:false});
+    expect(hints.get('new')).toMatchObject({personal:{membershipActive:false},recommended:{membershipActive:true},matchesRecommended:false});
     expect(displayHintDestination(input,'new')).toEqual({kind:'container',id:'B'});
+    render(<MessageDisplayHintsProvider input={input} onView={vi.fn()}>
+      <MessageDisplayMarker messageId="old"/><MessageDisplayMarker messageId="new"/>
+    </MessageDisplayHintsProvider>);
+    const oldMarker=screen.getByRole('button',{name:/显示提示 old：.*统计无效/});
+    expect(oldMarker).toHaveAccessibleName(/选择生效/);
+    expect(oldMarker).toHaveStyle({color:'#86efac'});
+    const newMarker=screen.getByRole('button',{name:/显示提示 new：.*统计生效/});
+    expect(newMarker).toHaveAccessibleName(/选择无效/);
+    expect(newMarker).toHaveStyle({color:'#fca5a5'});
+    fireEvent.click(oldMarker);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('选择生效');
+    expect(screen.getByRole('tooltip')).toHaveTextContent('统计无效');
+    expect(screen.getByRole('img',{name:'选择与统计不一致'})).toHaveTextContent('≠');
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent(/个人选择优先|当前对你|与我的选择|当前显示与统计结果/);
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent('推荐');
   });
 
   it('compares a correction record with the adopted body and reuses correction history/view destinations',()=>{
@@ -139,8 +156,9 @@ describe('shared display markers',()=>{
     const marker=screen.getByRole('button',{name:/显示提示 m：待阅/});
     fireEvent.mouseEnter(marker);
     const tooltip=screen.getByRole('tooltip'),hintText=tooltip.textContent;
-    expect(tooltip).toHaveTextContent('待阅，尚未标为已读');expect(tooltip).toHaveTextContent('与我的选择一致');
-    expect(tooltip).toHaveTextContent('与推荐一致');expect(tooltip).not.toHaveTextContent(/仅提示状态|不自动跳转|查看沿用/);
+    expect(tooltip).toHaveTextContent('待阅，尚未标为已读');expect(tooltip).toHaveTextContent('选择生效');
+    expect(tooltip).toHaveTextContent('统计生效');expect(tooltip).not.toHaveTextContent(/与我的选择|当前显示与统计结果|推荐|仅提示状态|不自动跳转|查看沿用/);
+    expect(screen.getByRole('img',{name:'选择与统计一致'})).toHaveTextContent('=');
     expect(marker).toHaveAttribute('aria-describedby',tooltip.id);expect(marker).not.toHaveAttribute('title');
     fireEvent.mouseLeave(marker);expect(screen.queryByRole('tooltip')).toBeNull();
     fireEvent.click(marker);expect(screen.getByRole('tooltip').textContent).toBe(hintText);
@@ -154,18 +172,19 @@ describe('shared display markers',()=>{
   it('offers a small View tag and shows consistency only in the existing hint',()=>{
     const input=fixture([text('m')],[]),onView=vi.fn();
     render(<MessageDisplayHintsProvider input={input} onView={onView}><MessageDisplayMarker messageId="m" viewTag/></MessageDisplayHintsProvider>);
-    const tag=screen.getByRole('button',{name:/查看消息 m/});expect(tag).toHaveTextContent('查看');expect(tag.getAttribute('aria-label')).toContain('与我的选择一致');
+    const tag=screen.getByRole('button',{name:/查看消息 m/});expect(tag).toHaveTextContent('查看');expect(tag.getAttribute('aria-label')).toContain('选择生效');
     fireEvent.click(tag);expect(onView).toHaveBeenCalledWith('m',expect.anything(),true);expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('shows the arrangement message card when using the existing preview',()=>{
     const input=fixture([text('m')],[rel('arrangement','ARRANGE',['m'])]),noop=vi.fn();
     render(<MessageDisplayHintsProvider input={input} onView={noop}><GraphView messages={input.messages} edges={input.edges}
-      draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} voteStats={{}}
+      draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null}
       comparisonSingle comparisonDisplay="agree" comparisonTargetId="arrangement"
       onMessageClick={noop} onMessageDoubleClick={noop} onTextMouseUp={noop} onEdgeLabelSingleClick={noop}
       onEdgeLabelDoubleClick={noop} onFragmentAnchorClick={noop} isFragmentSelected={()=>false}/></MessageDisplayHintsProvider>);
     expect(screen.getByRole('group',{name:'组织消息 arrangement'})).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:/显示提示 arrangement/}));expect(noop).not.toHaveBeenCalled();expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('img',{name:'选择与统计一致'})).toHaveTextContent('=');
   });
 });

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { createApp } from './app.js';
 import { Store } from './db.js';
+import { openMigratingStore } from '../../migrate/src/migrations.js';
 
 // Never fall back to the deployment DATABASE_URL: integration tests get their
 // own namespace on an explicitly configured test server or the local dev server.
@@ -25,7 +26,7 @@ export async function createTestApp(options: { settlementTickMs?: number; databa
 
 export async function createTestStore(schema = newTestSchema()) {
   if (!schemas.has(schema)) throw new Error('测试只能访问本轮创建的 schema');
-  const store = await Store.open(testDatabaseUrl(), { schema });
+  const store = await openMigratingStore(testDatabaseUrl(), { schema });
   resources.push(store);
   return store;
 }

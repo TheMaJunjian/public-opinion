@@ -28,7 +28,7 @@ export function resolveMemberships(actions: MembershipAction[], rejected: Readon
       const seen = new Set<string>();
       while (action && !seen.has(action.id)) {
         seen.add(action.id);
-        // Removing a legacy boundary maps this placement to root. It is a
+        // Removing a retired organization boundary maps this placement to root. It is a
         // terminal checkpoint, not permission to restore an earlier container.
         if (retiredParents.has(action.parentId) || retiredParents.has(memberId)) break;
         if (!excluded.has(action.id) && !excluded.has(action.parentId)) {

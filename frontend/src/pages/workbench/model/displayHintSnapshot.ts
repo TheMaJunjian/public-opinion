@@ -10,6 +10,7 @@ export type DisplaySnapshot = {
   parentIds: string[];
   memberIds: string[];
   suppressed: boolean;
+  membershipActive?: boolean;
   correctionIds: string[];
   recommendationTied?: boolean;
 };
@@ -38,7 +39,7 @@ export type DisplayHintsInput = {
 };
 const same = (a: string[],b: string[]) => a.length === b.length && a.every((id,index) => id === b[index]);
 export function sameDisplay(a: DisplaySnapshot,b: DisplaySnapshot) {
-  return a.content === b.content && a.suppressed === b.suppressed && same(a.parentIds,b.parentIds) && same(a.memberIds,b.memberIds)
+  return a.content === b.content && a.suppressed === b.suppressed && a.membershipActive === b.membershipActive && same(a.parentIds,b.parentIds) && same(a.memberIds,b.memberIds)
     && JSON.stringify(a.arrangement)===JSON.stringify(b.arrangement);
 }
 export function parentsFor(effect: ContainerEffect) {
@@ -54,12 +55,14 @@ export function snapshot(message: DemoMessage, effect: ContainerEffect, parents:
     ...(message.relationType==='arrange'?{arrangement:{layout:message.relationPayload?.targetLayout??'',
       order:[...new Set(effect.edges.filter(edge=>edge.relationMessageId===message.id&&edge.relationType==='arrange').map(edge=>edge.to.messageId))]}}:{}),
     memberIds: membership ? [...membership.textIds,...membership.relationIds].sort() : [], suppressed: effect.suppressed.has(message.id),
+    ...(message.kind==='join'?{membershipActive:effect.effectiveJoinIds.has(message.id)}:{}),
     correctionIds: correction?.appliedCorrectionIds ?? (correction ? [correction.correctionId] : []), recommendationTied: correction?.recommendationTied };
 }
 
 /** A compact display fingerprint stored only when the user sends a READ message. */
 export function displaySignature(value: DisplaySnapshot): string {
-  const text=JSON.stringify([value.content,value.parentIds,value.memberIds,value.suppressed,value.arrangement]);
+  const text=JSON.stringify([value.content,value.parentIds,value.memberIds,value.suppressed,value.arrangement,
+    ...(value.membershipActive===undefined?[]:[value.membershipActive])]);
   let first=2166136261,second=5381;
   for(let index=0;index<text.length;index++){first=Math.imul(first^text.charCodeAt(index),16777619);second=Math.imul(second,33)^text.charCodeAt(index);}
   return `display:1:${text.length}:${(first>>>0).toString(36)}:${(second>>>0).toString(36)}`;

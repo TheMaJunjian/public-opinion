@@ -1,6 +1,6 @@
 import type { Rect } from './layout';
 export type Point = { x: number; y: number };
-export type LabelSeed = { drawId: string; text: string; p0: Point; p1: Point; p2: Point };
+export type LabelSeed = { drawId: string; text: string; p0: Point; p1: Point; p2: Point; rightWidth?: number; rightHeight?: number };
 
 export function quadAt(p0: Point, p1: Point, p2: Point, t: number): Point {
   const u = 1-t;
@@ -57,20 +57,25 @@ export function computeLabelPlacementsAlongCurve(params: { seeds: LabelSeed[]; f
   const placed: Rect[] = [];
   const ts = [0.35,0.42,0.5,0.58,0.65,0.28,0.72,0.2,0.8];
   for (const s of sorted) {
+    const footprint=(x:number,y:number):Rect=>{
+      const label=labelRectApprox(x,y,s.text);
+      const height=Math.max(label.height,s.rightHeight??0);
+      return {...label,y:y-height/2,width:label.width+(s.rightWidth??0),height};
+    };
     let chosen: {x:number;y:number}|null = null;
     for (const t of ts) {
-      const p=quadAt(s.p0,s.p1,s.p2,t), r=labelRectApprox(p.x,p.y,s.text);
-      let ok=true;
+      const p=quadAt(s.p0,s.p1,s.p2,t), r=footprint(p.x,p.y);
+      let ok=r.y>=0;
       for (const tr of [...forbiddenRects,...placed]) if (rectsIntersect(r,tr)) { ok=false; break; }
       if (ok) { chosen={x:p.x,y:p.y}; placed.push(r); break; }
     }
     if (!chosen) {
-      const p=quadAt(s.p0,s.p1,s.p2,0.5); const x=p.x; let y=p.y, r=labelRectApprox(x,y,s.text);
+      const p=quadAt(s.p0,s.p1,s.p2,0.5); const x=p.x; let y=p.y, r=footprint(x,y);
       for (let iter=0;iter<200;iter++) {
-        let collision=false;
+        let collision=r.y<0;
         for (const tr of [...forbiddenRects,...placed]) if (rectsIntersect(r,tr)) { collision=true; break; }
         if (!collision) break;
-        y=p.y+Math.ceil(iter/2)*16*(iter%2===0?1:-1); r=labelRectApprox(x,y,s.text);
+        y=p.y+Math.ceil(iter/2)*16*(iter%2===0?1:-1); r=footprint(x,y);
       }
       chosen={x,y}; placed.push(r);
     }

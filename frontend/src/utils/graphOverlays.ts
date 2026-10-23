@@ -9,7 +9,7 @@ import { FRAME_PAD, MERGE_CARD_H } from './layout';
 import type { LayoutBox, Rect } from './layout';
 import type { Box } from './frameLayout';
 import type { Point } from './graphEdgeGeometry';
-import { getRelKind, isArrangeFrameRel, isAnyFrameRel, getRelationBoundsFromLayout, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_RIGHT_GAP, TAG_MAX_LABEL_CHARS, MERGE_CONTENT_TOP_GAP } from './graphPresentationGeometry';
+import { getRelKind, isArrangeFrameRel, isAnyFrameRel, getRelationBoundsFromLayout, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_RIGHT_GAP, TAG_MAX_LABEL_CHARS, MERGE_CONTENT_TOP_GAP } from './graphPresentationGeometry';
 import { quadAt } from './graphEdgeGeometry';
 import { moveAnchor, type GraphAnchorCache } from './graphAnchorCache';
 type LabelBbox = Rect;
@@ -49,6 +49,7 @@ export interface GraphOverlayInput {
   contentRefs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   edges: DemoEdge[];
   excludedStanceEdges?: ReadonlySet<string>;
+  visibleDecorationIds?: ReadonlySet<string>;
   messages: DemoMessage[];
   isTraceWindow: boolean;
   anonCorrectedRelMsgIds: Set<string>;
@@ -161,7 +162,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
     for (const [mid,data] of Object.entries(decorationsByMsg)) {
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
       const hasAgree=data.agreeCount>0, hasDisagree=data.disagreeCount>0;
-      const decX=box.x+box.width+DEC_RIGHT_GAP;
+      const decX=box.x+box.width+DEC_RIGHT_GAP+EDGE_HINT_W+DEC_GAP;
       let decY=box.y+DEC_RIGHT_TOP;
       if (hasAgree) {
         const rect={x:decX,y:decY,width:DEC_W,height:DEC_H};
@@ -177,7 +178,14 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
         decorationRects[`${mid}::disagree`]={kind:"disagree",key:data.disagreeKey,messageId:mid,rect,iconRect,bodyRect};
       }
     }
-    for (const v of Object.values(decorationRects)) globalForbiddenRects.push(v.rect);
+    const decorationOwners=new Set<string>();
+    for (const v of Object.values(decorationRects)) {
+      if(!input.visibleDecorationIds||input.visibleDecorationIds.has(v.messageId))globalForbiddenRects.push(v.rect);
+      if(!decorationOwners.has(v.messageId)){
+        decorationOwners.add(v.messageId);
+        globalForbiddenRects.push({x:v.rect.x-EDGE_HINT_W-DEC_GAP,y:v.rect.y,width:EDGE_HINT_W,height:EDGE_HINT_W});
+      }
+    }
 
     // Compute TAG label positions — aggregated by label text, stacked below agree/disagree decorations
     const newTagDecorationsByMsg: Record<string,{label:string;relMsgIds:string[];rect:Rect;relAgreeCount:number;relDisagreeCount:number;relAgreeMsgIds:string[];relDisagreeMsgIds:string[]}[]> = {};
@@ -186,25 +194,30 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
       if (e.to.selection.kind!=="whole") continue;
       const mid=e.to.messageId;
       const ep=endpointBoxForNormal(mid), box=ep?.box??layout[mid]; if (!box) continue;
-      // Use e.relationLabel which carries the actual tag text (set in modelBridge for new-style tags,
-      // or derived from source message content for legacy tags).
       const label=isValidTagLabel(e.relationLabel)
         ? e.relationLabel.slice(0,TAG_MAX_LABEL_CHARS)
-        : (msgMap.get(e.from.messageId)?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注");
+        : "标注";
       if (!newTagDecorationsByMsg[mid]) newTagDecorationsByMsg[mid]=[];
       // Find existing group for this label (aggregate same-text tags)
       const existing=newTagDecorationsByMsg[mid].find(g=>g.label===label);
       if (existing) {
         existing.relMsgIds.push(e.relationMessageId);
       } else {
-        const tagX=box.x+box.width+TAG_RIGHT_GAP;
+        const tagX=box.x+box.width+TAG_RIGHT_GAP+EDGE_HINT_W+DEC_GAP;
         const hasAgree=!!decorationRects[`${mid}::agree`], hasDisagree=!!decorationRects[`${mid}::disagree`];
-        const decBottomY = box.y+DEC_RIGHT_TOP + (hasAgree?DEC_H+DEC_GAP:0) + (hasDisagree?DEC_H+DEC_GAP:0);
+        const expanded=!input.visibleDecorationIds||input.visibleDecorationIds.has(mid);
+        const decBottomY = box.y+DEC_RIGHT_TOP + (expanded
+          ? (hasAgree?DEC_H+DEC_GAP:0)+(hasDisagree?DEC_H+DEC_GAP:0)
+          : hasAgree||hasDisagree?EDGE_HINT_W+DEC_GAP:0);
         const tagY=decBottomY + newTagDecorationsByMsg[mid].length*(TAG_H+TAG_V_GAP);
         const tagW=Math.max(TAG_MIN_W, label.length*8+8+28);
         const rect={x:tagX,y:tagY,width:tagW,height:TAG_H};
         newTagDecorationsByMsg[mid].push({label,relMsgIds:[e.relationMessageId],rect,relAgreeCount:0,relDisagreeCount:0,relAgreeMsgIds:[],relDisagreeMsgIds:[]});
-        globalForbiddenRects.push(rect);
+        if(expanded)globalForbiddenRects.push(rect);
+        else if(!decorationOwners.has(mid)){
+          decorationOwners.add(mid);
+          globalForbiddenRects.push({x:tagX-EDGE_HINT_W-DEC_GAP,y:box.y+DEC_RIGHT_TOP,width:EDGE_HINT_W,height:EDGE_HINT_W});
+        }
       }
     }
 
@@ -386,7 +399,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
       if (msgMap.get(toId)?.kind !== "relation") continue;
       const label=isValidTagLabel(e.relationLabel)
         ? e.relationLabel.slice(0,TAG_MAX_LABEL_CHARS)
-        : (msgMap.get(e.from.messageId)?.content?.slice(0,TAG_MAX_LABEL_CHARS)??"标注");
+        : "标注";
       const arr=newTagsByRelMsg.get(toId)??[];
       arr.push({label,relMsgId:e.relationMessageId});
       newTagsByRelMsg.set(toId,arr);
@@ -405,7 +418,7 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
     const BADGE_W = 56, BADGE_H = 18, BADGE_RIGHT_GAP = -6, BADGE_TOP_OFFSET = -8;
     // Aggregate RECOMMEND/ARCHIVE badges by (target message, relationType) —
     // all subTypes of the same type share one badge with a unified send count.
-    const inlineBadgeGroups = new Map<string, { relMsgIds: string[]; relType: string; subDetails: Array<{subType:string;customLabel?:string;count:number}> }>();
+    const inlineBadgeGroups = new Map<string, { relMsgIds: string[]; relType: string; reason?:string; subDetails: Array<{subType:string;customLabel?:string;count:number}> }>();
     for (const e of edges) {
       if (getRelKind(e.relationType) !== 'inline-badge') continue;
       if (e.to.selection.kind !== 'whole') continue;
@@ -424,15 +437,16 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
       const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
       if (!box) continue;
       const rt = e.relationType.toUpperCase();
-      const groupKey = `${mid}|${rt}`;
+      const relMsg = msgMap.get(e.relationMessageId);
+      const rp = relMsg?.relationPayload;
+      const reason = rt === 'ATTENTION' || rt === 'BLOCK' ? rp?.subType : undefined;
+      const groupKey = `${mid}|${rt}|${reason ?? ''}`;
       let group = inlineBadgeGroups.get(groupKey);
       if (!group) {
-        group = { relMsgIds: [], relType: rt, subDetails: [] };
+        group = { relMsgIds: [], relType: rt, reason, subDetails: [] };
         inlineBadgeGroups.set(groupKey, group);
       }
-      const relMsg = msgMap.get(e.relationMessageId);
-      const rp = (relMsg as any)?.relationPayload as Record<string,unknown> | undefined;
-      const sc = (rp?.sendCount as number) ?? 1;
+      const sc = ((rp as Record<string,unknown> | undefined)?.repetitionCount as number) ?? 1;
       const st = rp?.subType as string | undefined;
       // Aggregate: add relMsgId and subType detail
       if (!group.relMsgIds.includes(e.relationMessageId)) {
@@ -452,25 +466,26 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
     for (const [groupKey, group] of inlineBadgeGroups) {
       const [mid, rt] = groupKey.split('|');
       const spec = getPresentationSpec(rt);
-      // Sum total sendCount from all subDetails + any non-subType sends
+      // Sum total repetitionCount from all subDetails + any non-subType sends
       let totalCount = 0;
       for (const d of group.subDetails) { totalCount += d.count; }
-      // Non-subType sends: each relation without subType contributes its sendCount
+      // Non-subType sends: each relation without subType contributes its repetitionCount
       for (const rmId of group.relMsgIds) {
         const rm = msgMap.get(rmId);
         const rp = (rm as any)?.relationPayload as Record<string,unknown> | undefined;
         if (!rp?.subType) {
-          totalCount += (rp?.sendCount as number) ?? 1;
+          totalCount += (rp?.repetitionCount as number) ?? 1;
         }
       }
       if (totalCount <= 0) continue;
-      let badgeLabel = spec.label;
+      let badgeLabel = spec.label + (group.reason === 'YES' ? '－是' : group.reason === 'NO' ? '－否' : '');
       if (totalCount >= 2) badgeLabel = `${badgeLabel} ×${totalCount}`;
       const ep = endpointBoxForNormal(mid), frameRect = frameByRelMsgId.get(mid) ?? groupFrameByRelMsgId.get(mid);
       const box = ep?.box ?? layout[mid] ?? (frameRect ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height } : null);
       if (!box) continue;
       const arr = newInlineBadgesByMsg.get(mid) ?? [];
-      const badgeX = box.x + box.width - BADGE_W + BADGE_RIGHT_GAP;
+      const badgeWidth = Math.max(BADGE_W,badgeLabel.length*8+8);
+      const badgeX = box.x + box.width - badgeWidth + BADGE_RIGHT_GAP;
       const badgeY = box.y + BADGE_TOP_OFFSET - arr.length * (BADGE_H + 2);
       arr.push({
         relMsgId: group.relMsgIds[0],
@@ -478,14 +493,14 @@ export function measureGraphOverlays(input: GraphOverlayInput): GraphOverlays | 
         relKind: spec.kind,
         relLabel: badgeLabel,
         relColor: spec.color,
-        rect: { x: badgeX, y: badgeY, width: BADGE_W, height: BADGE_H },
+        rect: { x: badgeX, y: badgeY, width: badgeWidth, height: BADGE_H },
         subDetails: group.subDetails.length > 0 ? group.subDetails : undefined,
       });
       newInlineBadgesByMsg.set(mid, arr);
     }
     const inlineBadgesByMsg = (newInlineBadgesByMsg);
 
-    const positionedEdges = input.skipRouting ? [] : routeGraphEdges({ newTagDecorationsByMsg, edgesByRelMsg, endpointBoxForNormal, layout, relationCardMsgIds, frameByRelMsgId, groupFrameByRelMsgId, msgMap, labelBboxes, relDecByRelMsgId, decorationRects, edges, comparisonSuppressedRelIds, colOf, correctedEdgeIdsByRelMsg, normalSet, contentRefs, toCanvasRect, getMessageRects, sampleQuad, penScore, globalForbiddenRects,
+    const positionedEdges = input.skipRouting ? [] : routeGraphEdges({ newTagDecorationsByMsg, edgesByRelMsg, endpointBoxForNormal, layout, relationCardMsgIds, frameByRelMsgId, groupFrameByRelMsgId, msgMap, labelBboxes, relDecByRelMsgId, decorationRects, edges, comparisonSuppressedRelIds, colOf, correctedEdgeIdsByRelMsg, normalSet, contentRefs, toCanvasRect, getMessageRects, sampleQuad, penScore, globalForbiddenRects, visibleDecorationIds:input.visibleDecorationIds,
       getCachedFragment(messageId, key) {
         const rect = input.anchorCache?.get(messageId)?.fragments[key], box = layout[messageId];
         return rect && box ? moveAnchor(rect, box) : undefined;

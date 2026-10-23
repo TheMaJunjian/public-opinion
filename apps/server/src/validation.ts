@@ -10,12 +10,16 @@ const part=z.discriminatedUnion('type',[
   z.object({id:identifier,type:z.literal('text'),text:z.string().max(30000)}).strict(),
   z.object({id:identifier,type:z.literal('web'),url:z.string().url().max(2000).refine(s=>/^https?:\/\//.test(s)),excerpt:z.string().max(30000)}).strict(),
   z.object({id:identifier,type:z.literal('code'),language:z.string().max(80),source:z.string().max(30000)}).strict(),
-  z.object({id:identifier,type:z.literal('relation'),relation:z.string().min(1).max(80),roles:z.record(z.array(binding).max(100)).refine(r=>Object.keys(r).length<=20&&new Set(Object.values(r).flat().map(b=>b.id)).size===Object.values(r).flat().length,'关系成员 ID 必须唯一')}).strict(),
-  z.object({id:identifier,type:z.literal('display'),relationPartId:identifier,layout:z.enum(['flow','columns','row','summary']),target:reference.optional(),order:z.array(identifier).max(100).optional()}).strict(),
+  z.object({id:identifier,type:z.literal('relation'),relation:z.string().min(1).max(80),reason:z.enum(['YES','NO']).optional(),roles:z.record(z.array(binding).max(100)).refine(r=>Object.keys(r).length<=20&&new Set(Object.values(r).flat().map(b=>b.id)).size===Object.values(r).flat().length,'关系成员 ID 必须唯一')}).strict(),
+  z.object({id:identifier,type:z.literal('display'),relationPartId:identifier,layout:z.enum(['flow','columns','row','summary','relation']),target:reference.optional(),order:z.array(identifier).max(100).optional()}).strict(),
   z.object({id:identifier,type:z.literal('data'),value:z.unknown()}).strict(),
 ]);
 export const partsSchema=z.array(part).min(1).max(64).superRefine((parts,ctx)=>{
   if(new Set(parts.map(p=>p.id)).size!==parts.length) ctx.addIssue({code:'custom',message:'部件 ID 必须唯一'});
+  for (const p of parts) if (p.type === 'relation') {
+    if (['unfollow','unblock'].includes(p.relation)) ctx.addIssue({code:'custom',message:'请发送关注或拉黑标注，并明确选择是或否'});
+    if (['follow','block'].includes(p.relation) && p.reason !== 'YES' && p.reason !== 'NO') ctx.addIssue({code:'custom',message:'关注和拉黑标注须选择是或否'});
+  }
   for(const p of parts) if(p.type==='display'&&!p.target&&!parts.some(r=>r.id===p.relationPartId&&r.type==='relation')) ctx.addIssue({code:'custom',message:'显示部件必须指向关系部件'});
 });
 export const sendSchema=z.object({requestId:identifier,parts:partsSchema,recommendation:safe.optional(),wager:safe.optional(),selfStance:z.enum(['pro','con']).optional()}).strict();

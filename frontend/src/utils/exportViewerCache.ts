@@ -6,7 +6,7 @@ const STORE_NAME = 'archives';
 type CachedArchive = { archiveId: string; data: ExportData };
 let currentArchive: CachedArchive | null = null;
 
-/** Keep large archives out of Web Storage; retain its per-tab reference and legacy data. */
+/** Keep large archives in IndexedDB, with a per-tab reference and an in-memory fallback. */
 function withArchiveStore<T>(mode: IDBTransactionMode, request: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     let blocked = false;

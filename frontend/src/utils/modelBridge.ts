@@ -10,17 +10,9 @@ export const READABLE_RELATION_TYPES = new Set([
   'summary', 'classify', 'proposal', 'delegation', 'code_change', 'operations',
 ]);
 
-/** Imported CORRECT records already used legacy voting; they are not new authorization proposals. */
+/** Native amendment parts use the authorization workflow; correction parts use voting. */
 export function isCorrectionProposal(message: { parts?: Part[]; relationPayload?: RelationPayload | null; payload?: RelationPayload }): boolean {
-  const imported = message.parts?.some(part => part.type === 'data' && part.value && typeof part.value === 'object'
-    && !Array.isArray(part.value) && typeof part.value.legacyTopicId === 'string' && part.value.uiType === 'CORRECT');
-  const payload = message.relationPayload ?? message.payload;
-  const nativeText = message.parts?.some(part => part.type === 'data' && part.value && typeof part.value === 'object' && !Array.isArray(part.value)
-    && part.value.uiType === 'CORRECT' && typeof part.value.value === 'string');
-  // Previously sent text amendments also get the lightweight display behavior
-  // once the server projects their full original/replacement bodies.
-  const textCorrection = nativeText || typeof payload?.correctionBeforeContent === 'string' && typeof payload.correctionAfterContent === 'string';
-  return !imported && !textCorrection && !!message.parts?.some(part => part.type === 'relation' && part.relation === 'amend');
+  return !!message.parts?.some(part => part.type === 'relation' && part.relation === 'amend');
 }
 
 /** Project readable text for this viewer without changing the stored message or its identity. */
@@ -50,12 +42,15 @@ export function hasReadableMessageContent(message: {relationType?:string;parts?:
   const type=message.relationType?.toLowerCase()??'';
   // Organization bodies belong to their scope card or frame header.
   if(type==='merge'||type==='arrange'||type==='correct')return false;
-  const metadata=message.parts?.some(part=>part.type==='data'&&part.value&&typeof part.value==='object'&&!Array.isArray(part.value)&&'legacyTopicId' in part.value&&part.value.kind==='RELATION');
-  if(metadata&&!READABLE_RELATION_TYPES.has(type)&&type!=='correct')return false;
+  if(message.parts?.some(part=>part.type==='display'&&part.layout==='relation'))return false;
   return !!message.parts?.some(part => part.type === 'text' && part.text.trim().length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend');
 }
-export function isCardMessage(message: { kind: MessageKind; relationType?: string; parts?: Part[] } | undefined): boolean {
-  return !!message && (isContentKind(message.kind)
+export function presentationTarget(message: {id?:string;parts?:Part[]} | undefined): string | undefined {
+  const display=message?.parts?.find(part=>part.type==='display'&&part.target&&part.target.messageId!==message.id);
+  return display?.type==='display'?display.target?.messageId:undefined;
+}
+export function isCardMessage(message: { id?:string;kind: MessageKind; relationType?: string; parts?: Part[] } | undefined): boolean {
+  return !!message && !presentationTarget(message) && (isContentKind(message.kind)
     || hasReadableMessageContent(message)
     || (message.kind === 'relation' && READABLE_RELATION_TYPES.has((message.relationType ?? '').toLowerCase())));
 }
@@ -101,7 +96,7 @@ export type Selection =
 export type UnitSelection = {
   messageId: string;
   selection: Selection;
-  /** Exact address. The legacy selection is only the workbench's visual shorthand. */
+  /** Exact address. Selection is the workbench's visual shorthand. */
   reference?: Reference;
   label?: string;
 };
@@ -350,9 +345,7 @@ export function convertMessagesToDemoModel(
     const relMsgId = rel.id;
     const relType: string = rel.relationType.toLowerCase();
 
-    // Governance relations are persisted as content messages. The API may
-    // still expose a compatibility relation projection, but it must not
-    // create a second card for the same backend entity.
+    // A content message and its relation projection share one card identity.
     const persistedMessage = messageById.get(rel.id);
     if (persistedMessage && (persistedMessage as any).kind !== 'RELATION') seenRelMsgIds.add(rel.id);
 

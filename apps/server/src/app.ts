@@ -17,11 +17,11 @@ export async function createApp(options: {
     const databaseUrl=options.databaseUrl??process.env.DATABASE_URL;
     if(!databaseUrl)throw new Error('请配置 DATABASE_URL 连接 PostgreSQL');
     const app = express(), store = await Store.open(databaseUrl,{schema:options.databaseSchema??process.env.DATABASE_SCHEMA});
-    const migrationRow=await store.db.prepare("SELECT value FROM settings WHERE key='migration'").get();
-    const readOnlyRehearsal=migrationRow&&JSON.parse(String(migrationRow.value)).mode==='read-only-rehearsal';
+    const migrationRow=await store.db.prepare("SELECT value FROM settings WHERE key='access-mode'").get();
+    const readOnlyRehearsal=migrationRow&&JSON.parse(String(migrationRow.value))==='read-only';
     if(readOnlyRehearsal) app.use((req,res,next)=>{
         if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!['/api/login','/api/logout','/api/ui/snapshot/query'].includes(req.path)) {
-            res.status(503).json({error:'真实数据只读迁移演练；阻断项尚未解决，业务写入和结算已禁用'});
+            res.status(503).json({error:'当前数据库为只读模式，业务写入和结算已禁用'});
             return;
         }
         next();

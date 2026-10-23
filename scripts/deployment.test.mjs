@@ -26,14 +26,15 @@ test('database preflight only reads and rejects empty, legacy and non-read-only 
       async query(sql) {
         queries.push(sql);
         if (scenario === 'legacy') throw new Error('relation settings does not exist');
-        if (sql.includes('.settings')) return { rows: [{ value: JSON.stringify({ mode: scenario === 'native' ? 'native-rehearsal' : 'read-only-rehearsal' }) }] };
+        if(sql.includes('.schema_migrations'))return {rows:[{version:1,name:'current-schema'}]};
+        if (sql.includes('.settings')) return { rows: [{ value: JSON.stringify(scenario === 'native' ? 'read-write' : 'read-only') }] };
         return { rows: [{ count: scenario === 'empty' ? 0 : 252 }] };
       }
       async end() { closed = true; }
     }
     const configuration = databaseConfiguration(scenario === 'production' ? { DATABASE_URL: target.MIGRATION_TARGET_DATABASE_URL } : target);
-    if (scenario === 'valid') assert.equal((await verifyExistingDatabase(configuration, FakeClient)).users, 252);
-    else await assert.rejects(verifyExistingDatabase(configuration, FakeClient));
+    if (scenario === 'valid') assert.equal((await verifyExistingDatabase(configuration, FakeClient,['current-schema'])).users, 252);
+    else await assert.rejects(verifyExistingDatabase(configuration, FakeClient,['current-schema']));
     assert.ok(closed); assert.ok(queries.every(sql => /^(BEGIN .*READ ONLY|SELECT |COMMIT)/.test(sql)));
     assert.ok(!queries.some(sql => /CREATE|INSERT|UPDATE|DELETE|DROP/.test(sql)));
   }

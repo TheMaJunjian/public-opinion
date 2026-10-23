@@ -107,7 +107,7 @@ describe('viewport message rendering with measured browser geometry', () => {
     const edges: DemoEdge[] = merge ? ids.map(id => ({ id: `merge-${id}`, relationMessageId: 'merge', relationType: 'merge', relationLabel: '归并',
       from: { messageId: 'anon:merge', selection: { kind: 'whole' } }, to: { messageId: id, selection: { kind: 'whole' } } })) : [];
     if (merge) messages.push({ ...message('merge'), kind: 'relation', relationType: 'merge', relationPayload: { title: '大归并' } });
-    const props: GraphViewProps = { messages, edges, draftUnits: [], activeTextSelectId: null, lastClickedMessageId: null, voteStats: {}, ...callbacks };
+    const props: GraphViewProps = { messages, edges, draftUnits: [], activeTextSelectId: null, lastClickedMessageId: null, ...callbacks };
     const tasks = createWorkbenchDrawingTasks();
     const view = render(<WorkbenchDrawingContext.Provider value={tasks}><div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}><GraphView {...props} /></div></WorkbenchDrawingContext.Provider>);
     let maximum = 0;
@@ -166,7 +166,7 @@ describe('viewport message rendering with measured browser geometry', () => {
     const expanded = new Set(organizations.filter(message => message.relationType === 'summary').map(message => message.id));
     const view = render(<div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
       <GraphView messages={[...members, ...organizations]}
-        edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={targetId} voteStats={{}}
+        edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={targetId}
         traceFrameIds={expanded} traceExpandedFrameIds={expanded} {...callbacks} />
     </div>);
     frames(55);
@@ -268,7 +268,7 @@ describe('viewport message rendering with measured browser geometry', () => {
     expect(view.container.querySelector('[data-msgid="m-0"]')).toBeNull();
   });
 
-  it('reveals an offscreen relation decoration without mounting its target card', () => {
+  it('reveals an offscreen relation decoration with a reachable target card', () => {
     const messages = ids.map(message);
     messages.push({ ...message('tag'), kind: 'relation', relationType: 'tag' },
       { ...message('tag-agree'), kind: 'relation', relationType: 'agree' });
@@ -277,19 +277,19 @@ describe('viewport message rendering with measured browser geometry', () => {
       { id: 'tag-agree', relationMessageId: 'tag-agree', relationType: 'agree', relationLabel: '赞同',
         from: { messageId: 'anon:tag-agree', selection: { kind: 'whole' } }, to: { messageId: 'tag', selection: { kind: 'whole' } } }];
     const view = render(<div data-workbench-left-panel style={{ overflow: 'auto', height: 500 }}>
-      <GraphView messages={messages} edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} voteStats={{}} {...callbacks} />
+      <GraphView messages={messages} edges={edges} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} {...callbacks} />
     </div>);
     frames(55);
     const host = view.container.querySelector<HTMLElement>('[data-workbench-left-panel]')!;
     expect(host.querySelector('[data-jump-msgids~="tag"]')).toBeNull();
     act(() => { host.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE, { detail: { ids: ['tag'] } })); });
     expect(host.querySelector('[data-jump-msgids~="tag"]')).not.toBeNull();
-    expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).toBeNull();
+    expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).not.toBeNull();
     const target = host.querySelector<HTMLElement>('[data-jump-msgids~="tag"]')!;
     const overlay = render(<MessageJumpOverlay messageId="tag" targetElement={target} targetRect={target.getBoundingClientRect()} />);
     expect(host).toHaveTextContent('远处标注');
-    expect(host.querySelector('[data-jump-visual-msgids~="tag"][title^="赞同"]')).not.toBeNull();
-    expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).toBeNull();
+    expect(host.querySelector('[data-jump-msgids~="tag-agree"][title^="赞同"]')).not.toBeNull();
+    expect(host.querySelector('[data-msgid="m-599"]:not([data-rel-overlay])')).not.toBeNull();
     const mask = document.querySelector('[data-message-jump-overlay] mask')!;
     expect(document.querySelector('[data-message-jump-layer]')).toHaveAttribute('mask', `url(#${mask.id})`);
     overlay.unmount();

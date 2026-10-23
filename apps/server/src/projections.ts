@@ -1,6 +1,6 @@
 import { organization, referenceKey, relations, type Message, type MessageState, type Reference } from '@gonglun/core';
 import type { Store } from './db.js';
-import { retiredTopicIds } from './retired-topics.js';
+import { retiredOrganizationIds } from './retired-organizations.js';
 /** Execution-time statements survive edits to their source messages and bounded views. */
 export async function initializeProjections(store: Store): Promise<void> {
     await store.db.exec(`
@@ -35,7 +35,7 @@ export async function recordStance(store: Store, source: Message, resolved: {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT ("sourceId") DO NOTHING
     `).run(source.id, source.authorId, target.messageId, target.revision!, referenceKey(target), target.partId ?? null, wholeComponent ? 1 : 0, resolved.side, source.sequence || (await store.latestSequence()) + 1);
-    if(!source.parts.some(part=>part.type==='data'&&part.value&&typeof part.value==='object'&&!Array.isArray(part.value)&&'legacyTopicId' in part.value)) await store.db.prepare('UPDATE legacy_organization_states SET body=body || \'{"nativeOverride":true}\'::jsonb WHERE "messageId"=$1').run(target.messageId);
+    await store.db.prepare('DELETE FROM message_state_checkpoints WHERE "messageId"=$1').run(target.messageId);
     return target.messageId;
 }
 
@@ -48,7 +48,7 @@ interface StanceRow {
 }
 /** Authoritative display state is independent of which relation messages a page includes. */
 export async function statesFor(store: Store, ids: string[]): Promise<MessageState[]> {
-    const retiredTopics = await retiredTopicIds(store);
+    const retiredTopics = await retiredOrganizationIds(store);
     const uniqueIds = [...new Set(ids)];
     const result: MessageState[] = [];
     // Keep query results bounded even when a mutation touches many messages.
@@ -147,14 +147,11 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
                     state.recommendationTotal += source.spending.recommendation;
             }
         }
-        const imported=await store.db.prepare('SELECT "messageId",body FROM legacy_organization_states WHERE "messageId"=ANY($1::text[])').all(batch);
+        const imported=await store.db.prepare('SELECT "messageId",body FROM message_state_checkpoints WHERE "messageId"=ANY($1::text[])').all(batch);
         for(const row of imported) {
             const state=states.get(String(row.messageId));
             if(!state) continue;
-            if(row.body.nativeOverride) continue;
-            state.supportCount=row.body.agreeCount??0;
-            state.oppositionCount=row.body.disagreeCount??0;
-            state.suppressed=!!row.body.rejected;
+            Object.assign(state,row.body);
         }
         const placements = await store.db.prepare(`SELECT a.id,a.disabled,m."sourceId" FROM membership_actions a
             LEFT JOIN memberships m ON m."memberId"=a.body->>'memberId' WHERE a.id=ANY($1::text[])`).all(batch);
@@ -166,8 +163,7 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             const state = states.get(message.id)!;
             if (retiredTopics.has(message.id)) { state.organizationRetired = true; state.suppressed = true; }
             if (relations(message).some(part =>
-                part.relation === 'member-of' && part.roles.member?.length && (part.roles.parent?.some(binding => retiredTopics.has(binding.reference.messageId)) || part.roles.member.some(binding => retiredTopics.has(binding.reference.messageId)))
-                || part.relation === 'legacy-join' && part.roles.source?.some(binding => retiredTopics.has(binding.reference.messageId)))) {
+                part.relation === 'member-of' && part.roles.member?.length && (part.roles.parent?.some(binding => retiredTopics.has(binding.reference.messageId)) || part.roles.member.some(binding => retiredTopics.has(binding.reference.messageId))))) {
                 state.membershipDisabled = true; state.membershipActive = false; state.suppressed = true;
             }
         }

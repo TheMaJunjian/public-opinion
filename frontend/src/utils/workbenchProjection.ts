@@ -31,11 +31,14 @@ export function archiveToWorkbenchSnapshot(data: ExportData): WorkbenchSnapshot 
     createdBy: { id: relation.authorId, username: relation.author, createdAt: '' },
   }));
   const attentionUsers: WorkbenchSnapshot['attentionUsers'] = {};
-  for (const relation of relations) {
+  for (const relation of [...relations].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id))) {
     if (relation.relationType.toUpperCase() !== 'ATTENTION') continue;
     for (const ref of relation.targetRefs) {
       if (ref.kind !== 'message' && ref.kind !== 'text-fragment') continue;
       const users = attentionUsers[ref.messageId] ?? [];
+      if(relation.payload?.subType==='NO'){
+        attentionUsers[ref.messageId]=users.filter(id=>id!==relation.createdBy.id);continue;
+      }
       if (!users.includes(relation.createdBy.id)) users.push(relation.createdBy.id);
       attentionUsers[ref.messageId] = users;
     }

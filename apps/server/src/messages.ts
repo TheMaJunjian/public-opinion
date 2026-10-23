@@ -4,6 +4,7 @@ import { applyOrganization, reconcileOrganizationEffects, reconcileOrganizationR
 import { dataOf, distributeOperations, grant, hasEffect, injectRevenue, lockDelegation, markEffect, oneTarget, openSettlement, placeWager, relationTarget, settleDue, terminate } from './economy.js';
 import { parseSend, partsSchema, readReference, rulesSchema, validateReferences } from './validation.js';
 import { recordPersonal } from './personal-actions.js';
+import { normalizeAnnotationStance } from './annotation-stances.js';
 
 const actions=new Set(['agree','disagree','terminate','authorize','delegate','distribute','credit']);
 async function authorize(tx: Mutation, message: Message, user: User) {
@@ -118,15 +119,22 @@ export async function send(store: Store, user: User, raw: unknown, options: {
         const wager = input.wager ?? 0, recommendation = input.recommendation ?? 0;
         if (input.selfStance && actionParts.length)
             throw new DomainError('自我表态不能同时执行其他资金操作');
+        const normalized = await normalizeAnnotationStance(store, input);
+        if (normalized.selfStance && normalized.parts.some(part => part.id === 'self-stance'))
+            throw new DomainError('自我表态的部件编号已被占用，请更换该部件编号');
+        if (normalized !== input) {
+            partsSchema.parse(normalized.parts);
+            await validateReferences(store, normalized.parts);
+        }
         if (wager > 0 && !input.selfStance && !actionParts.some(p => p.type === 'relation' && ['agree', 'disagree'].includes(p.relation)))
             throw new DomainError('押注须选择赞同或反对');
         const tx = new Mutation(store);
         // Finish elapsed rounds before accepting an incoming wager at the new cutoff.
         await settleDue(tx);
         const protocol = (await store.rules()).protocolFee;
-        const message = await tx.create(user.id, input.parts, { protocol, recommendation, wager }, options.messageId);
-        if (input.selfStance) {
-            message.parts.push({ id: 'self-stance', type: 'relation', relation: input.selfStance === 'pro' ? 'agree' : 'disagree', roles: { target: [{ id: 'self', reference: { messageId: message.id } }] } });
+        const message = await tx.create(user.id, normalized.parts, { protocol, recommendation, wager }, options.messageId);
+        if (normalized.selfStance) {
+            message.parts.push({ id: 'self-stance', type: 'relation', relation: normalized.selfStance === 'pro' ? 'agree' : 'disagree', roles: { target: [{ id: 'self', reference: { messageId: message.id } }] } });
             await tx.put(message);
         }
         await store.ledger(user.id, message.id, -protocol, 0, '协议费');

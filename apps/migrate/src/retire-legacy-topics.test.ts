@@ -1,11 +1,15 @@
+import {initializeOrganizationMemberships} from './migrate-organization-memberships.js';
+import {validateRetirementJournal} from './validate-retirement-journal.js';
+import {migrateViewFile} from './migrate-view-file.js';
+import {migrateQueryRecords} from './migrate-query-records.js';
 import { afterEach, expect, it } from 'vitest';
 import { bindRoles, replayArchive, resolveMemberships, type Membership } from '@gonglun/core';
-import { Mutation } from './db.js';
-import { applyOrganization, reconcileOrganizationEffects, validateJoinApproval } from './organizations.js';
+import { Mutation } from '../../server/src/db.js';
+import { applyOrganization, reconcileOrganizationEffects, validateJoinApproval } from '../../server/src/organizations.js';
 import { planTopicRetirement, retireLegacyTopics } from './retire-legacy-topics.js';
-import { statesFor, recordStance } from './projections.js';
-import { viewsFor, parentOf, snapshot } from './ui-projections.js';
-import { createTestStore, cleanupTestDatabases } from './test-database.js';
+import { statesFor, recordStance } from '../../server/src/projections.js';
+import { viewsFor, parentOf, snapshot } from '../../server/src/ui-projections.js';
+import { createTestStore, cleanupTestDatabases } from '../../server/src/test-database.js';
 import { convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBridge.js';
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 import { projectContainerCanvas } from '../../../frontend/src/pages/workbench/projections/containerCanvas.js';
@@ -40,6 +44,7 @@ async function fixture() {
     const message = await tx.create('system', [{ id: 'relation', type: 'relation', relation: 'member-of', roles: bindRoles({ parent: [{ messageId: parentId }], member: [{ messageId: memberId }] }) }], undefined, id);
     await applyOrganization(tx, message); await reconcileOrganizationEffects(tx); await tx.commit();
   });
+  await store.transaction(()=>initializeOrganizationMemberships(store));
   await join('move-out', 'moved', 'outside');
   return { store, join };
 }
@@ -50,6 +55,7 @@ it('releases only current Topic members, preserving all messages, old versions, 
   const originalVersions = await store.db.prepare('SELECT * FROM revisions ORDER BY position').all();
   const originalChanges = await store.db.prepare('SELECT * FROM changes ORDER BY sequence').all();
   const actionBodies = await store.db.prepare('SELECT id,body FROM membership_actions ORDER BY id').all();
+  await store.db.exec('DROP TABLE account_baselines,stake_positions,pool_checkpoints,message_state_checkpoints,settlement_access,published_round_reports');
   const plan = await store.read(() => planTopicRetirement(store));
   expect(plan.topicIds).toEqual(['topic-a', 'topic-b']);
   expect(plan.releasedMemberships.map(row => row.memberId).sort()).toEqual(['cross-topic', 'direct', 'inside']);
@@ -71,19 +77,26 @@ it('releases only current Topic members, preserving all messages, old versions, 
   expect(replay.memberships.map(row => [row.memberId, row.parentId]).sort()).toEqual([['leaf', 'inside'], ['moved', 'outside']]);
   expect(replay.states.find(state => state.messageId === 'topic-a')?.organizationRetired).toBe(true);
   const archive = { format: 'gonglun-2', changes: changes.map(row => JSON.parse(row.body)) };
+  expect(() => migrateViewFile({...archive,messages:[],relations:[]})).not.toThrow();
   const maliciousRemoval = structuredClone(archive);
   maliciousRemoval.changes.at(-1).removedMemberships.push('moved');
-  expect(() => replayArchive(maliciousRemoval)).toThrow('升级记录不一致');
+  expect(() => validateRetirementJournal(maliciousRemoval)).toThrow('升级记录不一致');
+  expect(() => migrateViewFile({...maliciousRemoval,messages:[],relations:[]})).toThrow('升级记录不一致');
+  await expect(store.transaction(async()=>{
+    const tampered=maliciousRemoval.changes.at(-1);
+    await store.db.prepare('UPDATE changes SET body=$1 WHERE sequence=$2').run(JSON.stringify(tampered),tampered.sequence);
+    await migrateQueryRecords(store);
+  })).rejects.toThrow('升级记录不一致');
   const incompleteRetirement = structuredClone(archive);
   delete incompleteRetirement.changes.at(-1).states.find((state: any) => state.messageId === 'topic-a').organizationRetired;
-  expect(() => replayArchive(incompleteRetirement)).toThrow('升级记录不一致');
+  expect(() => validateRetirementJournal(incompleteRetirement)).toThrow('升级记录不一致');
   const forgedTopic = structuredClone(archive);
   forgedTopic.changes.at(-1).upgrade.topicIds.push('inside');
-  expect(() => replayArchive(forgedTopic)).toThrow('升级记录不一致');
+  expect(() => validateRetirementJournal(forgedTopic)).toThrow('升级记录不一致');
   const alteredTreasury = structuredClone(archive);
   alteredTreasury.changes.at(-1).treasury.operating++;
   alteredTreasury.changes.at(-1).treasury.issued++;
-  expect(() => replayArchive(alteredTreasury)).toThrow('升级记录不一致');
+  expect(() => validateRetirementJournal(alteredTreasury)).toThrow('升级记录不一致');
   expect(await store.transaction(() => retireLegacyTopics(store))).toBeNull();
   expect(await store.latestSequence()).toBe(change!.sequence);
 });
@@ -100,7 +113,7 @@ it('does not delete a moved message or restore the cancelled Topic when its new 
   });
   expect(await parentOf(store, 'moved')).toBe('root');
   expect((await store.message('moved')).parts[0]).toMatchObject({ text: 'moved' });
-  await expect(join('cannot-restore', 'moved', 'topic-a')).rejects.toThrow('已取消');
+  await expect(join('cannot-restore', 'moved', 'topic-a')).rejects.toThrow('已退役');
   expect(await store.db.prepare('SELECT 1 FROM messages WHERE id=$1').get('cannot-restore')).toBeUndefined();
   const prior = (await store.db.prepare("SELECT id FROM membership_actions WHERE body->>'memberId'='moved' AND body->>'parentId'='topic-a'").get())!.id;
   await expect(validateJoinApproval(store, { messageId: prior }, 'pro', 'system')).rejects.toThrow('不能恢复');

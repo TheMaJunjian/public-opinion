@@ -47,7 +47,7 @@ export function isValidTagLabel(label: string | undefined): label is string {
   return !!label && label !== 'tag';
 }
 
-export const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义' };
+export const SUB_TYPE_LABELS: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义', YES: '是', NO: '否' };
 
 export const SUB_TYPE_OPTIONS = ['', 'SPAM', 'OFFTOPIC', 'LOWVALUE', 'IMPORTANT', 'CUSTOM'];
 
@@ -152,15 +152,13 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
       ? notifyUsers.map(user => user.username)
       : notifyUserIds.map(id => `与会者 ${id}`);
     content = `回复通知：${notifyLabels.length > 0 ? notifyLabels.join('、') : '无匹配与会者'}\n目标：${targetSummary}`;
-  } else if (relType === 'recommend' || relType === 'archive') {
+  } else if (['recommend','archive','attention','block'].includes(relType)) {
     const st = (relation.payload as Record<string, unknown> | null)?.subType as string | undefined;
     const stLabel = st ? (st === 'CUSTOM' ? ((relation.payload as Record<string, unknown> | null)?.customLabel as string | undefined || '自定义') : subTypeLabel(st)) : '';
     const displayLabel = stLabel ? `${typeName}·${stLabel}` : typeName;
-    const sc = (relation.payload as Record<string, unknown> | null)?.sendCount as number | undefined;
+    const sc = (relation.payload as Record<string, unknown> | null)?.repetitionCount as number | undefined;
     const countSuffix = (sc && sc >= 2) ? ` ×${sc}` : '';
-    const tf = (relation.payload as Record<string, unknown> | null)?.transformedFrom as string | undefined;
-    const fromSuffix = tf === 'AGREE' ? '（来自赞同）' : tf === 'DISAGREE' ? '（来自反对）' : '';
-    content = `${displayLabel}${countSuffix}${fromSuffix}\n目标：${targetSummary}`;
+    content = `${displayLabel}${countSuffix}\n目标：${targetSummary}`;
   } else if (relType === 'agree' || relType === 'disagree') {
     content = `目标：${targetSummary}`;
   } else if (relation.sourceMessageId) {

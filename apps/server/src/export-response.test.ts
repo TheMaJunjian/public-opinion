@@ -47,8 +47,7 @@ it('transfers only missing history while refreshing the full current view, inclu
     }
   });
   const original = (await request(app).get('/api/ui/export')).body;
-  // Historical files had no manifest and no explicit predecessor links.
-  const base = checkpoint({ ...original, changes: original.changes.map(({ previousSequence: _previous, ...change }: Change) => change) });
+  const base = checkpoint(original);
   await app.store.transaction(async () => {
     const tx = new Mutation(app.store), message = await app.store.message(firstId);
     await tx.put({ ...message, revision: 2, parts: [{ id: 'body', type: 'text', text: '旧消息已更新' }] });

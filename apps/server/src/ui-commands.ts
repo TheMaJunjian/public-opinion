@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { DomainError, id, Store } from './db.js';
 import { send } from './messages.js';
 import { dataOf } from './economy.js';
-import { legacyType, messageView, parentOf, primaryRelation, roundView, snapshot, type RecordData } from './ui-projections.js';
+import { relationViewType, messageView, parentOf, primaryRelation, roundView, snapshot, type RecordData } from './ui-projections.js';
 import { readReference } from './validation.js';
 export type Signature = {
     deviceId: string;
@@ -127,6 +127,10 @@ export async function createRelation(context: CommandContext, parent: string, bo
     if (type === 'ARCHIVE' && ['SPAM', 'OFFTOPIC', 'LOWVALUE'].includes(payload.subType))
         name = 'low-quality';
     const parts: Part[] = [relation(name, roles)];
+    if (name === 'follow' || name === 'block') {
+        const part = parts[0]!;
+        if (part.type === 'relation') part.reason = z.enum(['YES','NO']).parse(payload.subType);
+    }
     const content = text(payload.content ?? payload.title ?? payload.label);
     if (content && type !== 'CORRECT')
         parts.unshift({ id: 'body', type: 'text', text: content });
@@ -262,8 +266,6 @@ export async function executeBatch(store: Store, user: User, input: unknown, sig
         (await store.db.prepare("INSERT INTO command_requests VALUES ($1,$2,$3,$4)").run(user.id, body.requestId, serialized, JSON.stringify(result)));
         return result;
     });
-    // Receipts written before this boundary was introduced already contain snapshots.
-    if (!receipt.projection) return receipt;
     const { projection, ...result } = receipt;
     try {
         const snapshots = await store.read(() => Promise.all((projection.parents as string[])

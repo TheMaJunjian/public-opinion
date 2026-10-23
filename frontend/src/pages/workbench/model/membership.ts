@@ -14,7 +14,7 @@ export const JOIN_STATUS_LABELS: Record<JoinStatus, string> = {
 };
 export const JOIN_STATUS_HINTS: Record<JoinStatus, string> = {
   valid: '反对这条加入消息，将按它保存的前序归属移出。',
-  rejected: '这条记录已被反对，不参与当前用户的回退或推荐；赞同后成为最新个人选择。',
+  rejected: '这条记录已被反对，不参与当前用户的回退或统计选择；赞同后成为最新个人选择。',
   'container-rejected': '请先赞同并恢复容器，再赞同这条加入消息。',
   superseded: '赞同这条加入消息会成为你的最新选择；反对后按个人选择的前序恢复。',
   inactive: '当前消息不由这条加入记录决定归属。',
@@ -24,10 +24,10 @@ export const JOIN_STATUS_HINTS: Record<JoinStatus, string> = {
 export function getJoinStatusPresentation(status: JoinStatus, sources?: ReadonlySet<JoinEffectSource>) {
   if (status !== 'valid' || !sources?.size) return {label:JOIN_STATUS_LABELS[status],hint:JOIN_STATUS_HINTS[status]};
   const personal=sources.has('personal'),recommended=sources.has('recommended');
-  return {label:[...(personal?['当前用户生效']:[]),...(recommended?['推荐生效']:[])].join(' · '),
-    hint:personal&&recommended?'这条记录的不同目标分别按当前用户选择和统计推荐生效。'
+  return {label:[...(personal?['当前用户生效']:[]),...(recommended?['统计生效']:[])].join(' · '),
+    hint:personal&&recommended?'这条记录按当前用户选择和统计结果生效。'
       :personal?'按当前用户的最新个人选择或其前序选择生效。'
-      :'当前用户没有可用的个人赞同选择，按未被当前用户反对的加入记录中赞同押注最多的推荐生效。'};
+      :'当前用户没有可用的个人赞同选择，按未被当前用户反对的加入记录中赞同押注最多的统计结果生效。'};
 }
 
 /** Status badges use the same winners as ownership, including simulated views. */
@@ -111,9 +111,7 @@ const JOIN_RELATION_TYPES = new Set(['JOIN']);
 
 type JoinRelationRecord = Omit<Pick<Relation, 'id' | 'relationType' | 'sourceMessageId' | 'targetRefs' | 'createdAt'>, 'createdAt'> & { createdAt?: string; createdBy?: Relation['createdBy']; payload?: Relation['payload']; state?: Relation['state'] };
 
-function getJoinTargetKey(ref: TargetRef): string {
-  return ref.kind === 'relation' ? ref.relationId : ref.messageId;
-}
+
 
 function joinTargetsMessage(joinRelation: JoinRelationRecord, messageId: string): boolean {
   return (joinRelation.targetRefs as TargetRef[]).some(ref =>
@@ -166,7 +164,7 @@ export function getEffectiveJoinRelationIds(
   return new Set(getEffectiveJoinByTarget(relations, rejectedContainerIds, rejectedJoinRelationIds, userDisagreedJoinRelationIds).values());
 }
 
-/** Preserve the winning target as well as the record ID for older multi-target JOINs. */
+/** Saved execution history is authoritative; declaration-only previews resolve locally. */
 export function getEffectiveJoinByTarget(
   relations: JoinRelationRecord[], rejectedContainerIds: Set<string>, rejectedJoinRelationIds: Set<string>, userDisagreedJoinRelationIds?: ReadonlySet<string>,
 ): Map<string, string> {
@@ -175,21 +173,18 @@ export function getEffectiveJoinByTarget(
   const rejected = new Set([...rejectedContainerIds, ...rejectedJoinRelationIds, ...(userDisagreedJoinRelationIds ?? [])]);
   for (const relation of relations) if (relation.state?.membershipDisabled) rejected.add(relation.id);
   const resolved = resolveMemberships(actions, rejected, retired);
-  const latest = new Map<string, {id:string; time:number}>();
-  for (const relation of relations) {
-    if (relation.relationType?.toUpperCase() !== 'JOIN' || !relation.sourceMessageId
-      || relation.state?.membershipDisabled || retired.has(relation.sourceMessageId)
-      || rejectedContainerIds.has(relation.id) || rejectedJoinRelationIds.has(relation.id)
-      || userDisagreedJoinRelationIds?.has(relation.id) || rejectedContainerIds.has(relation.sourceMessageId)) continue;
-    const time = new Date(relation.createdAt ?? 0).getTime();
-    for (const ref of relation.targetRefs as TargetRef[]) {
-      const key = getJoinTargetKey(ref), previous = latest.get(key);
-      if (resolved.trackedMembers.has(key)) continue;
-      // Equal times keep the first source record, matching stable sort semantics.
-      if (!previous || time > previous.time) latest.set(key, {id:relation.id,time});
+  const declarations=new Map<string,{id:string;time:number}>();
+  for(const relation of relations){
+    if(relation.relationType.toUpperCase()!=='JOIN'||!relation.sourceMessageId||relation.payload?.membershipHistory
+      ||relation.state?.membershipDisabled||rejected.has(relation.id)||rejected.has(relation.sourceMessageId)||retired.has(relation.sourceMessageId))continue;
+    const time=Date.parse(relation.createdAt??'')||0;
+    for(const ref of relation.targetRefs){
+      const memberId=ref.kind==='relation'?ref.relationId:ref.messageId;
+      if(resolved.trackedMembers.has(memberId))continue;
+      if(!declarations.has(memberId)||time>declarations.get(memberId)!.time)declarations.set(memberId,{id:relation.id,time});
     }
   }
-  return new Map([...latest].map(([id, join]) => [id, join.id] as const).concat([...resolved.effective].map(([id, action]) => [id, action.id] as const)));
+  return new Map([...declarations].map(([id,action])=>[id,action.id] as const).concat([...resolved.effective].map(([id, action]) => [id, action.id] as const)));
 }
 
 /** Keep container frame edges only for their currently effective JOIN members. */

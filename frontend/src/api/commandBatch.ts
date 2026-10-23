@@ -5,7 +5,7 @@ export interface Command { id: string; method: string; path: string; body: Recor
 export interface CommandEnvelope { requestId: string; commands: Command[] }
 export interface CommandCommit { snapshots?: WorkbenchSnapshot[] }
 export interface CommandBatchContext { apiBase: string }
-interface CapturedContext { owner: string; api: string; key: string; user: User; legacyKey?: string }
+interface CapturedContext { owner: string; api: string; key: string; user: User }
 type Batch = CommandEnvelope & { context: CapturedContext; previous: CommandEnvelope | null; failure?: Error; provisional: Map<string, Message | Relation> };
 let current: Batch | null = null;
 let active = false;
@@ -18,23 +18,18 @@ function captureContext(options?: CommandBatchContext): CapturedContext {
   const user = currentUser(), owner = String(user.id || 'anonymous');
   const page = typeof location === 'undefined' ? 'http://localhost/' : location.href;
   const api = new URL(options?.apiBase ?? import.meta.env.VITE_API_BASE_URL ?? '/api', page).href.replace(/\/$/, '');
-  const sameOriginDefault = new URL('/api', page).href;
-  return { owner, api, user, key: `gonglun:pending-send:v2:${JSON.stringify([api, owner])}`,
-    // The old user-only record can be recovered on its original same-origin API.
-    // Never replay an unbound legacy envelope against another API endpoint.
-    ...(api === sameOriginDefault ? { legacyKey: `gonglun:pending-send:${owner}` } : {}) };
+  return { owner, api, user, key: `gonglun:pending-send:v2:${JSON.stringify([api, owner])}` };
 }
 function assertOwner(context: CapturedContext) {
   if (String(currentUser().id || 'anonymous') !== context.owner) throw new DOMException('账户已切换，请重新操作', 'AbortError');
 }
 function pending(context: CapturedContext): CommandEnvelope | null {
-  const raw = sessionStorage.getItem(context.key) ?? (context.legacyKey ? sessionStorage.getItem(context.legacyKey) : null);
+  const raw = sessionStorage.getItem(context.key);
   if (!raw) return null;
   const value = JSON.parse(raw) as CommandEnvelope;
   if (!value || typeof value.requestId !== 'string' || !Array.isArray(value.commands) || !value.commands.length)
     throw new Error('待确认的发送记录无效，请先核对已有消息');
   sessionStorage.setItem(context.key, raw);
-  if (context.legacyKey) sessionStorage.removeItem(context.legacyKey);
   return value;
 }
 function definiteRejection(error: unknown): boolean {

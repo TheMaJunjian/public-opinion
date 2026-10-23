@@ -1,7 +1,7 @@
 import { bindRoles, ORGANIZATIONS, relations, resolveMemberships, type Json, type Membership, type MembershipAction, type Message, type Part, type Reference } from '@gonglun/core';
 import { DomainError, Mutation, type Store } from './db.js';
 import { statesFor } from './projections.js';
-import { retiredTopicIds } from './retired-topics.js';
+import { retiredOrganizationIds } from './retired-organizations.js';
 
 const whole = (ref: { revision?: number; partId?: string; memberId?: string; path?: unknown[]; range?: unknown }) =>
     ref.revision === undefined && !ref.partId && !ref.memberId && !ref.path?.length && !ref.range;
@@ -23,17 +23,14 @@ async function containerRejectedForUser(store: Store, parentId: string, userId: 
             AND s."wholeComponent"=1 AND (s."targetPartId" IS NULL OR s."targetPartId"=COALESCE(a.body->>'sourcePartId','relation'))
         )) LIMIT 1`).get(parentId, userId);
     if(chosen)return false;
-    const rows = await store.db.prepare(`SELECT b.side,SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
-        WHERE COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}')=$1
-        AND NOT EXISTS (SELECT 1 FROM legacy_stakes old WHERE old.id=b.id) GROUP BY b.side`).all(parentId);
-    const legacy = await store.db.prepare('SELECT side,SUM(amount) AS amount FROM legacy_stakes WHERE "messageId"=$1 GROUP BY side').all(parentId);
+    const rows = await store.db.prepare('SELECT side,SUM(amount) AS amount FROM stake_positions WHERE "subjectId"=$1 GROUP BY side').all(parentId);
     const amounts = { pro: 0, con: 0 };
-    for (const row of [...rows, ...legacy]) amounts[String(row.side).toLowerCase() as 'pro' | 'con'] += Number(row.amount);
+    for (const row of rows) amounts[String(row.side) as 'pro' | 'con'] += Number(row.amount);
     return amounts.con > amounts.pro;
 }
 async function validateMove(tx: Mutation, memberId: string, parentId: string, userId: string) {
-    const retired = await retiredTopicIds(tx.store);
-    if (retired.has(parentId) || retired.has(memberId)) throw new DomainError('旧 Topic 分类已取消，保留记录仅供历史查看', 409);
+    const retired = await retiredOrganizationIds(tx.store);
+    if (retired.has(parentId) || retired.has(memberId)) throw new DomainError('组织已退役，保留记录仅供历史查看', 409);
     if (memberId === parentId) throw new DomainError('消息不能包含自身');
     const organization = await tx.store.message(parentId);
     await tx.store.message(memberId);
@@ -58,8 +55,8 @@ export async function validateJoinApproval(store: Store, target: Reference, side
     const placement = relations(message).find(part => part.relation === 'member-of' && part.roles.member?.length);
     if (!placement || target.partId && target.partId !== placement.id) return;
     const parentId = placement.roles.parent?.[0]?.reference.messageId;
-    if (parentId && (await retiredTopicIds(store)).has(parentId))
-        throw new DomainError('旧 Topic 分类已取消，历史加入消息不能恢复', 409);
+    if (parentId && (await retiredOrganizationIds(store)).has(parentId))
+        throw new DomainError('组织已退役，历史加入消息不能恢复', 409);
     if (parentId && await containerRejectedForUser(store, parentId, userId))
         throw new DomainError('容器已被反对，请先赞同并恢复容器，再赞同加入消息', 409);
 }
@@ -69,11 +66,7 @@ async function recordJoin(tx: Mutation, message: Message, memberId: string, pare
     if (await tx.store.db.prepare('SELECT 1 FROM membership_actions WHERE id=$1').get(message.id)) return;
     const previous = await tx.store.db.prepare('SELECT * FROM memberships WHERE "memberId"=$1').get(memberId);
     let previousId: string | null = previous ? String(previous.sourceId) : null;
-    // Materialize the actual previous index entry before replacing an old implicit placement.
-    if (previousId && !await tx.store.db.prepare('SELECT 1 FROM membership_actions WHERE id=$1').get(previousId)) {
-        const baseline = await createJoin(tx, message, memberId, String(previous!.parentId), true);
-        previousId = baseline.id;
-    }
+    if (previousId && !await tx.store.db.prepare('SELECT 1 FROM membership_actions WHERE id=$1').get(previousId)) throw new DomainError('组织归属缺少执行记录，请先迁移数据库');
     const row = await tx.store.db.prepare('INSERT INTO membership_actions(id,body) VALUES ($1,$2) RETURNING position').get(message.id, '{}');
     const component = relations(message).find(part => part.relation === 'member-of' && part.roles.member?.length)!;
     const history: MembershipAction = { id: message.id, memberId, parentId, previousId, previousParentId: previous ? String(previous.parentId) : null, order: Number(row!.position), sourcePartId: component.id, bindingId: component.roles.member![0]!.id, sourceRevision: message.revision };
@@ -84,61 +77,15 @@ async function recordJoin(tx: Mutation, message: Message, memberId: string, pare
     await setMembership(tx, { memberId, parentId, sourceId: message.id, sourcePartId: history.sourcePartId, bindingId: history.bindingId, sourceRevision: message.revision });
 }
 
-async function createJoin(tx: Mutation, origin: Message, memberId: string, parentId: string, baseline = false) {
+async function createJoin(tx: Mutation, origin: Message, memberId: string, parentId: string) {
     const parts: Part[] = [{ id: 'relation', type: 'relation', relation: 'member-of', roles: bindRoles({ parent: [{ messageId: parentId }], member: [{ messageId: memberId }] }) },
         { id: 'data', type: 'data', value: { uiType: 'JOIN', generatedBy: origin.id } }];
     const message = await tx.create(origin.authorId, parts);
-    if (baseline) {
-        const row = await tx.store.db.prepare('INSERT INTO membership_actions(id,body) VALUES ($1,$2) RETURNING position').get(message.id, '{}');
-        const history: MembershipAction = { id: message.id, memberId, parentId, previousId: null, previousParentId: null, order: Number(row!.position) };
-        message.parts.push({ id: 'membership-history', type: 'data', value: { membershipHistory: history as unknown as Json } });
-        await tx.put(message);
-        await tx.store.db.prepare('UPDATE membership_actions SET body=$1 WHERE id=$2').run(JSON.stringify(history), message.id);
-    } else await recordJoin(tx, message, memberId, parentId);
+    await recordJoin(tx, message, memberId, parentId);
     return message;
 }
 
-/** Upgrade older native placements using the committed change log as their history. */
-export async function initializeOrganizationMemberships(store: Store) {
-    const migration = await store.db.prepare("SELECT value FROM settings WHERE key='migration'").get();
-    if (migration && JSON.parse(String(migration.value)).mode === 'read-only-rehearsal') return;
-    const rows = await store.db.prepare(`SELECT m.*,s.body FROM memberships m JOIN messages s ON s.id=m."sourceId"
-        WHERE NOT EXISTS (SELECT 1 FROM membership_actions a WHERE a.body->>'memberId'=m."memberId") ORDER BY m.position`).all();
-    const native = rows.filter(row => !(JSON.parse(String(row.body)) as Message).parts.some(part => part.type === 'data' && part.value && typeof part.value === 'object' && !Array.isArray(part.value) && 'legacyTopicId' in part.value));
-    if (!native.length) return;
-    const timelines = new Map<string, Array<Membership | null>>(native.map(row => [String(row.memberId), []]));
-    for (const row of await store.db.prepare('SELECT body FROM changes ORDER BY sequence').all()) {
-        const change = JSON.parse(String(row.body));
-        for (const memberId of change.removedMemberships) timelines.get(memberId)?.push(null);
-        for (const membership of change.memberships) timelines.get(membership.memberId)?.push(membership);
-    }
-    const tx = new Mutation(store);
-    for (const row of native) {
-        const memberId = String(row.memberId), timeline = timelines.get(memberId)!;
-        const last = timeline.at(-1);
-        if (last?.parentId !== row.parentId || last?.sourceId !== row.sourceId) timeline.push(row as unknown as Membership);
-        let previousId: string | null = null, previousParentId: string | null = null;
-        for (const entry of timeline) {
-            if (!entry) { previousId = null; previousParentId = null; continue; }
-            const origin = await store.message(entry.sourceId);
-            const explicit = relations(origin).find(part => part.relation === 'member-of' && part.roles.member?.[0]?.reference.messageId === memberId);
-            const join = explicit ? origin : await createJoin(tx, origin, memberId, entry.parentId, true);
-            let actionRow = await store.db.prepare('SELECT body,position FROM membership_actions WHERE id=$1').get(join.id);
-            if (explicit && actionRow) { previousId = join.id; previousParentId = entry.parentId; continue; }
-            if (!actionRow) actionRow = await store.db.prepare('INSERT INTO membership_actions(id,body) VALUES ($1,$2) RETURNING position').get(join.id, '{}');
-            const history: MembershipAction = { id: join.id, memberId, parentId: entry.parentId, previousId, previousParentId, order: Number(actionRow!.position) };
-            await store.db.prepare('UPDATE membership_actions SET body=$1 WHERE id=$2').run(JSON.stringify(history), join.id);
-            join.parts = [...join.parts.filter(part => part.id !== 'membership-history'), { id: 'membership-history', type: 'data', value: { membershipHistory: history as unknown as Json } }];
-            await tx.put(join);
-            previousId = join.id; previousParentId = entry.parentId;
-        }
-        if (previousId) await setMembership(tx, { memberId, parentId: String(row.parentId), sourceId: previousId, sourcePartId: 'relation', bindingId: 'member-0', sourceRevision: 1 });
-    }
-    await reconcileOrganizationEffects(tx);
-    await tx.commit();
-}
-
-async function setMembership(tx: Mutation, membership: Membership) {
+export async function setMembership(tx: Mutation, membership: Membership) {
     const before = await tx.store.db.prepare('SELECT * FROM memberships WHERE "memberId"=$1').get(membership.memberId);
     if (before?.parentId === membership.parentId && before.sourceId === membership.sourceId) return;
     await tx.store.db.prepare(`INSERT INTO memberships("memberId","parentId","sourceId","sourcePartId","bindingId","sourceRevision") VALUES ($1,$2,$3,$4,$5,$6)
@@ -163,7 +110,7 @@ export async function reconcileOrganizationEffects(tx: Mutation) {
     const states = await statesFor(tx.store, [...new Set(actions.flatMap(action => [action.id, action.parentId]))]);
     const rejected = new Set(states.filter(state => state.suppressed).map(state => state.messageId));
     for (const row of rows) if (row.disabled) rejected.add(String(row.id));
-    const resolved = resolveMemberships(actions, rejected, await retiredTopicIds(tx.store));
+    const resolved = resolveMemberships(actions, rejected, await retiredOrganizationIds(tx.store));
     for (const memberId of resolved.trackedMembers) {
         const action = resolved.effective.get(memberId);
         if (action) await setMembership(tx, { memberId, parentId: action.parentId, sourceId: action.id, sourcePartId: action.sourcePartId ?? 'relation', bindingId: action.bindingId ?? 'member-0', sourceRevision: action.sourceRevision ?? 1 });

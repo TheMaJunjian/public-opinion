@@ -466,11 +466,11 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
             正文按本人立场优先、公共统计其次显示有效更正。选字可基于显示内容，更正始终以原文为准。
           </div>}
           {/* SubType selector */}
-          {((p.relationType === "tag" && (p.secondaryRelationType === "recommend" || p.secondaryRelationType === "archive")) || p.relationType === "recommend" || p.relationType === "archive") && (
+          {((p.relationType === "tag" && ['recommend','archive','attention','block'].includes(p.secondaryRelationType)) || ['recommend','archive','attention','block'].includes(p.relationType ?? '')) && (
             <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
               <span style={{ opacity: 0.85 }}>标注理由：</span>
-              {p.SUB_TYPE_OPTIONS.map(st => (
-                <button key={st || 'none'} onClick={() => {
+              {((p.secondaryRelationType === 'attention' || p.secondaryRelationType === 'block') ? ['YES','NO'] : p.SUB_TYPE_OPTIONS).map(st => (
+                <button key={st || 'none'} aria-pressed={p.subType === st} onClick={() => {
                   if (st === 'CUSTOM') {
                     p.setNewMessageContent(p.subTypeCustomBufferRef.current);
                     p.setSubType(st);

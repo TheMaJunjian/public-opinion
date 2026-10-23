@@ -127,6 +127,9 @@ export function deriveSingleButtonLabel(input: DeriveSingleButtonLabelInput): st
   if (isTagWithInlineBadge) {
     if (!hasTargetsAvailable) return "请在画布中选择目标消息";
     const secName = relationTypeName(secondaryRelationType as RelationType);
+    if (['attention','block'].includes(secondaryRelationType)) return subType === 'YES' || subType === 'NO'
+      ? `建立「${secName}－${subType === 'YES' ? '是' : '否'}」标注`
+      : '请选择标注理由：是或否';
     if (subType === 'CUSTOM') {
       if (newMessageContent.trim().length === 0) return "请输入自定义理由";
       return `建立「${secName}」关系（自定义理由，用${usingDraft ? "候选" : "目标集合"}作目标）`;

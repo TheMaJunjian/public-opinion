@@ -20,7 +20,7 @@ function listProps(messages: DemoMessage[]): ComponentProps<typeof WorkbenchMess
       relationTypeByRelMsgId: new Map(messages.flatMap(item => item.relationType ? [[item.id, item.relationType] as const] : [])),
       joinRelationsByTarget: new Map(), joinRelationsBySource: new Map(), effectiveJoinRelationIds: new Set(),
       summaryCoverageByMessageId: new Map(), correctionVersions: new Map() },
-    display: { tagSourceIdsForList: new Set(), suppressedRelIds: new Set(), rejectedContainerIds: new Set(), overriddenStanceRelIds: new Set(),
+    display: { embeddedMessageIds: new Set(), suppressedRelIds: new Set(), rejectedContainerIds: new Set(), overriddenStanceRelIds: new Set(),
       readStatusByMessageId: new Map(), homeDisplayRoleByMessageId: new Map(), authorStakes: {}, stakeCounts: {}, correctionFilterTargetId: null, joinFilterTargetId: null },
     comparison: { comparisonReviewed: false, comparisonTargetId: null, comparisonRecommendedDisplay: 'agree',
       activeStanceByRelMsgId: new Map(), activeStanceMap: new Map(), stanceEffectByRelMsgId: new Map() },
@@ -51,7 +51,7 @@ describe('native list content and navigation regressions', () => {
     expect(view.container.querySelector('[data-msgid="joining"]')).toHaveTextContent(label);
   });
 
-  it.each([['personal','当前用户生效'],['recommended','推荐生效']] as const)('distinguishes %s JOIN ownership on the list', (source,label)=>{
+  it.each([['personal','当前用户生效'],['recommended','统计生效']] as const)('distinguishes %s JOIN ownership on the list', (source,label)=>{
     const relation={id:'joining',relationType:'JOIN',sourceMessageId:'parent',targetRefs:[{kind:'message' as const,messageId:'leaf'}],createdAt:'',createdBy:{id:'author',username:'作者',createdAt:''}};
     const converted=convertMessagesToDemoModel([],[relation]),props=listProps(converted.messages);
     props.catalog.relationById.set(relation.id,relation);

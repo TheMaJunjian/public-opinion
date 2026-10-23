@@ -646,7 +646,7 @@ describe('导航目标解析', () => {
       },
     ] as any;
 
-    expect(resolveNavigationTargetId('tag-1', [], relations)).toBe('target-1');
+    expect(resolveNavigationTargetId('tag-1', [], relations)).toBe('tag-1');
     expect(resolveNavigationTargetId('recommend-1', [], relations)).toBe('recommend-1');
     expect(resolveNavigationTargetId('archive-1', [], relations)).toBe('archive-1');
     expect(resolveNavigationTargetId('agree-1', [], relations)).toBe('agree-1');

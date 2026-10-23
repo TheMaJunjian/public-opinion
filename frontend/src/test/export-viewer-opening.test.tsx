@@ -10,7 +10,7 @@ vi.mock('../utils/exportViewerCache', () => ({ loadLastExport: vi.fn(), saveLast
 
 const data: ExportData = {
   formatVersion: 1, exportedAt: '', scope: { messageId: null, title: '相同阅览文件' },
-  messages: [{ id: 'm', kind: 'TEXT', contentType: 'TEXT', content: '保存的正文', createdAt: '', author: '甲', authorId: 'a' }],
+  messages: [{ id: 'm', kind: 'TEXT', contentType: 'TEXT', content: '保存的正文', createdAt: '', author: '甲', authorId: 'a',revision:1,parts:[{id:'body',type:'text',text:'保存的正文'}] }],
   relations: [], view: { username: '甲', mode: 'list', classificationId: null,
     messageFilter: { hideJoin: false, hideSettlement: true }, homeFilter: 'read-self', cleanFilters: [] },
 };

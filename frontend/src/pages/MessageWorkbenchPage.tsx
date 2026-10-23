@@ -1,4 +1,5 @@
 import { useWorkbenchComposer } from './workbench/useWorkbenchComposer';
+import { annotationStanceError } from '@gonglun/core';
 import { useRelationToolbar } from './workbench/useRelationToolbar';
 import { useWorkbenchViewport } from './workbench/useWorkbenchViewport';
 import { useBrowsingHistory } from './workbench/useBrowsingHistory';
@@ -18,11 +19,10 @@ import { useAuth } from '../context/AuthContext';
 import type {
   DemoEdge,
   DemoMessage,
-  MessageKind,
   RelationType,
   UnitSelection,
 } from '../utils/modelBridge';
-import { computeCorrectionVersions, computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isContentKind, withCorrectionContent } from '../utils/modelBridge';
+import { computeCorrectionVersions, computeGloballySuppressedRelIds, computeTransitiveVoteStats, computeUserActiveStanceRelIds, computeUserOverriddenStanceRelIds, demoMessageToRelation, isContentKind, presentationTarget, withCorrectionContent } from '../utils/modelBridge';
 import { isRelationMessage, isTextMessage } from '../utils/leaderboardMetrics';
 import { getLatestUserReadStatusByMessageId } from './workbench/model/filters';
 import { blockCorrectionForSecondBettor as runBlockCorrectionForSecondBettor, handleAuthError as runHandleAuthError, requireAuth as runRequireAuth } from './workbench/actions/authentication';
@@ -288,7 +288,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     return computeCorrectionVersions(messages,edges,invalid,displayUser?.username??null,{previewCorrectionId:correctionPreviewId});
   },[personalCorrectionVersions,correctionPreviewId,messages,edges,displayUser?.username]);
   const correctionStances=useMemo(()=>deriveCorrectionStanceDisplay(messages,edges,correctionVersions,stakeCounts,authorStakes),[messages,edges,correctionVersions,stakeCounts,authorStakes]);
-  const displayVoteStats=useMemo(()=>computeTransitiveVoteStats(edges,messages,correctionStances.excludedEdges),[messages,edges,correctionStances.excludedEdges]);
   const displayStanceEdges=useMemo(()=>edges.filter(edge=>!correctionStances.excludedEdges.has(edge.id)),[edges,correctionStances.excludedEdges]);
   const containerPreviewStack=useRef<Array<{
     id:string|null; snapshot:TraceSnapshot; filter:MessageFilterSettings;
@@ -826,21 +825,13 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     }),
     [messages, voteStats],
   );
-  const comparisonStakeTotals = useMemo(() => {
-    const totals = new Map<string, { agree: number; disagree: number }>();
-    for (const edge of edges) {
-      if (edge.relationType !== 'agree' && edge.relationType !== 'disagree') continue;
-      const current = totals.get(edge.to.messageId) ?? { agree: 0, disagree: 0 };
-      current[edge.relationType] += authorStakes[edge.relationMessageId] ?? 0;
-      totals.set(edge.to.messageId, current);
-    }
-    return totals;
-  }, [edges, authorStakes]);
   const comparisonRecommendedDisplay = useMemo(() => {
     if (!comparisonTargetId) return 'agree' as const;
-    const totals = comparisonStakeTotals.get(comparisonTargetId);
-    return totals && totals.disagree > totals.agree ? 'disagree' as const : 'agree' as const;
-  }, [comparisonStakeTotals, comparisonTargetId]);
+    const statistics = deriveContainerEffect({messages,relations,edges,username:null,stakeCounts});
+    const joinStatus = statistics.context.joinStatusByMessage.get(comparisonTargetId);
+    const inactive = joinStatus ? joinStatus !== 'valid' : statistics.suppressed.has(comparisonTargetId);
+    return inactive ? 'disagree' as const : 'agree' as const;
+  }, [messages,relations,edges,stakeCounts,comparisonTargetId]);
   const containerEffect = useMemo(() => deriveContainerEffect({messages,relations,edges,username:displayUser?.username??null,stakeCounts}),[messages,relations,edges,displayUser?.username,stakeCounts]);
   const effectiveSuppressedRelIdsForLayout = containerEffect.suppressed;
   const rejectedContainerIds = containerEffect.rejectedContainerIds;
@@ -992,24 +983,14 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     return null;
   }, [relationType, targetUnits, draftUnits, msgMap]);
   const appendCreatedRelation = useCallback((backendRel: Relation) => {
-    // Skip adding duplicate relations (deduplicated on backend)
-    // When deduplicated, update the existing relation/message in state instead
-    const isDedup = !!(backendRel as unknown as Record<string, unknown>).deduplicated;
-    if (isDedup) {
-      // Update existing relation and message with fresh data (e.g. incremented sendCount)
-      relationsRef.current = relationsRef.current.map(r => r.id === backendRel.id ? backendRel : r);
-      setRelations(prev => prev.map(r => r.id === backendRel.id ? backendRel : r));
-      setMessages(prev => prev.map(m => m.id === backendRel.id ? buildRelationDemoMessage(backendRel) : m));
-    } else {
-      relationsRef.current = relationsRef.current.some(r => r.id === backendRel.id)
-        ? relationsRef.current
-        : [...relationsRef.current, backendRel];
-      setRelations(prev => prev.some(r => r.id === backendRel.id) ? prev : [...prev, backendRel]);
-      setMessages(prev => prev.some(m => m.id === backendRel.id) ? prev : [...prev, buildRelationDemoMessage(backendRel)]);
-    }
+    const upsert = <T extends {id:string}>(items:T[], item:T) => items.some(value=>value.id===item.id)
+      ? items.map(value=>value.id===item.id?item:value) : [...items,item];
+    relationsRef.current=upsert(relationsRef.current,backendRel);
+    setRelations(prev=>upsert(prev,backendRel));
+    setMessages(prev=>upsert(prev,buildRelationDemoMessage(backendRel)));
     const relType = backendRel.relationType?.toUpperCase();
     const targetMsgIds: string[] = [];
-    if (relType === 'AGREE' || relType === 'DISAGREE') {
+    if (relType === 'AGREE' || relType === 'DISAGREE' || backendRel.payload?.annotationStance) {
       targetMsgIds.push(...backendRel.targetRefs
         .filter((ref) =>
           (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
@@ -1028,9 +1009,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
           relationType: relType.toLowerCase() as RelationType,
           from: backendRel.sourceRefs?.[0] ? referenceToUnit(backendRel.sourceRefs[0]) : { messageId: fromMsgId, selection: { kind: "whole" } },
           to: targetRefToUnit(ref),
-          relationLabel: relationTypeName(relType.toLowerCase()),
+          relationLabel: backendRel.payload?.label || relationTypeName(relType.toLowerCase()),
         };
-        setEdges(prev => [...prev, edge]);
+        setEdges(prev => prev.some(existing => existing.relationMessageId === backendRel.id
+          && selKey(existing.to) === selKey(edge.to)) ? prev : [...prev, edge]);
       }
     }
     // For RECOMMEND/ARCHIVE: populate targetMsgIds from text targets
@@ -1052,26 +1034,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       api.getMessageStakes(mid).then(s => {
         mergeStakeSnapshot(mid, s);
       }).catch(() => { });
-    }
-    // For RECOMMEND/ARCHIVE: the stake is on the text target, so also mirror its
-    // stake counts onto the annotation relation message for badge display.
-    if (relType === 'RECOMMEND' || relType === 'ARCHIVE') {
-      const textTarget = targetMsgIds[0];
-      if (textTarget) {
-        api.getMessageStakes(textTarget).then(s => {
-          mergeStakeSnapshot(textTarget, s);
-          const byType = s.countsByType ?? {};
-          setStakeCounts(prev => ({
-            ...prev,
-            [backendRel.id]: {
-              truth: byType.TRUTH ?? { pro: 0, con: 0 },
-              value: byType.VALUE ?? { pro: 0, con: 0 },
-            },
-          }));
-          const bettors = new Set(s.stakes.map(st => st.user.id || st.user.username)).size;
-          setMessageBettorCounts(prev => ({ ...prev, [backendRel.id]: bettors }));
-        }).catch(() => { });
-      }
     }
     window.dispatchEvent(new Event('points-refresh'));
     // Notify SettlementPanel to reload stakes for target messages
@@ -1097,6 +1059,11 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         ? { messageId: ref.kind === 'relation' ? ref.relationId : ref.messageId }
         : unitSelectionToReference(targetRefToUnit(ref), currentMessages),
     });
+    if (type === 'disagree') for (const ref of targetRefs) {
+      const target = currentMessages.get(ref.reference!.messageId);
+      const error = target && annotationStanceError(target, ref.reference!);
+      if (error) throw new Error(error);
+    }
     try {
       const readDisplay=type==='read'?Object.fromEntries(targetRefs.flatMap(ref=>{
         const id=ref.kind==='relation'?ref.relationId:ref.messageId,signature=readingDisplayRef.current(id);
@@ -1138,55 +1105,14 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
       const detail = (e as CustomEvent<Relation>).detail;
       if (detail && detail.id && detail.relationType) {
         appendCreatedRelation(detail);
-        // For RECOMMEND/ARCHIVE from voting: create edge for badge display
-        const rt = detail.relationType?.toUpperCase();
-        if (rt === 'RECOMMEND' || rt === 'ARCHIVE') {
-          const isDup = !!(detail as unknown as Record<string, unknown>).deduplicated;
-          if (!isDup) {
-            const targetIds = detail.targetRefs
-              .filter(ref => (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
-              .map(ref => (ref as { messageId: string }).messageId);
-            const anonSrcId = `anon:${detail.id}`;
-            setEdges(prev => {
-              const newEdges = targetIds.filter(mid =>
-                !prev.some(e => e.relationMessageId === detail.id && e.to.messageId === mid)
-              ).map(mid => ({
-                id: nextId("edge"),
-                relationMessageId: detail.id,
-                relationType: rt.toLowerCase() as RelationType,
-                from: { messageId: anonSrcId, selection: { kind: "whole" as const } },
-                to: { messageId: mid, selection: { kind: "whole" as const } },
-                relationLabel: relationTypeName(rt.toLowerCase()),
-              }));
-              return [...prev, ...newEdges];
-            });
-          }
-        }
+
       }
     };
     window.addEventListener('relation-created', handler);
     return () => window.removeEventListener('relation-created', handler);
   }, [appendCreatedRelation]);
 
-  // TAG-only source messages in the linear list view: messages used exclusively as old-style
-  // TAG relation sources should not appear as list items (their label is shown on the tag badge).
-  const tagSourceIdsForList = useMemo(() => {
-    const hiddenTagSourceIds = new Set<string>();
-    const shouldKeepVisible = new Set<string>();
-    for (const e of edges) {
-      const fromKind = msgMap.get(e.from.messageId)?.kind;
-      const toKind = msgMap.get(e.to.messageId)?.kind;
-      if (e.relationType === "tag" && fromKind && isContentKind(fromKind as MessageKind)) {
-        hiddenTagSourceIds.add(e.from.messageId);
-      }
-      if (toKind && isContentKind(toKind as MessageKind)) shouldKeepVisible.add(e.to.messageId);
-      if (e.relationType !== "tag" && fromKind && isContentKind(fromKind as MessageKind)) {
-        shouldKeepVisible.add(e.from.messageId);
-      }
-    }
-    for (const id of shouldKeepVisible) hiddenTagSourceIds.delete(id);
-    return hiddenTagSourceIds;
-  }, [edges, msgMap]);
+  const embeddedMessageIds = useMemo(() => new Set(messages.filter(message=>presentationTarget(message)).map(message=>message.id)),[messages]);
 
   const effectiveJoinRelationIds = containerEffect.effectiveJoinIds;
 
@@ -2107,16 +2033,19 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   const isTagWithInlineBadge = relationType === "tag" && (secondaryRelationType === "recommend" || secondaryRelationType === "archive" || secondaryRelationType === "attention" || secondaryRelationType === "block");
   const notifyTargets = draftUnits.length > 0 ? draftUnits : targetUnits;
   const attentionTargetMessageIds = useMemo(() => {
-    const targetIds = new Set(Object.keys(attentionUsersByTarget).filter(id => attentionUsersByTarget[id].length > 0));
-    for (const relation of relations) {
+    const followers = new Map(Object.entries(attentionUsersByTarget).map(([id,users]) => [id,new Set(users)]));
+    for (const relation of [...relations].sort((a,b) => (a.sequence ?? Date.parse(a.createdAt)) - (b.sequence ?? Date.parse(b.createdAt)))) {
       if (relation.relationType.toUpperCase() !== 'ATTENTION') continue;
       for (const targetRef of relation.targetRefs) {
         if (targetRef.kind === 'message' || targetRef.kind === 'text-fragment') {
-          targetIds.add(targetRef.messageId);
+          const users = followers.get(targetRef.messageId) ?? new Set<string>();
+          if (relation.payload?.subType === 'YES') users.add(relation.createdBy.id);
+          else if (relation.payload?.subType === 'NO') users.delete(relation.createdBy.id);
+          followers.set(targetRef.messageId,users);
         }
       }
     }
-    return targetIds;
+    return new Set([...followers].filter(([,users]) => users.size>0).map(([id]) => id));
   }, [attentionUsersByTarget, relations]);
   const hasAttentionNotifyTarget = notifyTargets.length > 0 && notifyTargets.every(target =>
     attentionTargetMessageIds.has(target.messageId)
@@ -2130,6 +2059,10 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     [draftUnits, targetUnits, relationType, relations, msgMap, containerEffect],
   );
   const processedTargetUnits = effectiveTargetUnits;
+  const annotationOppositionError = relationType === 'disagree' ? effectiveTargetUnits.reduce<string | null>((error, unit) => {
+    const message = msgMap.get(unit.messageId);
+    return error || (message ? annotationStanceError(message, unitSelectionToReference(unit, msgMap)) : null);
+  }, null) : null;
   const hasCorrectionRelationTarget = relationType === 'correct'
     && effectiveTargetUnits.some(unit => msgMap.get(unit.messageId)?.kind === 'relation' && !msgMap.get(unit.messageId)?.parts
       && !isCorrectableCorrectionTarget(msgMap.get(unit.messageId)));
@@ -2251,12 +2184,12 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
   // Note: draftUnits (候选区) is a quick substitute for targetUnits (目标集合).
   // If draftUnits is non-empty it takes precedence; otherwise targetUnits is used.
   const hasTextContent = newMessageContent.trim().length > 0;
-  const singleButtonEnabled = deriveSingleButtonEnabled({ relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget });
+  const singleButtonEnabled = !annotationOppositionError && deriveSingleButtonEnabled({ relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget });
 
   // Dynamic label describing what the send button will do
   const singleButtonLabel = deriveSingleButtonLabel({ relationType, newMessageContent, draftUnits, isClassifyType, sourceUnits, relations, getClassifyTargetRefs, targetUnits, joinOnlyAction, hasTargetsAvailable, isSummaryType, isMergeType, hasCorrectionRelationTarget, hasInvalidCorrectTarget, hasTextContent, isNotifyType, hasAttentionNotifyTarget, isGovernanceOrOpsType, secondaryRelationType, msgMap, isAgreeDisagreeType, isArrangeType, isTagWithInlineBadge, subType, isTagWithQuickAnnotate });
 
-  const sendValidationLabel = deriveSendValidationLabel({ singleButtonEnabled, relationType, hasTextContent, draftUnits, targetUnits, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, hasCorrectionRelationTarget, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, invalidJoinTargetMessage, hasCrossLinkValidationError, crossLinkValidationMessage, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, secondaryRelationType, hasInvalidProposalFormat, hasTargetsAvailable, isClassifyType, isGovernanceOrOpsType, isAgreeDisagreeType, isArrangeType, isMergeType, isTagWithQuickAnnotate, isTagWithInlineBadge });
+  const sendValidationLabel = annotationOppositionError ?? deriveSendValidationLabel({ singleButtonEnabled, relationType, hasTextContent, draftUnits, targetUnits, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, hasCorrectionRelationTarget, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, invalidJoinTargetMessage, hasCrossLinkValidationError, crossLinkValidationMessage, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, secondaryRelationType, hasInvalidProposalFormat, hasTargetsAvailable, isClassifyType, isGovernanceOrOpsType, isAgreeDisagreeType, isArrangeType, isMergeType, isTagWithQuickAnnotate, isTagWithInlineBadge });
 
   // Secondary relation options for CORRECT type: relations of the same PresentationKind as the targeted relation message, plus "none".
   const correctSecondaryOptions = ['text-correction', 'meaning-change'];
@@ -2844,7 +2777,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     onRelatedNavigate={viewRelatedContainer} standaloneMessageIds={comparisonViewIds??correctionTemporaryViewIds??standaloneMessageIds}
                     visibleMessages={messageWindow.messages}
                     catalog={{ messages:containerPreview?.allMessages??containerEffect.messages, edges:containerPreview?.edges??edges, msgMap:containerPreview?new Map(containerPreview.allMessages.map(message=>[message.id,message])):containerEffect.msgMap, relationById:containerPreview?new Map(containerPreview.relations.map(relation=>[relation.id,relation])):containerEffect.relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds:containerPreview?.effectiveJoinIds??effectiveJoinRelationIds, joinStatusByMessage:containerPreview?.context.joinStatusByMessage??joinStatusByMessage, joinEffectSourcesByMessage:containerPreview?.context.joinEffectSourcesByMessage??containerEffect.context.joinEffectSourcesByMessage, containerOwnership:containerPreview?.effect.ownership??containerEffect.ownership, summaryCoverageByMessageId, correctionVersions }}
-                    display={{ tagSourceIdsForList:comparisonMode?new Set<string>():tagSourceIdsForList, suppressedRelIds:containerPreview?.suppressed??suppressedRelIds, rejectedContainerIds:containerPreview?.rejectedContainerIds??rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds: homeFilterResult?.matchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts:correctionStances.counts, correctionFilterTargetId, joinFilterTargetId }}
+                    display={{ embeddedMessageIds:comparisonMode?new Set<string>():embeddedMessageIds, suppressedRelIds:containerPreview?.suppressed??suppressedRelIds, rejectedContainerIds:containerPreview?.rejectedContainerIds??rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds: homeFilterResult?.matchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts:correctionStances.counts, correctionFilterTargetId, joinFilterTargetId }}
                     comparison={{ comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap, stanceEffectByRelMsgId }}
                     settlement={{ settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated: message => (window as Window & { __addSettlementMessage?: (value: typeof message) => void }).__addSettlementMessage?.(message) }}
                     selection={{ draftUnits, activeTextSelectId, lastClickedMessageId }}
@@ -2890,7 +2823,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
                     onEdgeLabelDoubleClick={handleEdgeLabelDoubleClick} onFragmentAnchorClick={handleFragmentAnchorClick}
                     isFragmentSelected={isFragmentSelected} onCanvasBlankClick={handleCanvasBlankClick}
                     onMessageMouseDown={handleMessageMouseDown} onMessageMouseUp={handleMessageMouseUp}
-                    voteStats={displayVoteStats} excludedStanceEdges={correctionStances.excludedEdges}
+                    excludedStanceEdges={correctionStances.excludedEdges}
                     onDecorationIconClick={handleDecorationIconClick}
                     onDecorationBodyClick={handleDecorationBodyClick}
                     onDecorationDoubleClick={handleDecorationDoubleClick}

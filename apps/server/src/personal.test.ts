@@ -11,7 +11,7 @@ const setup = async () => { const app = await createTestApp(); instances.push(ap
 async function register(app: App, name: string): Promise<Actor> { const agent = request.agent(app); const response = await agent.post('/api/register').send({ name, password: 'personal-password' }); expect(response.status).toBe(201); return { agent, session: response.body }; }
 async function send(actor: Actor, parts: Part[]): Promise<Message> { const response = await actor.agent.post('/api/messages').set('x-csrf-token', actor.session.csrf).send({ requestId: randomUUID(), parts }); expect(response.status, response.text).toBe(201); return response.body.message; }
 const text = (value: string): Part => ({ id: 'text', type: 'text', text: value });
-const relation = (value: string, target: string, role = 'target'): Part => ({ id: 'relation', type: 'relation', relation: value, roles: bindRoles({ [role]: [{ messageId: target }] }) });
+const relation = (value: string, target: string, role = 'target', reason: 'YES' | 'NO' = 'YES'): Part => ({ id: 'relation', type: 'relation', relation: value, roles: bindRoles({ [role]: [{ messageId: target }] }),...(['follow','block'].includes(value)?{reason}:{}) });
 afterEach(async () => { for (const app of instances.splice(0)) await app.close(); await cleanupTestDatabases(); });
 
 describe('authoritative personal views', () => {
@@ -20,12 +20,12 @@ describe('authoritative personal views', () => {
     const alice = await register(app, 'alice');
     const target = await send(alice, [text('并发关注的消息')]);
     const before = await app.store.account(alice.session.user.id);
-    const sent = await Promise.all(['follow', 'unfollow', 'follow', 'unfollow'].map(action => send(alice, [relation(action, target.id)])));
+    const sent = await Promise.all((['YES','NO','YES','NO'] as const).map(reason => send(alice, [relation('follow', target.id,'target',reason)])));
     const latest = [...sent].sort((a, b) => b.sequence - a.sequence)[0]!;
     const lastAction = latest.parts.find(part => part.type === 'relation');
     const marks = await alice.agent.get('/api/me/marks').query({ ids: target.id });
     expect(marks.status, marks.text).toBe(200);
-    expect(marks.body.personalStates[0].followed).toBe(lastAction?.type === 'relation' && lastAction.relation === 'follow');
+    expect(marks.body.personalStates[0].followed).toBe(lastAction?.type === 'relation' && lastAction.reason === 'YES');
     expect(new Set(sent.map(message => message.sequence)).size).toBe(sent.length);
     expect((await app.store.account(alice.session.user.id)).available).toBe(before.available - sent.length * (await app.store.rules()).protocolFee);
     expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM personal_actions WHERE "authorId"=$1 AND "targetId"=$2').get(alice.session.user.id, target.id))?.n).toBe(sent.length);
@@ -72,8 +72,8 @@ describe('authoritative personal views', () => {
     expect(followed.body.messages.map((message: Message) => message.id)).toEqual([target.id]);
     const freshAlice = { agent: relogin, session: auth.body };
     await send(freshAlice, [relation('unread', target.id)]);
-    await send(freshAlice, [relation('unfollow', target.id)]);
-    await send(freshAlice, [relation('unblock', target.id)]);
+    await send(freshAlice, [relation('follow', target.id, 'target', 'NO')]);
+    await send(freshAlice, [relation('block', target.id, 'target', 'NO')]);
     await send(freshAlice, [relation('unarchive', target.id)]);
     await send(bob, [relation('read', target.id)]);
     expect((await relogin.get('/api/me/marks').query({ ids: target.id })).body.personalStates[0]).toEqual({ messageId: target.id, followed: false, read: false, blocked: false, archived: false });
@@ -113,7 +113,7 @@ describe('authoritative personal views', () => {
     expect(second.body.messages[0].id).toBe(update.id);
     const since = await alice.agent.get('/api/me/notifications').query({ after: cutoff });
     expect(since.body.messages.map((message: Message) => message.id).sort()).toEqual([explicit.id, update.id].sort());
-    await send(alice, [relation('unfollow', group.id)]);
+    await send(alice, [relation('follow', group.id, 'target', 'NO')]);
     await send(bob, [text('取消关注后的进展'), relation('reply', child.id)]);
     expect((await alice.agent.get('/api/me/notifications')).body.messages.map((message: Message) => message.id)).toEqual([explicit.id]);
   });
@@ -122,7 +122,7 @@ describe('authoritative personal views', () => {
     const app = await setup(); const alice = await register(app, 'alice');
     const target = await send(alice, [text('持续的议题')]);
     const original = await send(alice, [relation('follow', target.id)]);
-    await send(alice, [relation('unfollow', target.id)]);
+    await send(alice, [relation('follow', target.id, 'target', 'NO')]);
     const proposal = await send(alice, [relation('amend', original.id), { id: 'data', type: 'data', value: { expectedRevision: 1, parts: [relation('follow', target.id), text('修改旧关注消息的说明')] } as unknown as Json }]);
     await send(alice, [relation('authorize', proposal.id)]);
     expect((await app.store.message(original.id)).revision).toBe(2);

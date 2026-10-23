@@ -16,8 +16,8 @@ export type Part =
   | { id: string; type: 'text'; text: string }
   | { id: string; type: 'web'; url: string; excerpt: string }
   | { id: string; type: 'code'; language: string; source: string }
-  | { id: string; type: 'relation'; relation: string; roles: Record<string, Binding[]> }
-  | { id: string; type: 'display'; relationPartId: string; layout: 'flow' | 'columns' | 'row' | 'summary'; target?: Reference; order?: string[] }
+  | { id: string; type: 'relation'; relation: string; roles: Record<string, Binding[]>; reason?: 'YES' | 'NO' }
+  | { id: string; type: 'display'; relationPartId: string; layout: 'flow' | 'columns' | 'row' | 'summary' | 'relation'; target?: Reference; order?: string[] }
   | { id: string; type: 'data'; value: Json };
 
 export interface Message {
@@ -54,7 +54,7 @@ export const DEFAULT_RULES: Rules = {
   contributionWeights: { content: 3, relation: 2, agreement: 1, evidence: 5, duplicate: 0, earlyBonus: 1, earlyWindow: 20, unrecognizedAuthorCap: 8 },
 };
 export interface Round {
-  id: string; target: Reference; targetRevision: number; status: 'open' | 'waiting' | 'settled';
+  id: string; target: Reference; targetRevision: number; status: 'open' | 'waiting' | 'settled' | 'frozen';
   pro: number; con: number; result: 'pro' | 'con' | 'tie' | null;
   previousRoundId: string | null; distributionId: string | null; endsAt: string | null;
 }
@@ -88,7 +88,7 @@ export interface MessageState {
   membershipActive?: boolean;
   /** An authorized revision retired this immutable placement. */
   membershipDisabled?: boolean;
-  /** A migration-only Topic container is retained for history, with no current organization effect. */
+  /** A retired organization is retained for history, with no current organization effect. */
   organizationRetired?: boolean;
 }
 export interface Change {
@@ -100,7 +100,6 @@ export interface Change {
   states: MessageState[];
   ledger: LedgerEntry[];
   treasury: { operating: number; issued: number };
-  upgrade?: { kind: 'retire-legacy-topics'; version: 1; topicIds: string[]; releasedMemberships: Membership[]; retiredJoinIds: string[] };
 }
 export interface Page {
   messages: Message[]; users: User[]; memberships: Membership[];

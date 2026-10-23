@@ -1,6 +1,6 @@
 import type { Part, Reference, ExecutedStance, Json, MessageState, Message as CoreMessage } from './types.js';
 
-/** Shared transport views. Historical imports may omit native execution fields. */
+/** Shared transport views. Partial and provisional projections may omit native execution fields. */
 export interface UserView {
   id: string;
   username: string;
@@ -79,10 +79,12 @@ export interface RelationPayload {
   independentMemberships?: boolean;
   membershipHistory?: import('./membership.js').MembershipAction;
   label?: string;
+  annotationStance?: { target: Reference; side: 'pro' | 'con' };
+  repetitionCount?:number;
   title?: string;
   targetLayout?: RelationTargetLayout;
   content?: string;
-  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'CUSTOM';
+  subType?: 'SPAM' | 'OFFTOPIC' | 'LOWVALUE' | 'IMPORTANT' | 'CUSTOM' | 'YES' | 'NO';
   customLabel?: string;
   operationType?: string;
   amount?: number;
@@ -142,7 +144,6 @@ export interface StakeItem {
   settlementType?: 'TRUTH' | 'VALUE';
   user: UserView;
   reference?: Reference;
-  legacy?: boolean;
 }
 
 export interface MessageStakes {

@@ -12,23 +12,20 @@ function ownershipIndex(relations:ContainerRelation[],rejected:Set<string>,rejec
   const normalize=(ref:TargetRef):TargetRef=>ref.kind!=='relation'&&containerTypes.has(byId.get(ref.messageId)?.relationType?.toUpperCase()??'')?{kind:'relation',relationId:ref.messageId}:ref;
   const key=(ref:TargetRef)=>{const normalized=normalize(ref);return normalized.kind==='relation'?`r:${normalized.relationId}`:`m:${normalized.messageId}`;};
   const effective=displayWinners??getEffectiveJoinByTarget(relations,rejected,rejectedJoins);
-  const releasedJoins=new Map<string,Map<string,string>>();
+  const releasedDeclarations=new Map<string,Map<string,string>>();
   const effectiveFor=(id:string)=>{
-    // Native membership is restored by its history, never by flattening the
-    // rejected container's declarations back into its current parent.
-    if (byId.get(id)?.payload?.independentMemberships || (bySource.get(id) ?? []).some(join => join.payload?.membershipHistory)) return effective;
-    if(!rejected.has(id))return effective;
-    let joins=releasedJoins.get(id);
-    if(!joins){
+    if(byId.get(id)?.payload?.independentMemberships||(bySource.get(id)??[]).some(join=>join.payload?.membershipHistory)||!rejected.has(id))return effective;
+    let result=releasedDeclarations.get(id);
+    if(!result){
       const parents=new Set(rejected);parents.delete(id);
-      joins=getEffectiveJoinByTarget(relations,parents,rejectedJoins);
+      result=getEffectiveJoinByTarget(relations,parents,rejectedJoins);
       if(displayWinners){
-        joins=new Map([...joins].filter(([target,joinId])=>!displayWinners.has(target)&&byId.get(joinId)?.sourceMessageId===id));
-        for(const [target,joinId] of displayWinners)joins.set(target,joinId);
+        result=new Map([...result].filter(([target,joinId])=>!displayWinners.has(target)&&byId.get(joinId)?.sourceMessageId===id));
+        for(const [target,joinId] of displayWinners)result.set(target,joinId);
       }
-      releasedJoins.set(id,joins);
+      releasedDeclarations.set(id,result);
     }
-    return joins;
+    return result;
   };
   const bySource=new Map<string,ContainerRelation[]>(),byTarget=new Map<string,ContainerRelation[]>();
   for(const relation of relations) if(relation.relationType?.toUpperCase()==='JOIN') {

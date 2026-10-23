@@ -689,7 +689,8 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='original')).toBe(true));
     fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
     const card=document.querySelector('[data-msgid="correct"]')!;
-    expect(card).toHaveTextContent('具体更改');
+    expect(card).toHaveTextContent('start=2 len=2');
+    expect(card).not.toHaveTextContent('具体更改');
     expect(card).toHaveTextContent('修改为「1111」');
     expect(card).not.toHaveTextContent('更正前');expect(card).not.toHaveTextContent('更正后');
     expect(card).not.toHaveTextContent('建立关系：CORRECT');
@@ -1706,7 +1707,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(correctedCard).not.toHaveTextContent('需要更正的旧正文');
       expect(screen.queryByRole('combobox', { name: '正文版本' })).toBeNull();
       if (mode === 'graph') expect(correctedCard.querySelector('[data-jump-msgids~="body-correction"]')).not.toBeNull();
-      else expect(view.container.querySelector('[data-msgid="body-correction"]')).toHaveTextContent('修改前全文');
+      else expect(view.container.querySelector('[data-msgid="body-correction"]')).toHaveTextContent(`将「旧正文」修改为「${replacement}」`);
       // Keep the corrected body visible while selecting a suffix whose offset shifted.
       fireEvent.click(screen.getByRole('button', { name: /^更正$/ }));
       fireEvent.doubleClick(correctedCard);
@@ -1741,19 +1742,24 @@ describe('MessageWorkbenchPage composer refresh', () => {
       const restoredCard = view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="editable-container"]:not([data-rel-overlay])')!;
       expect(restoredCard).toHaveTextContent('需要更正的旧正文');
       if (mode === 'graph') expect(restoredCard.querySelector('[data-jump-msgids~="body-correction"]')).not.toBeNull();
-      else expect(view.container.querySelector('[data-msgid="body-correction"]')).toHaveTextContent('当前对你无效');
+      else expect(view.container.querySelector('[data-msgid="body-correction"]')).toHaveTextContent(`将「旧正文」修改为「${replacement}」`);
       if (mode === 'graph') {
         fireEvent.doubleClick(restoredCard.querySelector('[data-jump-msgids~="body-correction"]')!);
         await waitForWorkbenchIdle();
         expect(screen.getByText('更正记录临时分类（1）')).toBeInTheDocument();
         const historyCard = view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="body-correction"]')!;
-        expect(historyCard).toHaveTextContent('修改前全文');
-        expect(historyCard).toHaveTextContent('修改后全文');
+        expect(historyCard).toHaveTextContent(`将「旧正文」修改为「${replacement}」`);
+        expect(historyCard).toHaveTextContent(`start=${start} len=3`);
+        expect(historyCard).not.toHaveTextContent(/具体更改|修改前全文|修改后全文|开头保留|结尾也保留/);
         expect(historyCard).toHaveTextContent(correctionKind === 'MEANING' ? '修改原意' : '修正文字');
-        expect([...historyCard.querySelectorAll('pre')].map(node => node.textContent)).toEqual([before, after]);
+        const targetButton=within(historyCard).getByRole('button',{name:container.id});
+        expect(targetButton.parentElement).toHaveTextContent(`目标：${container.id}`);
+        expect(targetButton.parentElement).not.toHaveTextContent(makeUser().username);
+        expect(historyCard).not.toHaveTextContent('更正了消息');
+        expect(historyCard.querySelectorAll('pre')).toHaveLength(0);
         const viewTag=within(historyCard).getByRole('button',{name:/查看消息 body-correction/});
         expect(viewTag).toHaveTextContent('查看');
-        expect(viewTag.getAttribute('aria-label')).toContain('与我的选择不同');
+        expect(viewTag.getAttribute('aria-label')).toContain('选择无效');
         expect(within(historyCard).getByRole('link',{name:correction.id}).nextElementSibling).toBe(viewTag);
         fireEvent.click(viewTag);
         await waitForWorkbenchIdle();
@@ -1763,11 +1769,14 @@ describe('MessageWorkbenchPage composer refresh', () => {
         const previewCard=view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="editable-container"]:not([data-rel-overlay])')!;
         expect(previewCard).toHaveTextContent('需要更正的加长的新正文');
         expect(previewCard.textContent?.includes('👍7')).toBe(correctionKind==='TEXT');
-        expect(mockGraphView.mock.lastCall![0].voteStats[container.id]?.agreeCount??0).toBe(correctionKind==='TEXT'?1:0);
+        const graph=mockGraphView.mock.lastCall![0];
+        const priorVote=graph.edges.find((edge:{relationMessageId:string})=>edge.relationMessageId===oldVote.id);
+        expect(priorVote).toBeDefined();
+        expect(graph.excludedStanceEdges.has(priorVote.id)).toBe(correctionKind==='MEANING');
         const ownHint=previewCard.querySelector('[data-display-hint-scope="message"]')!;
         expect(ownHint.previousSibling?.textContent).toBe(container.id);
         expect(previewCard.querySelectorAll('[data-display-hint-scope="corrections"]')).toHaveLength(1);
-        expect(within(previewCard).getByRole('button',{name:/更正显示提示 editable-container/}).getAttribute('aria-label')).toContain('与我的选择不同');
+        expect(within(previewCard).getByRole('button',{name:/更正显示提示 editable-container/}).getAttribute('aria-label')).toContain('选择无效');
         expect(mockApi.createRelation).toHaveBeenCalledTimes(2);
         await act(async()=>mockGraphView.mock.lastCall![0].onDecorationBodyClick({stopPropagation:vi.fn()},container.id,'agree'));
         expect(mockGraphView.mock.lastCall![0].draftUnits.map((unit:{messageId:string})=>unit.messageId)).toEqual(correctionKind==='TEXT'?[oldVote.id]:[]);
@@ -1788,6 +1797,140 @@ describe('MessageWorkbenchPage composer refresh', () => {
       }
       expect(mockApi.createMessage).not.toHaveBeenCalled();
     } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; }
+  });
+
+  it.each(['RECOMMEND','ARCHIVE'].flatMap(type=>['AGREE','DISAGREE'].map(stanceType=>({type,stanceType}))))(
+    'finishes sending $stanceType to $type as the corresponding annotation',async({type,stanceType})=>{
+    localStorage.setItem('token','test-token');
+    const annotation:Relation={...makeRelation(),id:'annotation-target',relationType:type,sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:'msg-1'}],revision:1,parts:[
+        {id:'relation',type:'relation',relation:type.toLowerCase(),roles:{target:[{id:'target',reference:{messageId:'msg-1'}}]}},
+        {id:'data',type:'data',value:{uiType:type}},
+      ]};
+    const effectiveType=stanceType==='AGREE'?type:type==='RECOMMEND'?'ARCHIVE':'RECOMMEND';
+    const stance:Relation={...makeRelation(),id:'annotation-stance',relationType:effectiveType,sourceMessageId:null,
+      targetRefs:annotation.targetRefs,revision:1,payload:{annotationStance:{target:{messageId:annotation.id},side:stanceType==='AGREE'?'pro':'con'}}};
+    mockApi.getRelations.mockResolvedValue({data:[annotation]});
+    mockApi.getWorkbenchSnapshot.mockResolvedValueOnce({scope:{messageId:'classification-1',title:'测试分类'},
+      messages:[makeMessage('msg-1','第一条'),makeMessage('msg-2','第二条'),{...makeMessage(annotation.id,''),kind:'RELATION',
+        relationType:type,targetRefs:annotation.targetRefs,relationPayload:annotation.payload,parts:annotation.parts,revision:1}],
+      relations:[annotation],users:[makeUser()],stakes:{},tagCounts:{},attentionUsers:{},sequence:1,nextCursor:null,hasMore:false});
+    mockApi.createRelation.mockResolvedValueOnce(stance);
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      fireEvent.click(view.container.querySelector('[data-msgid="annotation-target"][data-rel-overlay]')!);
+      fireEvent.click(screen.getByRole('button',{name:stanceType==='AGREE'?'赞同':'反对'}));
+      fireEvent.click(screen.getByRole('button',{name:'发送'}));
+      await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledExactlyOnceWith('classification-1',expect.objectContaining({
+        relationType:stanceType,targetRefs:[expect.objectContaining({reference:{messageId:annotation.id}})],
+      })));
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="annotation-stance"]')).not.toBeNull());
+      await waitForWorkbenchIdle();
+      expect(screen.queryByRole('dialog',{name:'正在发送'})).toBeNull();
+      expect(mockGraphView.mock.lastCall![0].messages.find((message:{id:string})=>message.id===stance.id)).toMatchObject({relationType:effectiveType.toLowerCase()});
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="annotation-stance"]')).toBeNull());
+      expect(view.container.querySelector('[data-jump-msgids*="annotation-stance"][data-rel-overlay]')).not.toBeNull();
+      expect(screen.queryByText(/绘制超时|绘制或定位尚未完成/)).toBeNull();
+      expect(mockApi.createRelation).toHaveBeenCalledOnce();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+
+  it.each(['attention','block'].flatMap(type=>['YES','NO'].map(reason=>({type,reason}))))('directly sends $type with reason $reason',async({type,reason})=>{
+    localStorage.setItem('token','test-token');
+    const result:Relation={...makeRelation(),id:'personal-annotation',relationType:type.toUpperCase(),sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:'msg-1'}],payload:{subType:reason as 'YES'|'NO'}};
+    mockApi.createRelation.mockResolvedValueOnce(result);
+    const view=render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    await waitForWorkbenchIdle();
+    act(()=>window.dispatchEvent(new CustomEvent(PART_SELECTION_EVENT,{detail:{reference:{messageId:'msg-1'},label:'第一条'}})));
+    fireEvent.click(screen.getByRole('button',{name:'标注'}));
+    fireEvent.click(screen.getByRole('button',{name:type==='attention'?'关注':'拉黑'}));
+    fireEvent.click(screen.getByRole('button',{name:reason==='YES'?'是':'否'}));
+    expect(screen.getByRole('button',{name:reason==='YES'?'是':'否'})).toHaveAttribute('aria-pressed','true');
+    fireEvent.click(screen.getByRole('button',{name:'发送'}));
+    await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1',expect.objectContaining({relationType:type.toUpperCase(),payload:expect.objectContaining({subType:reason})})));
+    view.unmount();
+  });
+
+  it.each([false,true])('blocks opposing custom annotations even with legacy opposite metadata (legacy: %s)',async configured=>{
+    const annotation:Relation={...makeRelation(),id:'custom-annotation',relationType:'TAG',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:'msg-1'}],payload:{label:'可靠',...(configured?{oppositeLabel:'存疑'}:{})}};
+    mockApi.getRelations.mockResolvedValue({data:[annotation]});
+    const view=render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    await waitForWorkbenchIdle();
+    act(()=>window.dispatchEvent(new CustomEvent(PART_SELECTION_EVENT,{detail:{reference:{messageId:annotation.id},label:'可靠'}})));
+    fireEvent.click(screen.getByRole('button',{name:'反对'}));
+    const button=screen.getByRole('button',{name:'发送'});
+    expect(button).toBeDisabled();
+    expect(screen.getByText('该标注没有互斥项，不能发送反对')).toBeInTheDocument();
+    expect(screen.queryByLabelText('互斥标注')).not.toBeInTheDocument();
+    fireEvent.click(button);
+    expect(mockApi.createRelation).not.toHaveBeenCalled();
+    expect(mockApi.createMessage).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it('finishes agreeing with a custom annotation and temporarily reveals the new tag',async()=>{
+    const annotation:Relation={...makeRelation(),id:'custom-annotation',relationType:'TAG',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:'msg-1'}],payload:{label:'可靠'}};
+    const result:Relation={...annotation,id:'new-custom-annotation',payload:{label:'可靠',
+      annotationStance:{target:{messageId:annotation.id},side:'pro'}}};
+    mockApi.getRelations.mockResolvedValue({data:[annotation]});
+    mockApi.createRelation.mockResolvedValueOnce(result);
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      act(()=>window.dispatchEvent(new CustomEvent(PART_SELECTION_EVENT,{detail:{reference:{messageId:annotation.id},label:'可靠'}})));
+      fireEvent.click(screen.getByRole('button',{name:'赞同'}));
+      fireEvent.click(screen.getByRole('button',{name:'发送'}));
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="new-custom-annotation"]')).not.toBeNull());
+      await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-jump-msgids*="new-custom-annotation"]')).toHaveTextContent(result.payload!.label!);
+      expect(mockApi.createRelation).toHaveBeenCalledOnce();
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="new-custom-annotation"]')).toBeNull());
+      expect(screen.getByRole('button',{name:'显示装饰 msg-1'})).toHaveAttribute('aria-expanded','false');
+      expect(screen.queryByText(/绘制超时|绘制或定位尚未完成/)).toBeNull();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
+  });
+
+  it.each(['AGREE','DISAGREE'] as const)('finishes sending %s to a reference without waiting for a missing decoration',async stanceType=>{
+    localStorage.setItem('token','test-token');
+    const reference:Relation={...makeRelation(),id:'voted-reference',relationType:'REFERENCE',sourceMessageId:'msg-1',
+      targetRefs:[{kind:'message',messageId:'msg-2'}]};
+    const stance:Relation={...makeRelation(),id:'reference-stance',relationType:stanceType,sourceMessageId:null,
+      targetRefs:[{kind:'relation',relationId:reference.id}]};
+    mockApi.getRelations.mockResolvedValue({data:[reference]});
+    mockApi.createRelation.mockResolvedValueOnce(stance);
+    const geometry=vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,120,600,400));
+    graphRendering.actual=true;
+    const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('group',{name:'关系消息 voted-reference'}));
+      fireEvent.click(screen.getByRole('button',{name:stanceType==='AGREE'?'赞同':'反对'}));
+      fireEvent.click(screen.getByRole('button',{name:'发送'}));
+      await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledOnce());
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="reference-stance"]')).not.toBeNull());
+      await waitForWorkbenchIdle();
+      expect(screen.queryByRole('dialog',{name:'正在发送'})).toBeNull();
+      expect(graphRendering.tasks!.failure).toBeNull();
+      expect(mockGraphView.mock.lastCall![0].draftUnits).toEqual([]);
+      await waitFor(()=>expect(document.querySelector('[data-message-jump-target="reference-stance"]')).toBeNull());
+      if(stanceType==='AGREE')expect(screen.getByRole('button',{name:'显示装饰 voted-reference'})).toHaveAttribute('aria-expanded','false');
+      else expect(view.container.querySelector('[data-msgid="reference-stance"]:not([data-rel-overlay])')).toHaveTextContent('反对');
+      expect(screen.queryByText(/绘制超时|绘制或定位尚未完成/)).toBeNull();
+      expect(mockApi.createRelation).toHaveBeenCalledOnce();
+    }finally{view.unmount();geometry.mockRestore();graphRendering.actual=false;}
   });
 
   it.each([false, true].flatMap(empty => [false, true].map(shown => ({ empty, shown }))))(
@@ -1819,6 +1962,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(!!screen.queryByRole('group', { name: '组织消息 arrangement' })).toBe(shown);
       if (shown) {
         fireEvent.click(view.container.querySelector('div[data-msgid="arrangement"][data-rel-overlay]')!);
+        fireEvent.click(screen.getByRole('button',{name:'显示装饰 arrangement'}));
         const badge = view.container.querySelector<HTMLElement>('[data-msgid="arrangement"][title^="赞同："]')!;
         fireEvent.click(within(badge).getByText('1', { exact: true }));
         fireEvent.click(view.container.querySelector('div[data-msgid="arrangement"][data-rel-overlay]')!);
@@ -3418,7 +3562,7 @@ describe('MessageWorkbenchPage CLASSIFY classification with CORRECT-related mess
       expect(screen.getAllByRole('button', { name: '退出分类' }).length).toBeGreaterThan(0);
     });
     // msg-orig (direct target) must be visible
-    expect(screen.getByText('msg-orig')).toBeInTheDocument();
+    expect(screen.getByRole('group',{name:/^消息 msg-orig，/})).toBeInTheDocument();
     // msg-corr (CORRECT-related to msg-orig) must be automatically included
     expect(screen.getByText('msg-corr')).toBeInTheDocument();
     // rel-correct (CORRECT relation message) must also be visible
@@ -3480,7 +3624,7 @@ describe('MessageWorkbenchPage SUMMARY classification with CORRECT-related messa
       expect(screen.getAllByRole('button', { name: '退出总结' }).length).toBeGreaterThan(0);
     });
     // msg-orig (direct target) must be visible
-    expect(screen.getByText('msg-orig')).toBeInTheDocument();
+    expect(screen.getByRole('group',{name:/^消息 msg-orig，/})).toBeInTheDocument();
     // msg-corr (CORRECT-related to msg-orig) must be automatically included
     expect(screen.getByText('msg-corr')).toBeInTheDocument();
     // rel-correct (CORRECT relation message) must also be visible
@@ -3535,7 +3679,7 @@ describe('MessageWorkbenchPage SUMMARY classification with CORRECT-related messa
 
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     await waitFor(() => {
-      expect(screen.getByText('msg-orig')).toBeInTheDocument();
+      expect(screen.getByRole('group',{name:/^消息 msg-orig，/})).toBeInTheDocument();
       expect(screen.getByText('msg-corr')).toBeInTheDocument();
     });
   });
@@ -4861,7 +5005,7 @@ describe('MessageWorkbenchPage CLASSIFY targeting arrange with nested CORRECT', 
     expect(screen.getAllByText('m5').length).toBeGreaterThan(0);
     expect(screen.getAllByText('m6').length).toBeGreaterThan(0);
     // CORRECT cascade
-    expect(screen.getByText('m3')).toBeInTheDocument();
+    expect(screen.getByRole('group',{name:/^消息 m3，/})).toBeInTheDocument();
     // Relation messages
     expect(screen.getByText('r4')).toBeInTheDocument();
     expect(screen.getByText('r11')).toBeInTheDocument();

@@ -1,7 +1,7 @@
 import { relations, targets, type Message } from '@gonglun/core';
 import type { Store } from './db.js';
 
-const families: Record<string, string> = { read: 'read', unread: 'read', follow: 'follow', unfollow: 'follow', block: 'block', unblock: 'block', archive: 'archive', unarchive: 'archive' };
+const families: Record<string, string> = { read: 'read', unread: 'read', follow: 'follow', block: 'block', recommend: 'archive', archive: 'archive', unarchive: 'archive' };
 /** Personal actions execute once when a message is sent, independently of later edits. */
 export async function recordPersonal(store: Store, message: Message) {
     if (message.authorId === 'system' || message.revision !== 1)
@@ -25,7 +25,8 @@ export async function recordPersonal(store: Store, message: Message) {
             continue;
         const partOrder = message.parts.indexOf(part);
         for (const reference of targets(part, 'target')) {
-            const values = [message.authorId, reference.messageId, family, part.relation, message.sequence, message.id, part.id, partOrder] as const;
+            const action = (part.relation === 'follow' || part.relation === 'block') && part.reason === 'NO' ? `un${part.relation}` : part.relation;
+            const values = [message.authorId, reference.messageId, family, action, message.sequence, message.id, part.id, partOrder] as const;
             if ((await insert.run(...values)).rowCount)
                 await latest.run(...values);
         }

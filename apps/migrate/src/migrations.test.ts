@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
-import { Mutation, Store } from './db.js';
+import { Mutation, Store } from '../../server/src/db.js';
 import { migrationsFor, runMigrations } from './migrations.js';
-import { cleanupTestDatabases, createTestStore, newTestSchema, testDatabaseUrl } from './test-database.js';
+import { cleanupTestDatabases, createTestStore, newTestSchema, testDatabaseUrl } from '../../server/src/test-database.js';
 import { replayArchive } from '@gonglun/core';
 
 afterEach(cleanupTestDatabases);
@@ -20,8 +20,9 @@ it('upgrades an unversioned journal with rollback gaps once, preserving public c
   const [first, second] = await Promise.all([createTestStore(schema), createTestStore(schema)]);
   const upgraded = await first.db.prepare('SELECT sequence,body FROM changes ORDER BY sequence').all();
   const decoded = (rows: typeof original) => rows.map(row => ({ sequence: row.sequence, body: JSON.parse(row.body) }));
-  expect(decoded(upgraded)).toEqual(decoded(original));
-  expect(replayArchive({format:'gonglun-2',changes:upgraded.map(row=>JSON.parse(row.body))}).changeCount).toBe(2);
+  expect(decoded(upgraded.slice(0,original.length))).toEqual(decoded(original));
+  expect(upgraded).toHaveLength(original.length+1);
+  expect(replayArchive({format:'gonglun-2',changes:upgraded.map(row=>JSON.parse(row.body))}).changeCount).toBe(3);
   expect(await second.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual(migrationsFor(second).map(({version})=>({version})));
   expect(await first.setting('region')).toBe(await store.setting('region'));
 });
@@ -47,7 +48,9 @@ it('upgrades an existing converted Topic once across concurrent startups and pre
     await store.db.prepare('INSERT INTO memberships("memberId","parentId","sourceId") VALUES ($1,$2,$3)').run('member','old-topic','member');
     tx.memberships.set('member',{memberId:'member',parentId:'old-topic',sourceId:'member'});
     await tx.commit();
-    await store.db.exec('DELETE FROM schema_migrations WHERE version=3');
+    // Reproduce the released v2 schema, before current query tables existed.
+    await store.db.exec('DROP TABLE account_baselines,stake_positions,pool_checkpoints,message_state_checkpoints,settlement_access,published_round_reports');
+    await store.db.exec('DELETE FROM schema_migrations WHERE version>=3');
   });
   const before = await store.db.prepare('SELECT * FROM messages ORDER BY id').all();
   const sequence = await store.latestSequence();
@@ -57,9 +60,11 @@ it('upgrades an existing converted Topic once across concurrent startups and pre
   expect(inspection).toEqual({sequence, version:2});
   await expect(Store.inspect(testDatabaseUrl(), {schema}, existing => existing.set('forbidden',true))).rejects.toThrow('read-only');
   const [first,second] = await Promise.all([createTestStore(schema),createTestStore(schema)]);
-  expect(await first.latestSequence()).toBe(sequence+1);
+  expect(await first.latestSequence()).toBe(sequence+2);
   expect(await second.db.prepare('SELECT * FROM memberships').all()).toEqual([]);
-  expect(await first.db.prepare('SELECT * FROM messages ORDER BY id').all()).toEqual(before);
-  expect(await second.setting('retired-legacy-topics')).toEqual(['old-topic']);
+  const after=await first.db.prepare('SELECT * FROM messages ORDER BY id').all();
+  expect(after.map(row=>row.id)).toEqual(before.map(row=>row.id));
+  expect(JSON.parse(String(after.find(row=>row.id==='old-topic')!.body)).parts).not.toEqual(JSON.parse(String(before.find(row=>row.id==='old-topic')!.body)).parts);
+  expect(await second.setting('retired-organizations')).toEqual(['old-topic']);
   expect(await second.db.prepare('SELECT name FROM schema_migrations WHERE version=3').get()).toEqual({name:'retire-converted-topic-containers'});
 });

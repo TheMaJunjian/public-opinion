@@ -68,7 +68,7 @@ export default function RelationRecordPopups({ messages, edges, decorationPopup,
               <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 4, background: "#2a2a2a", fontSize: 11 }}>
                 <div style={{ fontWeight: 600, marginBottom: 4, opacity: 0.8 }}>理由明细：</div>
                 {subDetails.map(d => {
-                  const stLabels: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义' };
+                  const stLabels: Record<string, string> = { SPAM: '垃圾', OFFTOPIC: '跑题', LOWVALUE: '低质', IMPORTANT: '重要', CUSTOM: '自定义', YES: '是', NO: '否' };
                   return (
                     <div key={d.subType} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
                       <span>{d.customLabel || stLabels[d.subType] || d.subType}</span>

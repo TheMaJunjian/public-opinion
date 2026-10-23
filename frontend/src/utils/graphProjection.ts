@@ -1,9 +1,10 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
-import { computeCorrectedEdgeMap, isCardMessage, isContentKind } from './modelBridge';
+import { computeCorrectedEdgeMap, isCardMessage, isContentKind, presentationTarget } from './modelBridge';
 import { getSummaryCoveredIds, hasActiveDisplayEffect, needsSeparateStanceCard } from './messageDisplay';
 import { projectStanceLayoutEdges } from './stanceLayout';
 import { buildFrameBlocks } from './graphOrganizations';
 import {isRejectedContainer} from './relatedMessages';
+import { getPresentationSpec } from '../types';
 import { computeMinColumnsForAnnoRefRule1, applyReplyLayoutAdjustmentsWithConstraints, applyAgreeDisagreeColumnOverride, applyGroupingColumnOverride } from './graphColumnRules';
 
 export interface GraphProjectionInput {
@@ -21,8 +22,6 @@ export interface GraphProjectionInput {
 export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTraceWindow,standaloneMessageIds,rejectedContainerIds,hiddenMessageIds,cardFrameIds }: GraphProjectionInput) {
   const msgMap = new Map(messages.map(message => [message.id, message]));
   const edgesByRelMsg = new Map<string, DemoEdge[]>();
-  const tagSources = new Set<string>();
-  const referencedContent = new Set<string>();
   const classifyRelMsgIds = new Set<string>();
   const summaryRelMsgIds = new Set<string>();
   const correctionsByTargetMsgId = new Map<string, Array<{ relMsgId: string; targetMsgId: string }>>();
@@ -36,25 +35,39 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
     own.push(edge); edgesByRelMsg.set(edge.relationMessageId, own);
     if (edge.relationType === 'classify') classifyRelMsgIds.add(edge.relationMessageId);
     if (edge.relationType === 'summary') summaryRelMsgIds.add(edge.relationMessageId);
-    const source = msgMap.get(edge.from.messageId);
-    const target = msgMap.get(edge.to.messageId);
-    if (source && isContentKind(source.kind)) {
-      (edge.relationType === 'tag' ? tagSources : referencedContent).add(source.id);
-    }
-    if (target && isContentKind(target.kind)) referencedContent.add(target.id);
     if (edge.relationType === 'correct') {
       const versions = correctionsByTargetMsgId.get(edge.to.messageId) ?? [];
       versions.push({ relMsgId: edge.relationMessageId, targetMsgId: edge.to.messageId });
       correctionsByTargetMsgId.set(edge.to.messageId, versions);
     }
   }
-  for (const id of referencedContent) tagSources.delete(id);
   const relationCardMsgIds = new Set([...classifyRelMsgIds, ...summaryRelMsgIds]);
   for (const message of messages) {
     if (message.kind === 'relation' && (isCardMessage(message) || needsSeparateStanceCard(message, msgMap)
       || isRejectedContainer(message,rejectedContainerIds))) {
       relationCardMsgIds.add(message.id);
     }
+  }
+  // A converted annotation keeps its exact address. Some addressed fields have
+  // no badge host, so retain the annotation as a reachable card in those cases.
+  for (const edge of edges) {
+    const annotation = msgMap.get(edge.relationMessageId);
+    if (!annotation?.relationPayload?.annotationStance) continue;
+    const kind = getPresentationSpec(edge.relationType).kind;
+    if (!['inline-badge','decoration-label'].includes(kind)) continue;
+    const target = msgMap.get(edge.to.messageId), targetKind = getPresentationSpec(target?.relationType ?? '').kind;
+    const host = target && (isContentKind(target.kind) || relationCardMsgIds.has(target.id)
+      || ['arrange-frame','frame-group','replace-overlay'].includes(targetKind)
+      || kind === 'decoration-label' && targetKind === 'edge-label' && edgesByRelMsg.has(target.id));
+    if (edge.to.selection.kind !== 'whole' || !host) relationCardMsgIds.add(annotation.id);
+  }
+  // Rejecting an edge relation can remove its arrow. Keep the new stance
+  // reachable as a card when its target no longer has a decoration anchor.
+  for(const edge of edges){
+    if(edge.relationType!=='agree'&&edge.relationType!=='disagree')continue;
+    const target=msgMap.get(edge.to.messageId);
+    if(target?.kind==='relation'&&['edge-label','inline-badge'].includes(getPresentationSpec(target.relationType??'').kind)
+      &&!edgesByRelMsg.has(target.id)&&!relationCardMsgIds.has(target.id))relationCardMsgIds.add(edge.relationMessageId);
   }
   const tracedSummaryMembers = new Set<string>();
   for (const edge of edges) {
@@ -65,7 +78,7 @@ export function projectGraphScene({ messages, edges, traceExpandedFrameIds, isTr
   const hiddenTargetIds = new Set([...getSummaryCoveredIds(msgMap, edges)]
     .filter(id => !summaryRelMsgIds.has(id) && !tracedSummaryMembers.has(id)));
   const normals = messages.filter(message => !hiddenMessageIds?.has(message.id) && (!isRejectedContainer(message,rejectedContainerIds)||standaloneMessageIds?.has(message.id)) && !traceExpandedFrameIds.has(message.id) && !hiddenTargetIds.has(message.id)
-    && (isContentKind(message.kind) && !tagSources.has(message.id)
+    && !presentationTarget(message) && (isContentKind(message.kind)
       || message.kind === 'relation' && relationCardMsgIds.has(message.id)));
   const normalIds = normals.map(message => message.id);
   const relIds = new Set(messages.filter(message => message.kind === 'relation' && !relationCardMsgIds.has(message.id)).map(message => message.id));

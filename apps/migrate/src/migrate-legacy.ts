@@ -1,12 +1,16 @@
 import { createHash } from 'node:crypto';
 import { bindRoles, DEFAULT_RULES, referenceKey, replayArchive, resolveReference, resolveStance, type Json, type Membership, type Message, type Part, type Reference, type Rules } from '@gonglun/core';
-import { integer, Mutation, Store } from './db.js';
-import { Postgres } from './postgres.js';
-import { recordPersonal } from './personal-actions.js';
-import { recordStance } from './projections.js';
-import { rulesSchema, partsSchema, validateReferences } from './validation.js';
+import { integer, Mutation, Store } from '../../server/src/db.js';
+import { Postgres } from '../../server/src/postgres.js';
+import { recordPersonal } from '../../server/src/personal-actions.js';
+import { recordStance } from '../../server/src/projections.js';
+import { rulesSchema, partsSchema, validateReferences } from '../../server/src/validation.js';
 import { legacyOrganizationState } from './legacy-organizations.js';
 import { legacyTimestamp as timestamp } from './legacy-time.js';
+import { openMigratingStore } from './migrations.js';
+import {initializeMigrationArchive} from './migration-schema.js';
+import { migrateAnnotationReasons, upgradeAnnotationRecords } from './migrate-annotation-reasons.js';
+import {migrateQueryRecords} from './migrate-query-records.js';
 
 type Row = Record<string, any>;
 type Snapshot = Record<string, Row[]>;
@@ -114,8 +118,9 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
     return {messageId:id};
   }
   function make(row:Row,parts:Part[]): Message {
-    partsSchema.parse(parts);
-    return {id:row.id,revision:1,authorId:row.createdById,createdAt:timestamp(row.createdAt),updatedAt:timestamp(row.updatedAt??row.createdAt),regionId:'pending',ledgerId:'local',programVersion:'2.0.0',ruleVersion:rules.version,parts,spending:{protocol:0,recommendation:0,wager:0},sequence:0};
+    const message:Message=upgradeAnnotationRecords({id:row.id,revision:1,authorId:row.createdById,createdAt:timestamp(row.createdAt),updatedAt:timestamp(row.updatedAt??row.createdAt),regionId:'pending',ledgerId:'local',programVersion:'2.0.0',ruleVersion:rules.version,parts,spending:{protocol:0,recommendation:0,wager:0},sequence:0});
+    partsSchema.parse(message.parts);
+    return message;
   }
   for(const row of topics) try {
     converted.set(row.id,make(row,[{id:'body',type:'text',text:row.id},{id:'relation',type:'relation',relation:'classify',roles:{}},{id:'data',type:'data',value:{kind:'RELATION',uiType:'CLASSIFY',title:row.id,legacyTopicId:row.id,legacyTopicStatus:row.status,legacyTitle:row.title,legacyBody:row.body??null}}]));
@@ -230,9 +235,10 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
     const tables=await probeTarget.prepare('SELECT COUNT(*)::integer AS n FROM pg_tables WHERE schemaname=$1').get(probeTarget.schema);
     if(tables?.n) throw new Error('目标 schema 必须为空；每次演练使用新的独立数据库/schema');
   } finally {await probeSource.close();await probeTarget.close();}
-  const store=await Store.open(options.targetUrl,{schema:options.targetSchema});
+  const store=await openMigratingStore(options.targetUrl,{schema:options.targetSchema});
   try {
     await store.transaction(async()=>{
+      await initializeMigrationArchive(store);
       if((await store.db.prepare('SELECT COUNT(*)::integer AS n FROM users').get())!.n||(await store.latestSequence())) throw new Error('目标已存在业务数据');
       await store.db.exec('CREATE TABLE legacy_records ("tableName" TEXT NOT NULL, position INTEGER NOT NULL, digest TEXT NOT NULL, body JSONB NOT NULL, PRIMARY KEY("tableName",position))');
       for(const [table,rows] of Object.entries(snapshot)) for(let position=0;position<rows.length;position++) await store.db.prepare('INSERT INTO legacy_records VALUES ($1,$2,$3,$4::jsonb)').run(table,position,digest(rows[position]),JSON.stringify(rows[position]));
@@ -326,6 +332,8 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
       const frozenIds=[...new Set([...get('Stake').map(row=>row.messageId),...get('SettlementRound').map(row=>row.messageId)])];
       for(const target of frozenIds) await store.db.prepare('INSERT INTO effects VALUES ($1,$2)').run(`legacy-settlement:${target}`,JSON.stringify({sourceDigest:report.sourceDigest,activeTargets:activeTargets.get(target)??[]}));
       await checkpointTx.commit();
+      await migrateAnnotationReasons(store);
+      await migrateQueryRecords(store);
       const changeRows=await store.db.prepare('SELECT body FROM changes ORDER BY sequence').all();
       const replay=replayArchive({format:'gonglun-2',regionId,ledgerId:'local',programVersion:'2.0.0',changes:changeRows.map(row=>JSON.parse(String(row.body)))});
       for(const user of users) {
@@ -337,6 +345,7 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
       if(archiveCount!==Object.values(snapshot).reduce((total,rows)=>total+rows.length,0)) throw new Error('旧原文归档数量不一致');
       report.applied=true;
       await store.set('migration',report);
+      if(options.readOnlyRehearsal)await store.set('access-mode','read-only');
     });
     return report;
   } finally {await store.close();}

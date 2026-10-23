@@ -65,6 +65,8 @@ export function useWorkbenchComposer() {
     const mode = `${relationType ?? 'plain'}::${secondaryRelationType}`;
     const previousMode = previousComposerModeRef.current;
     if (mode === previousMode) return;
+    if (mode === 'tag::attention' || mode === 'tag::block') setters.setSubType('YES');
+    else if (previousMode === 'tag::attention' || previousMode === 'tag::block') setters.setSubType('');
     const content = stateRef.current.newMessageContent;
     const wasDelegation = previousMode.startsWith('delegation::');
     if (relationType === 'proposal') {

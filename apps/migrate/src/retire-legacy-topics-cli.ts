@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
-import { Store } from './db.js';
-import { Postgres } from './postgres.js';
+import { Store } from '../../server/src/db.js';
+import { Postgres } from '../../server/src/postgres.js';
 import { planTopicRetirement, retireLegacyTopics } from './retire-legacy-topics.js';
 
 const args = process.argv.slice(2);
@@ -25,12 +25,13 @@ if (args.includes('--apply') && value('--expect-region') !== preflight.region)
   throw new Error('执行前必须提供预检报告的 --expect-region，确认正在升级同一数据源');
 let applied = false;
 if (args.includes('--apply')) {
-  // Store.open also runs versioned upgrades, including this retirement on existing databases.
-  const store = await Store.open(databaseUrl, { schema: process.env.DATABASE_SCHEMA });
+  const store = Store.maintenance(databaseUrl, { schema: process.env.DATABASE_SCHEMA });
   try {
     await store.transaction(async () => {
       if (await store.setting<string>('region') !== preflight.region) throw new Error('数据源已变化');
       await retireLegacyTopics(store);
+      const versions=await store.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all();
+      if(versions.length===2)await store.db.prepare('INSERT INTO schema_migrations(version,name) VALUES(3,$1)').run('retire-converted-topic-containers');
     });
     applied = true;
   } finally { await store.close(); }

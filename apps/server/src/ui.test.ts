@@ -42,11 +42,11 @@ it('keeps empty deltas bounded and explicitly clears the last follower', async (
   const app=await make(),user=await actor(app,'增量用户');
   await actor(app,'无关用户');
   const message=await good(post(user,'/messages',{content:'关注目标'}));
-  await good(post(user,'/relations',{relationType:'ATTENTION',targetRefs:[{kind:'message',messageId:message.id}]}));
+  await good(post(user,'/relations',{relationType:'ATTENTION',payload:{subType:'YES'},targetRefs:[{kind:'message',messageId:message.id}]}));
   const before=(await user.agent.get('/api/ui/snapshot')).body;
   const idle=(await user.agent.get(`/api/ui/snapshot?after=${before.sequence}`)).body;
   expect(idle.users).toEqual([]);
-  await good(post(user,'/relations',{relationType:'UNFOLLOW',targetRefs:[{kind:'message',messageId:message.id}]}));
+  await good(post(user,'/relations',{relationType:'ATTENTION',payload:{subType:'NO'},targetRefs:[{kind:'message',messageId:message.id}]}));
   const delta=(await user.agent.get(`/api/ui/snapshot?after=${before.sequence}`)).body;
   expect(delta.attentionUsers[message.id]).toEqual([]);
   expect(delta.users.map((u:{username:string})=>u.username)).not.toContain('无关用户');
@@ -284,10 +284,10 @@ describe('保留操作方式的消息 API',()=>{
   });
   it('通知收件人随发送固定，取消关注后旧通知仍可查看',async()=>{
     const app=(await make()),author=await actor(app,'发起人'),follower=await actor(app,'关注者'),message=await good(post(author,'/messages',{content:'通知讨论'}));
-    await good(post(follower,'/relations',{relationType:'ATTENTION',targetRefs:[{kind:'message',messageId:message.id}]}));
+    await good(post(follower,'/relations',{relationType:'ATTENTION',payload:{subType:'YES'},targetRefs:[{kind:'message',messageId:message.id}]}));
     const notice=await good(post(author,'/relations',{relationType:'NOTIFY',targetRefs:[{kind:'message',messageId:message.id}],payload:{content:'有新证据'}}));
     expect(notice.payload.notifyUserIds).toContain(follower.session.user.id);
-    await good(post(follower,'/relations',{relationType:'UNFOLLOW',targetRefs:[{kind:'message',messageId:message.id}]}));
+    await good(post(follower,'/relations',{relationType:'ATTENTION',payload:{subType:'NO'},targetRefs:[{kind:'message',messageId:message.id}]}));
     expect((await follower.agent.get('/api/me/notifications')).body.messages.some((m:any)=>m.id===notice.id)).toBe(true);
   });
   it('价值讨论是独立评价消息，推荐不押注，评价反转平反且不触碰原真假赌池',async()=>{

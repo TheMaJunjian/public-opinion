@@ -3,6 +3,7 @@ import { getPresentationSpec } from '../../../types';
 import type { DemoMessage } from '../../../utils/modelBridge';
 import { resolveMessageCanvas } from './membership';
 import { areContainersOnSameChain } from './ownership';
+import {presentationTarget} from '../../../utils/modelBridge';
 
 export function getAutoClassifyTargetForSettlementMessage(msg: Pick<DemoMessage, 'id' | 'kind'>): TargetRef | null {
   if (msg.kind === 'round_result') {
@@ -35,6 +36,8 @@ export function resolveNavigationTargetId(
   relations: Relation[],
 ): string {
   const message = messages.find(item => item.id === messageId);
+  const presentedIn=presentationTarget(message);
+  if(presentedIn)return presentedIn;
   if (message && (message.kind === 'round' || message.kind === 'round_result')) {
     return message.settlementTargetId ?? messageId;
   }
@@ -50,7 +53,7 @@ export function resolveNavigationTargetId(
   }
 
   if (['AGREE', 'DISAGREE', 'CORRECT'].includes(relation.relationType.toUpperCase())
-    || getPresentationSpec(relation.relationType).kind === 'inline-badge') {
+    || ['inline-badge','decoration-label'].includes(getPresentationSpec(relation.relationType).kind)) {
     return messageId;
   }
 

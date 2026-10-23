@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import {readFileSync} from 'node:fs';
 
 export function databaseConfiguration(env) {
   const rehearsal = env.GONGLUN_REHEARSAL === '1';
@@ -17,17 +18,20 @@ export function databaseConfiguration(env) {
 }
 
 /** Read-only preflight. Never creates schemas/tables or initializes an empty DB. */
-export async function verifyExistingDatabase(configuration, ClientType = Client) {
+export async function verifyExistingDatabase(configuration, ClientType = Client, versions=JSON.parse(readFileSync(new URL('../apps/server/dist/database-version.json',import.meta.url),'utf8'))) {
   const client = new ClientType({ connectionString: configuration.url, connectionTimeoutMillis: 10000 });
   try {
     await client.connect();
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const migration = await client.query(`SELECT value FROM "${configuration.schema}".settings WHERE key='migration'`);
+    const applied=await client.query(`SELECT version,name FROM "${configuration.schema}".schema_migrations ORDER BY version`);
+    if(applied.rows.length!==versions.length||applied.rows.some((row,index)=>row.version!==index+1||row.name!==versions[index]))
+      throw new Error('数据库需要先使用独立迁移程序升级');
+    const migration = await client.query(`SELECT value FROM "${configuration.schema}".settings WHERE key='access-mode'`);
     const users = await client.query(`SELECT COUNT(*)::integer AS count FROM "${configuration.schema}".users`);
     if (users.rows[0].count < 1) throw new Error('目标库没有已有用户，拒绝启动空站点');
-    const mode = migration.rows[0] ? JSON.parse(migration.rows[0].value).mode : undefined;
-    if (configuration.rehearsal && mode !== 'read-only-rehearsal') throw new Error('目标不是已迁移的只读演练库');
-    if (!configuration.rehearsal && mode === 'read-only-rehearsal') throw new Error('只读演练库须使用 --rehearsal，不能作为正式站点启动');
+    const mode = migration.rows[0] ? JSON.parse(migration.rows[0].value) : undefined;
+    if (configuration.rehearsal && mode !== 'read-only') throw new Error('目标不是已迁移的只读演练库');
+    if (!configuration.rehearsal && mode === 'read-only') throw new Error('只读演练库须使用 --rehearsal，不能作为正式站点启动');
     await client.query('COMMIT');
     return { database: configuration.database, schema: configuration.schema, users: users.rows[0].count, mode: mode || 'production' };
   } finally { await client.end(); }

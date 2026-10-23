@@ -502,7 +502,7 @@ export function getMessageTagCounts(scopeMessageId: string) {
 // ============================================================
 
 export interface ExportData {
-  format?: 'gonglun-2';
+  format?: 'gonglun-2' | 'gonglun-view-3';
   journal?: import('@gonglun/core').JournalManifest;
   formatVersion: number;
   exportedAt: string;

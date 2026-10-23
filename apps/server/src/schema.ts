@@ -1,8 +1,9 @@
+import {querySchema} from './query-schema.js';
 /** Fresh PostgreSQL schema with explicit insertion positions. */
 export const schemaSql = `
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS rule_versions(version INTEGER PRIMARY KEY,body TEXT NOT NULL,"authorizationId" TEXT,"createdAt" TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,password TEXT NOT NULL,founder INTEGER NOT NULL,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);
+CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,password TEXT NOT NULL,founder INTEGER NOT NULL,"createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);
 CREATE UNIQUE INDEX IF NOT EXISTS users_name_folded ON users(lower(name));
 CREATE TABLE IF NOT EXISTS accounts("userId" TEXT PRIMARY KEY,available BIGINT NOT NULL,locked BIGINT NOT NULL CHECK(locked >= 0),earned BIGINT NOT NULL,spent BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,"userId" TEXT NOT NULL,csrf TEXT NOT NULL,expires BIGINT NOT NULL,"deviceId" TEXT);
@@ -32,11 +33,4 @@ CREATE TABLE IF NOT EXISTS requests("userId" TEXT NOT NULL,"requestId" TEXT NOT 
 CREATE TABLE IF NOT EXISTS command_requests("userId" TEXT NOT NULL,"requestId" TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY("userId","requestId"));
 CREATE TABLE IF NOT EXISTS effects(key TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS escrows("messageId" TEXT PRIMARY KEY,"ownerId" TEXT NOT NULL,amount BIGINT NOT NULL,"recipientId" TEXT,"fulfillmentId" TEXT);
-CREATE TABLE IF NOT EXISTS legacy_stakes(id TEXT PRIMARY KEY,"userId" TEXT NOT NULL,"messageId" TEXT NOT NULL,"roundId" TEXT,"settlementType" TEXT NOT NULL,side TEXT NOT NULL,amount BIGINT NOT NULL CHECK(amount>=0),"createdAt" TEXT NOT NULL,body JSONB NOT NULL);
-CREATE INDEX IF NOT EXISTS legacy_stakes_target ON legacy_stakes("messageId","settlementType");
-CREATE TABLE IF NOT EXISTS legacy_pools("messageId" TEXT NOT NULL,"settlementType" TEXT NOT NULL,"lockedPro" BIGINT NOT NULL,"lockedCon" BIGINT NOT NULL,body JSONB NOT NULL,PRIMARY KEY("messageId","settlementType"));
-CREATE TABLE IF NOT EXISTS legacy_votes(id TEXT PRIMARY KEY,"roundId" TEXT NOT NULL,"userId" TEXT NOT NULL,vote TEXT NOT NULL,amount BIGINT NOT NULL,"createdAt" TEXT NOT NULL,body JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS legacy_accounts("userId" TEXT PRIMARY KEY,body JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS legacy_users(id TEXT PRIMARY KEY,"createdAt" TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS legacy_organization_states("messageId" TEXT PRIMARY KEY,body JSONB NOT NULL);
-`;
+` + querySchema;

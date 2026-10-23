@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { type Account, type Change, type LedgerEntry, type Membership, type Message, type Rules, type User } from '@gonglun/core';
 import { statesFor } from './projections.js';
 import { Postgres } from './postgres.js';
-import { migrationsFor, runMigrations } from './migrations.js';
+import { DATABASE_MIGRATIONS } from './database-version.js';
+import { initializeDatabase } from './initialize-database.js';
 
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();
@@ -27,12 +28,29 @@ export class Store {
     try {
       await store.transaction(async () => {
         await store.db.exec(`CREATE SCHEMA IF NOT EXISTS "${store.db.schema}"`);
-        const legacy = await store.db.prepare(`SELECT to_regclass('"User"') AS users, to_regclass('"Message"') AS messages`).get();
-        if (legacy?.users || legacy?.messages) throw new Error('检测到旧 Prisma 数据库；请先完成 PostgreSQL 业务数据迁移，禁止自动初始化新版表');
-        await runMigrations(store.db, migrationsFor(store));
+        const schema = await store.db.prepare("SELECT to_regclass('schema_migrations') AS migrations,to_regclass('messages') AS messages").get();
+        if (!schema?.migrations && !schema?.messages) {
+          const existing = await store.db.prepare('SELECT COUNT(*)::integer AS n FROM information_schema.tables WHERE table_schema=current_schema()').get();
+          if (existing?.n) throw new Error('数据库需要迁移，请先执行独立迁移程序');
+          await initializeDatabase(store);
+          await store.db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+          for (const [index,name] of DATABASE_MIGRATIONS.entries())
+            await store.db.prepare('INSERT INTO schema_migrations(version,name) VALUES($1,$2)').run(index+1,name);
+        } else {
+          if (!schema?.migrations) throw new Error('数据库需要迁移，请先执行 npm run db:migrate');
+          const applied = await store.db.prepare('SELECT version,name FROM schema_migrations ORDER BY version').all<{version:number;name:string}>();
+          if (applied.some((row,index) => row.version !== index+1 || DATABASE_MIGRATIONS[index] !== row.name))
+            throw new Error('数据库版本与当前程序不兼容');
+          if (applied.length !== DATABASE_MIGRATIONS.length) throw new Error('数据库需要迁移，请先执行 npm run db:migrate');
+        }
       });
       return store;
     } catch (error) { await store.close(); throw error; }
+  }
+
+  /** Dedicated maintenance entry point. The caller owns the transaction and all upgrade logic. */
+  static maintenance(databaseUrl: string, options: {schema?:string} = {}): Store {
+    return new Store(new Postgres(databaseUrl,options.schema));
   }
 
   transaction<T>(fn: () => T | Promise<T>): Promise<T> { return this.db.transaction(fn); }
@@ -58,7 +76,7 @@ export class Store {
     return row as Account;
   }
   async user(userId: string): Promise<User> {
-    const row = await this.db.prepare('SELECT u.id,u.name,u.founder,l."createdAt" FROM users u LEFT JOIN legacy_users l ON l.id=u.id WHERE u.id=$1').get<{id:string;name:string;founder:number;createdAt:string|null}>(userId);
+    const row = await this.db.prepare('SELECT id,name,founder,"createdAt" FROM users WHERE id=$1').get<{id:string;name:string;founder:number;createdAt:string|null}>(userId);
     if (!row) throw new DomainError('用户不存在', 404);
     return {id:row.id,name:row.name,username:row.name,founder:!!row.founder,...(row.createdAt?{createdAt:row.createdAt}:{})};
   }

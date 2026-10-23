@@ -12,6 +12,15 @@ export const DEC_GAP = 4;       // vertical gap between agree / disagree decorat
 export const DEC_RIGHT_GAP = 6; // horizontal gap between card right edge and decoration
 export const DEC_RIGHT_TOP = 4; // y offset from card top
 export const DEC_ICON_W = 20;   // clickable icon area width within a decoration badge
+export const EDGE_HINT_W = 16;
+
+export function getEdgeDecorationLeft(label: Rect, hasHint = true): number {
+  return label.x + label.width + DEC_RIGHT_GAP + (hasHint ? EDGE_HINT_W + DEC_GAP : 0);
+}
+
+export function getDecorationColumnWidth(expanded: boolean): number {
+  return EDGE_HINT_W + (expanded ? DEC_GAP + DEC_W : 0);
+}
 // TAG label constants
 export const TAG_H = 18;            // height of each tag label badge
 export const TAG_MIN_W = 36;        // minimum width

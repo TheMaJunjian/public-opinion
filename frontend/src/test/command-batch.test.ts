@@ -1,3 +1,4 @@
+import { migratePendingSends } from '../../../apps/migrate/src/browser-state';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cancelCommandBatch, queueCommand, runCommandBatch, type CommandEnvelope } from '../api/commandBatch';
 
@@ -147,12 +148,13 @@ describe('workbench sends', () => {
     expect(other.mock.calls[1][0]).toEqual(other.mock.calls[0][0]);
   });
 
-  it('recovers the old same-origin storage format without replaying it on another API', async () => {
+  it('recovers an explicitly migrated pending record without replaying it on another API', async () => {
     const previous = { requestId: crypto.randomUUID(), commands: [{ id: crypto.randomUUID(), method: 'POST', path: '/messages', body: { content: '旧格式待确认' } }] };
     sessionStorage.setItem('gonglun:pending-send:u', JSON.stringify(previous));
     const different = vi.fn<(input: CommandEnvelope) => Promise<unknown>>(async () => ({}));
     await runCommandBatch(async () => add({ content: '旧格式待确认' }), different, undefined, { apiBase: 'https://other.invalid/api' });
     expect(different.mock.calls[0][0].requestId).not.toBe(previous.requestId);
+    migratePendingSends(sessionStorage,location.origin);
     const recover = vi.fn(async () => ({})), committed = vi.fn();
     await runCommandBatch(async () => add({ content: '旧格式待确认' }), recover, committed, { apiBase: '/api' });
     expect(recover).toHaveBeenCalledExactlyOnceWith(previous);

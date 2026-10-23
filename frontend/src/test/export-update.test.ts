@@ -5,11 +5,11 @@ import { mergeExportUpdate, prepareExportUpdate, type UpdatableExportData } from
 
 const message: Message = { id: 'm', revision: 1, authorId: 'system', createdAt: '', updatedAt: '', regionId: 'local', ledgerId: 'local', programVersion: '2.0.0', ruleVersion: 1,
   parts: [{ id: 'body', type: 'text', text: '旧正文' }], spending: { protocol: 0, recommendation: 0, wager: 0 }, sequence: 1 };
-const change: Change = { sequence: 1, messages: [message], states: [], memberships: [], removedMemberships: [], ledger: [], treasury: { operating: 0, issued: 0 } };
+const change: Change = { sequence: 1, previousSequence:0,messages: [message], states: [], memberships: [], removedMemberships: [], ledger: [], treasury: { operating: 0, issued: 0 } };
 export const originalArchive = (): UpdatableExportData => ({
   format: 'gonglun-2', formatVersion: 2, exportedAt: '', regionId: 'local', ledgerId: 'local', programVersion: '2.0.0',
   scope: { messageId: null, title: '公论' }, changes: [structuredClone(change)],
-  messages: [{ id: 'm', kind: 'TEXT', contentType: 'TEXT', content: '旧正文', createdAt: '', authorId: 'system', author: '公论规则' }], relations: [],
+  messages: [{ id: 'm', kind: 'TEXT', contentType: 'TEXT', content: '旧正文', createdAt: '', authorId: 'system', author: '公论规则',revision:1,parts:message.parts }], relations: [],
   viewerUsername: '原用户', tagCounts: { m: { VALUABLE: 2 } }, attentionUsers: { m: ['u'] },
   view: { username: '原用户', mode: 'list', classificationId: null, homeFilter: null, cleanFilters: [], messageFilter: { hideSettlement: true, hideJoin: true } },
 });

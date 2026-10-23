@@ -6,13 +6,13 @@ import { randomUUID } from 'node:crypto';
 import { replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
 import { WorkbenchStore, type WorkbenchSnapshot } from '../../../frontend/src/data/workbench.js';
 import { migrateLegacy } from './migrate-legacy.js';
-import { executeBatch } from './ui-commands.js';
-import { stakesFor } from './ui-projections.js';
+import { executeBatch } from '../../server/src/ui-commands.js';
+import { stakesFor } from '../../server/src/ui-projections.js';
 import { collectContainerVisibleIds } from '../../../frontend/src/pages/workbench/model/ownership.js';
 import { computeCorrectionVersions, convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBridge.js';
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 import { projectContainerCanvas } from '../../../frontend/src/pages/workbench/projections/containerCanvas.js';
-import { cleanupTestDatabases, createTestApp, newTestSchema, testDatabaseUrl } from './test-database.js';
+import { cleanupTestDatabases, createTestApp, newTestSchema, testDatabaseUrl } from '../../server/src/test-database.js';
 
 afterEach(cleanupTestDatabases);
 const time='2026-01-01T00:00:00.000Z';
@@ -70,6 +70,28 @@ it('migrates an immutable source snapshot, preserves bcrypt login and reconciles
   await expect(migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true})).rejects.toThrow('目标 schema 必须为空');
 });
 
+it('imports previous follow and block actions before validating the current message format',async()=>{
+  const annotations=[
+    {id:'follow',relationType:'ATTENTION',relationPayload:{},relation:'follow',reason:'YES'},
+    {id:'unfollow',relationType:'ATTENTION',relationPayload:{action:'unfollow'},relation:'follow',reason:'NO'},
+    {id:'block',relationType:'BLOCK',relationPayload:{},relation:'block',reason:'YES'},
+    {id:'unblock',relationType:'UNBLOCK',relationPayload:{},relation:'block',reason:'NO'},
+  ];
+  const message={id:'old-message',topicId:'old-topic',createdById:'old-user',kind:'TEXT',content:'旧正文',createdAt:time,updatedAt:time};
+  const source=await fixture({Message:[message,...annotations.map((annotation,index)=>({...message,id:annotation.id,kind:'RELATION',
+    relationType:annotation.relationType,relationPayload:annotation.relationPayload,targetRefs:[{kind:'message',messageId:message.id}],
+    createdAt:`2026-01-01T00:00:0${index+1}.000Z`}))]}),targetSchema=newTestSchema();
+  expect((await migrateLegacy(source)).blockers).toEqual([]);
+  expect((await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true})).applied).toBe(true);
+  const app=await createTestApp({databaseSchema:targetSchema});
+  for(const annotation of annotations)expect((await app.store.message(annotation.id)).parts).toContainEqual(expect.objectContaining({
+    type:'relation',relation:annotation.relation,reason:annotation.reason,
+  }));
+  expect(await app.store.db.prepare('SELECT family,action FROM personal_marks ORDER BY family').all()).toEqual([
+    {family:'block',action:'unblock'},{family:'follow',action:'unfollow'},
+  ]);
+});
+
 it('keeps Topic IDs as classification content and preserves separate topics and original classifications',async()=>{
   const topic=(id:string,title:string)=>({id,title,body:'原话题说明',status:'OPEN',createdById:'old-user',createdAt:time,updatedAt:time});
   const message=(id:string,topicId:string,type:string|null=null,refs:any[]=[])=>({id,topicId,createdById:'old-user',kind:type?'RELATION':'TEXT',content:'原正文 '+id,relationType:type,targetRefs:refs,relationPayload:type?{title:'原分类标题'}:null,createdAt:time,updatedAt:time});
@@ -80,7 +102,8 @@ it('keeps Topic IDs as classification content and preserves separate topics and 
   const root=(await agent.get('/api/ui/snapshot')).body;
   for(const id of ['topic-a','topic-b']){
     const migrated=root.messages.find((m:any)=>m.id===id);
-    expect(migrated).toMatchObject({relationType:'CLASSIFY',content:id,relationPayload:{title:id,legacyTitle:'同名标题',legacyBody:'原话题说明'}});
+    expect(migrated).toMatchObject({relationType:'CLASSIFY',content:id,relationPayload:{title:id}});
+    expect(migrated.relationPayload).not.toHaveProperty('legacyTitle');
   }
   expect(root.messages.find((m:any)=>m.id==='old-class')).toMatchObject({relationType:'CLASSIFY',content:'原正文 old-class',relationPayload:{title:'原分类标题'},targetRefs:[{kind:'message',messageId:'member-a'}]});
   expect((await agent.get('/api/ui/snapshot?parent=old-class')).body.scope.title).toBe('原分类标题');
@@ -97,16 +120,16 @@ it('preserves original JOIN target kinds and container declarations through inde
   expect((await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true,preserveActiveState:true,readOnlyRehearsal:true})).blockers).toEqual([]);
   const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
   const view=(await agent.get('/api/ui/snapshot')).body;
-  expect(view.relations.find((r:any)=>r.id==='join-a').targetRefs).toMatchObject([{kind:'message',messageId:'frame'}]);
+  expect(view.relations.find((r:any)=>r.id==='join-a').targetRefs).toMatchObject([{kind:'relation',relationId:'frame',reference:{messageId:'frame'}}]);
   expect(view.relations.find((r:any)=>r.id==='join-b').targetRefs).toMatchObject([{kind:'relation',relationId:'frame'}]);
   // Reference shape does not give the same message a second effective owner.
   expect(collectContainerVisibleIds('class-a',view.relations).relationIds.has('frame')).toBe(false);
   expect(collectContainerVisibleIds('class-b',view.relations).relationIds.has('frame')).toBe(true);
-  expect(view.relations.find((r:any)=>r.id==='class-b').targetRefs).toEqual([]);
+  expect(view.relations.find((r:any)=>r.id==='class-b').targetRefs.map((ref:any)=>ref.messageId??ref.relationId).sort()).toEqual(['frame','other']);
   // A personal rejection can restore the other historical placement; physical
   // single-parent membership must not erase the older declaration.
   expect(collectContainerVisibleIds('class-a',view.relations,new Set(),new Set(['join-b'])).relationIds.has('frame')).toBe(true);
-  expect(view.relations.find((r:any)=>r.id==='class-a').targetRefs).toMatchObject([{kind:'message',messageId:'other'}]);
+  expect(view.relations.find((r:any)=>r.id==='class-a').declaredTargetRefs).toMatchObject([{kind:'message',messageId:'other'}]);
   expect(collectContainerVisibleIds('class-a',view.relations).textIds.has('other')).toBe(false);
   expect(collectContainerVisibleIds('class-a',view.relations,new Set(),new Set(['join-other-b'])).textIds.has('other')).toBe(true);
   expect(view.relations.find((r:any)=>r.id==='frame').declaredTargetRefs).toMatchObject([{kind:'message',messageId:'leaf'}]);
@@ -232,7 +255,7 @@ it('creates an explicitly read-only rehearsal preserving locked funds and pendin
   expect(report.applied).toBe(true);expect(report.mode).toBe('read-only-rehearsal');expect(report.blockers.length).toBeGreaterThan(0);
   const app=await createTestApp({databaseSchema:targetSchema,settlementTickMs:1}),agent=request.agent(app);
   expect(await app.store.account('old-user')).toMatchObject({available:500,locked:10});
-  expect((await agent.get('/api/messages/old-message/context')).body.rounds[0]).toMatchObject({status:'legacy-pending',legacyStatus:'VOTING'});
+  expect((await agent.get('/api/messages/old-message/context')).body.rounds[0]).toMatchObject({status:'frozen'});
   const before=await app.store.latestSequence();
   expect((await agent.post('/api/login').send({name:'旧用户',password:'short'})).status).toBe(200);
   expect((await agent.post('/api/messages').send({requestId:randomUUID(),parts:[{id:'body',type:'text',text:'blocked'}]})).status).toBe(503);
@@ -311,7 +334,7 @@ it('locks only available virtual points without minting or settling, and tolerat
   const app=await createTestApp({databaseSchema:targetSchema});
   expect(await app.store.account('old-user')).toMatchObject({available:0,locked:500});
   expect(await app.store.setting('minted')).toBe(512);
-  expect(JSON.parse(String((await app.store.db.prepare(`SELECT body FROM rounds WHERE id='pending'`).get())!.body)).legacyStatus).toBe('VOTING');
+  expect((await app.store.db.prepare(`SELECT body FROM published_round_reports WHERE id='pending'`).get())!.body.status).toBe('VOTING');
   expect((await migrateLegacy(source)).available).toBe(500);
 });
 
@@ -337,8 +360,8 @@ it('operates funded imported truth/value rounds without reversing historical pay
   expect((await app.store.db.prepare(`SELECT body FROM rounds WHERE id='historical'`).get())!.body).toEqual(original);
   expect(await app.store.db.prepare(`SELECT 1 FROM ledger WHERE reason='撤回先前对赌分配'`).get()).toBeUndefined();
   await run('/relations',{relationType:'AGREE',targetRefs:[{kind:'message',messageId:'old-message'}],wager:2});
-  const next=JSON.parse(String((await app.store.db.prepare(`SELECT body FROM rounds WHERE "targetKey" LIKE 'legacy-active:TRUTH:%' ORDER BY position DESC LIMIT 1`).get())!.body));
-  expect(next.legacyActiveBoundary).toBe(false);
+  const next=JSON.parse(String((await app.store.db.prepare(`SELECT body FROM rounds WHERE body::jsonb #>> '{target,messageId}'='old-message' AND body::jsonb ->> 'settlementType'='TRUTH' ORDER BY position DESC LIMIT 1`).get())!.body));
+  expect(next).not.toHaveProperty('legacyActiveBoundary');
   expect((await stakesFor(app.store,['old-message']))['old-message'].pool.lockedPro).toBe(2);
   await run(`/rounds/${next.id}/close-and-settle`);
   expect(await app.store.account(user.id)).toMatchObject({locked:0});

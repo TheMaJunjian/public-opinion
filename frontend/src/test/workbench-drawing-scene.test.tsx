@@ -56,7 +56,7 @@ it('finishes selecting and deselecting an arrangement while its worker layout an
     useWorkbenchLoadingProgress(false, null);
     tasks = useContext(WorkbenchDrawingContext);
     const [draftUnits, setDraftUnits] = useState<GraphViewProps['draftUnits']>([]);
-    return <GraphView messages={messages} edges={edges} draftUnits={draftUnits} activeTextSelectId={null} lastClickedMessageId="arrange" voteStats={{}}
+    return <GraphView messages={messages} edges={edges} draftUnits={draftUnits} activeTextSelectId={null} lastClickedMessageId="arrange"
       onMessageClick={() => setDraftUnits(previous => previous.length ? [] : [{ messageId: 'arrange', selection: { kind: 'whole' } }])}
       onMessageDoubleClick={vi.fn()} onTextMouseUp={vi.fn()} onEdgeLabelSingleClick={vi.fn()}
       onEdgeLabelDoubleClick={vi.fn()} onFragmentAnchorClick={vi.fn()} isFragmentSelected={() => false} />;
@@ -117,7 +117,7 @@ function Scene({ onClick = vi.fn() }: { onClick?: GraphViewProps['onMessageClick
   ]} edges={[{
     id: 'relation', relationMessageId: 'relation', relationType: 'reply', relationLabel: '回复',
     from: { messageId: 'reply', selection: { kind: 'whole' } }, to: { messageId: 'claim', selection: { kind: 'whole' } },
-  }]} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} voteStats={{}} autoCenterMessageId="claim"
+  }]} draftUnits={[]} activeTextSelectId={null} lastClickedMessageId={null} autoCenterMessageId="claim"
     onMessageClick={onClick} onMessageDoubleClick={vi.fn()} onTextMouseUp={vi.fn()}
     onEdgeLabelSingleClick={vi.fn()} onEdgeLabelDoubleClick={vi.fn()} onFragmentAnchorClick={vi.fn()} isFragmentSelected={() => false} />;
 }

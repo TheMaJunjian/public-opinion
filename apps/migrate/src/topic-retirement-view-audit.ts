@@ -1,10 +1,10 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { Store } from '../apps/server/src/db.js';
-import { viewsFor, stakesFor, allUsers } from '../apps/server/src/ui-projections.js';
+import { Store } from '../../server/src/db.js';
+import { viewsFor, stakesFor, allUsers } from '../../server/src/ui-projections.js';
 import { isRelationView, type Message, type WorkbenchSnapshot } from '@gonglun/core';
-import { projectWorkbenchSnapshot } from '../frontend/src/utils/workbenchProjection.js';
-import { deriveContainerEffect } from '../frontend/src/pages/workbench/model/containerEffect.js';
-import { projectContainerCanvas } from '../frontend/src/pages/workbench/projections/containerCanvas.js';
+import { projectWorkbenchSnapshot } from '../../../frontend/src/utils/workbenchProjection.js';
+import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
+import { projectContainerCanvas } from '../../../frontend/src/pages/workbench/projections/containerCanvas.js';
 
 const [mode, baselinePath, reportPath] = process.argv.slice(2);
 if (!['capture', 'verify'].includes(mode) || !baselinePath || mode === 'verify' && !reportPath) throw new Error('capture BASELINE | verify BASELINE REPORT');

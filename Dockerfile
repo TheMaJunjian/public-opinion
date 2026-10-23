@@ -14,6 +14,7 @@ ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/server/dist ./apps/server/dist
+COPY --from=build /app/apps/migrate/dist ./apps/migrate/dist
 COPY --from=build /app/frontend/dist ./frontend/dist
 COPY scripts/image-database.mjs scripts/start-existing.mjs ./scripts/
 USER node

@@ -15,6 +15,14 @@ const category: DemoMessage = {
 afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); });
 
 describe('visible organization card elements', () => {
+  it('shows the text selection hint when a classification enters correction selection', () => {
+    const view = render(<ClassificationCard msg={category} selectedUnits={[]} box={{x:0,y:0,width:340}}
+      targetCount={1} title={category.content} activeText isWhole={false} isActive isStanceTarget={false}
+      homeLabel={null} relatedJoinRelations={[]} outgoingJoinRelations={[]} isJoinEffective={()=>false}
+      cardRef={null} headerRef={null} contentRef={null} onMessageClick={vi.fn()} onMessageDoubleClick={vi.fn()} onTextMouseUp={vi.fn()}/>);
+    expect(view.getByText('拖选文字即可选择片段，或点击已有高亮片段')).toBeInTheDocument();
+    expect(view.container.querySelector('[data-message-part-id="body"]')).toHaveStyle({cursor:'text'});
+  });
   it('keeps whitespace beside JOIN badges navigable after leaving and returning to a classification card',()=>{
     const navigate=vi.fn(),select=vi.fn(),openRecords=vi.fn();
     const join={id:'join-leaf',relationType:'JOIN',sourceMessageId:category.id,targetRefs:[{kind:'message' as const,messageId:'leaf'}],createdAt:'2026-01-01',createdBy:{id:'u',username:'甲',createdAt:''}};

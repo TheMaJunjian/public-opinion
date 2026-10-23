@@ -3,6 +3,9 @@ import {replayArchive,type Message} from '@gonglun/core';
 import {Store} from '../../server/src/db.js';
 import {financialFingerprint} from './financial-fingerprint.js';
 import {validateRetirementJournal} from './validate-retirement-journal.js';
+import {settlementTargetRepairPlan} from './restore-settlement-targets.js';
+import {valueVoteMessageRepairPlan} from './repair-value-vote-messages.js';
+import {annotationStanceMessageRepairPlan} from './repair-annotation-stance-messages.js';
 
 const stable=(value:unknown)=>JSON.stringify(value,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)
   ?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))):value);
@@ -31,7 +34,14 @@ const report=await Store.inspect(process.env.DATABASE_URL,{schema:process.env.DA
     if(message.parts.some(part=>part.type==='relation'&&(['unfollow','unblock','legacy-join'].includes(part.relation)
       ||['follow','block'].includes(part.relation)&&!['YES','NO'].includes(part.reason??''))))throw new Error(`仍存在旧格式消息：${message.id}`);
   }
+  const settlementTargets=await settlementTargetRepairPlan(store.db);
+  if(settlementTargets.pending||settlementTargets.unresolved)throw new Error(`仍有 ${settlementTargets.pending+settlementTargets.unresolved} 条旧结算消息缺少原始目标引用`);
+  const valueVoteMessages=await valueVoteMessageRepairPlan(store.db);
+  if(valueVoteMessages.pending||valueVoteMessages.unresolved)throw new Error(`仍有 ${valueVoteMessages.pending+valueVoteMessages.unresolved} 条历史价值投票消息需要转换`);
+  const annotationStanceMessages=await annotationStanceMessageRepairPlan(store.db);
+  if(annotationStanceMessages.pending||annotationStanceMessages.unresolved)throw new Error(`仍有 ${annotationStanceMessages.pending+annotationStanceMessages.unresolved} 条历史标注表态需要转换`);
   return {verified:true,messages:messages.length,accounts:accounts.length,memberships:memberships.length,changes:changes.length,sequence:replay.sequence,
+    settlementTargets,valueVoteMessages,annotationStanceMessages,
     financialFingerprint:await financialFingerprint(store.db),replayMessagesMatch:true,replayAccountsMatch:true,replayMembershipsMatch:true,referenceIndexesMatch:true};
 });
 if(process.argv[2])await writeFile(process.argv[2],JSON.stringify(report,null,2)+'\n',{flag:'wx'});

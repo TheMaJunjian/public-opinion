@@ -28,6 +28,15 @@ export const TAG_V_GAP = 3;         // vertical gap between stacked tag labels
 export const TAG_RIGHT_GAP = 6;     // horizontal gap from card right edge
 export const TAG_MAX_LABEL_CHARS = 20; // max characters shown in a tag label badge
 export const TAG_HIT_PAD = 14;  // extra transparent padding around tag hit area so tags are easy to click even when overlapping frames (> FRAME_PAD=12 so tag hit area fully covers frame border strip overlap)
+export const TAG_HIT_PAD_X = 4; // keep adjacent decoration columns independently clickable
+
+/** Annotation controls sit over the card's upper-right corner; badges use a separate column. */
+export function getAnnotationPlacement(box: Rect, voteWidth = 0) {
+  const right = box.x + box.width;
+  const toggle = { x: right - EDGE_HINT_W - DEC_RIGHT_GAP, y: Math.max(0, box.y - EDGE_HINT_W - DEC_GAP), width: EDGE_HINT_W, height: EDGE_HINT_W };
+  return { toggle, x: voteWidth ? right + DEC_RIGHT_GAP + voteWidth + DEC_RIGHT_GAP : right + DEC_GAP,
+    y: Math.max(TAG_HIT_PAD, toggle.y) };
+}
 // Frame constants (shared by arrange, classify, merge, summary frames)
 // FRAME_PAD is imported from ../utils/layout
 export const FRAME_PAD_X = GRID_LEFT;  // 18 — horizontal padding inside frame

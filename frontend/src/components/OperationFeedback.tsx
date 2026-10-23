@@ -10,8 +10,10 @@ export function OperationProgressDialog({ title, children }: { title: string; ch
   const message = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    message.current?.focus();
-    return () => { if (previous?.isConnected && !previous.closest('[inert]')) previous.focus(); };
+    message.current?.focus({ preventScroll: true });
+    // Positioning has already located the sent message when this dialog closes.
+    // Restoring keyboard focus must not scroll back to the original control.
+    return () => { if (previous?.isConnected && !previous.closest('[inert]')) previous.focus({ preventScroll: true }); };
   }, []);
   const dialogProps = {
     'aria-busy': true,
@@ -22,7 +24,7 @@ export function OperationProgressDialog({ title, children }: { title: string; ch
       event.stopPropagation();
       if (event.key === 'Escape') event.preventDefault();
       if (event.key === 'Tab') {
-        event.preventDefault(); message.current?.focus();
+        event.preventDefault(); message.current?.focus({ preventScroll: true });
       }
     },
   };

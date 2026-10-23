@@ -8,6 +8,7 @@ import { gunzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { hash } from 'bcryptjs';
+import { DATABASE_MIGRATIONS } from '../apps/server/src/database-version.ts';
 
 // Own Compose project and volumes; never reads deployment credentials.
 const directory = mkdtempSync(join(tmpdir(), 'gonglun-release-'));
@@ -59,7 +60,7 @@ async function checkFailedUpgrade(databaseUrl,label){
     ]};
     await checking.query('INSERT INTO migrated_fixture.messages VALUES($1,$2,$3,$4,$5)',[badId,invalid.authorId,invalid.createdAt,invalid.sequence,JSON.stringify(invalid)]);
     await checking.query('INSERT INTO migrated_fixture.revisions VALUES($1,$2,$3)',[badId,1,JSON.stringify(invalid)]);
-    await checking.query('DELETE FROM migrated_fixture.schema_migrations WHERE version=7');
+    await checking.query('DELETE FROM migrated_fixture.schema_migrations WHERE version>=7');
     const before=await snapshot();
     compose('restart','api');
     let health;
@@ -136,7 +137,9 @@ try {
   const fixture={
     User:[{id:'legacy-user',username:'legacy-user',password:await hash('old',4),publicKey:null,createdAt:time,updatedAt:time}],
     Topic:[{id:'legacy-topic',title:'Legacy topic',status:'OPEN',createdById:'legacy-user',createdAt:time,updatedAt:time}],
-    Message:[{id:'legacy-message',topicId:'legacy-topic',createdById:'legacy-user',kind:'TEXT',content:'Legacy message preserved',createdAt:time,updatedAt:time}],
+    Message:[{id:'legacy-message',topicId:'legacy-topic',createdById:'legacy-user',kind:'TEXT',content:'Legacy message preserved',createdAt:time,updatedAt:time},
+      {id:'legacy-result',topicId:'legacy-topic',createdById:'legacy-user',kind:'ROUND_RESULT',relationType:null,content:'Historical settlement result',
+        targetRefs:[{messageId:'legacy-message'}],relationPayload:{settlementType:'TRUTH'},createdAt:time,updatedAt:time}],
     Balance:[{userId:'legacy-user',balance:300,debtFrozen:false}],
     PointAccount:[{userId:'legacy-user',available:300,locked:0}],
     RevenuePool:[{id:'legacy-pool',balance:20}],
@@ -144,10 +147,11 @@ try {
   try {
     await pool.query('CREATE SCHEMA legacy_fixture');
     for(const table of ['User','Topic','Message','Balance','PointAccount','SettlementRound','Stake','VoteStake','BetPool','RevenuePool','LedgerEntry','RuleVersion','UserSigningKey','AuditLog']) {
-      const rows=fixture[table]??[],fields=Object.keys(rows[0]??{id:''});
-      const definitions=fields.map(field=>`"${field}" ${typeof rows[0]?.[field]==='number'?'integer':typeof rows[0]?.[field]==='boolean'?'boolean':'text'}`);
+      const rows=fixture[table]??[],fields=rows.length?[...new Set(rows.flatMap(row=>Object.keys(row)))]:['id'];
+      const definitions=fields.map(field=>{const value=rows.find(row=>row[field]!==null&&row[field]!==undefined)?.[field];
+        return `"${field}" ${typeof value==='number'?'integer':typeof value==='boolean'?'boolean':value&&typeof value==='object'?'jsonb':'text'}`;});
       await pool.query(`CREATE TABLE legacy_fixture."${table}" (${definitions.join(',')})`);
-      for(const row of rows) await pool.query(`INSERT INTO legacy_fixture."${table}" VALUES (${fields.map((_,index)=>`$${index+1}`).join(',')})`,fields.map(field=>row[field]));
+      for(const row of rows) await pool.query(`INSERT INTO legacy_fixture."${table}" VALUES (${fields.map((_,index)=>`$${index+1}`).join(',')})`,fields.map(field=>row[field]&&typeof row[field]==='object'?JSON.stringify(row[field]):row[field]));
     }
   } finally {await pool.end();}
   const migrated=spawnSync(process.execPath,[resolve('node_modules/tsx/dist/cli.mjs'),resolve('apps/migrate/src/migrate-legacy-cli.ts'),'--founder-id','legacy-user','--apply','--accept-checkpoint'],{stdio:'inherit',env:{...process.env,LEGACY_DATABASE_URL:databaseUrl,LEGACY_DATABASE_SCHEMA:'legacy_fixture',MIGRATION_TARGET_DATABASE_URL:databaseUrl,MIGRATION_TARGET_SCHEMA:'migrated_fixture'}});
@@ -173,7 +177,14 @@ try {
   assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,299);
   // The packaged server launches its separate migrator automatically on restart.
   const upgradePool=new Pool({connectionString:databaseUrl});
-  try{await upgradePool.query('DELETE FROM migrated_fixture.schema_migrations WHERE version=7');}
+  try{
+    const old=JSON.parse((await upgradePool.query("SELECT body FROM migrated_fixture.messages WHERE id='legacy-result'")).rows[0].body);
+    const broken={...old,parts:old.parts.filter(part=>part.id!=='settlement-target')};
+    await upgradePool.query('UPDATE migrated_fixture.messages SET body=$1 WHERE id=$2',[JSON.stringify(broken),old.id]);
+    await upgradePool.query('UPDATE migrated_fixture.revisions SET body=$1 WHERE "messageId"=$2 AND revision=1',[JSON.stringify(broken),old.id]);
+    await upgradePool.query('DELETE FROM migrated_fixture.refs WHERE "sourceId"=$1 AND "targetId"=$2',[old.id,'legacy-message']);
+    await upgradePool.query('DELETE FROM migrated_fixture.schema_migrations WHERE version>=7');
+  }
   finally{await upgradePool.end();}
   compose('restart','api');
   for(let attempt=0;;attempt++){
@@ -183,7 +194,12 @@ try {
   const afterUpgrade=await request('/api/login','POST',{name:'legacy-user',password:'old'});
   assert.equal(afterUpgrade.status,200);assert.equal(afterUpgrade.body.account.available,299);
   const upgradedPool=new Pool({connectionString:databaseUrl});
-  try{assert.equal((await upgradedPool.query('SELECT MAX(version) AS version FROM migrated_fixture.schema_migrations')).rows[0].version,7);}
+  try{
+    assert.equal((await upgradedPool.query('SELECT MAX(version) AS version FROM migrated_fixture.schema_migrations')).rows[0].version,DATABASE_MIGRATIONS.length);
+    const repaired=JSON.parse((await upgradedPool.query("SELECT body FROM migrated_fixture.messages WHERE id='legacy-result'")).rows[0].body);
+    assert.ok(repaired.parts.some(part=>part.type==='relation'&&part.relation==='distribution'&&part.roles.target?.some(binding=>binding.reference.messageId==='legacy-message')));
+    assert.equal((await upgradedPool.query('SELECT COUNT(*) AS n FROM migrated_fixture.refs WHERE "sourceId"=$1 AND "targetId"=$2',['legacy-result','legacy-message'])).rows[0].n,'1');
+  }
   finally{await upgradedPool.end();}
   console.log('PASS: packaged server automatically upgrades an older database without a confirmation');
   await checkFailedUpgrade(databaseUrl,'packaged main');

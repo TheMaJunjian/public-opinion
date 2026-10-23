@@ -1,7 +1,7 @@
 import type { Json } from "@gonglun/core";
 import React from "react";
 import { api } from "../../../api";
-import type { Relation } from "../../../types";
+import { getPresentationSpec, type Relation } from "../../../types";
 import { clearBrowserSelection, relationTypeName } from '../../../utils/graphTextSelection';
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import type {
@@ -361,17 +361,17 @@ interface HandleInlineBadgeDoubleClickDependencies {
 export function handleInlineBadgeDoubleClick(dependencies: HandleInlineBadgeDoubleClickDependencies, e: React.MouseEvent, relMsgId: string, detail?: { relMsgIds?: string[]; subDetails?: Array<{ subType: string; customLabel?: string; count: number }> }): void {
   const { edges, setTagPopup, enterTemporaryCategory, setJoinFilterTargetId, setCorrectionFilterTargetId, setViewMode, setComparisonPopup } = dependencies;
   e.stopPropagation();
-  // Recommend/archive: show aggregated badge detail with subType breakdown
+  // All annotation badges share their record/details popup.
   const relEdges = edges.filter(ed => ed.relationMessageId === relMsgId);
   const relType = relEdges[0]?.relationType;
-  if (relType === 'recommend' || relType === 'archive') {
+  if (relType && getPresentationSpec(relType).kind === 'inline-badge') {
     const targetMid = relEdges[0]?.to.messageId;
     if (!targetMid) return;
     const typeName = relationTypeName(relType);
-    const allRelMsgIds = detail?.relMsgIds ?? Array.from(new Set(
+    const allRelMsgIds = detail?.relMsgIds ?? (relType === 'attention' || relType === 'block' ? [relMsgId] : Array.from(new Set(
       edges.filter(ed => ed.relationType === relType && isWholeMessageSelection(ed.to, targetMid))
         .map(ed => ed.relationMessageId)
-    ));
+    )));
     setTagPopup({ messageId: targetMid, tagLabel: typeName, relMsgIds: allRelMsgIds, x: e.clientX, y: e.clientY, subDetails: detail?.subDetails });
   } else if (relType === 'correct') {
     const targetId = relEdges[0]?.to.messageId;

@@ -26,9 +26,69 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it.each(['normal','classify','summary','arrange','merge'] as const)('keeps %s votes on the right and annotations at the upper right independently collapsible', type => {
+    const target:DemoMessage=type==='normal'?message('target'):{...message('target'),kind:'relation',relationType:type};
+    const relations=(['agree','disagree','recommend','tag'] as const).map(type=>({...message(type),kind:'relation' as const,relationType:type}));
+    const edges=relations.map(record=>relation(record.id,record.relationType,`anon:${record.id}`,'target'));
+    if(type==='arrange'||type==='merge')edges.push(relation('target',type,'anon:target','member'));
+    const view=renderScene([target,message('member'),...relations],edges);
+    const canvas=view.container.querySelector('[data-jump-canvas]')!;
+    const voteToggle=view.getByRole('button',{name:'显示装饰 target'}),annotationToggle=view.getByRole('button',{name:'显示标注 target'});
+    expect(parseFloat(annotationToggle.style.top)+parseFloat(annotationToggle.style.height)).toBeLessThanOrEqual(parseFloat(voteToggle.style.top));
+    fireEvent.click(voteToggle);
+    expect(findMessageElements(view.container,'agree')).toHaveLength(1);
+    expect(findMessageElements(view.container,'recommend')).toHaveLength(0);
+    expect(findMessageElements(view.container,'tag')).toHaveLength(0);
+    fireEvent.click(annotationToggle);
+    const vote=findMessageElements(view.container,'agree')[0];
+    for(const id of ['recommend','tag']){
+      const badge=findMessageElements(view.container,id)[0];
+      expect(badge).toBeDefined();
+      expect(parseFloat(badge.style.left)).toBeGreaterThan(parseFloat(vote.style.left)+parseFloat(vote.style.width));
+      expect(parseFloat(badge.style.top)).toBeGreaterThanOrEqual(0);
+    }
+    fireEvent.click(view.getByRole('button',{name:'收起标注 target'}));
+    expect(findMessageElements(view.container,'recommend')).toHaveLength(0);
+    expect(findMessageElements(view.container,'agree')).toHaveLength(1);
+    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
+    fireEvent.click(view.getByRole('button',{name:'收起装饰 target'}));
+    expect(findMessageElements(view.container,'agree')).toHaveLength(0);
+    expect(findMessageElements(view.container,'recommend')).toHaveLength(1);
+    fireEvent.click(view.getByRole('button',{name:'收起标注 target'}));
+    for(const id of ['recommend','agree','tag']){
+      act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[id]}}));});
+      expect(findMessageElements(view.container,id)).toHaveLength(1);
+      expect(view.getByRole('button',{name:id==='agree'?'显示标注 target':'显示装饰 target'})).toHaveAttribute('aria-expanded','false');
+      act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
+    }
+  });
+  it('folds multiple annotations on the first classification and reveals each jump target within the canvas', () => {
+    const target:DemoMessage={...message('category'),kind:'relation',relationType:'classify'};
+    const types=['recommend','archive','attention','block'] as const;
+    const annotations=types.map(type=>({...message(type),kind:'relation' as const,relationType:type,relationPayload:{subType:'YES' as const}}));
+    const view=renderScene([target,...annotations],annotations.map(annotation=>relation(annotation.id,annotation.relationType,`anon:${annotation.id}`,target.id)));
+    for(const type of types)expect(findMessageElements(view.container,type)).toHaveLength(0);
+    const canvas=view.container.querySelector('[data-jump-canvas]')!;
+    for(const type of types){
+      act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[type]}}));});
+      const badge=findMessageElements(view.container,type)[0];
+      expect(badge).toBeDefined();
+      expect(parseFloat(badge.style.top)).toBeGreaterThanOrEqual(0);
+      act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
+      expect(findMessageElements(view.container,type)).toHaveLength(0);
+    }
+    fireEvent.click(view.getByRole('button',{name:'显示标注 category'}));
+    const badges=types.map(type=>findMessageElements(view.container,type)[0]);
+    for(let i=1;i<badges.length;i++)expect(parseFloat(badges[i].style.top)).toBeGreaterThanOrEqual(parseFloat(badges[i-1].style.top)+parseFloat(badges[i-1].style.height));
+    act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
+    expect(findMessageElements(view.container,'recommend')).toHaveLength(1);
+    fireEvent.click(view.getByRole('button',{name:'收起标注 category'}));
+    for(const type of types)expect(findMessageElements(view.container,type)).toHaveLength(0);
+  });
   it.each(['attention','block'] as const)('separates positive and negative %s badges',type=>{
     const annotations=(['YES','NO'] as const).map(reason=>({...message(reason),kind:'relation' as const,relationType:type,relationPayload:{subType:reason}}));
     const view=renderScene([message('target'),...annotations],annotations.map(annotation=>relation(annotation.id,type,`anon:${annotation.id}`,'target')));
+    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
     expect(view.getByText(type==='attention'?'关注－是':'拉黑－是')).toBeInTheDocument();
     expect(view.getByText(type==='attention'?'关注－否':'拉黑－否')).toBeInTheDocument();
   });
@@ -53,6 +113,7 @@ describe('rendered graph scene', () => {
     const view=renderScene([message('target'),...annotations,...stances],edges,{onDecorationIconClick:icon,onDecorationBodyClick:body,
       onDecorationDoubleClick:details,onMessageClick:select,onInlineBadgeClick:select});
     expect(findMessageElements(view.container,'agree-2')).toHaveLength(0);
+    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
     fireEvent.click(view.getByRole('button',{name:'显示装饰 annotation-1'}));
     const agreement=findMessageElements(view.container,'agree-1')[0],opposition=findMessageElements(view.container,'disagree-1')[0];
     expect(agreement.style.left).toBe(opposition.style.left);
@@ -292,9 +353,9 @@ describe('rendered graph scene', () => {
     expect(card).toHaveTextContent('好玩1111');expect(card).not.toHaveTextContent('好玩吗？');
     expect(card.querySelector('[data-jump-msgids~="correction"]')).not.toBeNull();
     expect(graph.queryByTitle(/^标注：/)).toBeNull();
-    fireEvent.click(graph.getByRole('button',{name:'显示装饰 corrected-target'}));
+    fireEvent.click(graph.getByRole('button',{name:'显示标注 corrected-target'}));
     expect(graph.getByTitle(/^标注：/)).toHaveTextContent('重要');
-    fireEvent.click(graph.getByRole('button',{name:'收起装饰 corrected-target'}));
+    fireEvent.click(graph.getByRole('button',{name:'收起标注 corrected-target'}));
     expect(graph.queryByTitle(/^标注：/)).toBeNull();
     const canvas=graph.container.querySelector('[data-jump-canvas]')!;
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[tag.id]}}));});

@@ -8,7 +8,7 @@ import { WorkbenchStore, type WorkbenchSnapshot } from '../../../frontend/src/da
 import { migrateLegacy } from './migrate-legacy.js';
 import {prepareStartupDatabase} from './startup.js';
 import { executeBatch } from '../../server/src/ui-commands.js';
-import { stakesFor } from '../../server/src/ui-projections.js';
+import { stakesFor,viewsFor } from '../../server/src/ui-projections.js';
 import { collectContainerVisibleIds } from '../../../frontend/src/pages/workbench/model/ownership.js';
 import { computeCorrectionVersions, convertMessagesToDemoModel } from '../../../frontend/src/utils/modelBridge.js';
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
@@ -70,6 +70,21 @@ it('migrates an immutable source snapshot, preserves bcrypt login and reconciles
   expect(written.status,written.text).toBe(201);expect(written.body.account.available).toBe(499);
   expect(await migrateLegacy(source)).toMatchObject({sourceDigest:dry.sourceDigest});
   await expect(migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true})).rejects.toThrow('目标 schema 必须为空');
+});
+
+it('imports ROUND and ROUND_RESULT targets even when relationType and roundId are absent',async()=>{
+  const target={id:'old-message',topicId:'old-topic',createdById:'old-user',kind:'TEXT',content:'原目标正文',createdAt:time,updatedAt:time};
+  const records=['ROUND','ROUND_RESULT'].map((kind,index)=>({...target,id:`settlement-${index}`,kind,content:'保留结算说明',relationType:null,
+    targetRefs:[{messageId:target.id}],relationPayload:{settlementType:'TRUTH'}}));
+  const source=await fixture({Message:[target,...records]}),targetSchema=newTestSchema();
+  expect((await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true})).blockers).toEqual([]);
+  const app=await createTestApp({databaseSchema:targetSchema});
+  const view=await viewsFor(app.store,await Promise.all(records.map(record=>app.store.message(record.id))));
+  for(const record of view){
+    expect(record.targetRefs).toMatchObject([{reference:{messageId:target.id}}]);
+    expect(record.content).toBe('保留结算说明');
+  }
+  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:0});
 });
 
 it('imports previous follow and block actions before validating the current message format',async()=>{

@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline/promises';
 import { spawnSync } from 'node:child_process';
 import { isIP } from 'node:net';
 import { verifyExistingDatabase } from './image-database.mjs';
+import { DATABASE_MIGRATIONS } from '../apps/server/src/database-version.ts';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const identifier = /^[a-z_][a-z0-9_]{0,62}$/;
@@ -21,9 +22,9 @@ export async function prompt(label, fallback = '') {
   finally { terminal.close(); }
 }
 
-export function runCommand(command, args, { cwd = repository, capture = false } = {}) {
+export function runCommand(command, args, { cwd = repository, capture = false, env = process.env } = {}) {
   const result = spawnSync(command, args, {
-    cwd, encoding: capture ? 'utf8' : undefined,
+    cwd, env, encoding: capture ? 'utf8' : undefined,
     stdio: ['inherit', capture ? 'pipe' : 'inherit', 'inherit'], windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
   });
@@ -31,6 +32,20 @@ export function runCommand(command, args, { cwd = repository, capture = false } 
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} 执行失败（退出码 ${result.status ?? result.signal}）。`);
   return capture ? result.stdout : '';
+}
+
+/** Upgrade only the restored local copy, before changing the website connection. */
+export function upgradeRestoredDatabase({ url, schema, database }, { run = runCommand } = {}) {
+  const target = new URL(url);
+  if (!['postgres:', 'postgresql:'].includes(target.protocol) || !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname)
+    || decodeURIComponent(target.pathname.slice(1)) !== database || !identifier.test(database) || !identifier.test(schema))
+    throw new Error('恢复后的升级目标必须是明确指定的本地数据库和 schema。');
+  // Do not load .env here: it still belongs to the previous local database.
+  const options = { cwd: repository, env: { ...process.env, DATABASE_URL: url, DATABASE_SCHEMA: schema } };
+  run(process.execPath, ['--import', 'tsx', join(repository, 'apps/migrate/src/migrate-cli.ts')], options);
+  const report = JSON.parse(run(process.execPath, ['--import', 'tsx', join(repository, 'apps/migrate/src/verify-current-cli.ts')], { ...options, capture: true }));
+  if (report.verified !== true) throw new Error('恢复后的数据库未通过独立数据核验。');
+  return report;
 }
 
 export function connectionLabel(value) {
@@ -210,8 +225,10 @@ export async function synchronize({ repoRoot = repository, ask = prompt, run = r
     created = true;
     docker(['exec', '-T', 'postgres', 'pg_restore', '-U', 'gonglun', '-d', database, '--no-owner', '--no-acl', '--exit-on-error', '--single-transaction', containerFile]);
     const url = `postgresql://gonglun:gonglun_dev@127.0.0.1:54329/${database}`;
-    const checked = await verifyDatabase({ url, schema, database, rehearsal: false });
-    log(`恢复与只读检查通过：${checked.database}；schema：${checked.schema}；用户数：${checked.users}`);
+    log('备份已恢复，正在对新本地库执行独立迁移及消息、账本、引用索引核验。');
+    upgradeRestoredDatabase({ url, schema, database }, { run });
+    const checked = await verifyDatabase({ url, schema, database, rehearsal: false }, undefined, DATABASE_MIGRATIONS);
+    log(`恢复、升级与只读检查通过：${checked.database}；schema：${checked.schema}；用户数：${checked.users}`);
     log(`将本地 .env 从 ${connectionLabel(values.DATABASE_URL)} 切换到 ${connectionLabel(url)}。`);
     if (!yes(await ask('确认切换本地网站？输入 y 确认；回车保留原连接', 'N'))) {
       log(`已恢复到 ${database}，本地 .env 未切换。`);

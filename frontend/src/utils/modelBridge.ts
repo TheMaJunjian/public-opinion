@@ -213,7 +213,7 @@ export type DemoEdge = {
   relationLabel: string;
 };
 
-function targetRefsSummary(targetRefs: TargetRef[]): string {
+export function targetRefsSummary(targetRefs: TargetRef[]): string {
   if (targetRefs.length === 0) return '（无目标）';
   return targetRefs.map(ref => {
     if (ref.kind === 'message') return ref.messageId;
@@ -311,7 +311,8 @@ export function convertMessagesToDemoModel(
       const ref = m.targetRefs?.[0];
       roundPayload = (m as any).relationPayload as Record<string,unknown> | undefined;
       settlementTargetId = typeof roundPayload?.subjectId === 'string' ? roundPayload.subjectId
-        : ref?.reference?.messageId ?? (ref?.kind === 'relation' ? ref.relationId : ref?.messageId);
+        : ref?.reference?.messageId ?? (ref?.kind === 'relation' ? ref.relationId : ref?.messageId)
+          ?? (typeof roundPayload?.targetMessageId === 'string' ? roundPayload.targetMessageId : undefined);
     }
     const stype = roundPayload?.settlementType as string | undefined;
     return {

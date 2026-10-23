@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname, basename, posix } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { synchronize, connectionLabel, localBackups, updateEnvContents, validateRemote, verifyBackup } from './sync-vps-db.mjs';
+import { synchronize, connectionLabel, localBackups, updateEnvContents, validateRemote, verifyBackup, upgradeRestoredDatabase, runCommand } from './sync-vps-db.mjs';
+import { DATABASE_MIGRATIONS } from '../apps/server/src/database-version.ts';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const original = '# local settings\r\nDATABASE_URL=postgresql://gonglun:private-test-password@127.0.0.1:54329/original\r\nDATABASE_SCHEMA=public\r\nPORT=3000\r\n';
@@ -51,6 +52,21 @@ function fixture(t, { answers = ['2', '', '1', '', 'new_target', 'y'], failure, 
       if (failure === 'download-checksum') writeFileSync(join(options.cwd, 'database.dump'), 'damaged');
       return '';
     }
+    if (command === process.execPath) {
+      assert.deepEqual(args.slice(0, 2), ['--import', 'tsx']);
+      assert.ok(!args.some(arg => arg.includes('--env-file')));
+      assert.match(options.env.DATABASE_URL, /^postgresql:\/\/gonglun:gonglun_dev@127\.0\.0\.1:54329\//);
+      assert.equal(options.env.DATABASE_SCHEMA, 'business');
+      assert.equal(readFileSync(join(directory, '.env'), 'utf8'), original);
+      if (args.at(-1).endsWith('migrate-cli.ts')) {
+        if (failure === 'migration') throw new Error('migration failed');
+        return '';
+      }
+      assert.ok(args.at(-1).endsWith('verify-current-cli.ts'));
+      assert.equal(options.capture, true);
+      if (failure === 'validation') throw new Error('journal replay mismatch');
+      return JSON.stringify({ verified: failure !== 'validation-result' });
+    }
     assert.equal(command, 'docker');
     if (args[0] === 'context') return args[1] === 'show' ? 'desktop-test\n' : JSON.stringify(endpoint);
     assert.ok(args.includes('--context') && args.includes('desktop-test'));
@@ -70,9 +86,11 @@ function fixture(t, { answers = ['2', '', '1', '', 'new_target', 'y'], failure, 
       assert.ok(queue.length, `Unexpected prompt: ${label}`);
       return queue.shift() || fallback;
     },
-    verifyDatabase: async configuration => {
+    verifyDatabase: async (configuration, _client, versions) => {
       assert.match(configuration.url, /^postgresql:\/\/gonglun:gonglun_dev@127\.0\.0\.1:54329\//);
       assert.equal(configuration.schema, 'business');
+      assert.deepEqual(versions, DATABASE_MIGRATIONS);
+      assert.equal(calls.filter(call => call.command === process.execPath).length, 2);
       if (failure === 'verify') throw new Error('incompatible database');
       await verify?.(configuration, directory);
       return { ...configuration, users: 2 };
@@ -91,7 +109,14 @@ test('local restore verifies the selected archive and changes only database sett
   assert.ok(!f.logs.join('\n').includes('private-test-password'));
   const create = f.calls.findIndex(call => call.args.includes('createdb'));
   const restore = f.calls.findIndex(call => call.args.includes('--single-transaction'));
+  const migration = f.calls.findIndex(call => call.args.at(-1).endsWith('migrate-cli.ts'));
+  const validation = f.calls.findIndex(call => call.args.at(-1).endsWith('verify-current-cli.ts'));
   assert.ok(create >= 0 && restore > create);
+  assert.ok(migration > restore && validation > migration);
+  for (const call of [f.calls[migration], f.calls[validation]]) {
+    assert.equal(new URL(call.options.env.DATABASE_URL).pathname, '/new_target');
+    assert.ok(!call.args.some(arg => arg.includes('postgresql://')));
+  }
   assert.ok(f.calls[create].args.includes('template0'));
   assert.ok(f.calls[restore].args.includes('--exit-on-error'));
   assert.ok(f.calls.at(-1).args.includes('rm'));
@@ -106,7 +131,7 @@ test('cancelling the switch keeps the restored database and the old .env', async
   assert.ok(!readdirSync(f.directory).some(name => name.startsWith('.env.before-vps-sync-')));
 });
 
-for (const failure of ['start', 'existing', 'archive', 'restore', 'verify']) {
+for (const failure of ['start', 'existing', 'archive', 'restore', 'migration', 'validation', 'validation-result', 'verify']) {
   test(`failure never switches .env or removes a database: ${failure}`, async t => {
     const f = fixture(t, { failure });
     await assert.rejects(f.start());
@@ -115,6 +140,23 @@ for (const failure of ['start', 'existing', 'archive', 'restore', 'verify']) {
     if (['start', 'existing', 'archive'].includes(failure)) assert.ok(!f.calls.some(call => call.args.includes('createdb')));
   });
 }
+
+test('restored database upgrades refuse remote or mismatched targets before running a child', () => {
+  for (const configuration of [
+    { url: 'postgresql://user:secret@production.example/example', schema: 'public', database: 'example' },
+    { url: 'postgresql://user:secret@127.0.0.1/original', schema: 'public', database: 'new_target' },
+    { url: 'postgresql://user:secret@127.0.0.1/example', schema: 'bad;schema', database: 'example' },
+  ]) assert.throws(() => upgradeRestoredDatabase(configuration, { run: () => assert.fail('must not run') }), /本地数据库和 schema/);
+});
+
+test('child commands receive explicit target settings without changing the parent environment', () => {
+  const previous = { url: process.env.DATABASE_URL, schema: process.env.DATABASE_SCHEMA };
+  const output = runCommand(process.execPath, ['--input-type=module', '-e', 'console.log(JSON.stringify({url:process.env.DATABASE_URL,schema:process.env.DATABASE_SCHEMA}))'], {
+    capture: true, env: { ...process.env, DATABASE_URL: 'local-target', DATABASE_SCHEMA: 'target_schema' },
+  });
+  assert.deepEqual(JSON.parse(output), { url: 'local-target', schema: 'target_schema' });
+  assert.deepEqual({ url: process.env.DATABASE_URL, schema: process.env.DATABASE_SCHEMA }, previous);
+});
 
 test('a concurrent edit of .env is preserved instead of replaced', async t => {
   const f = fixture(t, { verify: (_, directory) => writeFileSync(join(directory, '.env'), `${original}CUSTOM=edited\n`) });

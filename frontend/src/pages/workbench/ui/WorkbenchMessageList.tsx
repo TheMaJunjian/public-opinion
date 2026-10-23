@@ -13,13 +13,14 @@ import type { Relation } from '../../../types';
 import { getOrganizationTitle } from '../../../utils/messageDisplay';
 import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import { messageScopePath } from '../../../utils/messageRoutes';
-import { type CorrectionVersion, type DemoEdge, type DemoMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
+import { type CorrectionVersion, type DemoEdge, type DemoMessage, isCardMessage, isContentKind, type RelationType, type UnitSelection } from '../../../utils/modelBridge';
 import { collectOwnedByRelation } from '../model/ownership';
 import { getJoinStatusPresentation, type JoinStatus } from '../model/membership';
 import type { JoinEffectSource } from '../model/joinDisplay';
 import type { ContainerEffect } from '../model/containerEffect';
 import { filterMessageListContext } from '../projections/messageListContext';
 import VirtualMessageList from '../../../components/VirtualMessageList';
+import { renderSettlementContentWithTarget } from '../actions/messageRendering';
 
 interface MessageCatalog {
   messages: DemoMessage[];
@@ -136,6 +137,7 @@ export default function WorkbenchMessageList(props: Props) {
           const joinStatus = props.catalog.joinStatusByMessage?.get(msg.id) ?? (joinIsEffective ? 'valid' : 'inactive');
           const joinPresentation = getJoinStatusPresentation(joinStatus, props.catalog.joinEffectSourcesByMessage?.get(msg.id));
           const ctx: MessageCardContext = {
+            isRelationRecord: msg.kind === 'join' || msg.kind === 'round' || msg.kind === 'round_result' || (msg.kind === 'relation' && !isCardMessage(msg)),
             isWholeSelected, isActiveText, isOrganizationMessage,
             isClassification: isClassification,
             isSummary: isSummary,
@@ -294,8 +296,8 @@ export default function WorkbenchMessageList(props: Props) {
               onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
               headerExtra={
                 <>
-                  <div style={{ fontSize: 10, color: "#6b7280", textAlign: "right", width: "100%" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 1, minWidth: 0, width: "100%", gap: 8, flexWrap: "nowrap", whiteSpace: "nowrap", overflow: "hidden" }}>
+                  {(!ctx.isRelationRecord || (authorStakes[msg.id] ?? 0) > 0) && <div style={{ fontSize: 10, color: "#6b7280", textAlign: "right", width: ctx.isRelationRecord ? undefined : "100%" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 1, minWidth: 0, width: ctx.isRelationRecord ? undefined : "100%", gap: 8, flexWrap: "nowrap", whiteSpace: "nowrap", overflow: "hidden" }}>
                     <div style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0, overflow: "hidden" }}>
                       <JoinRecordBadges messageId={msg.id} memberRecords={relatedJoinRelations} containerRecords={outgoingJoinRelations}
                         isContainer={isOrganizationMessage} isEffective={join => effectiveJoinRelationIds.has(join.id)} onOpen={onJoinFilter}/>
@@ -324,14 +326,14 @@ export default function WorkbenchMessageList(props: Props) {
               badges={
                 <>
                   {msg.kind === "join" && joinRelation && (
-                    <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ marginBottom: ctx.isRelationRecord ? 0 : 4, order: 1, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                       <span title={joinPresentation.hint} style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: joinIsEffective ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.16)", color: joinIsEffective ? "#86efac" : "#fca5a5", border: `1px solid ${joinIsEffective ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.35)'}` }}>
                         {joinPresentation.label}
                       </span>
                     </div>
                   )}
                   {!isOrganizationMessage && msg.kind === "relation" && (relType === 'notify' || suppressedRelIds.has(msg.id) || rejectedContainerIds.has(msg.id) || overriddenStanceRelIds.has(msg.id)) && (
-                    <div style={{ marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ marginBottom: ctx.isRelationRecord ? 0 : 4, order: 1, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                       {relType === 'notify' && (() => {
                         const payload = msg.relationPayload;
                         const notifyUsers = Array.isArray(payload?.notifyUsers) && payload.notifyUsers.length > 0
@@ -373,7 +375,7 @@ export default function WorkbenchMessageList(props: Props) {
                     </div>
                   )}
                   {summaryCoverages.length > 0 && (
-                    <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <div style={{ marginBottom: ctx.isRelationRecord ? 0 : 6, order: 1, display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {summaryCoverages.map(item => <span key={item.summaryId} style={{ minWidth: 0, maxWidth: "100%", fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: "rgba(245,158,11,0.14)", color: "#fcd34d", border: "1px solid rgba(245,158,11,0.28)", overflowWrap: 'anywhere' }}>非线性视图由总结「{item.title}」覆盖</span>)}
                     </div>
                   )}
@@ -387,7 +389,7 @@ export default function WorkbenchMessageList(props: Props) {
               ) : undefined}
             >
               {msg.kind === 'join' ? (
-                <div style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', order: 1, minWidth: 0 }}>
                   <span>目标 ID：</span>
                   {(msg.joinInfo?.targetIds ?? []).length > 0 ? msg.joinInfo!.targetIds.map(targetId => (
                     <button
@@ -409,21 +411,21 @@ export default function WorkbenchMessageList(props: Props) {
                   ) : <span>无</span>}
                 </div>
               ) : msg.relationType === 'correct' ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: 12, color: '#fbbf24' }}>
+                <div style={{ display: 'contents' }}>
+                  <div style={{ fontSize: 12, color: '#fbbf24', order: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
                     目标：
                     {correctionTarget && (
                       <button
                         type="button"
                         onClick={event => { event.stopPropagation(); handleNavigateFromCorrectionTemporaryCategory(correctionTarget.id, false); }}
-                        style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 11 }}
+                        style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 999, border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontSize: 11, maxWidth: '100%', overflowWrap: 'anywhere' }}
                         title={`跳转到目标消息 ${correctionTarget.id}`}
                       >
                         {correctionTarget.id}
                       </button>
                     )}
                   </div>
-                  <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px' }}>
+                  <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px', order: 3, flexBasis: '100%', minWidth: 0, fontSize: 12 }}>
                     <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>{msg.relationPayload?.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · start={correctionRange.start} len={correctionRange.len}</div>
                     <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
                       {correctionReplacement.length === 0
@@ -433,7 +435,8 @@ export default function WorkbenchMessageList(props: Props) {
                     </div>
                   </div>
                 </div>
-              ) : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
+              ) : msg.kind === 'round' || msg.kind === 'round_result' ? renderSettlementContentWithTarget({ handleNavigateToMessage }, msg)
+                : msg.kind === 'relation' ? renderRelationContentWithTargets(msg)
                 : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
             </MessageCard>
           );

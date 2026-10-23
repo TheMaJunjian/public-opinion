@@ -83,10 +83,10 @@ it('a new migration version repairs a previously current database automatically'
     await tx.create('actor',[{id:'relation',type:'relation',relation:'recommend',roles:{target:[{id:'target',reference:{messageId:body.id}}]}}]);
     await tx.commit();
   });
-  await store.db.exec('DELETE FROM schema_migrations WHERE version=7');
+  await store.db.exec('DELETE FROM schema_migrations WHERE version>=7');
   const current=await Store.open(testDatabaseUrl(),{schema});
   try{
-    expect((await current.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get())?.version).toBe(7);
+    expect((await current.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get())?.version).toBe(DATABASE_MIGRATIONS.length);
     expect(await current.db.prepare("SELECT action FROM personal_marks WHERE family='archive'").get()).toEqual({action:'recommend'});
   }
   finally{await current.close();}
@@ -114,7 +114,7 @@ it('repairs a version 6 cancellation from its preserved original, including its 
     const relation=original.parts[0];if(relation.type==='relation')delete relation.reason;
     const data=original.parts[1];if(data.type==='data'&&data.value&&typeof data.value==='object'&&!Array.isArray(data.value))delete data.value.subType;
     await store.db.prepare('INSERT INTO annotation_reason_backups VALUES($1,$2,$3)').run('revisions',JSON.stringify([original.id,1]),JSON.stringify(original));
-    await store.db.exec('DELETE FROM schema_migrations WHERE version=7');
+    await store.db.exec('DELETE FROM schema_migrations WHERE version>=7');
   });
   const upgraded=await Store.open(testDatabaseUrl(),{schema});
   try{

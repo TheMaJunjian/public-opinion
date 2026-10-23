@@ -1,14 +1,16 @@
 import {relations,replaceReference,textOf,type Message} from '@gonglun/core';
 import {presentationMigration,upgradePresentationParts} from './presentation-format.js';
+import {restoreSettlementTargetParts,type LegacySettlementSource} from './settlement-target-format.js';
 
 /** Shared, pure conversion for database records and offline archives. */
-export function createMessageFormatTransform(latest:Map<string,Message>,originals:Map<string,Message>){
+export function createMessageFormatTransform(latest:Map<string,Message>,originals:Map<string,Message>,settlementSources=new Map<string,LegacySettlementSource>()){
   const presentation= presentationMigration([...latest.values()]);
   function transform(input:any):any{
     if(Array.isArray(input))return input.map(transform);
     if(!input||typeof input!=='object')return input;
     if(typeof input.id!=='string'||!Array.isArray(input.parts))return Object.fromEntries(Object.entries(input).map(([key,value])=>[key,key==='input'||key==='sourceAudit'?value:transform(value)]));
     const message=structuredClone(input) as Message;
+    restoreSettlementTargetParts(message,latest,originals,settlementSources.get(message.id));
     message.parts=upgradePresentationParts(message,presentation);
     const meta=message.parts.find(part=>part.type==='data');
     if(meta?.type!=='data'||!meta.value||typeof meta.value!=='object'||Array.isArray(meta.value))return {...input,parts:message.parts};

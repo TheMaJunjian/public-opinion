@@ -42,6 +42,22 @@ export async function markEffect(store: Store, key: string, value: unknown) { aw
 export async function hasEffect(store: Store, key: string) { return !!(await store.db.prepare("SELECT 1 FROM effects WHERE key=$1").get(key)); }
 async function savedRounds(store: Store, key: string): Promise<SavedRound[]> { return (await store.db.prepare(`SELECT body FROM rounds WHERE "targetKey"=$1 ORDER BY "createdAt",position`).all(key)).map(r => JSON.parse(r.body as string) as SavedRound); }
 async function saveRound(store: Store, round: SavedRound) { await store.db.prepare(`INSERT INTO rounds(id,"targetKey",body,"createdAt") VALUES ($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET body=excluded.body`).run(round.id, round.targetKey, JSON.stringify(round), round.createdAt); }
+/** Value annotations and the arbitration panel share the same subject and round. */
+export async function valueRoundFor(store: Store, reference: Reference): Promise<SavedRound | undefined> {
+    const subject = await store.message(reference.messageId, reference.revision);
+    const pinned = { ...reference, revision: subject.revision };
+    const rows = await store.db.prepare("SELECT body FROM rounds WHERE (body::jsonb #>> '{subjectId}')=$1 AND (body::jsonb #>> '{settlementType}')='VALUE' ORDER BY position DESC").all(subject.id);
+    for (const row of rows) {
+        const round = JSON.parse(String(row.body)) as SavedRound;
+        const evaluated = await store.message(round.target.messageId, round.target.revision);
+        const basis = relations(evaluated).find(part => part.relation === 'open-value-settlement')?.roles.target?.[0]?.reference;
+        if (basis && referenceKey(basis) === referenceKey(pinned)) return round;
+        // Imported active rounds use the original body as their execution address.
+        if (!basis && (round.status === 'open' || round.status === 'waiting') && round.target.messageId === subject.id
+            && round.target.revision === subject.revision && !reference.partId && !reference.memberId && !reference.range && !reference.path?.length) return round;
+    }
+    return undefined;
+}
 async function newRound(tx: Mutation, selected: {
     key: string;
     target: Reference;
@@ -118,15 +134,36 @@ export async function placeWager(tx: Mutation, message: Message, amount: number)
     if (stance.length !== 1 || stance[0]!.roles.target?.length !== 1)
         throw new DomainError('押注必须对应一项明确的赞同或反对');
     const resolved = await resolveExecutedStance(tx.store, stance[0]!.roles.target![0]!.reference, stance[0]!.relation === 'agree' ? 'pro' : 'con');
+    await placeResolvedWager(tx, message, amount, stance[0]!.id, resolved);
+}
+export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number) {
+    const reference = relationTarget(annotation);
+    const subject = await tx.store.message(reference.messageId, reference.revision);
+    const pinned = { ...reference, revision: subject.revision };
+    const previous = await valueRoundFor(tx.store, pinned);
+    const requested = dataOf(message).roundId;
+    if (requested !== undefined && requested !== previous?.id) throw new DomainError('投票目标与轮次不一致', 409);
+    let target = previous?.target;
+    if (!target) {
+        const claim = await tx.create('system', [
+            { id: 'body', type: 'text', text: '这条消息具有讨论价值。' },
+            { id: 'relation', type: 'relation', relation: 'open-value-settlement', roles: bindRoles({ target: [pinned] }) },
+            { id: 'data', type: 'data', value: { uiType: 'ROUND', settlementType: 'VALUE' } },
+        ]);
+        target = { messageId: claim.id, revision: claim.revision, partId: 'relation' };
+    }
+    await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotation.relation === 'recommend' ? 'pro' : 'con' });
+}
+async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }) {
     await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
     if(amount===0 && await tx.store.db.prepare('SELECT 1 FROM settlement_access WHERE "messageId"=$1').get(resolved.target.messageId)) {
         const target={...resolved.target,revision:(await tx.store.message(resolved.target.messageId,resolved.target.revision)).revision};
-        await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id,message.revision,stance[0]!.id,JSON.stringify(target),resolved.side);
+        await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id,message.revision,partId,JSON.stringify(target),resolved.side);
         tx.affected.add(await recordStance(tx.store,message,{target,side:resolved.side}));
         return;
     }
     const selected = await targetKey(tx.store, resolved.target);
-    await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id, message.revision, stance[0]!.id, JSON.stringify(selected.target), resolved.side);
+    await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id, message.revision, partId, JSON.stringify(selected.target), resolved.side);
     tx.affected.add((await recordStance(tx.store, message, { target: selected.target, side: resolved.side })));
     const history = await savedRounds(tx.store, selected.key);
     let round = history.find(r => r.status !== 'settled');

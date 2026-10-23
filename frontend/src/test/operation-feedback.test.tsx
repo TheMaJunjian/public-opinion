@@ -44,6 +44,7 @@ it('keeps progress centered in the changing visible viewport without changing pa
   render(<button>打开进度</button>);
   const trigger = screen.getByRole('button', { name: '打开进度' });
   trigger.focus();
+  const restoreFocus = vi.spyOn(trigger, 'focus');
   const view = render(<OperationProgressDialog title="正在绘制">正在更新消息与关系。</OperationProgressDialog>);
   try {
     const dialog = screen.getByRole('dialog', { name: '正在绘制' });
@@ -63,6 +64,7 @@ it('keeps progress centered in the changing visible viewport without changing pa
     expect(message).toHaveFocus();
     view.unmount();
     expect(trigger).toHaveFocus();
+    expect(restoreFocus).toHaveBeenCalledWith({ preventScroll: true });
     expect(document.body.style.overflow).toBe('scroll');
   } finally {
     view.unmount();

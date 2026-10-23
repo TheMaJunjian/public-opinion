@@ -7,4 +7,7 @@ export const DATABASE_MIGRATIONS = [
   'canonical-query-records',
   'explicit-access-policy',
   'complete-historical-message-formats',
+  'restore-historical-settlement-targets',
+  'correct-historical-value-vote-messages',
+  'normalize-historical-annotation-stances',
 ] as const;

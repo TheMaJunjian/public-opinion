@@ -11,6 +11,8 @@ import { openMigratingStore } from './migrations.js';
 import {initializeMigrationArchive} from './migration-schema.js';
 import { migrateAnnotationReasons, upgradeAnnotationRecords } from './migrate-annotation-reasons.js';
 import {migrateQueryRecords} from './migrate-query-records.js';
+import {repairValueVoteMessages} from './repair-value-vote-messages.js';
+import {repairAnnotationStanceMessages} from './repair-annotation-stance-messages.js';
 
 type Row = Record<string, any>;
 type Snapshot = Record<string, Row[]>;
@@ -143,6 +145,8 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
       if(['CLASSIFY','MERGE','SUMMARY','ARRANGE'].includes(row.relationType)) {
         parts.push({id:'display',type:'display',relationPartId:'relation',layout:payload.targetLayout==='single-row'?'row':payload.targetLayout==='multi-column'?'columns':'flow'});
       }
+    }else if(['ROUND','ROUND_RESULT'].includes(row.kind)&&references.length){
+      parts.push({id:'settlement-target',type:'relation',relation:row.kind==='ROUND'?'settlement':'distribution',roles:bindRoles({target:references})});
     }
     parts.push({id:'data',type:'data',value:{...payload,kind:row.kind,uiType:row.relationType??null,contentType:row.contentType??'TEXT',legacyTopicId:row.topicId,legacyTargetRefs:row.targetRefs??[],legacySupersededBy:row.supersededBy??null,legacyQuote:{sourceId:row.quoteSourceId??null,text:row.quotedText??null,hash:row.quotedTextHash??null,before:row.quoteContextBefore??null,after:row.quoteContextAfter??null}} as Json});
     parts.push({id:'placement',type:'relation',relation:'member-of',roles:bindRoles({parent:[{messageId:row.topicId}]})});
@@ -336,6 +340,8 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
       await checkpointTx.commit();
       await migrateAnnotationReasons(store);
       await migrateQueryRecords(store);
+      await repairValueVoteMessages(store);
+      await repairAnnotationStanceMessages(store);
       const changeRows=await store.db.prepare('SELECT body FROM changes ORDER BY sequence').all();
       const replay=replayArchive({format:'gonglun-2',regionId,ledgerId:'local',programVersion:'2.0.0',changes:changeRows.map(row=>JSON.parse(String(row.body)))});
       for(const user of users) {

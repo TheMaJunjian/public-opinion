@@ -6,12 +6,14 @@ import { selectionIsText, relationTypeName } from './graphTextSelection';
 import type { LayoutBox, Rect } from './layout';
 import type { Box } from './frameLayout';
 import type { Point, LabelSeed } from './graphEdgeGeometry';
-import { getEdgeDecorationLeft, getDecorationColumnWidth, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_MAX_LABEL_CHARS, MAX_RELATION_NESTING_DEPTH } from './graphPresentationGeometry';
+import { getEdgeDecorationLeft, getDecorationColumnWidth, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_MAX_LABEL_CHARS, MAX_RELATION_NESTING_DEPTH } from './graphPresentationGeometry';
 import { quadAt, rayRectIntersectionFirst, samplePerimeterCandidates, computeLabelPlacementsAlongCurve } from './graphEdgeGeometry';
 import type { PositionedEdge } from './graphOverlays';
 
 export interface GraphRoutingInput {
   visibleDecorationIds?: ReadonlySet<string>;
+  visibleAnnotationIds?: ReadonlySet<string>;
+  annotationToggleRects?: Record<string, Rect>;
   getCachedFragment?: (messageId: string, key: string) => Rect | undefined;
   newTagDecorationsByMsg: Record<string, { label: string; relMsgIds: string[]; rect: Rect; relAgreeCount: number; relDisagreeCount: number; relAgreeMsgIds: string[]; relDisagreeMsgIds: string[]; }[]>;
   edgesByRelMsg: Map<string, DemoEdge[]>;
@@ -90,9 +92,8 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       }
       if (relType === "tag") {
         const tagInfo = tagBadgeByRelMsgId.get(relId);
-        if(tagInfo&&input.visibleDecorationIds&&!input.visibleDecorationIds.has(tagInfo.mid)){
-          const box=endpointBoxForNormal(tagInfo.mid)?.box??layout[tagInfo.mid];
-          return {x:tagInfo.rect.x-EDGE_HINT_W-DEC_GAP,y:box?box.y+DEC_RIGHT_TOP:tagInfo.rect.y,width:EDGE_HINT_W,height:EDGE_HINT_W};
+        if(tagInfo&&input.visibleAnnotationIds&&!input.visibleAnnotationIds.has(tagInfo.mid)){
+          return input.annotationToggleRects?.[tagInfo.mid]??null;
         }
         return tagInfo ? { x: tagInfo.rect.x, y: tagInfo.rect.y, width: tagInfo.rect.width, height: tagInfo.rect.height } : null;
       }

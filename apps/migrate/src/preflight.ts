@@ -1,5 +1,8 @@
 import {Postgres} from '../../server/src/postgres.js';
 import {DATABASE_MIGRATIONS} from '../../server/src/database-version.js';
+import {settlementTargetRepairPlan} from './restore-settlement-targets.js';
+import {valueVoteMessageRepairPlan} from './repair-value-vote-messages.js';
+import {annotationStanceMessageRepairPlan} from './repair-annotation-stance-messages.js';
 
 /** Read-only planning does not initialize, stamp or rewrite any database. */
 export async function migrationPlan(databaseUrl:string,schema?:string){
@@ -13,7 +16,10 @@ export async function migrationPlan(databaseUrl:string,schema?:string){
     const counts:Record<string,number>={};
     for(const table of ['messages','revisions','changes','accounts','ledger'])if(tables.has(table))counts[table]=Number((await db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get())!.count);
     const region=tables.has('settings')?(await db.prepare("SELECT value FROM settings WHERE key='region'").get())?.value:undefined;
-    return {...identity,schema:db.schema,region:region?JSON.parse(String(region)):null,counts,
+    const settlementTargets=tables.has('messages')&&tables.has('revisions')?await settlementTargetRepairPlan(db):undefined;
+    const valueVoteMessages=['messages','revisions','rounds','bets','execution_stances'].every(table=>tables.has(table))?await valueVoteMessageRepairPlan(db):undefined;
+    const annotationStanceMessages=tables.has('messages')&&tables.has('revisions')?await annotationStanceMessageRepairPlan(db):undefined;
+    return {...identity,schema:db.schema,region:region?JSON.parse(String(region)):null,counts,settlementTargets,valueVoteMessages,annotationStanceMessages,
       currentVersion:applied.length,pending:DATABASE_MIGRATIONS.slice(applied.length).map((name,index)=>({version:applied.length+index+1,name}))};
   });}finally{await db.close();}
 }

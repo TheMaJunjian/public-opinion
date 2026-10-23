@@ -35,6 +35,7 @@ export default function OrganizationFrameHeader({ message, messageId, kind, memb
     style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 999, background: kind === 'arrange' ? 'rgba(167,139,250,0.2)' : kind === 'merge' ? 'rgba(148,163,184,0.22)' : kind === 'summary' ? 'rgba(52,211,153,0.2)' : 'rgba(34,197,94,0.2)', color: kind === 'arrange' ? '#c4b5fd' : kind === 'merge' ? '#cbd5e1' : kind === 'summary' ? '#6ee7b7' : '#86efac' }}
   >{label}</MessageElement>;
   return <>
+    {activeText && <div style={{fontSize:11,color:'#0b84ff',marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
     <div style={{ display: 'flex', flexWrap: hasFrameCard ? 'nowrap' : 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: '#f3f4f6', flex: hasFrameCard ? 1 : '1 0 80px', minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
         {message ? <MessageTextPart message={message} activeText={activeText} onMouseUp={onTextMouseUp}>{activeText && message.parts ? undefined : content}</MessageTextPart> : content}

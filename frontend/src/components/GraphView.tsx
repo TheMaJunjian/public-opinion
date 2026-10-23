@@ -1,6 +1,6 @@
 import { useGraphOverlays } from '../hooks/useGraphOverlays';
 import { projectGraphScene } from '../utils/graphProjection';
-import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
+import { unionLayoutRects, getGroupHeaderHeight, getGroupHeaderRect, getMergeCardHeaderRect, getEdgeDecorationLeft, getDecorationColumnWidth, getAnnotationPlacement, GROUP_HEADER_HEIGHT, DEC_W, DEC_H, DEC_GAP, DEC_RIGHT_GAP, DEC_RIGHT_TOP, DEC_ICON_W, EDGE_HINT_W, TAG_H, TAG_MIN_W, TAG_V_GAP, TAG_HIT_PAD, TAG_HIT_PAD_X, FRAME_RADIUS, GROUP_FRAME_STROKE, SHOW_SELECTED_ACTUAL_RECTS, INLINE_BADGE_COLOR } from '../utils/graphPresentationGeometry';
 import { unitEquals, selectionIsText, extractTextTargetsForMessage, relationTypeName, buildAnnoTree, renderAnnoNodes } from '../utils/graphTextSelection';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DemoMessage, DemoEdge, UnitSelection } from '../utils/modelBridge';
@@ -32,7 +32,7 @@ import JoinRecordBadges from './JoinRecordBadges';
 import ComparisonPane, { COMPARISON_HEADER_HEIGHT } from './ComparisonPane';
 import {indexRelatedMessages,isRejectedContainer} from '../utils/relatedMessages';
 import { CARD_W, GRID_LEFT, CANVAS_BOTTOM_PAD, CANVAS_RIGHT_PAD, FRAME_PAD, MERGE_CARD_H } from '../utils/layout';
-import type { Relation } from '../types';
+import { getPresentationSpec, type Relation } from '../types';
 import { noteWorkbenchDrawingProgress, reportWorkbenchDrawingDuration } from '../utils/workbenchActivity';
 import { useWorkbenchDrawingCommit, useWorkbenchDrawingTask } from '../context/WorkbenchDrawingContext';
 
@@ -447,17 +447,22 @@ function GraphViewCanvas(props: GraphViewProps) {
   const [expandedDecorationIds,setExpandedDecorationIds]=useState<Set<string>>(()=>new Set());
   const [revealedDecorationIds,setRevealedDecorationIds]=useState<Set<string>>(()=>new Set());
   const visibleDecorationIds=useMemo(()=>new Set([...expandedDecorationIds,...revealedDecorationIds]),[expandedDecorationIds,revealedDecorationIds]);
-  const renderDecorationToggle=(ids:string|string[],style?:React.CSSProperties)=>{
+  const [expandedAnnotationIds,setExpandedAnnotationIds]=useState<Set<string>>(()=>new Set());
+  const [revealedAnnotationIds,setRevealedAnnotationIds]=useState<Set<string>>(()=>new Set());
+  const visibleAnnotationIds=useMemo(()=>new Set([...expandedAnnotationIds,...revealedAnnotationIds]),[expandedAnnotationIds,revealedAnnotationIds]);
+  const renderDecorationToggle=(ids:string|string[],style?:React.CSSProperties,annotations=false)=>{
     const messageIds=typeof ids==='string'?[ids]:ids;
-    const expanded=messageIds.some(id=>visibleDecorationIds.has(id));
-    return <button key={`decoration-toggle-${messageIds[0]}`} type="button" data-decoration-toggle={messageIds[0]} data-rel-overlay="true"
-      aria-label={`${expanded?'收起':'显示'}装饰 ${messageIds[0]}`} aria-expanded={expanded}
-      title={`${expanded?'收起':'显示'}装饰`}
+    const expanded=messageIds.some(id=>(annotations?visibleAnnotationIds:visibleDecorationIds).has(id));
+    const label=annotations?'标注':'装饰';
+    return <button key={`${annotations?'annotation':'decoration'}-toggle-${messageIds[0]}`} type="button"
+      data-decoration-toggle={annotations?undefined:messageIds[0]} data-annotation-toggle={annotations?messageIds[0]:undefined} data-rel-overlay="true"
+      aria-label={`${expanded?'收起':'显示'}${label} ${messageIds[0]}`} aria-expanded={expanded}
+      title={`${expanded?'收起':'显示'}${annotations?'标注':'赞同／反对'}`}
       onMouseDown={event=>event.stopPropagation()} onMouseUp={event=>event.stopPropagation()}
       onKeyDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()}
       onClick={event=>{
         event.stopPropagation();
-        setExpandedDecorationIds(previous=>{
+        (annotations?setExpandedAnnotationIds:setExpandedDecorationIds)(previous=>{
           const next=new Set(previous);
           for(const id of messageIds){
             if(expanded)next.delete(id);
@@ -465,7 +470,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           }
           return next;
         });
-        if(expanded)setRevealedDecorationIds(previous=>new Set([...previous].filter(id=>!messageIds.includes(id))));
+        if(expanded)(annotations?setRevealedAnnotationIds:setRevealedDecorationIds)(previous=>new Set([...previous].filter(id=>!messageIds.includes(id))));
       }}
       style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:EDGE_HINT_W,height:EDGE_HINT_W,
         padding:0,border:'1px solid #444',borderRadius:3,background:'#1f1f1f',color:'#cbd5e1',fontSize:10,
@@ -476,20 +481,22 @@ function GraphViewCanvas(props: GraphViewProps) {
   const resolveRevealIds = useCallback((ids: string[]) => {
     const targets = new Set(ids);
     const decorationEdges=new Map<string,DemoEdge[]>();
-    for(const edge of edges)if(['agree','disagree','tag'].includes(edge.relationType))
+    for(const edge of edges)if(['agree','disagree','tag'].includes(edge.relationType)||getPresentationSpec(edge.relationType).kind==='inline-badge')
       decorationEdges.set(edge.relationMessageId,[...(decorationEdges.get(edge.relationMessageId)??[]),edge]);
-    const revealedDecorations=new Set<string>(),queue=[...ids];
+    const revealedDecorations=new Set<string>(),revealedAnnotations=new Set<string>(),visited=new Set<string>(),queue=[...ids];
     for(let index=0;index<queue.length;index++)for(const edge of decorationEdges.get(queue[index])??[]){
       const target=edge.to.messageId;
-      if(revealedDecorations.has(target))continue;
-      revealedDecorations.add(target);targets.add(target);queue.push(target);
+      (['agree','disagree'].includes(edge.relationType)?revealedDecorations:revealedAnnotations).add(target);
+      if(visited.has(target))continue;
+      visited.add(target);targets.add(target);queue.push(target);
     }
     const frames = messages.filter(message => message.relationType === 'arrange' && targets.has(message.id)).map(message => message.id);
     setRevealedDecorationIds(previous=>previous.size===revealedDecorations.size&&[...previous].every(id=>revealedDecorations.has(id))?previous:revealedDecorations);
+    setRevealedAnnotationIds(previous=>previous.size===revealedAnnotations.size&&[...previous].every(id=>revealedAnnotations.has(id))?previous:revealedAnnotations);
     setRevealedFrameIds(previous => previous.length === frames.length && previous.every((id, index) => id === frames[index]) ? previous : frames);
     // Mount the temporary card as well as the requested badge, including when
     // navigation starts outside the viewport. Clearing the pulse collapses it.
-    return [...new Set([...ids,...revealedDecorations,...frames])];
+    return [...new Set([...ids,...revealedDecorations,...revealedAnnotations,...frames])];
   }, [messages, edges]);
 
   const { msgMap, edgesByRelMsg, classifyRelMsgIds, relationCardMsgIds, normals,
@@ -632,7 +639,7 @@ function GraphViewCanvas(props: GraphViewProps) {
   }, [edges, msgMap]);
 
   const overlays = useGraphOverlays({
-    excludedStanceEdges:props.excludedStanceEdges, visibleDecorationIds,
+    excludedStanceEdges:props.excludedStanceEdges, visibleDecorationIds, visibleAnnotationIds,
     pendingMeasurements: virtual.pending,
     labelViewport: virtual.viewport, labelRetainedIds: virtual.retained,
     canvasRef, normalIds: visibleNormalIds, msgMap, relationCardMsgIds, cardRefs, colOf, layout, normals: visibleNormals, headerRefs, contentRefs, edges: visibleEdges, messages, isTraceWindow, anonCorrectedRelMsgIds, finalFrameRects, traceExpandedFrameIds, edgesByRelMsg, comparisonSuppressedRelIds, correctedEdgeIdsByRelMsg, textRefs, actualCanvasWidth, actualCanvasHeight,
@@ -647,7 +654,7 @@ function GraphViewCanvas(props: GraphViewProps) {
     }
     return retained;
   }, [virtual.retained, edgesByRelMsg]);
-  const { positionedEdges, decorationRectsState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg } = useMemo(() => {
+  const { positionedEdges, decorationRectsState, tagDecorationsByMsg, arrangeFrames, groupFrames, inlineBadgesByMsg, annotationToggleRects } = useMemo(() => {
     const keep = (id: string, rect: Rect) => overlayRetained.has(id) || virtual.mounted.has(id) || intersectsViewport(rect, virtual.viewport, 100);
     return {
       positionedEdges: overlays.positionedEdges.filter(edge => keep(edge.edge.relationMessageId, {
@@ -659,6 +666,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       arrangeFrames: overlays.arrangeFrames.map(frame => ({ ...frame, rect: finalFrameRects[frame.relMsgId] ?? frame.rect })).filter(frame => keep(frame.relMsgId, frame.rect)),
       groupFrames: overlays.groupFrames.filter(frame => keep(frame.relMsgId, finalFrameRects[frame.relMsgId] ?? frame.rect)),
       inlineBadgesByMsg: new Map([...overlays.inlineBadgesByMsg].map(([id, badges]) => [id, badges.filter(badge => keep(id, badge.rect))])),
+      annotationToggleRects: Object.fromEntries(Object.entries(overlays.annotationToggleRects).filter(([id, rect])=>keep(id,rect))),
     };
   }, [overlays, overlayRetained, virtual.mounted, virtual.viewport, finalFrameRects]);
 
@@ -1421,7 +1429,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           const expanded=visibleDecorationIds.has(relId);
           const stackHeight=voteCount*DEC_H+Math.max(0,voteCount-1)*DEC_GAP;
           let decTop=bb.y+bb.height/2-stackHeight/2;
-          if(voteCount>0||tagItems.length>0)items.push(<React.Fragment key={`reldec-toggle-${relId}`}>
+          if(voteCount>0)items.push(<React.Fragment key={`reldec-toggle-${relId}`}>
             {renderDecorationToggle(relId,{position:'absolute',left:rowLeft,top:bb.y+(bb.height-EDGE_HINT_W)/2,zIndex:15})}
           </React.Fragment>);
           for (const kind of ["agree","disagree"] as const) {
@@ -1455,15 +1463,17 @@ function GraphViewCanvas(props: GraphViewProps) {
             );
             decTop+=DEC_H+DEC_GAP;
           }
-          let correctionHeight=0;
+          let voteWidth=voteCount>0?getDecorationColumnWidth(expanded):0;
           for(const ci of correctionSrcByNewRelMsg.get(relId)??[]){
-            if(!visibleDecorationIds.has(ci.corrRelMsgId))continue;
             const correctionDec=relDecByRelMsgState.get(ci.corrRelMsgId);
             const count=((correctionDec?.agreeCount??0)>0?1:0)+((correctionDec?.disagreeCount??0)>0?1:0);
-            correctionHeight=Math.max(correctionHeight,count*DEC_H+Math.max(0,count-1)*DEC_GAP);
+            if(count>0)voteWidth+=getDecorationColumnWidth(visibleDecorationIds.has(ci.corrRelMsgId))+DEC_GAP;
           }
-          decTop=bb.y+bb.height/2+Math.max(expanded?stackHeight:EDGE_HINT_W,correctionHeight)/2+DEC_GAP;
-          if(voteCount===0&&correctionHeight===0)decTop=bb.y+(bb.height-TAG_H)/2;
+          const annotation=getAnnotationPlacement({x:rowLeft-DEC_RIGHT_GAP,y:bb.y,width:0,height:bb.height},voteWidth);
+          if(tagItems.length>0)items.push(<React.Fragment key={`reltag-toggle-${relId}`}>
+            {renderDecorationToggle(relId,{position:'absolute',left:annotation.toggle.x,top:annotation.toggle.y,zIndex:15},true)}
+          </React.Fragment>);
+          decTop=annotation.y;
           // TAG badges on this relation message — aggregated by label text
           const tagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
           for (const {label:itemLabel,relMsgId:tagRelMsgId} of tagItems) {
@@ -1472,7 +1482,7 @@ function GraphViewCanvas(props: GraphViewProps) {
             else { tagGroupMap.set(itemLabel,{label:itemLabel,relMsgIds:[tagRelMsgId]}); }
           }
           for (const {label:tagLabel,relMsgIds} of tagGroupMap.values()) {
-            if(!expanded)continue;
+            if(!visibleAnnotationIds.has(relId))continue;
             const count=relMsgIds.length;
             const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
             const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
@@ -1481,11 +1491,11 @@ function GraphViewCanvas(props: GraphViewProps) {
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,relId,tagLabel,relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,relId,tagLabel,relMsgIds);}}
                 title={`标注：${displayLabel}；单击选中，双击展开详情`}
-                style={{position:"absolute",left:decLeft-TAG_HIT_PAD,top:decTop-TAG_HIT_PAD,
-                  width:tagW+2*TAG_HIT_PAD,height:TAG_H+2*TAG_HIT_PAD,
+                style={{position:"absolute",left:annotation.x-TAG_HIT_PAD_X,top:decTop-TAG_HIT_PAD,
+                  width:tagW+2*TAG_HIT_PAD_X,height:TAG_H+2*TAG_HIT_PAD,
                   zIndex:14,cursor:"pointer",pointerEvents:"auto",background:"transparent",
                   display:"flex",alignItems:"center",justifyContent:"center",
-                  padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
+                  padding:`${TAG_HIT_PAD}px ${TAG_HIT_PAD_X}px`,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:tagW,height:TAG_H,boxSizing:"border-box",
                   background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
@@ -1520,7 +1530,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           // Keep each correction's votes in its own collapsible column.
           const r2Dec=relDecByRelMsgState.get(relId);
           const hasR2Votes=['annotation','reference','reply'].includes(pe.edge.relationType);
-          const r2Count=hasR2Votes?((r2Dec?.agreeCount??0)>0?1:0)+((r2Dec?.disagreeCount??0)>0?1:0)+(tagsByRelMsgState.get(relId)?.length??0):0;
+          const r2Count=hasR2Votes?((r2Dec?.agreeCount??0)>0?1:0)+((r2Dec?.disagreeCount??0)>0?1:0):0;
           let columnLeft=getEdgeDecorationLeft(bb,!visibleNormalIds.includes(relId))
             +(r2Count>0?getDecorationColumnWidth(visibleDecorationIds.has(relId))+DEC_GAP:0);
           for (const ci of newCorrInfo) {
@@ -1786,7 +1796,6 @@ function GraphViewCanvas(props: GraphViewProps) {
           Icon area: quick-send agree/disagree targeting the arrange relation message.
           Body area: toggle selection of all agree/disagree relation messages on this arrange. */}
       {visibleArrangeFrames.map(sf=>{
-        const sfTagItems=tagsByRelMsgState.get(sf.relMsgId)??[];
         const sfDecLeft=sf.rect.x+sf.rect.width+DEC_RIGHT_GAP;
         let sfDecTop=sf.rect.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[];
@@ -1821,7 +1830,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           );
           sfDecTop += DEC_H + DEC_GAP;
         }
-        if(sf.relAgreeCount>0||sf.relDisagreeCount>0||sfTagItems.length>0){
+        if(sf.relAgreeCount>0||sf.relDisagreeCount>0){
           nodes.push(<React.Fragment key={`sf-vote-toggle-${sf.relMsgId}`}>
             {renderDecorationToggle(sf.relMsgId,{position:'absolute',left:sfDecLeft,top:sfDecTop,zIndex:8})}
           </React.Fragment>);
@@ -1857,47 +1866,12 @@ function GraphViewCanvas(props: GraphViewProps) {
           );
           sfDecTop+=DEC_H+DEC_GAP;
         }
-        if(!visibleDecorationIds.has(sf.relMsgId)&&(sf.relAgreeCount>0||sf.relDisagreeCount>0))sfDecTop+=EDGE_HINT_W+DEC_GAP;
-        // TAG badges on this arrange relation message — aggregated by label text
-        const sfTagGroupMap=new Map<string,{label:string;relMsgIds:string[]}>();
-        for (const {label:itemLabel,relMsgId:tagRelMsgId} of sfTagItems) {
-          const existing=sfTagGroupMap.get(itemLabel);
-          if (existing) { existing.relMsgIds.push(tagRelMsgId); }
-          else { sfTagGroupMap.set(itemLabel,{label:itemLabel,relMsgIds:[tagRelMsgId]}); }
-        }
-        for (const {label:tagLabel,relMsgIds} of sfTagGroupMap.values()) {
-          if(!visibleDecorationIds.has(sf.relMsgId))continue;
-          const count=relMsgIds.length;
-          const displayLabel=count>1?`${tagLabel}（${count}人）`:tagLabel;
-          const tagW=Math.max(TAG_MIN_W,displayLabel.length*8+8+28);
-          nodes.push(
-            <div key={`sftag-${relMsgIds[0]}`} data-msgid={sf.relMsgId} data-jump-msgids={[sf.relMsgId, ...relMsgIds].join(' ')} data-rel-overlay="true"
-              onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
-              onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,sf.relMsgId,tagLabel,relMsgIds);}}
-              title={`标注：${displayLabel}；单击选中，双击展开详情`}
-              style={{position:"absolute",left:sfDecLeft+EDGE_HINT_W+DEC_GAP-TAG_HIT_PAD,top:sfDecTop-TAG_HIT_PAD,
-                width:tagW+2*TAG_HIT_PAD,height:TAG_H+2*TAG_HIT_PAD,
-                zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
-                display:"flex",alignItems:"center",justifyContent:"center",
-                padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
-              <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
-                width:tagW,height:TAG_H,boxSizing:"border-box",
-                  background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
-                  fontSize:10,padding:"0 4px",boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
-                border:"1px solid rgba(255,255,255,0.15)",
-                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                🏷{displayLabel}
-              </span>
-            </div>
-          );
-          sfDecTop+=TAG_H+TAG_V_GAP;
-        }
         return <React.Fragment key={`supp-dec-${sf.relMsgId}`}>{nodes}</React.Fragment>;
       })}
 
       {/* GROUP frame decoration badges — AGREE/DISAGREE badges to the RIGHT of the group frame */}
       {visibleGroupFrames.map(gf=>{
-        if (gf.relAgreeCount===0&&gf.relDisagreeCount===0&&!(tagsByRelMsgState.get(gf.relMsgId)?.length)) return null;
+        if (gf.relAgreeCount===0&&gf.relDisagreeCount===0) return null;
         const gfDecLeft=gf.rect.x+gf.rect.width+DEC_RIGHT_GAP;
         let gfDecTop=gf.rect.y+DEC_RIGHT_TOP;
         const nodes: React.ReactNode[]=[renderDecorationToggle(gf.relMsgId,{position:'absolute',left:gfDecLeft,top:gfDecTop,zIndex:8})];
@@ -1938,7 +1912,7 @@ function GraphViewCanvas(props: GraphViewProps) {
       {/* TAG decoration labels — aggregated by label text, interactive */}
       {Object.entries(tagDecorationsByMsg).map(([_mid,groups])=>
         groups.map(group=>{
-          if(!visibleDecorationIds.has(_mid))return null;
+          if(!visibleAnnotationIds.has(_mid))return null;
           const count=group.relMsgIds.length;
           const displayLabel=count>1?`${group.label}（${count}人）`:group.label;
           // Full-size agree/disagree decoration badges to the right of the tag badge, stacked vertically.
@@ -1955,11 +1929,11 @@ function GraphViewCanvas(props: GraphViewProps) {
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
-                style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD,top:group.rect.y-TAG_HIT_PAD,
-                  width:group.rect.width+2*TAG_HIT_PAD,height:group.rect.height+2*TAG_HIT_PAD,
+                style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD_X,top:group.rect.y-TAG_HIT_PAD,
+                  width:group.rect.width+2*TAG_HIT_PAD_X,height:group.rect.height+2*TAG_HIT_PAD,
                   zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
                   display:"flex",alignItems:"center",justifyContent:"center",
-                  padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
+                  padding:`${TAG_HIT_PAD}px ${TAG_HIT_PAD_X}px`,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
                   background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
@@ -1978,11 +1952,11 @@ function GraphViewCanvas(props: GraphViewProps) {
                 onClick={ev=>{ev.stopPropagation();onTagBodyClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 onDoubleClick={ev=>{ev.stopPropagation();onTagDoubleClick?.(ev,_mid,group.label,group.relMsgIds);}}
                 title={`标注：${group.label}（${count}人）；单击选中，双击展开详情`}
-                style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD,top:group.rect.y-TAG_HIT_PAD,
-                  width:group.rect.width+2*TAG_HIT_PAD,height:group.rect.height+2*TAG_HIT_PAD,
+                style={{position:"absolute",left:group.rect.x-TAG_HIT_PAD_X,top:group.rect.y-TAG_HIT_PAD,
+                  width:group.rect.width+2*TAG_HIT_PAD_X,height:group.rect.height+2*TAG_HIT_PAD,
                   zIndex:7,cursor:"pointer",pointerEvents:"auto",background:"transparent",
                   display:"flex",alignItems:"center",justifyContent:"center",
-                  padding:TAG_HIT_PAD,boxSizing:"border-box"}}>
+                  padding:`${TAG_HIT_PAD}px ${TAG_HIT_PAD_X}px`,boxSizing:"border-box"}}>
                 <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                   width:group.rect.width,height:group.rect.height,boxSizing:"border-box",
                   background:"rgba(180,150,0,0.85)",color:"#fff",borderRadius:3,
@@ -2042,8 +2016,6 @@ function GraphViewCanvas(props: GraphViewProps) {
         const frames=new Set([...visibleArrangeFrames,...visibleGroupFrames].map(frame=>frame.relMsgId));
         for(const value of Object.values(decorationRectsState??{}))if(!anchors.has(value.messageId))
           anchors.set(value.messageId,{x:value.rect.x-EDGE_HINT_W-DEC_GAP,y:value.rect.y});
-        for(const [id,groups] of Object.entries(tagDecorationsByMsg))if(groups.length&&!anchors.has(id))
-          anchors.set(id,{x:groups[0].rect.x-EDGE_HINT_W-DEC_GAP,y:groups[0].rect.y});
         return [...anchors].map(([id,anchor])=>{
           if(frames.has(id))return null;
           return <React.Fragment key={`dec-toggle-${id}`}>
@@ -2051,6 +2023,8 @@ function GraphViewCanvas(props: GraphViewProps) {
           </React.Fragment>;
         });
       })()}
+      {Object.entries(annotationToggleRects).map(([id,rect])=>renderDecorationToggle(id,
+        {position:'absolute',left:rect.x,top:rect.y,zIndex:8},true))}
       {decorationRectsState&&decorationsByMsgState&&Object.entries(decorationRectsState).map(([,v])=>{
         if(!visibleDecorationIds.has(v.messageId))return null;
         const counts=decorationsByMsgState[v.messageId]; if (!counts) return null;
@@ -2103,8 +2077,9 @@ function GraphViewCanvas(props: GraphViewProps) {
         );
       })}
 
-      {/* INLINE BADGES (RECOMMEND/ARCHIVE) — small badge anchored to target message card */}
+      {/* Annotation badges have their own upper-right toggle. */}
       {Array.from(inlineBadgesByMsg.entries()).map(([targetId, badges]) => {
+        if(!visibleAnnotationIds.has(targetId))return null;
         let voteColumn=0;
         return badges.map(badge => {
           const isWholeSel = isRelWholeSel(badge.relMsgId);
@@ -2132,7 +2107,7 @@ function GraphViewCanvas(props: GraphViewProps) {
           voteColumn+=voteGroups.length;
           const tooltip = badge.subDetails && badge.subDetails.length > 0
             ? `${badge.relLabel}\n${badge.subDetails.map(d => {
-                const stLabels: Record<string,string> = { SPAM:'垃圾', OFFTOPIC:'跑题', LOWVALUE:'低质', IMPORTANT:'重要', CUSTOM:'自定义' };
+                const stLabels: Record<string,string> = { SPAM:'垃圾', OFFTOPIC:'跑题', LOWVALUE:'低质', IMPORTANT:'重要', CUSTOM:'自定义', YES:'是', NO:'否' };
                 return `  ${d.customLabel || stLabels[d.subType] || d.subType}: ${d.count}人`;
               }).join('\n')}\n双击查看详情`
             : `${badge.relLabel}；双击展开操作详情`;
@@ -2142,7 +2117,7 @@ function GraphViewCanvas(props: GraphViewProps) {
               onDoubleClick={ev=>{ev.stopPropagation();onInlineBadgeDoubleClick?.(ev,badge.relMsgId, { relMsgIds: badge.relMsgIds, subDetails: badge.subDetails });}}
               title={tooltip}
               style={{position:"absolute",left:badge.rect.x,top:badge.rect.y,width:badge.rect.width,height:badge.rect.height,
-                zIndex:5,background:isWholeSel?"#fbbf24":bg,color:isWholeSel?"#111827":"#fff",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
+                zIndex:7,boxSizing:'border-box',background:isWholeSel?"#fbbf24":bg,color:isWholeSel?"#111827":"#fff",borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
                 fontSize:9,pointerEvents:"auto",cursor:"pointer",padding:"0 4px",
                 boxShadow:isWholeSel?"0 2px 8px rgba(251,191,36,0.35)":"0 1px 4px rgba(0,0,0,0.5)",
                 border:isWholeSel?"2px solid #fbbf24":"1px solid rgba(255,255,255,0.15)",

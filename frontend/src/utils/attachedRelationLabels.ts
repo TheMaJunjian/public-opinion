@@ -31,6 +31,24 @@ function getReasonLabel(payload: RelationPayload | undefined): string | undefine
   return SUB_TYPE_LABELS[payload.subType] ?? payload.subType;
 }
 
+/** Secondary labels belong to the compact list record's content, not its type badge. */
+export function getRelationRecordContentLabel(message: DemoMessage): string | undefined {
+  const type = message.relationType;
+  const payload = message.relationPayload;
+  if (type === 'correct') return undefined; // Already shown in the correction details.
+  if (type === 'recommend' || type === 'archive') {
+    return payload?.subType === 'CUSTOM' ? payload.customLabel?.trim() || '自定义' : getReasonLabel(payload);
+  }
+  if (type === 'attention' || type === 'block') {
+    if (payload?.subType === 'YES') return '是';
+    if (payload?.subType === 'NO') return '否';
+  }
+  const label = payload?.label?.trim();
+  if (!label) return undefined;
+  const display = type === 'reply' ? replyAdditionalDisplayLabel(label) : label;
+  return display === getPresentationSpec(type ?? 'relation').label ? undefined : display;
+}
+
 const OPERATION_LABELS: Record<string, string> = {
   DISTRIBUTE_REVENUE: '分配收入',
   ALLOCATE_REVENUE: '分配收入',

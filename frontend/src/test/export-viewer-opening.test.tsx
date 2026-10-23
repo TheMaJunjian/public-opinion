@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -92,8 +92,10 @@ it('shows a cache read error and still permits opening a valid selected file',as
   expect(await screen.findByRole('alert')).toHaveTextContent('缓存损坏');
   fireEvent.change(screen.getByLabelText('选择导出文件'),{target:{files:[new File([JSON.stringify(data)],'有效.json')]}});
   fireEvent.click(await screen.findByRole('button',{name:'阅览此文件'}));
-  await vi.waitFor(()=>expect(saveLastExport).toHaveBeenCalledWith(data));
-  expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer');
+  await waitFor(()=>{
+    expect(saveLastExport).toHaveBeenCalledWith(data);
+    expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer');
+  });
 });
 
 it('ignores a cache failure arriving after the chooser has closed',async()=>{

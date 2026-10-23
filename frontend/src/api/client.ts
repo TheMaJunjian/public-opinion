@@ -400,7 +400,7 @@ export function getRoundDetail(roundId: string) {
 }
 
 export function castVote(roundId: string, data: { vote: 'TRUE' | 'FALSE'; amount: number; stanceCorrections?:Record<string,string[]> }) {
-  // Voting now creates an AGREE/DISAGREE relation message (Phase 5 unification)
+  // Value votes return RECOMMEND/ARCHIVE annotations; truth votes return AGREE/DISAGREE.
   return request<import('../types').Relation & { message: string }>(`/rounds/${roundId}/votes`, {
     method: 'POST',
     body: JSON.stringify(data),

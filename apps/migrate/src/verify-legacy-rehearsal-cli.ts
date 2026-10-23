@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
-import { replayArchive, type Message } from '@gonglun/core';
+import { replayArchive, relations, type Message } from '@gonglun/core';
 import { Postgres } from '../../server/src/postgres.js';
 import { legacyTimestamp } from './legacy-time.js';
 import { legacyOrganizationState } from './legacy-organizations.js';
@@ -64,6 +64,11 @@ try {
       const data=converted.parts.find(part=>part.type==='data'),meta=data?.type==='data'?data.value as Record<string,any>:undefined;
       const original=await target.prepare('SELECT body FROM legacy_records WHERE \"tableName\"=$1 AND body->>\'id\'=$2').get('Message',message.id);
       if(json(original?.body?.targetRefs??[])!==json(message.targetRefs??[])) throw new Error(`原始容器/关系引用不匹配: ${message.id}`);
+      if(['ROUND','ROUND_RESULT'].includes(message.kind)&&(message.targetRefs??[]).length){
+        const expected=[...new Set(message.targetRefs.map((ref:any)=>ref.reference?.messageId??ref.messageId??ref.relationId))].sort();
+        const actual=[...new Set(relations(converted).flatMap(part=>(part.roles.target??[]).map(binding=>binding.reference.messageId)))].sort();
+        if(json(expected)!==json(actual))throw new Error(`结算原生目标引用不匹配: ${message.id}`);
+      }
       let parent=parents.get(String(message.id));const visited=new Set<string>([message.id]);
       while(parent&&!topicIds.has(parent)){
         if(visited.has(parent)) throw new Error(`容器归属循环: ${message.id}`);

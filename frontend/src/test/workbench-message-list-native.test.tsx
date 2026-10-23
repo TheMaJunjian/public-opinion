@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
+import type { RelationPayload, TargetRef } from '../types';
 import { MemoryRouter } from 'react-router-dom';
 import WorkbenchMessageList from '../pages/workbench/ui/WorkbenchMessageList';
 import type { DemoMessage, RelationType } from '../utils/modelBridge';
@@ -38,6 +39,165 @@ const renderList = (messages: DemoMessage[], props = listProps(messages)) => ren
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.getSelection()?.removeAllRanges(); });
 
 describe('native list content and navigation regressions', () => {
+  it.each(['classify', 'summary', 'delegation'] as const)('keeps the %s text card unchanged while only pure relation records use the compact layout', relationType => {
+    const textRelation = message('text-relation', { kind: 'relation', relationType,
+      relationPayload: { title: '完整的关系正文' }, parts: [{ id: 'body', type: 'text', text: '完整的关系正文' }] });
+    const record = message('record', { kind: 'relation', relationType: 'agree', content: '目标：text-relation',
+      targetRefs: [{ kind: 'message', messageId: 'text-relation' }] });
+    const view = renderList([textRelation, record, message('text')]);
+    const textCard = view.container.querySelector<HTMLElement>('[data-msgid="text-relation"]')!;
+    const recordRow = view.container.querySelector<HTMLElement>('[data-msgid="record"]')!;
+    expect(textCard).not.toHaveAttribute('data-relation-record');
+    expect(textCard.style.backgroundColor).not.toBe('transparent');
+    expect(textCard).toHaveTextContent('完整的关系正文');
+    expect(recordRow).toHaveAttribute('data-relation-record', 'true');
+    const textRow = view.container.querySelector<HTMLElement>('[data-msgid="text"]')!;
+    expect(recordRow.style.backgroundColor).toBe(textRow.style.backgroundColor);
+    expect(recordRow.style.borderTop).toBe(textRow.style.borderTop);
+    expect(recordRow.style.borderRadius).toBe(textRow.style.borderRadius);
+    expect(within(recordRow).getAllByText('text-relation')).toHaveLength(1);
+  });
+
+  it.each([false, true])('shows source and target IDs once for a pure relation record (native description: %s)', native => {
+    const record = message('reference', { kind: 'relation', relationType: 'reference',
+      sourceMessageId: 'source-id', targetRefs: [{ kind: 'message', messageId: 'target-id' }],
+      content: '引用  source-id → target-id',
+      ...(native ? { parts: [
+        { id: 'body', type: 'text', text: '建立关系：REFERENCE；目标：target-id' },
+        { id: 'relation', type: 'relation', relation: 'reference', roles: {} },
+        { id: 'display', type: 'display', relationPartId: 'relation', layout: 'relation' },
+      ] } : {}),
+    });
+    const props = listProps([record]), view = renderList([record], props);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="reference"]')!;
+    expect(row).not.toHaveTextContent('建立关系');
+    expect(row).not.toHaveTextContent('→');
+    for (const id of ['source-id', 'target-id']) {
+      expect(within(row).getAllByText(id)).toHaveLength(1);
+      fireEvent.click(within(row).getByRole('button', { name: id }));
+      expect(props.onNavigate).toHaveBeenLastCalledWith(id);
+    }
+    expect(props.cardHandlers.onClick).not.toHaveBeenCalled();
+  });
+
+  it.each(['REPLY', 'AGREE', 'REFERENCE'])('removes generated target descriptions from real %s projections, including relation parts and fragments', relationType => {
+    const targetRefs: TargetRef[] = [
+      { kind: 'relation', relationId: 'whole-target', part: 'whole' },
+      { kind: 'relation', relationId: 'label-target', part: 'label' },
+      { kind: 'text-fragment', messageId: 'fragment-target', text: '用于验证长片段摘要也不会被作为重复正文显示的文本', hash: 'fragment-hash' },
+      { kind: 'message', messageId: 'message-target' },
+    ];
+    const converted = convertMessagesToDemoModel([], [{ id: 'projected-relation', relationType, sourceMessageId: 'source-id',
+      targetRefs, createdAt: '', createdBy: { id: 'author', username: '作者', createdAt: '' } }]);
+    const props = listProps(converted.messages), view = renderList(converted.messages, props);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="projected-relation"]')!;
+    expect(row).toHaveAttribute('data-relation-record', 'true');
+    expect(row).not.toHaveTextContent('（whole）');
+    expect(row).not.toHaveTextContent('（label）');
+    expect(row).not.toHaveTextContent('用于验证长片段摘要');
+    for (const id of ['source-id', 'whole-target', 'label-target', 'fragment-target', 'message-target']) {
+      expect(row.textContent!.split(id)).toHaveLength(2);
+      fireEvent.click(within(row).getByRole('button', { name: id }));
+      expect(props.onNavigate).toHaveBeenLastCalledWith(id);
+    }
+    expect(props.cardHandlers.onClick).not.toHaveBeenCalled();
+  });
+
+  it('preserves authored native relation text even when it includes a generated-looking target description', () => {
+    const body = '这是需要保留的说明\n目标：target-id（whole）';
+    const record = message('authored-relation', { kind: 'relation', relationType: 'reference',
+      targetRefs: [{ kind: 'relation', relationId: 'target-id', part: 'whole' }],
+      parts: [
+        { id: 'body', type: 'text', text: body },
+        { id: 'relation', type: 'relation', relation: 'reference', roles: {} },
+        { id: 'display', type: 'display', relationPartId: 'relation', layout: 'relation' },
+      ],
+    });
+    const view = renderList([record]);
+    expect(view.container.querySelector('[data-message-part-id="body"]')?.textContent).toBe(body);
+  });
+
+  it.each(['REPLY', 'AGREE', 'REFERENCE'])('removes stored %s descriptions with abbreviated target IDs', relationType => {
+    const targetId = 'cmv0xqmon00xt78kz0774od10';
+    const converted = convertMessagesToDemoModel([], [{ id: 'legacy-short-description', relationType, sourceMessageId: 'source-id',
+      targetRefs: [{ kind: 'message', messageId: targetId }],
+      parts: [
+        { id: 'body', type: 'text', text: `建立关系：${relationType}；目标：0774od10` },
+        { id: 'relation', type: 'relation', relation: relationType.toLowerCase(), roles: {} },
+        { id: 'display', type: 'display', relationPartId: 'relation', layout: 'relation' },
+      ], createdAt: '', createdBy: { id: 'author', username: '作者', createdAt: '' } }]);
+    const view = renderList(converted.messages);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="legacy-short-description"]')!;
+    expect(row).not.toHaveTextContent('建立关系');
+    expect(row.textContent!.split('0774od10')).toHaveLength(2);
+    expect(within(row).getByRole('button', { name: targetId })).toBeVisible();
+  });
+
+  it.each([
+    ['ROUND', 'TRUTH'], ['ROUND', 'VALUE'], ['ROUND_RESULT', 'TRUTH'], ['ROUND_RESULT', 'VALUE'],
+  ] as const)('shows %s %s settlement records compactly with their ID and a navigable target', (kind, settlementType) => {
+    const label = `${settlementType === 'VALUE' ? '价值' : '真假'}仲裁`;
+    const content = kind === 'ROUND' ? `发起${label}：目标消息「建立关系：JOIN；目标：target-id」`
+      : `${label}完成：目标消息 target-id；结果：赞成胜出（TRUE）；TRUE 权重 20，FALSE 权重 10`;
+    const converted = convertMessagesToDemoModel([{ id: 'settlement-id', kind, contentType: 'TEXT', content,
+      createdAt: '', createdBy: { id: 'author', username: '作者', createdAt: '' },
+      targetRefs: [{ kind: 'relation', relationId: 'target-id', part: 'whole' }], relationPayload: { settlementType } as unknown as RelationPayload,
+      parts: [{ id: 'body', type: 'text', text: content }],
+    }], []);
+    const props = listProps(converted.messages), view = renderList(converted.messages, props);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="settlement-id"]')!;
+    expect(row).toHaveAttribute('data-relation-record', 'true');
+    expect(row).toHaveTextContent('settlement-id');
+    expect(row.textContent!.split('target-id')).toHaveLength(2);
+    expect(row).not.toHaveTextContent('建立关系');
+    if (kind === 'ROUND_RESULT') expect(row).toHaveTextContent('结果：赞成胜出（TRUE）；TRUE 权重 20，FALSE 权重 10');
+    fireEvent.click(within(row).getByRole('button', { name: 'target-id' }));
+    expect(props.onNavigate).toHaveBeenCalledWith('target-id');
+    expect(props.cardHandlers.onClick).not.toHaveBeenCalled();
+  });
+
+  it.each(['subjectId', 'targetMessageId'])('uses settlement %s metadata when target references are absent and keeps distribution details', field => {
+    const converted = convertMessagesToDemoModel([{ id: 'settlement-result', kind: 'ROUND_RESULT', contentType: 'TEXT',
+      content: '对赌分配：30 贡献点；作者 +30。', createdAt: '', createdBy: { id: 'author', username: '作者', createdAt: '' },
+      relationPayload: { [field]: 'target-id' },
+    }], []);
+    const view = renderList(converted.messages);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="settlement-result"]')!;
+    expect(within(row).getByRole('button', { name: 'target-id' })).toBeVisible();
+    expect(row).toHaveTextContent('对赌分配：30 贡献点；作者 +30。');
+  });
+
+  it('identifies a legacy settlement with no recorded target instead of guessing from quoted text', () => {
+    const record = message('unlinked-result', { kind: 'round_result', content: '真假仲裁完成：目标消息「相同正文」；结果：赞成胜出' });
+    const view = renderList([record]);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="unlinked-result"]')!;
+    expect(row).toHaveTextContent('目标未记录');
+    expect(row).toHaveTextContent('结果：赞成胜出');
+    expect(row.querySelector('button[title^="跳转到目标消息"]')).toBeNull();
+  });
+
+  it.each([
+    ['recommend', { subType: 'IMPORTANT' }, '推荐', '重要'],
+    ['archive', { subType: 'CUSTOM', customLabel: '需要保留完整内容的较长附加关系说明，不能再截断' }, '冷藏', '需要保留完整内容的较长附加关系说明，不能再截断'],
+    ['tag', { label: '标签内容' }, '标注', '标签内容'],
+  ] as const)('moves the %s secondary label into content without repeating it in the type badge', (relationType, relationPayload, type, content) => {
+    const record = message('labeled-record', { kind: 'relation', relationType, relationPayload,
+      content: '目标：target-id', targetRefs: [{ kind: 'message', messageId: 'target-id' }] });
+    const view = renderList([record]);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="labeled-record"]')!;
+    expect(within(row).getByText(type, { exact: true })).toBeVisible();
+    expect(row.textContent!.split(content)).toHaveLength(2);
+    expect(row).not.toHaveTextContent(`${type} ·`);
+  });
+
+  it('shows the correction subtype only in its existing content', () => {
+    const record = message('correction', { kind: 'relation', relationType: 'correct', relationPayload: { correctionKind: 'TEXT', correctionContent: '新文字' } });
+    const view = renderList([record]);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="correction"]')!;
+    expect(within(row).getByText('更正', { exact: true })).toBeVisible();
+    expect(row.textContent!.split('修正文字')).toHaveLength(2);
+  });
+
   it.each([
     ['valid', '生效'], ['rejected', '被反对 · 未生效'],
     ['container-rejected', '容器被反对 · 未生效'], ['superseded', '未选中 · 未生效'],

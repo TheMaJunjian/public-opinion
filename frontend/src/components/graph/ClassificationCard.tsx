@@ -70,6 +70,7 @@ export default function ClassificationCard({
                   </div>
                 </div>
                 <div ref={contentRef} style={{display:"flex",flexDirection:"column",gap:4}}>
+                  {activeText && <div style={{fontSize:11,color:'#0b84ff',marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
                     <div style={{fontSize:prominence.fontSize,fontWeight:600,color:"#f3f4f6",flex:1,minWidth:0,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>
                       <MessageTextPart message={msg} activeText={activeText} onMouseUp={onTextMouseUp}>{activeText && msg.parts ? undefined : title}</MessageTextPart>

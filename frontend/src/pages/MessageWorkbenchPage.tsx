@@ -990,7 +990,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     setMessages(prev=>upsert(prev,buildRelationDemoMessage(backendRel)));
     const relType = backendRel.relationType?.toUpperCase();
     const targetMsgIds: string[] = [];
-    if (relType === 'AGREE' || relType === 'DISAGREE' || backendRel.payload?.annotationStance) {
+    if (relType === 'AGREE' || relType === 'DISAGREE' || relType === 'RECOMMEND' || relType === 'ARCHIVE' || backendRel.payload?.annotationStance) {
       targetMsgIds.push(...backendRel.targetRefs
         .filter((ref) =>
           (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
@@ -999,7 +999,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         .filter((ref): ref is { kind: 'relation'; relationId: string } =>
           ref.kind === 'relation' && 'relationId' in ref)
         .map(ref => ref.relationId));
-      // Add edge for AGREE/DISAGREE relation
+      // Publish the returned stance or annotation immediately, including relation targets.
       const srcMsgId = backendRel.sourceMessageId ?? null;
       const fromMsgId = srcMsgId || `anon:${backendRel.id}`;
       for (const ref of backendRel.targetRefs) {
@@ -1014,13 +1014,6 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
         setEdges(prev => prev.some(existing => existing.relationMessageId === backendRel.id
           && selKey(existing.to) === selKey(edge.to)) ? prev : [...prev, edge]);
       }
-    }
-    // For RECOMMEND/ARCHIVE: populate targetMsgIds from text targets
-    if (relType === 'RECOMMEND' || relType === 'ARCHIVE') {
-      targetMsgIds.push(...backendRel.targetRefs
-        .filter((ref) =>
-          (ref.kind === 'message' || ref.kind === 'text-fragment') && 'messageId' in ref)
-        .map(ref => (ref as { messageId: string }).messageId));
     }
     // Self-stake amount for the relation message itself
     const rawPayload2 = (backendRel as unknown as Record<string, unknown>).relationPayload
@@ -1099,7 +1092,7 @@ function MessageWorkbenchContent({ topControlsFrozen = false, topControlsOffset 
     }
   }, [logout, navigate]);
 
-  // Listen for relation-created events (triggered after vote creates AGREE/DISAGREE relation)
+  // Vote results include truth stances and value annotations.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<Relation>).detail;

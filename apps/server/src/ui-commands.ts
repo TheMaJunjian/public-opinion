@@ -2,7 +2,7 @@ import { bindRoles, organization, relations, replaceReference, textOf, type Json
 import { z } from 'zod';
 import { DomainError, id, Store } from './db.js';
 import { send } from './messages.js';
-import { dataOf } from './economy.js';
+import { dataOf, valueRoundFor } from './economy.js';
 import { relationViewType, messageView, parentOf, primaryRelation, roundView, snapshot, type RecordData } from './ui-projections.js';
 import { readReference } from './validation.js';
 export type Signature = {
@@ -193,11 +193,10 @@ export async function createRelation(context: CommandContext, parent: string, bo
 export async function createRound(context: CommandContext, target: string, body: RecordData) {
     const value = body.settlementType === 'VALUE';
     const original = (await context.store.message(target));
-    const previousValue = value ? (await context.store.db.prepare("SELECT body FROM rounds WHERE (body::jsonb #>> '{subjectId}')=$1 AND (body::jsonb #>> '{settlementType}')='VALUE' ORDER BY position DESC LIMIT 1").get(target)) : undefined;
-    const previous = previousValue ? JSON.parse(String(previousValue.body)) : undefined;
-    const previousClaim = previous ? (await context.store.message(previous.target.messageId, previous.target.revision)) : undefined;
-    const basis = previousClaim && relations(previousClaim).find(p => p.relation === 'open-value-settlement')?.roles.target?.[0]?.reference;
-    const reuse = value && basis?.revision === original.revision ? previous?.target as Reference : undefined;
+    const previous = value ? await valueRoundFor(context.store, { messageId: target, revision: original.revision }) : undefined;
+    const reuse = previous?.target;
+    if (previous && previous.status !== 'settled')
+        return { ...(await roundView(context.store, previous.id, context.user.id)), requestMessageId: previous.target.messageId };
     const message = (await publish(context, [...(value && !reuse ? [{ id: 'body', type: 'text', text: '这条消息具有讨论价值。' } as Part] : []), relation(value && !reuse ? 'open-value-settlement' : 'open-settlement', { target: [reuse ?? { messageId: target, revision: original.revision }] }), { id: 'data', type: 'data', value: { note: text(body.note), uiType: 'ROUND', settlementType: value ? 'VALUE' : 'TRUTH' } }, ...membership((await parentOf(context.store, target)))], {}));
     const row = (await context.store.db.prepare("SELECT id FROM rounds WHERE (body::jsonb #>> '{target,messageId}')=$1 AND (body::jsonb #>> '{status}')<>'settled' ORDER BY position DESC LIMIT 1").get(reuse?.messageId ?? (value ? message.id : target)));
     if (!row)
@@ -232,6 +231,15 @@ async function executeWithinTransaction(context: CommandContext, method: string,
         if (round.status === 'SETTLED')
             throw new DomainError('该轮已结束', 409);
         const stanceCorrections=body.stanceCorrections===undefined?undefined:stanceCorrectionsSchema.parse(body.stanceCorrections);
+        if (round.settlementType === 'VALUE') {
+            const evaluated = await store.message(round.reference.messageId, round.reference.revision);
+            const subject = relations(evaluated).find(part => part.relation === 'open-value-settlement')?.roles.target?.[0]?.reference
+                ?? { messageId: round.messageId, revision: round.reference.revision };
+            return messageView(store, await publish(context, [
+                relation(body.vote === 'TRUE' ? 'recommend' : 'archive', { target: [subject] }),
+                { id: 'data', type: 'data', value: { roundId: round.id } },
+            ], { wager: number(body.amount) }));
+        }
         return (await messageView(store, (await publish(context, [relation(body.vote === 'TRUE' ? 'agree' : 'disagree', { target: [round.reference] }), { id: 'data', type: 'data', value: { roundId: round.id,...(stanceCorrections?{stanceCorrections}:{}) } }], { wager: number(body.amount) }))));
     }
     if ((match = path.match(/^\/rounds\/([^/]+)\/close-and-settle$/)) && method === 'POST') {

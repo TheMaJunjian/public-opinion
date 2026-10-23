@@ -7,6 +7,7 @@ import { changes, context, listMessages } from './queries.js';
 import { markedPage, notifications, personalMessages } from './personal.js';
 import { createUiRouter } from './ui.js';
 import { journalManifest } from './export-response.js';
+import { RollbackUnconfirmedError } from './postgres.js';
 const query = z.object({ parent: z.string().max(100).optional(), cursor: z.string().max(1000).optional(), limit: z.coerce.number().int().min(1).max(100).optional(), q: z.string().max(200).optional(), relation: z.string().max(80).optional(), author: z.string().max(100).optional() }).strict();
 const personalQuery = query.extend({ filter: z.enum(['normal', 'follow', 'read', 'unread', 'block', 'archive']).optional(), after: z.coerce.number().int().nonnegative().optional() });
 export async function createApp(options: {
@@ -308,7 +309,9 @@ export async function createApp(options: {
             return;
         }
         console.error(error);
-        res.status(500).json({ error: '操作失败，所有本次变更已回滚' });
+        res.status(500).json({ error: error instanceof RollbackUnconfirmedError
+            ? '操作失败，数据库未确认本次操作或回滚结果，请检查后重试'
+            : '操作失败，所有本次变更已回滚' });
     });
     let ticking:Promise<void>|undefined;
     const timer = setInterval(() => {

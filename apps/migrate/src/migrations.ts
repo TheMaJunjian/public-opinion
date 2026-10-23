@@ -12,22 +12,33 @@ import { migrateQueryRecords } from './migrate-query-records.js';
 import {querySchema} from '../../server/src/query-schema.js';
 import {financialFingerprint} from './financial-fingerprint.js';
 import {completeMessageFormats} from './complete-message-formats.js';
+import {conversionFailure} from '@gonglun/core';
+import {RollbackUnconfirmedError} from '../../server/src/postgres.js';
 
 export interface Migration { version: number; name: string; up(): Promise<void> }
 
 export async function openMigratingStore(databaseUrl:string, options:{schema?:string} = {}):Promise<Store> {
   const store = Store.maintenance(databaseUrl,options);
+  let started = false;
   try {
     await store.transaction(async () => {
+      started = true;
       await store.db.exec(`CREATE SCHEMA IF NOT EXISTS "${store.db.schema}"`);
       const legacy = await store.db.prepare(`SELECT to_regclass('"User"') AS users,to_regclass('"Message"') AS messages`).get();
       if (legacy?.users || legacy?.messages) throw new Error('请使用旧版迁移命令将数据迁入新版数据库');
       const before=await financialFingerprint(store.db);
       await runMigrations(store.db,migrationsFor(store));
-      if(before!==null&&before!==await financialFingerprint(store.db))throw new Error('迁移前后余额或账本不一致，已回滚');
+      if(before!==null&&before!==await financialFingerprint(store.db))throw new Error('迁移前后余额或账本不一致');
     });
     return store;
-  } catch (error) {await store.close();throw error;}
+  } catch (error) {
+    const uncertain = error instanceof RollbackUnconfirmedError;
+    const failure = conversionFailure(error, uncertain ? 'unconfirmed' : started ? 'completed' : 'unchanged',
+      uncertain ? '已尝试回滚，但数据库未确认结果；服务已停止业务访问，请检查数据库。'
+        : started ? '本次数据库转换已回滚，原有数据及迁移版本保持不变。' : '尚未执行转换，原数据库未修改。');
+    await store.close();
+    throw failure;
+  }
 }
 
 export function migrationsFor(store: Store): Migration[] {

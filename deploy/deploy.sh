@@ -90,7 +90,12 @@ fi
 # Only query the target, in a disposable container with a read-only transaction.
 # Wrong/empty/legacy targets fail before the running API is replaced.
 "${compose[@]}" run --rm --no-deps -T api node scripts/start-existing.mjs --check
-"${compose[@]}" up -d --no-deps --no-build --pull never --wait api
+"${compose[@]}" up -d --no-deps --no-build --pull never --wait api || {
+  status=$?
+  echo 'API startup failed. Failure time, cause and rollback result from the server:' >&2
+  "${compose[@]}" logs --no-color --tail 80 api >&2 || true
+  exit "$status"
+}
 if [ "$mode" = production ]; then
   "${compose[@]}" up -d --no-deps --no-build --wait caddy
 fi

@@ -18,6 +18,10 @@ try {
     await import('../apps/server/dist/main.js');
   }
 } catch (error) {
-  console.error('启动已取消：', String(error.message).replace(/postgres(?:ql)?:\/\/\S+/g, '[数据库地址已隐藏]'));
-  process.exitCode = 1;
+  const {showStartupFailure,logStartupFailure}=await import('../apps/server/dist/startup-failure.js');
+  if(process.argv.includes('--check')){
+    // A disposable preflight must exit, rather than opening a listener.
+    logStartupFailure(error);
+    process.exitCode = 1;
+  }else await showStartupFailure(error);
 }

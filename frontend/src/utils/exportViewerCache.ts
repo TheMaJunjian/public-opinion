@@ -57,12 +57,12 @@ export async function saveLastExport(data: ExportData): Promise<void> {
 export async function loadLastExport(): Promise<unknown | null> {
   // A new route must receive a fresh object even when persistent storage fails.
   if (currentArchive) return structuredClone(currentArchive.data);
-  try {
-    const raw = sessionStorage.getItem(LAST_EXPORT_KEY);
-    if (!raw) return null;
-    const cached = JSON.parse(raw);
-    if (typeof cached?.archiveId !== 'string') return cached;
-    const entry = await withArchiveStore<CachedArchive | undefined>('readonly', store => store.get(cached.archiveId));
-    return entry && entry.archiveId === cached.archiveId ? entry.data : null;
-  } catch { return null; }
+  const raw = sessionStorage.getItem(LAST_EXPORT_KEY);
+  if (!raw) return null;
+  const cached = JSON.parse(raw);
+  if (!cached || typeof cached !== 'object' || Array.isArray(cached)) throw new Error('上次阅览缓存格式无效，请重新选择原 JSON 文件');
+  if (typeof cached?.archiveId !== 'string') return cached;
+  const entry = await withArchiveStore<CachedArchive | undefined>('readonly', store => store.get(cached.archiveId));
+  if (!entry || entry.archiveId !== cached.archiveId || !entry.data) throw new Error('上次阅览缓存缺失，请重新选择原 JSON 文件');
+  return entry.data;
 }

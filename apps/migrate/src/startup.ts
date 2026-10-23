@@ -4,6 +4,8 @@ import {openMigratingStore} from './migrations.js';
 import {migrationPlan} from './preflight.js';
 import {migrateLegacy} from './migrate-legacy.js';
 import {DATABASE_MIGRATIONS} from '../../server/src/database-version.js';
+import {ConversionFailure,conversionFailure} from '@gonglun/core';
+import {RollbackUnconfirmedError} from '../../server/src/postgres.js';
 
 /** Resumes native upgrades; Prisma imports retain the entire original schema. */
 export async function prepareStartupDatabase(databaseUrl:string,schema='public',options:{plan?:boolean;founderId?:string;targetSchema?:string}={}){
@@ -22,6 +24,7 @@ export async function prepareStartupDatabase(databaseUrl:string,schema='public',
   if(legacy){
     const suffix='_gonglun_2',target=options.targetSchema??(schema.length+suffix.length<=63?schema+suffix:`gonglun_${createHash('sha256').update(schema).digest('hex').slice(0,24)}`);
     const sourceSchema=schema,guard=new Postgres(databaseUrl,sourceSchema);
+    let staging:string|undefined;
     try{await guard.transaction(async()=>{
     const current=new Postgres(databaseUrl,target);
     let imported=false;
@@ -35,7 +38,7 @@ export async function prepareStartupDatabase(databaseUrl:string,schema='public',
       }
     }finally{await current.close();}
     if(!imported){
-      const staging=`gonglun_import_${randomUUID().replaceAll('-','')}`;
+      staging=`gonglun_import_${randomUUID().replaceAll('-','')}`;
       const report=await migrateLegacy({sourceUrl:databaseUrl,sourceSchema:sourceSchema,targetUrl:databaseUrl,targetSchema:staging,
         founderId:founderId!,apply:!options.plan,preserveActiveState:true,nativeImport:true});
       if(report.blockers.length||!options.plan&&!report.applied)throw new Error(`旧库不能可靠转换：${report.blockers.join('；')}`);
@@ -45,7 +48,20 @@ export async function prepareStartupDatabase(databaseUrl:string,schema='public',
         await guard.exec(`ALTER SCHEMA "${staging}" RENAME TO "${current.schema}"`);
       }
     }
-    });}finally{await guard.close();}
+    });}catch(error){
+      const uncertain=error instanceof RollbackUnconfirmedError;
+      let status:'unchanged'|'unconfirmed'=uncertain?'unconfirmed':'unchanged';
+      let result=uncertain?'旧数据库未修改；转换目标的发布结果未获确认，已停止业务访问。':'旧数据库未修改，未切换到转换结果。';
+      if(staging&&!options.plan){
+        // Only remove the unique staging schema owned by this attempt.
+        const cleanup=new Postgres(databaseUrl);
+        try{await cleanup.exec(`DROP SCHEMA IF EXISTS "${staging}" CASCADE`);result+=' 本次临时转换数据已清理。';}
+        catch{status='unconfirmed';result+=' 临时转换数据清理失败，请检查数据库。';}
+        finally{await cleanup.close();}
+      }
+      const failure=conversionFailure(error,status,result);
+      throw new ConversionFailure({...failure.report,rollbackStatus:status,rollbackResult:result});
+    }finally{await guard.close();}
     if(options.plan)return {schema:target,legacy:true};
     schema=target;
   }

@@ -2,6 +2,7 @@ import {execFile} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
+import {ConversionFailure,conversionFailure} from '@gonglun/core';
 
 /** Keep historical conversion in a separate executable, outside the server bundle. */
 export async function upgradeDatabase(databaseUrl:string,schema?:string):Promise<string>{
@@ -14,7 +15,7 @@ export async function upgradeDatabase(databaseUrl:string,schema?:string):Promise
     if(typeof result.schema!=='string'||!/^[a-z_][a-z0-9_]{0,62}$/.test(result.schema))throw new Error('迁移程序未返回有效数据库结构');
     return result.schema;
   }catch(error){
-    const failure=error as Error&{stderr?:string};
-    throw new Error(`数据库自动转换失败：${(failure.stderr||failure.message).replace(/postgres(?:ql)?:\/\/\S+/g,'[数据库地址已隐藏]')}`);
+    const failure=conversionFailure(error,'unconfirmed','转换程序未返回有效结果，无法确认回滚状态；服务已停止业务访问。');
+    throw new ConversionFailure({...failure.report,reason:`数据库自动转换失败：${failure.report.reason}`});
   }
 }

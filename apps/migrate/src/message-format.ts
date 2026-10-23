@@ -32,7 +32,7 @@ export function createMessageFormatTransform(latest:Map<string,Message>,original
         const selected=original.parts.find(part=>part.id===target.partId);
         const before=selected?.type==='text'?selected.text:selected?.type==='code'?selected.source:selected?.type==='web'?selected.excerpt:textOf(original);
         const prefix=before.slice(0,target.range.start),suffix=before.slice(target.range.end);
-        if(!replacement.startsWith(prefix)||!replacement.endsWith(suffix))throw new Error(`更正 ${message.id} 的全文与原选区不一致，迁移已回滚`);
+        if(!replacement.startsWith(prefix)||!replacement.endsWith(suffix))throw new Error(`更正 ${message.id} 的全文与原选区不一致`);
         replacement=replacement.slice(prefix.length,replacement.length-suffix.length);
       }
       if(original&&target?.partId&&typeof replacement==='string'){

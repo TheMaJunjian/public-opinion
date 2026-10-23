@@ -99,6 +99,8 @@ case "$1" in
       *" ps -q caddy "*) echo current-caddy-container ;;
       *" run "*) [ "$MOCK_BAD_TARGET" != 1 ] ;;
       *" exec "*) [ "$MOCK_HEALTH_FAILURE" != 1 ] ;;
+      *" up "*" api "*) [ "$MOCK_STARTUP_FAILURE" != 1 ] ;;
+      *" logs "*) printf '失败时间：2026-10-23T01:00:00Z\\n失败原因：模拟转换错误\\n回滚结果：已回滚\\n' ;;
     esac ;;
 esac
 `, { mode: 0o755 });
@@ -163,6 +165,18 @@ test('an explicit rollback reuses the retained local image without downloading o
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.ok(!result.commands.some(args => ['load', 'info'].includes(args[0])));
   assert.ok(result.commands.some(args => args.includes('--check')));
+});
+
+test('failed API startup prints the conversion report and preserves the previous deployment record',t=>{
+  const result=deploy(t,['--production'],{MOCK_LOCAL_IMAGE:'1',MOCK_STARTUP_FAILURE:'1',MOCK_PREVIOUS_DEPLOYMENT:'1'});
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/失败时间：2026-10-23T01:00:00Z/);
+  assert.match(result.stderr,/失败原因：模拟转换错误/);
+  assert.match(result.stderr,/回滚结果：已回滚/);
+  assert.ok(result.commands.some(args=>args.includes('logs')&&args.at(-1)==='api'));
+  assert.ok(!result.commands.some(args=>args.includes('up')&&args.at(-1)==='caddy'));
+  assert.equal(result.markerContents,'GONGLUN_IMAGE=gonglun:previous\nGONGLUN_DEPLOY_MODE=production\n');
+  assert.doesNotMatch(result.stdout,/Ready/);
 });
 
 test('one-command production update pulls before deployment and verifies the running revision and health', t => {

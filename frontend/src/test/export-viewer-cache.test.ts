@@ -69,5 +69,14 @@ it('does not substitute stale stored data after an interrupted cache write', asy
   });
   await cache.saveLastExport(archive('新文件'));
   vi.resetModules();
-  expect(await (await import('../utils/exportViewerCache')).loadLastExport()).toBeNull();
+  await expect((await import('../utils/exportViewerCache')).loadLastExport()).rejects.toThrow();
+});
+
+it('reports unreadable and missing caches without deleting the original reference',async()=>{
+  for(const raw of ['invalid JSON','null','false',JSON.stringify({archiveId:'missing'})]){
+    sessionStorage.setItem('lastExportData',raw);
+    const cache=await import('../utils/exportViewerCache');
+    await expect(cache.loadLastExport()).rejects.toThrow();
+    expect(sessionStorage.getItem('lastExportData')).toBe(raw);
+  }
 });

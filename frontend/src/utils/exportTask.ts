@@ -1,13 +1,14 @@
 import type { ExportData, ExportUpdateData } from '../api/client';
 import { mergeExportUpdate, prepareExportUpdate, validateExportForViewing } from './exportArchive';
 import { fetchJsonWithDeadline } from './requestLifecycle';
+import type { ConversionFailureReport } from '@gonglun/core';
 
 export type ExportTask = { kind: 'full'; scopeMessageId: string; source?: ExportData | null; view: NonNullable<ExportData['view']> }
   | { kind: 'update'; file: Blob };
 export interface PreparedExport { blob: Blob; added: number; messageCount: number }
 export type ExportWorkerRequest = { task: ExportTask; apiUrl: string };
 export type ExportWorkerResponse = { status: 'progress'; message: string }
-  | { status: 'ready'; result: PreparedExport } | { status: 'error'; message: string };
+  | { status: 'ready'; result: PreparedExport } | { status: 'error'; message: string; failure?: ConversionFailureReport };
 
 /** Runs in the export worker: only small progress messages and the finished Blob leave it. */
 export async function prepareArchiveExport({ task, apiUrl }: ExportWorkerRequest, progress: (message: string) => void): Promise<PreparedExport> {

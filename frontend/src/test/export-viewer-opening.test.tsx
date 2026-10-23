@@ -69,3 +69,39 @@ it.each(['file','cache'])('automatically converts an old %s without a migration 
   expect(screen.queryByText(/确认迁移|需要转换/)).toBeNull();
   expect(old.messages[0]).not.toHaveProperty('parts');
 });
+
+it.each(['file','cache'])('shows the time, cause and original-data result for a failed %s conversion',async source=>{
+  const invalid={formatVersion:99,scope:{messageId:null,title:'新版文件'},messages:[],relations:[]};
+  const original=structuredClone(invalid);
+  if(source==='cache')vi.mocked(loadLastExport).mockResolvedValue(invalid);
+  render(<MemoryRouter><Chooser/></MemoryRouter>);
+  if(source==='file')fireEvent.change(screen.getByLabelText('选择导出文件'),{target:{files:[new File([JSON.stringify(invalid)],'无效.json')]}});
+  const alert=await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('失败时间：');
+  expect(alert).toHaveTextContent('文件版本比当前程序更新');
+  expect(alert).toHaveTextContent('回滚结果：');
+  expect(alert).toHaveTextContent(source==='cache'?'原缓存未修改':'原 JSON 文件和缓存均未修改');
+  expect(saveLastExport).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button',{name:'阅览此文件'})).toBeNull();
+  expect(invalid).toEqual(original);
+});
+
+it('shows a cache read error and still permits opening a valid selected file',async()=>{
+  vi.mocked(loadLastExport).mockRejectedValue(new Error('缓存损坏'));
+  render(<MemoryRouter><Chooser/></MemoryRouter>);
+  expect(await screen.findByRole('alert')).toHaveTextContent('缓存损坏');
+  fireEvent.change(screen.getByLabelText('选择导出文件'),{target:{files:[new File([JSON.stringify(data)],'有效.json')]}});
+  fireEvent.click(await screen.findByRole('button',{name:'阅览此文件'}));
+  await vi.waitFor(()=>expect(saveLastExport).toHaveBeenCalledWith(data));
+  expect(JSON.parse(screen.getByTestId('location').textContent!).pathname).toBe('/viewer');
+});
+
+it('ignores a cache failure arriving after the chooser has closed',async()=>{
+  let rejectCache!:(error:Error)=>void;
+  vi.mocked(loadLastExport).mockReturnValue(new Promise((_,reject)=>{rejectCache=reject;}));
+  render(<MemoryRouter><Chooser/></MemoryRouter>);
+  await vi.waitFor(()=>expect(loadLastExport).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('button',{name:'关闭阅览'}));
+  await act(async()=>{rejectCache(new Error('迟到的异常'));});
+  expect(screen.queryByRole('alert')).toBeNull();
+});

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { startArchiveExport } from '../utils/exportWorker';
+import { conversionFailure } from '@gonglun/core';
 
 const workers: FakeWorker[] = [];
 class FakeWorker {
@@ -40,4 +41,12 @@ it('reports a worker load failure and releases the worker', async () => {
   workers[0].onerror!();
   await expect(job.result).rejects.toThrow('请刷新页面后重试');
   expect(workers[0].terminate).toHaveBeenCalledOnce();
+});
+
+it('preserves the conversion time and rollback result received from the worker',async()=>{
+  vi.stubGlobal('Worker',FakeWorker);
+  const job=startArchiveExport(task,vi.fn());
+  const failure=conversionFailure(new Error('旧文件记录缺失'),'unchanged','原 JSON 文件和缓存均未修改。');
+  workers[0].onmessage!({data:{status:'error',message:failure.message,failure:failure.report}} as MessageEvent);
+  await expect(job.result).rejects.toMatchObject({report:failure.report,message:failure.message});
 });

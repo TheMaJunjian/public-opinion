@@ -4,6 +4,7 @@ import ExportModal from '../components/ExportModal';
 import { startArchiveExport } from '../utils/exportWorker';
 import { downloadExport, saveUpdatedExport } from '../utils/saveExport';
 import type { PreparedExport } from '../utils/exportTask';
+import { conversionFailure } from '@gonglun/core';
 
 vi.mock('../utils/exportWorker', () => ({ startArchiveExport: vi.fn() }));
 vi.mock('../utils/saveExport', () => ({ downloadExport: vi.fn(), saveUpdatedExport: vi.fn() }));
@@ -56,6 +57,20 @@ it('does not write any file when the service rejects an update', async () => {
   render(<ExportModal {...props} />);
   choose(); fireEvent.click(screen.getByRole('button', { name: '更新文件' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('请回到原服务更新');
+  expect(saveUpdatedExport).not.toHaveBeenCalled();
+  expect(downloadExport).not.toHaveBeenCalled();
+});
+
+it('displays the original failure report after a worker conversion fails and saves nothing',async()=>{
+  const failure=conversionFailure(new Error('执行记录缺失'),'unchanged','本次转换已取消，原 JSON 文件和缓存均未修改。');
+  vi.mocked(startArchiveExport).mockImplementation(()=>({result:Promise.reject(failure),cancel}));
+  render(<ExportModal {...props}/>);
+  choose();fireEvent.click(screen.getByRole('button',{name:'更新文件'}));
+  const alert=await screen.findByRole('alert');
+  expect(alert.textContent).toContain(failure.message);
+  expect(alert.textContent!.match(/失败时间：/g)).toHaveLength(1);
+  expect(alert).toHaveTextContent('失败原因：执行记录缺失');
+  expect(alert).toHaveTextContent('回滚结果：本次转换已取消');
   expect(saveUpdatedExport).not.toHaveBeenCalled();
   expect(downloadExport).not.toHaveBeenCalled();
 });

@@ -5,6 +5,12 @@ import type { LedgerEntry } from '@gonglun/core';
 type Row = QueryResultRow;
 type Transaction = { client: PoolClient; ledger: LedgerEntry[]; settings: Map<string,string>; savepoint: number; pending: Promise<void>; readOnly?: boolean; serialized?: boolean };
 
+export class RollbackUnconfirmedError extends Error {
+  constructor(error: unknown, rollbackError?: unknown) {
+    super(`${error instanceof Error ? error.message : String(error)}；${rollbackError ? '数据库未确认回滚' : '提交结果未确认，不能保证回滚完成'}`, { cause: error });
+  }
+}
+
 function safeInteger(value: string): number {
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new RangeError('数据库整数超出安全范围');
@@ -121,6 +127,7 @@ export class Postgres {
     const client = await this.pool.connect();
     const transaction: Transaction = { client, ledger: [], settings: new Map(), savepoint: 0, pending: Promise.resolve(), serialized };
     let releaseError: Error | undefined;
+    let committing = false;
     try {
       await client.query('BEGIN');
       // Commands share a treasury and an ordered change stream. Serialize their
@@ -128,11 +135,13 @@ export class Postgres {
       if (serialized) await client.query("SELECT pg_advisory_xact_lock(hashtext('gonglun'), hashtext(current_database() || ':' || $1))", [this.schema]);
       const result = await this.context.run(transaction, fn);
       await transaction.pending;
+      committing = true;
       await client.query('COMMIT');
       return result;
     } catch (error) {
       await transaction.pending;
       try { await client.query('ROLLBACK'); } catch (rollbackError) { releaseError = rollbackError as Error; }
+      if (releaseError || committing) throw new RollbackUnconfirmedError(error, releaseError);
       throw error;
     } finally { client.release(releaseError); }
   }

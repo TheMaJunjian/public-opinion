@@ -4,6 +4,7 @@ import type { PreparedExport } from '../utils/exportTask';
 import { startArchiveExport } from '../utils/exportWorker';
 import { downloadExport, saveUpdatedExport } from '../utils/saveExport';
 import PromptModal from './PromptModal';
+import { conversionFailure } from '@gonglun/core';
 
 interface Props {
   onClose: () => void; scopeMessageId: string; filename: string;
@@ -34,7 +35,7 @@ export default function ExportModal({ onClose, scopeMessageId, filename, source,
       else { downloadExport(prepared.blob, filename); onClose(); }
     } catch (error) {
       if (generation.current !== request) return;
-      setError(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+      setError(`导出失败\n${conversionFailure(error,'unchanged','本次文件处理已取消，原 JSON 文件和缓存均未修改。').message}`);
       setPhase('choose');
     }
   }
@@ -70,6 +71,6 @@ export default function ExportModal({ onClose, scopeMessageId, filename, source,
         {result.added ? `已补充 ${result.added} 次变更` : '执行记录已是最新'}，现有 {result.messageCount} 条消息。完整性及资金守恒校验通过。
       </div>}
       {result && !busy && <div style={{ fontSize: 12, color: '#94a3b8' }}>保存时选择原文件即可覆盖更新；部分浏览器会下载一个更新后的文件。</div>}
-      {error && <div role="alert" style={{ color: '#f87171' }}>{error}</div>}
+      {error && <div role="alert" style={{ color: '#f87171', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error}</div>}
     </div>} />;
 }

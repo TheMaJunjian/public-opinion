@@ -6,6 +6,7 @@ import { loadLastExport, saveLastExport } from '../utils/exportViewerCache';
 import PopupOverlay from './PopupOverlay';
 import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
 import PromptModal from './PromptModal';
+import { conversionFailure } from '@gonglun/core';
 
 export { validateExportForViewing } from '../utils/exportArchive';
 
@@ -16,6 +17,7 @@ interface Props {
 
 export default function ExportViewerModal({ open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
+  const [cacheError, setCacheError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [processing, setProcessing] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -37,6 +39,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       setSelectedFile(null);
       setProcessing(false);
       setError(null);
+      setCacheError(null);
       setPrepared(null);
       setOpening(false);
       setLastExport(null);
@@ -44,9 +47,11 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => {
           void loadLastExport().then(async cached => {
-            if (cancelled || !cached) return;
-            try { const prepared=await prepareExportForViewing(cached);if(!cancelled)setLastExport(prepared); }
-            catch { /* Invalid historical caches cannot be reopened. */ }
+            if (cancelled || cached===null) return;
+            const prepared=await prepareExportForViewing(cached);
+            if(!cancelled)setLastExport(prepared);
+          }).catch(error=>{
+            if(!cancelled)setCacheError(`缓存 JSON 读取或转换失败\n${conversionFailure(error,'unchanged','本次处理已取消，原缓存未修改；可重新选择原 JSON 文件。').message}`);
           });
         });
       });
@@ -70,7 +75,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
           onClose();
         }).catch(error => {
           if (generation !== readingGeneration.current) return;
-          setError(`打开阅览文件失败：${error instanceof Error ? error.message : String(error)}`);
+          setError(`打开阅览文件失败\n${conversionFailure(error,'unconfirmed','打开未完成，原 JSON 文件未修改；缓存保存结果无法确认。').message}`);
           setOpening(false);
         });
       });
@@ -95,12 +100,15 @@ export default function ExportViewerModal({ open, onClose }: Props) {
         const prepared=await prepareExportForViewing(JSON.parse(reader.result as string));
         if(generation===readingGeneration.current)setPrepared(prepared);
       } catch (error: unknown) {
-        if(generation===readingGeneration.current)setError(`文件校验失败：${error instanceof Error ? error.message : String(error)}`);
+        if(generation===readingGeneration.current)setError(`JSON 文件转换或校验失败\n${conversionFailure(error,'unchanged','本次处理已取消，原 JSON 文件和缓存均未修改。').message}`);
       } finally {
         if(generation===readingGeneration.current)setProcessing(false);
       }
     };
-    reader.onerror = () => { if (generation === readingGeneration.current) { setError('文件读取失败'); setProcessing(false); } };
+    reader.onerror = () => { if (generation === readingGeneration.current) {
+      setError(`JSON 文件读取失败\n${conversionFailure(reader.error??new Error('文件读取失败'),'unchanged','原 JSON 文件和缓存均未修改。').message}`);
+      setProcessing(false);
+    } };
     reader.readAsText(file);
   };
 
@@ -164,6 +172,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
             </button>
           )}
           {!selectedFile && lastExport?.verification && <div role="status" style={{ color: '#86efac', fontSize: 12 }}>{lastExport.verification}</div>}
+          {cacheError && <div role="alert" style={{ color: '#f87171', fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', width: '100%' }}>{cacheError}</div>}
 
           <div
             onDrop={handleDrop}
@@ -222,7 +231,7 @@ export default function ExportViewerModal({ open, onClose }: Props) {
           )}
 
           {error && (
-            <div role="alert" style={{ color: '#f87171', fontSize: 12, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 6, width: '100%' }}>
+            <div role="alert" style={{ color: '#f87171', fontSize: 12, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 6, width: '100%', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
               {error}
             </div>
           )}

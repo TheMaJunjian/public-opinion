@@ -135,7 +135,10 @@ it('rolls back a failed automatic upgrade, retaining old messages, financial rec
     await store.db.prepare('INSERT INTO revisions("messageId",revision,body) VALUES($1,1,$2)').run(invalid.id,JSON.stringify(invalid));
     const before={messages:await store.db.prepare('SELECT * FROM messages ORDER BY id').all(),ledger:await store.db.prepare('SELECT * FROM ledger').all(),
       versions:await store.db.prepare('SELECT * FROM schema_migrations ORDER BY version').all()};
-    await expect(Store.open(testDatabaseUrl(),{schema})).rejects.toThrow('自动转换失败');
+    const failure=await Store.open(testDatabaseUrl(),{schema}).catch(error=>error);
+    expect(failure.report).toMatchObject({rollbackStatus:'completed',reason:expect.stringContaining('数据库自动转换失败'),rollbackResult:expect.stringContaining('本次数据库转换已回滚')});
+    expect(Number.isFinite(Date.parse(failure.report.failedAt))).toBe(true);
+    expect(failure.message).toContain('失败时间：');
     expect(await store.db.prepare('SELECT * FROM messages ORDER BY id').all()).toEqual(before.messages);
     expect(await store.db.prepare('SELECT * FROM ledger').all()).toEqual(before.ledger);
     expect(await store.db.prepare('SELECT * FROM schema_migrations ORDER BY version').all()).toEqual(before.versions);

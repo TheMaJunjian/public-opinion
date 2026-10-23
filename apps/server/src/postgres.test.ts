@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
@@ -8,6 +8,7 @@ import { Mutation } from './db.js';
 import { processDue, send } from './messages.js';
 import { changes, listMessages } from './queries.js';
 import { cleanupTestDatabases, createTestApp, newTestSchema } from './test-database.js';
+import {RollbackUnconfirmedError} from './postgres.js';
 
 afterEach(cleanupTestDatabases);
 type App = Awaited<ReturnType<typeof createTestApp>>;
@@ -24,6 +25,19 @@ const text = (value: string): Part => ({id:'text',type:'text',text:value});
 const relation = (value: string, messageId: string): Part => ({id:'relation',type:'relation',relation:value,roles:{target:[{id:'target',reference:{messageId}}]}});
 
 describe('PostgreSQL transactions across API instances', () => {
+  it('does not report a completed rollback to the browser when a database response is ambiguous',async()=>{
+    const app=await createTestApp(),actor=await register(app,'alice');
+    const transaction=vi.spyOn(app.store,'transaction').mockRejectedValue(new RollbackUnconfirmedError(new Error('连接中断')));
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    try{
+      const response=await request(app).post('/api/messages').set('Cookie',actor.cookie).set('x-csrf-token',actor.session.csrf)
+        .send({requestId:randomUUID(),parts:[text('提交未确认')]});
+      expect(response.status).toBe(500);
+      expect(response.body.error).toContain('未确认本次操作或回滚结果');
+      expect(response.body.error).not.toContain('已回滚');
+    }finally{transaction.mockRestore();log.mockRestore();}
+  });
+
   it('initializes once and charges one fee for concurrent retries of the same request', async () => {
     const [first,second] = await pair();
     expect(await first.store.setting('region')).toBe(await second.store.setting('region'));

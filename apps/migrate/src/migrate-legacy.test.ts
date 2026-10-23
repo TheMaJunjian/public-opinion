@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { hash } from 'bcryptjs';
 import { Pool } from 'pg';
 import request from 'supertest';
@@ -14,6 +14,7 @@ import { computeCorrectionVersions, convertMessagesToDemoModel } from '../../../
 import { deriveContainerEffect } from '../../../frontend/src/pages/workbench/model/containerEffect.js';
 import { projectContainerCanvas } from '../../../frontend/src/pages/workbench/projections/containerCanvas.js';
 import { cleanupTestDatabases, createTestApp, newTestSchema, testDatabaseUrl } from '../../server/src/test-database.js';
+import {Postgres} from '../../server/src/postgres.js';
 
 afterEach(cleanupTestDatabases);
 const time='2026-01-01T00:00:00.000Z';
@@ -116,6 +117,34 @@ it('refuses to change mismatched legacy funds during automatic import',async()=>
   await expect(prepareStartupDatabase(source.sourceUrl,source.sourceSchema,{targetSchema})).rejects.toThrow('不能可靠转换');
   expect((await migrateLegacy(source)).sourceDigest).toBe(before.sourceDigest);
 });
+
+it.each([false,true])('keeps the legacy source intact after failed publication and reports cleanup failure=%s honestly',async cleanupFails=>{
+  const source=await fixture(),targetSchema=newTestSchema(),before=await migrateLegacy(source);
+  const exec=Postgres.prototype.exec;
+  let staging:string|undefined;
+  const spy=vi.spyOn(Postgres.prototype,'exec').mockImplementation(async function(this:Postgres,sql:string){
+    const publish=sql.match(/^ALTER SCHEMA "(gonglun_import_[a-f0-9]{32})" RENAME/);
+    if(publish){staging=publish[1];throw new Error('模拟发布失败');}
+    if(cleanupFails&&staging&&sql===`DROP SCHEMA IF EXISTS "${staging}" CASCADE`)throw new Error('模拟清理失败');
+    return exec.call(this,sql);
+  });
+  const inspection=new Pool({connectionString:testDatabaseUrl()});
+  try{
+    const failure=await prepareStartupDatabase(source.sourceUrl,source.sourceSchema,{targetSchema}).catch(error=>error);
+    expect(failure.report).toMatchObject({reason:'模拟发布失败',rollbackStatus:cleanupFails?'unconfirmed':'unchanged'});
+    expect(failure.report.rollbackResult).toContain('旧数据库未修改');
+    expect(failure.report.rollbackResult).toContain(cleanupFails?'清理失败':'已清理');
+    expect((await migrateLegacy(source)).sourceDigest).toBe(before.sourceDigest);
+    expect((await inspection.query('SELECT to_regnamespace($1) AS name',[targetSchema])).rows[0].name).toBeNull();
+    expect(staging).toMatch(/^gonglun_import_[a-f0-9]{32}$/);
+    const remaining=(await inspection.query('SELECT to_regnamespace($1) AS name',[staging])).rows[0].name;
+    if(cleanupFails)expect(remaining).toBe(staging);else expect(remaining).toBeNull();
+  }finally{
+    spy.mockRestore();
+    if(staging&&/^gonglun_import_[a-f0-9]{32}$/.test(staging))await inspection.query(`DROP SCHEMA IF EXISTS "${staging}" CASCADE`);
+    await inspection.end();
+  }
+},30_000);
 
 it('automatically retains exactly funded active principal without starting a settlement countdown',async()=>{
   const source=await fixture({PointAccount:[{userId:'old-user',available:500,locked:10}],

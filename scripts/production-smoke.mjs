@@ -41,6 +41,55 @@ function request(path, method = 'GET', body, headers = {}) {
     req.on('error', reject); req.end(bytes);
   });
 }
+
+async function checkFailedUpgrade(databaseUrl,label){
+  const checking=new Pool({connectionString:databaseUrl});
+  const badId='smoke-invalid-correction';
+  const snapshot=async()=>{
+    const rows={};
+    for(const table of ['messages','revisions','accounts','ledger','schema_migrations'])rows[table]=(await checking.query(`SELECT * FROM migrated_fixture.${table} ORDER BY 1,2`)).rows;
+    return rows;
+  };
+  try{
+    const original=JSON.parse((await checking.query("SELECT body FROM migrated_fixture.messages WHERE id='legacy-message'")).rows[0].body);
+    const part=original.parts.find(part=>part.type==='text');
+    const invalid={...original,id:badId,revision:1,parts:[
+      {id:'relation',type:'relation',relation:'amend',roles:{target:[{id:'target',reference:{messageId:original.id,revision:original.revision,partId:part.id,range:{start:0,end:1}}}]}},
+      {id:'data',type:'data',value:{legacyTopicId:'legacy-topic',uiType:'CORRECT',correctionContent:'无法对应旧选区'}},
+    ]};
+    await checking.query('INSERT INTO migrated_fixture.messages VALUES($1,$2,$3,$4,$5)',[badId,invalid.authorId,invalid.createdAt,invalid.sequence,JSON.stringify(invalid)]);
+    await checking.query('INSERT INTO migrated_fixture.revisions VALUES($1,$2,$3)',[badId,1,JSON.stringify(invalid)]);
+    await checking.query('DELETE FROM migrated_fixture.schema_migrations WHERE version=7');
+    const before=await snapshot();
+    compose('restart','api');
+    let health;
+    for(let attempt=0;;attempt++){
+      try{health=await request('/api/health');assert.equal(health.status,503);assert.equal(health.body.conversionFailure.rollbackStatus,'completed');break;}
+      catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
+    }
+    const report=health.body.conversionFailure;
+    assert.ok(Number.isFinite(Date.parse(report.failedAt)));
+    assert.ok(report.reason.length>0);assert.ok(report.rollbackResult.includes('已回滚'));
+    for(let reload=0;reload<2;reload++){
+      const page=await request('/');
+      assert.equal(page.status,503);assert.equal(page.headers['cache-control'],'no-store');
+      for(const label of ['失败时间：','失败原因：','回滚结果：'])assert.ok(page.body.includes(label));
+      assert.deepEqual((await request('/api/health')).body.conversionFailure,report);
+    }
+    assert.equal((await request('/api/messages','POST',{})).status,503);
+    assert.deepEqual(await snapshot(),before,'Failed startup must roll back data and version changes');
+    const log=spawnSync('docker',[...args,'logs','--no-color','--tail','80','api'],{encoding:'utf8'});
+    assert.equal(log.status,0);assert.ok((log.stdout+log.stderr).includes(report.failedAt));
+    await checking.query('DELETE FROM migrated_fixture.revisions WHERE "messageId"=$1',[badId]);
+    await checking.query('DELETE FROM migrated_fixture.messages WHERE id=$1',[badId]);
+  }finally{await checking.end();}
+  compose('restart','api');
+  for(let attempt=0;;attempt++){
+    try{assert.equal((await request('/api/health')).status,200);break;}
+    catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
+  }
+  console.log(`PASS: ${label} failed upgrade rolls back, shows a stable report over HTTPS, stays unhealthy and recovers after repair`);
+}
 try {
   compose('up','-d','--build','--wait','--wait-timeout','120');
   for (let attempt = 0; ; attempt++) {
@@ -137,6 +186,7 @@ try {
   try{assert.equal((await upgradedPool.query('SELECT MAX(version) AS version FROM migrated_fixture.schema_migrations')).rows[0].version,7);}
   finally{await upgradedPool.end();}
   console.log('PASS: packaged server automatically upgrades an older database without a confirmation');
+  await checkFailedUpgrade(databaseUrl,'packaged main');
   // Exercise the same prebuilt image against the already migrated DB. The DB
   // container (including its start time and volume) must remain untouched.
   const capturePostgres=()=>{
@@ -186,6 +236,7 @@ try {
   console.log('PASS: packaged read-only retirement preflight, incremental upgrade, SQL/replay/all-viewer verification, idempotent rerun');
   console.log('PASS: prebuilt rehearsal image, empty target rejected, same PostgreSQL container/start time/volume, preserved login/balance/messages, read-only writes blocked');
   console.log('PASS: actual Prisma migration CLI → production image → Caddy HTTPS → bcrypt login, preserved message and balance, new write');
+  await checkFailedUpgrade(databaseUrl,'prebuilt existing-database launcher');
 } finally {
   try { compose('down','--volumes','--remove-orphans'); }
   finally { rmSync(directory,{recursive:true,force:true}); }

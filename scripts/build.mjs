@@ -9,7 +9,7 @@ for(const args of [['run','typecheck'],['--workspace','frontend','run','build']]
   if(result.error)throw result.error;
   if(result.status!==0)process.exit(result.status??1);
 }
-const application=await build({entryPoints:{main:'apps/server/src/main.ts'},bundle:true,platform:'node',format:'esm',
+const application=await build({entryPoints:{main:'apps/server/src/main.ts','startup-failure':'apps/server/src/startup-failure.ts'},bundle:true,platform:'node',format:'esm',
   external:['express','zod','pg'],outdir:'apps/server/dist',logLevel:'info',metafile:true});
 if(Object.keys(application.metafile.inputs).some(path=>path.includes('apps/migrate/')))throw new Error('主程序不能依赖迁移程序');
 for(const name of ['migrate-cli','migrate-legacy-cli','retire-legacy-topics-cli','topic-retirement-audit','topic-retirement-view-audit'])

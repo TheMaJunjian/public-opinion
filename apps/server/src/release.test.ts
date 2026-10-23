@@ -24,7 +24,7 @@ it('refuses to initialize new tables alongside a legacy production schema', asyn
   const pool = new Pool({connectionString:testDatabaseUrl()});
   try {
     await pool.query(`CREATE SCHEMA "${schema}"; CREATE TABLE "${schema}"."User" (id TEXT PRIMARY KEY)`);
-    await expect(Store.open(testDatabaseUrl(),{schema})).rejects.toThrow('迁移');
+    await expect(Store.open(testDatabaseUrl(),{schema})).rejects.toThrow('自动转换失败');
     const result = await pool.query('SELECT to_regclass($1) AS table_name',[`${schema}.settings`]);
     expect(result.rows[0].table_name).toBeNull();
   } finally { await pool.end(); }

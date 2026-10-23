@@ -10,7 +10,7 @@ it('空库由主程序建立当前结构，预检不会补版本或创建旧版�
   expect(await app.store.db.prepare("SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'legacy_%'").all(app.store.db.schema)).toEqual([]);
   await app.store.db.prepare('DELETE FROM schema_migrations WHERE version>3').run();
   const plan=await migrationPlan(testDatabaseUrl(),app.store.db.schema);
-  expect(plan.pending.map(item=>item.version)).toEqual([4,5,6]);
+  expect(plan.pending.map(item=>item.version)).toEqual([4,5,6,7]);
   expect((await app.store.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get())?.version).toBe(3);
 });
 

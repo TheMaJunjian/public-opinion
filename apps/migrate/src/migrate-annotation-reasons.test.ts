@@ -21,7 +21,7 @@ it('主程序拒绝旧格式，独立命令只迁移一次，覆盖版本、日�
     await store.db.exec('DELETE FROM schema_migrations WHERE version>=4');
   });
   const before=await store.latestSequence(),ledger=await store.db.prepare('SELECT * FROM ledger').all();
-  await expect(Store.open(testDatabaseUrl(),{schema})).rejects.toThrow('请先执行 npm run db:migrate');
+  await expect(Store.open(testDatabaseUrl(),{schema,autoMigrate:false})).rejects.toThrow('请先执行 npm run db:migrate');
   expect((await store.message('unfollow')).parts[0]).toMatchObject({relation:'unfollow'});
   const upgraded=await openMigratingStore(testDatabaseUrl(),{schema});
   try{

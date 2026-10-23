@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
 import { WorkbenchStore, type WorkbenchSnapshot } from '../../../frontend/src/data/workbench.js';
 import { migrateLegacy } from './migrate-legacy.js';
+import {prepareStartupDatabase} from './startup.js';
 import { executeBatch } from '../../server/src/ui-commands.js';
 import { stakesFor } from '../../server/src/ui-projections.js';
 import { collectContainerVisibleIds } from '../../../frontend/src/pages/workbench/model/ownership.js';
@@ -90,6 +91,47 @@ it('imports previous follow and block actions before validating the current mess
   expect(await app.store.db.prepare('SELECT family,action FROM personal_marks ORDER BY family').all()).toEqual([
     {family:'block',action:'unblock'},{family:'follow',action:'unfollow'},
   ]);
+});
+
+it('automatically imports a Prisma database once under concurrent startups and retains the immutable source',async()=>{
+  const source=await fixture(),targetSchema=newTestSchema();
+  const before=await migrateLegacy(source);
+  const options={targetSchema};
+  const [left,right]=await Promise.all([prepareStartupDatabase(source.sourceUrl,source.sourceSchema,options),prepareStartupDatabase(source.sourceUrl,source.sourceSchema,options)]);
+  expect(left.schema).toBe(targetSchema);expect(right.schema).toBe(targetSchema);
+  expect((await migrateLegacy(source)).sourceDigest).toBe(before.sourceDigest);
+  const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
+  expect(await app.store.setting('automatic-import-source')).toBe(source.sourceSchema);
+  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:0});
+  const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
+  expect(login.status,login.text).toBe(200);
+  const cursor=await app.store.latestSequence();
+  await prepareStartupDatabase(source.sourceUrl,source.sourceSchema,options);
+  expect(await app.store.latestSequence()).toBe(cursor);
+},30_000);
+
+it('refuses to change mismatched legacy funds during automatic import',async()=>{
+  const source=await fixture({PointAccount:[{userId:'old-user',available:500,locked:10}]}),targetSchema=newTestSchema();
+  const before=await migrateLegacy(source);
+  await expect(prepareStartupDatabase(source.sourceUrl,source.sourceSchema,{targetSchema})).rejects.toThrow('不能可靠转换');
+  expect((await migrateLegacy(source)).sourceDigest).toBe(before.sourceDigest);
+});
+
+it('automatically retains exactly funded active principal without starting a settlement countdown',async()=>{
+  const source=await fixture({PointAccount:[{userId:'old-user',available:500,locked:10}],
+    Stake:[{id:'active-stake',userId:'old-user',messageId:'old-message',roundId:'pending',side:'PRO',amount:10,settlementType:'TRUTH',createdAt:time}],
+    BetPool:[{messageId:'old-message',settlementType:'TRUTH',lockedPro:10,lockedCon:0}],
+    SettlementRound:[{id:'pending',messageId:'old-message',createdByUserId:'old-user',status:'VOTING',settlementType:'TRUTH',openedAt:time,closedAt:null}],
+  }),targetSchema=newTestSchema();
+  const before=await migrateLegacy({...source,preserveActiveState:true,readOnlyRehearsal:true});
+  await prepareStartupDatabase(source.sourceUrl,source.sourceSchema,{targetSchema});
+  const app=await createTestApp({databaseSchema:targetSchema});
+  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:10});
+  expect(await app.store.setting('access-mode')).toBe('read-write');
+  const round=await app.store.db.prepare('SELECT body FROM rounds WHERE id=$1').get('pending');
+  expect(JSON.parse(String(round!.body))).toMatchObject({status:'open',endsAt:null});
+  expect((await stakesFor(app.store,['old-message']))['old-message'].pool).toEqual({lockedPro:10,lockedCon:0});
+  expect((await migrateLegacy({...source,preserveActiveState:true,readOnlyRehearsal:true})).sourceDigest).toBe(before.sourceDigest);
 });
 
 it('keeps Topic IDs as classification content and preserves separate topics and original classifications',async()=>{

@@ -17,7 +17,7 @@ type Snapshot = Record<string, Row[]>;
 export interface MigrationOptions {
   sourceUrl: string; sourceSchema?: string;
   targetUrl?: string; targetSchema?: string;
-  founderId: string; rules?: Rules; apply?: boolean; readOnlyRehearsal?: boolean; preserveActiveState?:boolean; lockAvailable?:boolean; nativeRehearsal?:boolean;
+  founderId: string; rules?: Rules; apply?: boolean; readOnlyRehearsal?: boolean; preserveActiveState?:boolean; lockAvailable?:boolean; nativeRehearsal?:boolean; nativeImport?:boolean;
 }
 export interface MigrationReport {
   format: 'gonglun-prisma-migration-1'; sourceDigest: string;
@@ -132,7 +132,7 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
     if(row.relationType) {
       let name=relationNames[row.relationType]??String(row.relationType).toLowerCase();
       if(name==='follow'&&payload.action==='unfollow') name='unfollow';
-      if(options.nativeRehearsal&&row.relationType==='DELEGATION') name=payload.delegationKind==='FULFILL'?'fulfill':'delegate';
+      if((options.nativeRehearsal||options.nativeImport)&&row.relationType==='DELEGATION') name=payload.delegationKind==='FULFILL'?'fulfill':'delegate';
       const roles:Record<string,Reference[]>=['CLASSIFY','MERGE','SUMMARY','ARRANGE'].includes(row.relationType)?{members:references}:{target:references};
       if(row.relSourceId) { if(!messageIds.has(row.relSourceId)) throw new Error('关系源消息不存在'); roles.source=[{messageId:row.relSourceId}]; }
       // Preserve the original JOIN record and its source/targets for display;
@@ -210,9 +210,11 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
       report.fundingAdjustments=differences.filter(row=>row.difference>0).map(row=>{const amount=Math.min(Math.max(0,accountById.get(row.userId)?.available??0),row.difference);return {userId:row.userId,amount,remaining:row.difference-amount};});
       report.notes.push('按用户授权对虚拟贡献点尽量补锁：仅从可用余额转入锁定额，账户总额和 minted 不变；余额不足则保留剩余差异，不增发、不借款、不清零、不强制结算。');
     } else for(const row of differences) report.blockers.push(`旧合同活动本金与账户锁定额差异: ${row.userId} locked=${row.locked} principal=${row.activePrincipal} difference=${row.difference}`);
-    if(!options.readOnlyRehearsal) report.blockers.push('活跃状态保真迁移必须显式启用只读演练，直到旧资金合同的执行兼容性通过验收');
+    if(!options.readOnlyRehearsal&&!options.nativeImport) report.blockers.push('活跃状态保真迁移必须显式启用只读演练，直到旧资金合同的执行兼容性通过验收');
     report.notes.push('活跃状态结构化迁移：保留原 Stake、VoteStake、BetPool、锁定额、投票中轮次及组织状态，不清零、不结算、不改变旧合同。');
   }
+  if(options.nativeImport&&(!options.preserveActiveState||options.lockAvailable||report.financialAudit?.differences.length))
+    report.blockers.push('自动迁移要求旧本金与锁定余额完全一致，不能自动补锁或调整资金');
   if(options.nativeRehearsal) {
     if(!options.preserveActiveState||!options.lockAvailable||!options.readOnlyRehearsal) report.blockers.push('可操作隔离演练必须同时显式保留活跃状态并按可用余额补锁');
     if(report.fundingAdjustments?.some(row=>row.remaining>0)) report.blockers.push('存在未覆盖本金，保持只读，不接通对应轮次的资金执行');
@@ -290,13 +292,13 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
       // Historical source records remain immutable; checkpoint ledger begins here.
       const checkpointTx=new Mutation(store);
       const checkpoint=await checkpointTx.create('system',[{id:'body',type:'text',text:'旧版数据迁移余额检查点'},{id:'data',type:'data',value:{migrationFormat:report.format,sourceDigest:report.sourceDigest,legacyHistory:true}}],undefined,`migration:${report.sourceDigest.slice(0,32)}`);
-      for(const user of users) await store.ledger(user.id,checkpoint.id,accountById.get(user.id)!.available,options.readOnlyRehearsal?accountById.get(user.id)!.locked:0,'旧版余额检查点',true);
+      for(const user of users) await store.ledger(user.id,checkpoint.id,accountById.get(user.id)!.available,options.readOnlyRehearsal||options.nativeImport?accountById.get(user.id)!.locked:0,'旧版余额检查点',true);
       if(report.fundingAdjustments?.some(row=>row.amount>0)) {
         const adjustment=await checkpointTx.create('system',[{id:'body',type:'text',text:'迁移时按可用余额补锁虚拟贡献点；不增发、不强制结算'},{id:'data',type:'data',value:{sourceDigest:report.sourceDigest,policy:'lock-available',adjustments:report.fundingAdjustments as unknown as Json}}],undefined,`migration:lock:${report.sourceDigest.slice(0,32)}`);
         for(const row of report.fundingAdjustments) if(row.amount>0) await store.ledger(row.userId,adjustment.id,-row.amount,row.amount,'迁移虚拟贡献点补锁');
       }
       await store.set('operating',report.operating);
-      const locked=options.readOnlyRehearsal?users.reduce((sum,user)=>integer(sum+accountById.get(user.id)!.locked),0):0;
+      const locked=options.readOnlyRehearsal||options.nativeImport?users.reduce((sum,user)=>integer(sum+accountById.get(user.id)!.locked),0):0;
       await store.set('minted',integer(report.available+locked+report.operating));
       // Make old closed rounds visible, without guessing historical payouts.
       const activeTargets=new Map<string,Array<{reference:Reference;targetKey:string}>>();
@@ -306,7 +308,7 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
         const declaration=make({id:row.id,createdById:row.createdByUserId,createdAt:row.openedAt},[{id:'body',type:'text',text:row.note??'旧版结算历史'},{id:'relation',type:'relation',relation:'settlement',roles:bindRoles({target:[target]})},{id:'data',type:'data',value:{kind:'ROUND',openedBy:row.createdByUserId,legacyHistory:true}}]);
         declaration.regionId=regionId;await checkpointTx.put(declaration);
         const round={id:row.id,target,targetRevision:1,status:['SETTLED','CANCELLED','EFFECTED'].includes(row.status)?'settled':'legacy-pending',pro:row.totalProAtSettlement??row.settlementPro??0,con:row.totalConAtSettlement??row.settlementCon??0,result:row.result==='TRUE'?'pro':row.result==='FALSE'?'con':row.result==='UNKNOWN'?'tie':null,previousRoundId:row.previousRoundId??null,distributionId:null,endsAt:row.closedAt?timestamp(row.closedAt):null,targetKey:referenceKey(target),payouts:[],betIds:[],createdAt:timestamp(row.openedAt),settlementType:row.settlementType,subjectId:row.messageId,legacyHistory:true,legacyStatus:row.status,legacyNote:row.note??null,legacyVotes:get('VoteStake').filter(vote=>vote.roundId===row.id).map(vote=>({id:vote.id,userId:vote.userId,vote:vote.vote,amount:vote.amount,createdAt:vote.createdAt}))};
-        if(options.nativeRehearsal&&['OPEN','VOTING'].includes(row.status)) {
+        if((options.nativeRehearsal||options.nativeImport)&&['OPEN','VOTING'].includes(row.status)) {
           if(!['TRUTH','VALUE'].includes(row.settlementType)) throw new Error('不支持的活跃轮次类型');
           const reference:Reference={messageId:row.messageId,revision:1,...(row.settlementType==='VALUE'?{partId:'body'}:{})};
           const key=`legacy-active:${row.settlementType}:${referenceKey(reference)}`;
@@ -322,7 +324,7 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
         }
         await store.db.prepare('INSERT INTO rounds(id,"targetKey",body,"createdAt") VALUES ($1,$2,$3,$4)').run(row.id,round.targetKey,JSON.stringify(round),round.createdAt);
       }
-      if(options.nativeRehearsal) for(const pool of get('BetPool').filter(pool=>pool.settlementType==='DELEGATION'&&pool.lockedPro+pool.lockedCon>0)) {
+      if(options.nativeRehearsal||options.nativeImport) for(const pool of get('BetPool').filter(pool=>pool.settlementType==='DELEGATION'&&pool.lockedPro+pool.lockedCon>0)) {
         const task=oldMessages.find(message=>message.id===pool.messageId),stakes=get('Stake').filter(stake=>stake.messageId===pool.messageId&&stake.settlementType==='DELEGATION');
         const owners=[...new Set(stakes.map(stake=>stake.userId))];
         const reward=task?.relationPayload?.rewardAmount;

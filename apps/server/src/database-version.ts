@@ -6,4 +6,5 @@ export const DATABASE_MIGRATIONS = [
   'explicit-personal-annotation-reasons',
   'canonical-query-records',
   'explicit-access-policy',
+  'complete-historical-message-formats',
 ] as const;

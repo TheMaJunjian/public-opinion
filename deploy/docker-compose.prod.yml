@@ -27,6 +27,7 @@ services:
       TRUST_PROXY: "1"
       DATABASE_URL: postgresql://gonglun:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env.prod}@postgres:5432/${GONGLUN_DATABASE_NAME:-gonglun}
       DATABASE_SCHEMA: ${DATABASE_SCHEMA:-public}
+      GONGLUN_LEGACY_FOUNDER_ID: ${GONGLUN_LEGACY_FOUNDER_ID:-}
       GONGLUN_FOUNDER_KEY: ${GONGLUN_FOUNDER_KEY:?Set GONGLUN_FOUNDER_KEY in deploy/.env.prod}
     expose:
       - "3000"

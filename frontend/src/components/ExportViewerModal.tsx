@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ExportData } from '../api/client';
-import { validateExportForViewing } from '../utils/exportArchive';
+import { validateExportForViewing,prepareExportForViewing } from '../utils/exportArchive';
 import { loadLastExport, saveLastExport } from '../utils/exportViewerCache';
 import PopupOverlay from './PopupOverlay';
 import { DIALOG_BACKDROP, dialogStyles } from './dialogStyles';
@@ -43,9 +43,9 @@ export default function ExportViewerModal({ open, onClose }: Props) {
       // Display the chooser before loading and verifying a large cached archive.
       frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(() => {
-          void loadLastExport().then(cached => {
+          void loadLastExport().then(async cached => {
             if (cancelled || !cached) return;
-            try { setLastExport(validateExportForViewing(cached)); }
+            try { const prepared=await prepareExportForViewing(cached);if(!cancelled)setLastExport(prepared); }
             catch { /* Invalid historical caches cannot be reopened. */ }
           });
         });
@@ -89,14 +89,15 @@ export default function ExportViewerModal({ open, onClose }: Props) {
     setSelectedFile(file);
     setProcessing(true);
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (generation !== readingGeneration.current) return;
       try {
-        setPrepared(validateExportForViewing(JSON.parse(reader.result as string)));
+        const prepared=await prepareExportForViewing(JSON.parse(reader.result as string));
+        if(generation===readingGeneration.current)setPrepared(prepared);
       } catch (error: unknown) {
-        setError(`文件校验失败：${error instanceof Error ? error.message : String(error)}`);
+        if(generation===readingGeneration.current)setError(`文件校验失败：${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        setProcessing(false);
+        if(generation===readingGeneration.current)setProcessing(false);
       }
     };
     reader.onerror = () => { if (generation === readingGeneration.current) { setError('文件读取失败'); setProcessing(false); } };

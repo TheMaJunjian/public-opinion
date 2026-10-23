@@ -11,6 +11,7 @@ import { initializeMigrationArchive } from './migration-schema.js';
 import { migrateQueryRecords } from './migrate-query-records.js';
 import {querySchema} from '../../server/src/query-schema.js';
 import {financialFingerprint} from './financial-fingerprint.js';
+import {completeMessageFormats} from './complete-message-formats.js';
 
 export interface Migration { version: number; name: string; up(): Promise<void> }
 
@@ -46,7 +47,7 @@ export function migrationsFor(store: Store): Migration[] {
   { version: 6, name: 'explicit-access-policy', up: async()=>{
     await store.db.prepare('INSERT INTO settings VALUES($1,$2) ON CONFLICT(key) DO NOTHING').run('access-mode',JSON.stringify('read-write'));
     await store.db.prepare('INSERT INTO settings VALUES($1,$2) ON CONFLICT(key) DO NOTHING').run('retired-organizations','[]');
-  }}];
+  }},{version:7,name:'complete-historical-message-formats',up:()=>completeMessageFormats(store)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */

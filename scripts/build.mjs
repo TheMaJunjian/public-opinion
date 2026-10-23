@@ -17,6 +17,7 @@ for(const name of ['migrate-cli','migrate-legacy-cli','retire-legacy-topics-cli'
 await writeFile('apps/server/dist/database-version.json',JSON.stringify((await import('../apps/server/src/database-version.ts')).DATABASE_MIGRATIONS));
 await build({entryPoints:{
   'migrate-cli':'apps/migrate/src/migrate-cli.ts',
+  'startup-cli':'apps/migrate/src/startup-cli.ts',
   'migrate-legacy-cli':'apps/migrate/src/migrate-legacy-cli.ts',
   'verify-legacy-rehearsal-cli':'apps/migrate/src/verify-legacy-rehearsal-cli.ts',
   'verify-current-cli':'apps/migrate/src/verify-current-cli.ts',

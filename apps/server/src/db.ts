@@ -4,6 +4,9 @@ import { statesFor } from './projections.js';
 import { Postgres } from './postgres.js';
 import { DATABASE_MIGRATIONS } from './database-version.js';
 import { initializeDatabase } from './initialize-database.js';
+import { upgradeDatabase } from './database-upgrade.js';
+
+class DatabaseUpgradeRequired extends Error {}
 
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();
@@ -23,7 +26,7 @@ export class Store {
     finally { await store.close(); }
   }
 
-  static async open(databaseUrl: string, options: { schema?: string } = {}): Promise<Store> {
+  static async open(databaseUrl: string, options: { schema?: string; autoMigrate?:boolean } = {}): Promise<Store> {
     const store = new Store(new Postgres(databaseUrl, options.schema));
     try {
       await store.transaction(async () => {
@@ -31,21 +34,28 @@ export class Store {
         const schema = await store.db.prepare("SELECT to_regclass('schema_migrations') AS migrations,to_regclass('messages') AS messages").get();
         if (!schema?.migrations && !schema?.messages) {
           const existing = await store.db.prepare('SELECT COUNT(*)::integer AS n FROM information_schema.tables WHERE table_schema=current_schema()').get();
-          if (existing?.n) throw new Error('数据库需要迁移，请先执行独立迁移程序');
+          if (existing?.n) throw new DatabaseUpgradeRequired('数据库需要迁移，请先执行独立迁移程序');
           await initializeDatabase(store);
           await store.db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)');
           for (const [index,name] of DATABASE_MIGRATIONS.entries())
             await store.db.prepare('INSERT INTO schema_migrations(version,name) VALUES($1,$2)').run(index+1,name);
         } else {
-          if (!schema?.migrations) throw new Error('数据库需要迁移，请先执行 npm run db:migrate');
+          if (!schema?.migrations) throw new DatabaseUpgradeRequired('数据库需要迁移，请先执行 npm run db:migrate');
           const applied = await store.db.prepare('SELECT version,name FROM schema_migrations ORDER BY version').all<{version:number;name:string}>();
           if (applied.some((row,index) => row.version !== index+1 || DATABASE_MIGRATIONS[index] !== row.name))
             throw new Error('数据库版本与当前程序不兼容');
-          if (applied.length !== DATABASE_MIGRATIONS.length) throw new Error('数据库需要迁移，请先执行 npm run db:migrate');
+          if (applied.length !== DATABASE_MIGRATIONS.length) throw new DatabaseUpgradeRequired('数据库需要迁移，请先执行 npm run db:migrate');
         }
       });
       return store;
-    } catch (error) { await store.close(); throw error; }
+    } catch (error) {
+      await store.close();
+      if(error instanceof DatabaseUpgradeRequired&&options.autoMigrate!==false){
+        const schema=await upgradeDatabase(databaseUrl,options.schema);
+        return Store.open(databaseUrl,{schema,autoMigrate:false});
+      }
+      throw error;
+    }
   }
 
   /** Dedicated maintenance entry point. The caller owns the transaction and all upgrade logic. */

@@ -40,6 +40,29 @@ test('database preflight only reads and rejects empty, legacy and non-read-only 
   }
 });
 
+test('read-only deployment preflight accepts pending native upgrades while rejecting future versions',async()=>{
+  for(const scenario of ['unversioned','previous','rehearsal','future']){
+    const queries=[];
+    class FakeClient{
+      async connect(){}
+      async end(){}
+      async query(sql){
+        queries.push(sql);
+        if(sql.includes('to_regclass'))return {rows:[{name:scenario==='unversioned'?null:'schema_migrations'}]};
+        if(sql.includes('.schema_migrations'))return {rows:scenario==='future'?[{version:1,name:'old-schema'},{version:2,name:'newer-than-image'}]:[{version:1,name:'old-schema'}]};
+        if(sql.includes("key='access-mode'"))return {rows:[]};
+        if(sql.includes("key='migration'"))return {rows:scenario==='rehearsal'?[{value:JSON.stringify({mode:'read-only-rehearsal'})}]:[]};
+        return {rows:[{count:2}]};
+      }
+    }
+    const configuration=databaseConfiguration(scenario==='rehearsal'?target:{DATABASE_URL:target.MIGRATION_TARGET_DATABASE_URL});
+    const run=verifyExistingDatabase(configuration,FakeClient,['old-schema','next-schema'],{allowPending:true});
+    if(scenario==='future')await assert.rejects(run,/独立迁移程序/);
+    else assert.equal((await run).users,2);
+    assert.ok(queries.every(sql=>/^(BEGIN .*READ ONLY|SELECT |COMMIT)/.test(sql)));
+  }
+});
+
 const bash = process.platform === 'win32' ? resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../bin/bash.exe') : 'bash';
 function deploy(t, flags = [], overrides = {}, entry = 'deploy.sh') {
   const directory = mkdtempSync(join(tmpdir(), 'gonglun-deploy-test-'));

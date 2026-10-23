@@ -5,7 +5,8 @@ import {upgradeAnnotationRecords} from './annotation-format.js';
 export {upgradeAnnotationRecords} from './annotation-format.js';
 
 /** One transactional rewrite; primary keys, revisions, references, balances and action order stay intact. */
-export async function migrateAnnotationReasons(store: Store): Promise<void> {
+export async function migrateAnnotationReasons(store: Store,repairs?:ReadonlyMap<string,ReadonlySet<string>>): Promise<number> {
+  let changedMessages=0;
   await store.db.exec(`CREATE TABLE IF NOT EXISTS annotation_reason_backups(
     table_name TEXT NOT NULL,row_key TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(table_name,row_key))`);
   const initial = new Map<string,Message>();
@@ -24,11 +25,12 @@ export async function migrateAnnotationReasons(store: Store): Promise<void> {
         ORDER BY ${table.key} LIMIT 200`).all(after);
       if (!rows.length) break;
       for (const row of rows) {
-        const original = JSON.parse(String(row.body)), upgraded = upgradeAnnotationRecords(original);
+        const original = JSON.parse(String(row.body)), upgraded = upgradeAnnotationRecords(original,repairs);
         if (JSON.stringify(original) === JSON.stringify(upgraded)) continue;
         await store.db.prepare('INSERT INTO annotation_reason_backups VALUES ($1,$2,$3) ON CONFLICT DO NOTHING')
           .run(table.name,row.row_key,row.body);
         await store.db.prepare(`UPDATE ${table.name} SET ${table.column}=$1 WHERE ${table.key}=$2`).run(JSON.stringify(upgraded),row.row_key);
+        if(table.name==='messages')changedMessages++;
         if (table.name === 'revisions' && upgraded.revision === 1) initial.set(upgraded.id,upgraded as Message);
       }
       after = String(rows.at(-1)!.row_key);
@@ -50,4 +52,5 @@ export async function migrateAnnotationReasons(store: Store): Promise<void> {
         "authorId","targetId",family,action,sequence,"sourceId","partId","partOrder" FROM personal_actions
         WHERE family IN ('follow','block') ORDER BY "authorId","targetId",family,sequence DESC,"sourceId" DESC,"partOrder" DESC`);
   }
+  return changedMessages;
 }

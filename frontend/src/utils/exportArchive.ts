@@ -1,6 +1,22 @@
 import { archiveChangeFingerprint, replayArchive, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
 import type { ExportData, ExportUpdateData } from '../api/client';
 
+/** Convert old files locally, on demand, without adding a migration dialog. */
+export async function prepareExportForViewing(input:unknown){
+  const archive=input as ExportData|null;
+  if(archive&&archive.formatVersion>3)throw new Error('文件版本比当前程序更新，请更新程序后再打开');
+  const historical=archive&&typeof archive==='object'&&(archive.formatVersion<3
+    ||archive.format==='gonglun-2'&&!Array.isArray(archive.messages)&&Array.isArray((archive as unknown as Archive).changes)
+    ||Array.isArray(archive.messages)&&archive.messages.some(message=>!Array.isArray(message.parts)||!Number.isSafeInteger(message.revision)
+      ||message.parts.some(part=>part.type==='relation'&&['legacy-join','unfollow','unblock'].includes(part.relation)
+        ||part.type==='data'&&!!part.value&&typeof part.value==='object'&&!Array.isArray(part.value)&&'legacyTopicId' in part.value)));
+  if(historical){
+    const {migrateViewFile}=await import('../../../apps/migrate/src/migrate-view-file');
+    return validateExportForViewing(migrateViewFile(input));
+  }
+  return validateExportForViewing(input);
+}
+
 /** Accept the current view contract; historical conversion belongs to the standalone migrator. */
 export function validateExportForViewing(input: unknown): { data: ExportData; verification: string | null } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('导出文件格式无效');
@@ -37,7 +53,7 @@ export type UpdatableExportData = ExportData & Archive;
 
 /** Verify the selected file locally; send only a digest and cursor to the server. */
 export async function prepareExportUpdate(input: unknown): Promise<{ data: UpdatableExportData; checkpoint: ArchiveCheckpoint }> {
-  const { data } = validateExportForViewing(input);
+  const { data } = await prepareExportForViewing(input);
   if (data.format !== 'gonglun-2') throw new Error('此阅览文件不含完整执行记录，请先完整导出一次');
   const archive = data as UpdatableExportData;
   if (typeof archive.regionId !== 'string' || !archive.regionId || typeof archive.ledgerId !== 'string' || !archive.ledgerId) {

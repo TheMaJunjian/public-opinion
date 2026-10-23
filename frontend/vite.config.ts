@@ -6,6 +6,7 @@ const buildId = randomUUID()
 
 export default defineConfig({
   base: './',
+  worker: { format: 'es' },
   define: { __APP_BUILD_ID__: JSON.stringify(buildId) },
   plugins: [react(), {
     name: 'app-build-version',

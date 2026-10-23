@@ -9,7 +9,7 @@ import { loadLastExport, saveLastExport } from '../utils/exportViewerCache';
 vi.mock('../utils/exportViewerCache', () => ({ loadLastExport: vi.fn(), saveLastExport: vi.fn() }));
 
 const data: ExportData = {
-  formatVersion: 1, exportedAt: '', scope: { messageId: null, title: '相同阅览文件' },
+  formatVersion: 3, exportedAt: '', scope: { messageId: null, title: '相同阅览文件' },
   messages: [{ id: 'm', kind: 'TEXT', contentType: 'TEXT', content: '保存的正文', createdAt: '', author: '甲', authorId: 'a',revision:1,parts:[{id:'body',type:'text',text:'保存的正文'}] }],
   relations: [], view: { username: '甲', mode: 'list', classificationId: null,
     messageFilter: { hideJoin: false, hideSettlement: true }, homeFilter: 'read-self', cleanFilters: [] },
@@ -49,4 +49,23 @@ it.each(['file', 'drop', 'cache'])('paints a waiting dialog before processing %s
   expect(saveLastExport).toHaveBeenCalledWith(data);
   expect(JSON.parse(screen.getByTestId('location').textContent!)).toEqual({ pathname: '/viewer', state: { exportData: data } });
   expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it.each(['file','cache'])('automatically converts an old %s without a migration warning or confirmation',async source=>{
+  const old={formatVersion:2,topic:{title:'旧讨论'},messages:[{id:'text',kind:'TEXT',content:'原正文',createdAt:'',authorId:'a',author:'甲'}],
+    relations:[{id:'follow',relationType:'ATTENTION',sourceMessageId:null,targetRefs:[{kind:'message',messageId:'text'}],payload:{action:'unfollow'},createdAt:'',authorId:'a',author:'甲'}]};
+  if(source==='cache')vi.mocked(loadLastExport).mockResolvedValue(old);
+  render(<MemoryRouter initialEntries={['/messages']}><Chooser/></MemoryRouter>);
+  if(source==='file')fireEvent.change(screen.getByLabelText('选择导出文件'),{target:{files:[new File([JSON.stringify(old)],'旧文件.json',{type:'application/json'})]}});
+  const button=await screen.findByRole('button',{name:source==='file'?'阅览此文件':/上次阅览：旧讨论/});
+  expect(screen.queryByRole('alert')).toBeNull();
+  fireEvent.click(button);
+  await screen.findByTestId('location');
+  await vi.waitFor(()=>expect(saveLastExport).toHaveBeenCalled());
+  const converted=vi.mocked(saveLastExport).mock.calls[0][0];
+  expect(converted.formatVersion).toBe(3);
+  expect(converted.messages).toHaveLength(2);
+  expect(converted.relations[0].payload).toMatchObject({subType:'NO'});
+  expect(screen.queryByText(/确认迁移|需要转换/)).toBeNull();
+  expect(old.messages[0]).not.toHaveProperty('parts');
 });

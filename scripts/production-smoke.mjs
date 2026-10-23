@@ -122,6 +122,21 @@ try {
   assert.ok(compact.body.relationRecords.every(index=>Number.isInteger(index)&&compact.body.messages[index]));
   const migratedWrite=await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'Migrated production write'}]},{cookie:oldLogin.headers['set-cookie'][0].split(';')[0],'x-csrf-token':oldLogin.body.csrf});
   assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,299);
+  // The packaged server launches its separate migrator automatically on restart.
+  const upgradePool=new Pool({connectionString:databaseUrl});
+  try{await upgradePool.query('DELETE FROM migrated_fixture.schema_migrations WHERE version=7');}
+  finally{await upgradePool.end();}
+  compose('restart','api');
+  for(let attempt=0;;attempt++){
+    try{assert.equal((await request('/api/health')).status,200);break;}
+    catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
+  }
+  const afterUpgrade=await request('/api/login','POST',{name:'legacy-user',password:'old'});
+  assert.equal(afterUpgrade.status,200);assert.equal(afterUpgrade.body.account.available,299);
+  const upgradedPool=new Pool({connectionString:databaseUrl});
+  try{assert.equal((await upgradedPool.query('SELECT MAX(version) AS version FROM migrated_fixture.schema_migrations')).rows[0].version,7);}
+  finally{await upgradedPool.end();}
+  console.log('PASS: packaged server automatically upgrades an older database without a confirmation');
   // Exercise the same prebuilt image against the already migrated DB. The DB
   // container (including its start time and volume) must remain untouched.
   const capturePostgres=()=>{

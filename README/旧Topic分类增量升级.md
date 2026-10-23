@@ -1,6 +1,6 @@
 # 取消旧 Topic 转成的分类
 
-此升级用于已经完成旧库迁移的新版数据库。版本 3（`retire-converted-topic-containers`）由独立迁移程序执行。API 启动只校验版本，不执行转换；完整升级在源代码环境运行 `npm run db:migrate -- --plan` 后执行 `npm run db:migrate`。下列核验工具针对单独取消 Topic 的步骤；全部旧格式升级还会将旧字段转成新版结构，须另核对迁移备份及资金校验结果。
+此升级用于已经完成旧库迁移的新版数据库。版本 3（`retire-converted-topic-containers`）由独立迁移程序执行。API 启动会自动调用独立迁移程序完成待执行版本，无需提醒或确认；也可在启动前手动运行 `npm run db:migrate -- --plan` 和 `npm run db:migrate`。下列核验工具针对单独取消 Topic 的步骤；全部旧格式升级还会将旧字段转成新版结构，须另核对迁移备份及资金校验结果。
 
 专项视图核验需要当前查询表结构，适用于本版历史导入完成后仍保留 Topic 的数据库。较早版本的数据库应执行完整的 `db:migrate` 和 `db:verify`，不要直接套用下列专项视图核验命令。
 

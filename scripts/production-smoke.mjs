@@ -139,7 +139,9 @@ try {
     Topic:[{id:'legacy-topic',title:'Legacy topic',status:'OPEN',createdById:'legacy-user',createdAt:time,updatedAt:time}],
     Message:[{id:'legacy-message',topicId:'legacy-topic',createdById:'legacy-user',kind:'TEXT',content:'Legacy message preserved',createdAt:time,updatedAt:time},
       {id:'legacy-result',topicId:'legacy-topic',createdById:'legacy-user',kind:'ROUND_RESULT',relationType:null,content:'Historical settlement result',
-        targetRefs:[{messageId:'legacy-message'}],relationPayload:{settlementType:'TRUTH'},createdAt:time,updatedAt:time}],
+        targetRefs:[{messageId:'legacy-message'}],relationPayload:{settlementType:'TRUTH'},createdAt:time,updatedAt:time},
+      {id:'legacy-termination',topicId:'legacy-topic',createdById:'legacy-user',kind:'RELATION',relationType:'OPERATIONS',content:'Historical termination request',
+        targetRefs:[{messageId:'legacy-message'}],relationPayload:{operationType:'TERMINATE_SETTLEMENT',roundId:'legacy-previous-round'},createdAt:time,updatedAt:time}],
     Balance:[{userId:'legacy-user',balance:300,debtFrozen:false}],
     PointAccount:[{userId:'legacy-user',available:300,locked:0}],
     RevenuePool:[{id:'legacy-pool',balance:20}],
@@ -163,7 +165,7 @@ try {
     catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
   }
   const oldLogin=await request('/api/login','POST',{name:'legacy-user',password:'old'});
-  assert.equal(oldLogin.status,200);assert.equal(oldLogin.body.account.available,298);
+  assert.equal(oldLogin.status,200);assert.equal(oldLogin.body.account.available,297);
   const legacyView=await request('/api/ui/snapshot?parent=legacy-topic');
   assert.equal(legacyView.status,200);
   assert.ok(legacyView.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
@@ -174,7 +176,7 @@ try {
   assert.ok(compact.body.relationRecords.length>0);
   assert.ok(compact.body.relationRecords.every(index=>Number.isInteger(index)&&compact.body.messages[index]));
   const migratedWrite=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'Migrated production write'}]},{cookie:oldLogin.headers['set-cookie'][0].split(';')[0],'x-csrf-token':oldLogin.body.csrf});
-  assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,296);
+  assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,295);
   // The packaged server launches its separate migrator automatically on restart.
   const upgradePool=new Pool({connectionString:databaseUrl});
   try{
@@ -199,6 +201,9 @@ try {
     const repaired=JSON.parse((await upgradedPool.query("SELECT body FROM migrated_fixture.messages WHERE id='legacy-result'")).rows[0].body);
     assert.ok(repaired.parts.some(part=>part.type==='relation'&&part.relation==='distribution'&&part.roles.target?.some(binding=>binding.reference.messageId==='legacy-message')));
     assert.equal((await upgradedPool.query('SELECT COUNT(*) AS n FROM migrated_fixture.refs WHERE "sourceId"=$1 AND "targetId"=$2',['legacy-result','legacy-message'])).rows[0].n,'1');
+    const termination=JSON.parse((await upgradedPool.query("SELECT body FROM migrated_fixture.messages WHERE id='legacy-termination'")).rows[0].body);
+    assert.equal(termination.spending.wager,1);
+    assert.ok(termination.parts.some(part=>part.type==='data'&&part.value?.roundId==='legacy-previous-round'));
   }
   finally{await upgradedPool.end();}
   console.log('PASS: packaged server automatically upgrades an older database without a confirmation');

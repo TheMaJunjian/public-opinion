@@ -216,7 +216,8 @@ async function placeResolvedWager(tx: Mutation, message: Message, amount: number
         const previous = history.at(-1);
         round = (await newRound(tx, selected, message, previous));
     }
-    const requested=dataOf(message).roundId;if(requested!==undefined&&requested!==round.id)throw new DomainError('投票目标与轮次固定依据不一致',409);
+    // A historical self-contribution is separate from the old action's round.
+    const requested=dataOf(message).roundId;if(!historical&&requested!==undefined&&requested!==round.id)throw new DomainError('投票目标与轮次固定依据不一致',409);
     round[resolved.side] = integer(round[resolved.side] + amount);
     if (amount > 0) {
         await tx.store.ledger(message.authorId, message.id, -amount, amount, historical ? '历史消息真假补扣' : '对赌锁定', historical || allowDebt);

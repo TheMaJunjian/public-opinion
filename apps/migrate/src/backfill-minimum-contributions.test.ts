@@ -1,7 +1,7 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import {replayArchive,referenceKey} from '@gonglun/core';
 import {Mutation} from '../../server/src/db.js';
-import {placeWager,placeHistoricalSelfWager,refundHistoricalSelfWager} from '../../server/src/economy.js';
+import {openSettlement,placeWager,placeHistoricalSelfWager,refundHistoricalSelfWager} from '../../server/src/economy.js';
 import {cleanupTestDatabases,createTestStore,newTestSchema} from '../../server/src/test-database.js';
 import {migrationsFor,runMigrations} from './migrations.js';
 import {minimumContributionCandidates,backfillMinimumContributions,refundGeneratedContributions} from './backfill-minimum-contributions.js';
@@ -55,6 +55,57 @@ it('并发升级只补扣一次，允许负余额，保留签名与旧流水，�
   const sequence=await first.latestSequence();
   await createTestStore(schema);
   expect(await first.latestSequence()).toBe(sequence);
+});
+
+it('旧终止消息的轮次依据不限制迁移自赞，保留旧轮次且不重放终止操作',async()=>{
+  const {schema,store}=await fixture();
+  const originalRound=await store.transaction(async()=>{
+    const tx=new Mutation(store);
+    await store.db.prepare('INSERT INTO users(id,name,password,founder) VALUES($1,$2,$3,0)').run('system','系统','hash');
+    const opening=await tx.create('system',[{id:'relation',type:'relation',relation:'open-settlement',roles:{target:[{id:'target',reference:{messageId:'paid',revision:1}}]}}]);
+    await openSettlement(tx,opening);
+    const round=await store.db.prepare('SELECT body FROM rounds WHERE "targetKey"=$1').get(referenceKey({messageId:'paid',revision:1}));
+    const body=JSON.parse(String(round!.body));
+    await tx.create('author',[
+      {id:'relation',type:'relation',relation:'terminate',roles:{target:[{id:'target',reference:body.target}]}},
+      {id:'data',type:'data',value:{roundId:body.id}},
+    ],undefined,'legacy-termination');
+    await store.db.prepare('INSERT INTO signatures VALUES($1,$2,$3,$4,$5,$6,$7)').run('legacy-termination','author','device','key','旧终止请求原文','旧终止签名','2026-01-01');
+    await tx.commit();
+    return body;
+  });
+  const upgraded=await createTestStore(schema);
+  expect(await upgraded.account('author')).toEqual({available:-4,locked:4,earned:0,spent:0});
+  expect(JSON.parse(String((await upgraded.db.prepare('SELECT body FROM rounds WHERE id=$1').get(originalRound.id))!.body))).toEqual(originalRound);
+  const message=await upgraded.message('legacy-termination');
+  expect(message.parts).toContainEqual({id:'data',type:'data',value:{roundId:originalRound.id}});
+  expect(message.spending.wager).toBe(1);
+  const bet=await upgraded.db.prepare('SELECT "roundId","targetKey",amount FROM bets WHERE "messageId"=$1').get(message.id);
+  expect(bet).toMatchObject({targetKey:referenceKey({messageId:message.id,revision:1}),amount:1});
+  expect(bet!.roundId).not.toBe(originalRound.id);
+  expect(await upgraded.db.prepare('SELECT payload,signature FROM signatures WHERE "messageId"=$1').get(message.id)).toEqual({payload:'旧终止请求原文',signature:'旧终止签名'});
+  const replay=replayArchive({format:'gonglun-2',changes:(await upgraded.db.prepare('SELECT body FROM changes ORDER BY sequence').all()).map(row=>JSON.parse(String(row.body)))});
+  expect(replay.accounts.get('author')).toEqual(await upgraded.account('author'));
+  const sequence=await upgraded.latestSequence();
+  await createTestStore(schema);
+  expect(await upgraded.latestSequence()).toBe(sequence);
+});
+
+it('日常押注仍拒绝与目标轮次不一致的 roundId 并完整回滚',async()=>{
+  const {store}=await fixture(),account=await store.account('author'),sequence=await store.latestSequence();
+  const rounds=await store.db.prepare('SELECT id,body FROM rounds ORDER BY id').all();
+  await expect(store.transaction(async()=>{
+    const tx=new Mutation(store);
+    const message=await tx.create('author',[
+      {id:'relation',type:'relation',relation:'agree',roles:{target:[{id:'target',reference:{messageId:'paid',revision:1}}]}},
+      {id:'data',type:'data',value:{roundId:rounds[0]!.id}},
+    ],{protocol:0,recommendation:0,wager:1},'wrong-round-vote');
+    await placeWager(tx,message,1);
+  })).rejects.toThrow('投票目标与轮次固定依据不一致');
+  expect(await store.account('author')).toEqual(account);
+  expect(await store.latestSequence()).toBe(sequence);
+  expect(await store.db.prepare('SELECT id,body FROM rounds ORDER BY id').all()).toEqual(rounds);
+  expect(await store.db.prepare('SELECT 1 FROM messages WHERE id=$1').get('wrong-round-vote')).toBeUndefined();
 });
 
 it('补扣中途失败时账户、消息、流水和版本全部回滚',async()=>{

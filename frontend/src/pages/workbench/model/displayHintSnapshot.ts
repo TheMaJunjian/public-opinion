@@ -1,10 +1,16 @@
 import { buildStanceTargetMap, resolveDisplayedStance } from '../../../utils/modelBridge';
 import { indexRelatedMessages } from '../../../utils/relatedMessages';
 import type { Relation } from '../../../types';
+import {bodyVersionKey,type BodyVersion,type ReadingMark} from '@gonglun/core';
+import {displayedBodyVersion} from '../../../utils/bodyVersions';
+import {effectiveCardWidths} from '../../../utils/cardWidth';
 import { type CorrectionVersion, type DemoEdge, type DemoMessage } from '../../../utils/modelBridge';
 import { isContainerType, type ContainerEffect } from './containerEffect';
+import type {ReadingInfluence} from './readingProgress';
 
 export type DisplaySnapshot = {
+  version?: BodyVersion;
+  width?: number;
   content: string;
   arrangement?: { layout: string; order: string[] };
   parentIds: string[];
@@ -15,16 +21,26 @@ export type DisplaySnapshot = {
   recommendationTied?: boolean;
 };
 export type DisplayHint = {
+  unreadCorrectionIds?:string[];
+  selectionChanged?: boolean;
+  otherVersionInfluenceCount?: number;
   unread: boolean;
+  originalUnread: boolean;
   explicitlyUnread: boolean;
   relatedUnreadIds: string[];
+  pendingInfluences: ReadingInfluence[];
+  otherVersionUnreadCount: number;
+  unreadMemberCount: number;
   source?: 'personal' | 'recommended';
   different: boolean;
   matchesPersonal: boolean;
   matchesRecommended: boolean;
+  personalActive: boolean;
+  recommendedActive: boolean;
   readChanged?: boolean;
   personal: DisplaySnapshot;
   recommended: DisplaySnapshot;
+  displayed: DisplaySnapshot;
 };
 export type DisplayHintsInput = {
   messages: DemoMessage[];
@@ -32,14 +48,16 @@ export type DisplayHintsInput = {
   edges: DemoEdge[];
   username: string | null;
   readStatus: ReadonlyMap<string, 'READ' | 'UNREAD'>;
+  readingMarks?: ReadingMark[];
   personalEffect: ContainerEffect;
   displayEffect?: ContainerEffect;
   corrections: Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>;
+  recommendedCorrections?: Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>;
   displayCorrections?: Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }>;
 };
 const same = (a: string[],b: string[]) => a.length === b.length && a.every((id,index) => id === b[index]);
 export function sameDisplay(a: DisplaySnapshot,b: DisplaySnapshot) {
-  return a.content === b.content && a.suppressed === b.suppressed && a.membershipActive === b.membershipActive && same(a.parentIds,b.parentIds) && same(a.memberIds,b.memberIds)
+  return a.content === b.content && (!a.version||!b.version||bodyVersionKey(a.version)===bodyVersionKey(b.version)) && a.width===b.width && a.suppressed === b.suppressed && a.membershipActive === b.membershipActive && same(a.parentIds,b.parentIds) && same(a.memberIds,b.memberIds)
     && JSON.stringify(a.arrangement)===JSON.stringify(b.arrangement);
 }
 export function parentsFor(effect: ContainerEffect) {
@@ -51,7 +69,7 @@ export function parentsFor(effect: ContainerEffect) {
 }
 export function snapshot(message: DemoMessage, effect: ContainerEffect, parents: Map<string,Set<string>>, correction?: CorrectionVersion): DisplaySnapshot {
   const membership = isContainerType(message.relationType) ? effect.ownership.direct(message.id) : undefined;
-  return { content: correction?.content ?? message.content, parentIds: [...(parents.get(message.id) ?? [])].sort(),
+  return {version:displayedBodyVersion(message,correction),content: correction?.content ?? message.content, parentIds: [...(parents.get(message.id) ?? [])].sort(),
     ...(message.relationType==='arrange'?{arrangement:{layout:message.relationPayload?.targetLayout??'',
       order:[...new Set(effect.edges.filter(edge=>edge.relationMessageId===message.id&&edge.relationType==='arrange').map(edge=>edge.to.messageId))]}}:{}),
     memberIds: membership ? [...membership.textIds,...membership.relationIds].sort() : [], suppressed: effect.suppressed.has(message.id),
@@ -59,9 +77,10 @@ export function snapshot(message: DemoMessage, effect: ContainerEffect, parents:
     correctionIds: correction?.appliedCorrectionIds ?? (correction ? [correction.correctionId] : []), recommendationTied: correction?.recommendationTied };
 }
 
-/** A compact display fingerprint stored only when the user sends a READ message. */
+/** A compact display fingerprint for explicit viewing confirmations. */
 export function displaySignature(value: DisplaySnapshot): string {
   const text=JSON.stringify([value.content,value.parentIds,value.memberIds,value.suppressed,value.arrangement,
+    ...(value.width===undefined?[]:[value.width]),
     ...(value.membershipActive===undefined?[]:[value.membershipActive])]);
   let first=2166136261,second=5381;
   for(let index=0;index<text.length;index++){first=Math.imul(first^text.charCodeAt(index),16777619);second=Math.imul(second,33)^text.charCodeAt(index);}
@@ -71,7 +90,7 @@ export function displaySignature(value: DisplaySnapshot): string {
 export function getMessageDisplaySignature(input:DisplayHintsInput,id:string):string|undefined {
   const message=input.messages.find(item=>item.id===id);
   const effect=input.displayEffect??input.personalEffect;
-  return message?displaySignature(snapshot(message,effect,parentsFor(effect),(input.displayCorrections??input.corrections).get(id)?.current)):undefined;
+  return message?displaySignature({...snapshot(message,effect,parentsFor(effect),(input.displayCorrections??input.corrections).get(id)?.current),width:effectiveCardWidths(input.messages,input.edges,input.username)[id]??320}):undefined;
 }
 
 export function messageDisplay(value: DisplaySnapshot, original: DemoMessage, hasCorrections: boolean): DisplaySnapshot {

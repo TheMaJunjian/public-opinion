@@ -83,7 +83,7 @@ it('reuses committed message state and avoids a redundant batch savepoint',async
   const registered=await request(app).post('/api/register').send({name:'projection-work',password:'test-password'});
   expect(registered.status).toBe(201);
   const queries=vi.spyOn(app.store.db,'prepare'),commands=vi.spyOn(app.store.db,'exec');
-  await executeBatch(app.store,registered.body.user,{requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/messages',body:{content:'only compute once'}}]});
+  await executeBatch(app.store,registered.body.user,{requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/messages',body:{content:'only compute once',recommendation:1}}]});
   // One state calculation for the durable change, one for its post-commit snapshot.
   expect(queries.mock.calls.filter(([sql])=>sql.startsWith('SELECT body FROM messages WHERE id IN'))).toHaveLength(2);
   expect(commands.mock.calls.filter(([sql])=>sql.startsWith('SAVEPOINT'))).toHaveLength(1);

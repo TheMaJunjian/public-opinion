@@ -19,7 +19,7 @@ export async function prepareAddressedCorrection(dependencies: Pick<DraftSendDep
     let replacement = newMessageContent;
     const current = dependencies.correctionVersions.get(message.id)?.current;
     if (target.reference?.range) {
-      const displayed = current ? withCorrectionContent(message, current.content, current.changes) : message;
+      const displayed = current ? withCorrectionContent(message, current.content, current.changes, current.snapshot) : message;
       let offset = 0;
       for (const part of message.parts ?? []) {
         if (part.type !== 'text' && part.type !== 'code' && part.type !== 'web') continue;
@@ -45,7 +45,7 @@ export async function prepareAddressedCorrection(dependencies: Pick<DraftSendDep
     const prepared = preparePartCorrection(message, target, replacement);
     setComparisonPopup({
       relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
-      reversePreview: { ...prepared, mode: 'direct', correctionKind: dependencies.secondaryRelationType === 'meaning-change' ? 'MEANING' : 'TEXT' }
+      reversePreview: { ...prepared, mode: 'direct', correctionKind: 'TEXT' }
     });
   } catch (error) { setSendError(error instanceof Error ? error.message : '无法修改所选部件'); }
   return;
@@ -79,7 +79,7 @@ export async function prepareTextCorrection(dependencies: Pick<DraftSendDependen
   const beforeContent = originalContent;
   setComparisonPopup({
     relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
-    reversePreview: { before: beforeContent, after: correctedContent, target: effectiveTargets[0], mode: 'direct', correctionKind: dependencies.secondaryRelationType === 'meaning-change' ? 'MEANING' : 'TEXT' },
+    reversePreview: { before: beforeContent, after: correctedContent, target: effectiveTargets[0], mode: 'direct', correctionKind: 'TEXT' },
   });
   return;
 }
@@ -138,7 +138,7 @@ export async function prepareCorrectionChain(dependencies: Pick<DraftSendDepende
   const beforeContent = msgMap.get(ancestorTargetMid)?.content ?? generated;
   setComparisonPopup({
     relMsgId: '__new-correction__', x: window.innerWidth / 2, y: window.innerHeight / 2,
-    reversePreview: { before: beforeContent, after: generated, target: resolvedTargets[0], mode: 'direct', label, correctionKind: dependencies.secondaryRelationType === 'meaning-change' ? 'MEANING' : 'TEXT' },
+    reversePreview: { before: beforeContent, after: generated, target: resolvedTargets[0], mode: 'direct', label, correctionKind: 'TEXT' },
   });
   return;
 }

@@ -6,6 +6,9 @@ import JoinRecordBadges from '../../../components/JoinRecordBadges';
 import {indexRelatedMessages,isRejectedContainer} from '../../../utils/relatedMessages';
 import { useNavigate } from 'react-router-dom';
 import MessageCard, { type MessageCardContext, type MessageCardProps } from '../../../components/MessageCard';
+import MessageSettlementActions from '../../../components/MessageSettlementActions';
+import MessageAuthors from '../../../components/MessageAuthors';
+import {deriveMessageAuthorship} from '../../../utils/messageAuthorship';
 import { MessageDisplayMarker } from '../../../components/MessageDisplayHints';
 import RoundHistory from '../../../components/RoundHistory';
 import SettlementPanel from '../../../components/SettlementPanel';
@@ -21,6 +24,7 @@ import type { ContainerEffect } from '../model/containerEffect';
 import { filterMessageListContext } from '../projections/messageListContext';
 import VirtualMessageList from '../../../components/VirtualMessageList';
 import { renderSettlementContentWithTarget } from '../actions/messageRendering';
+import {groupContainerJoinRecords,JOIN_TARGET_LOCATION_LABELS} from '../model/joinRecordGroups';
 
 interface MessageCatalog {
   messages: DemoMessage[];
@@ -56,7 +60,6 @@ interface ListComparison {
   comparisonRecommendedDisplay: 'agree' | 'disagree';
   activeStanceByRelMsgId: Map<string, { targetRelId: string; type: 'agree' | 'disagree' }>;
   activeStanceMap: Map<string, { relMsgId: string; type: 'agree' | 'disagree' }>;
-  stanceEffectByRelMsgId: Map<string, { local: boolean; global: boolean }>;
 }
 interface ListSettlement {
   settlementOpenMsgId: string | null;
@@ -75,6 +78,7 @@ interface Props {
   selection: { draftUnits: UnitSelection[]; activeTextSelectId: string | null; lastClickedMessageId: string | null };
   cardHandlers: Pick<MessageCardProps, 'onClick' | 'onDoubleClick' | 'onMouseDown' | 'onMouseUp' | 'onContentMouseUp'>;
   scopeMessageId: string;
+  joinRecordContext?:{containerId:string;effect:ContainerEffect};
   onJoinFilter: (messageId: string, direction: 'incoming' | 'outgoing') => void;
   onNavigate: (messageId: string) => void;
   onRelatedNavigate?:(messageId:string)=>void;
@@ -94,7 +98,7 @@ export default function WorkbenchMessageList(props: Props) {
     renderRelation: renderRelationContentWithTargets, renderContent: renderMessageContentWithAnchorsForList } = props;
   const { messages, edges, msgMap, relationById, relationTypeByRelMsgId, joinRelationsByTarget, joinRelationsBySource, effectiveJoinRelationIds, summaryCoverageByMessageId, correctionVersions } = props.catalog;
   const { embeddedMessageIds, suppressedRelIds, rejectedContainerIds, overriddenStanceRelIds, readStatusByMessageId, homeMatchIds, homeDisplayRoleByMessageId, authorStakes, stakeCounts, correctionFilterTargetId } = props.display;
-  const { comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap, stanceEffectByRelMsgId } = props.comparison;
+  const { comparisonReviewed, comparisonTargetId, comparisonRecommendedDisplay, activeStanceByRelMsgId, activeStanceMap } = props.comparison;
   const { draftUnits, activeTextSelectId, lastClickedMessageId } = props.selection;
   const relatedByTarget=useMemo(()=>indexRelatedMessages(messages,rejectedContainerIds),[messages,rejectedContainerIds]);
   const standaloneMessageIds = props.standaloneMessageIds;
@@ -107,11 +111,13 @@ export default function WorkbenchMessageList(props: Props) {
   const { settlementOpenMsgId, settlementOpenType, settlementEntryHighlight, closeSettlement, openSettlement, onMessageCreated } = props.settlement;
   const rowIds = useMemo(() => listMessages.map(message => message.id), [listMessages]);
   const rowMap = useMemo(() => new Map(listMessages.map(message => [message.id, message])), [listMessages]);
+  const joinGroups=useMemo(()=>props.joinRecordContext?groupContainerJoinRecords(props.joinRecordContext.containerId,
+    rowIds.flatMap(id=>{const record=relationById.get(id);return record?[record]:[];}),props.joinRecordContext.effect):undefined,
+  [props.joinRecordContext,rowIds,relationById]);
+  const joinEntries=useMemo(()=>new Map([...(joinGroups?.adopted??[]),...(joinGroups?.unadopted??[])].map(entry=>[entry.id,entry])),[joinGroups]);
   const pins = useMemo(() => new Set([lastClickedMessageId, activeTextSelectId, settlementOpenMsgId].filter((id): id is string => !!id)),
     [lastClickedMessageId, activeTextSelectId, settlementOpenMsgId]);
-  return (
-    <VirtualMessageList ids={rowIds} pinned={pins}>
-      {id => {
+  const renderMessage=(id:string)=>{
           const msg = rowMap.get(id)!;
           const isWholeSelected = draftUnits.some(u => isWholeMessageSelection(u, msg.id));
           const isActiveText = activeTextSelectId === msg.id;
@@ -136,6 +142,7 @@ export default function WorkbenchMessageList(props: Props) {
           const joinIsEffective = !!joinRelation && effectiveJoinRelationIds.has(joinRelation.id);
           const joinStatus = props.catalog.joinStatusByMessage?.get(msg.id) ?? (joinIsEffective ? 'valid' : 'inactive');
           const joinPresentation = getJoinStatusPresentation(joinStatus, props.catalog.joinEffectSourcesByMessage?.get(msg.id));
+          const joinEntry=joinEntries.get(msg.id);
           const ctx: MessageCardContext = {
             isRelationRecord: msg.kind === 'join' || msg.kind === 'round' || msg.kind === 'round_result' || (msg.kind === 'relation' && !isCardMessage(msg)),
             isWholeSelected, isActiveText, isOrganizationMessage,
@@ -156,12 +163,6 @@ export default function WorkbenchMessageList(props: Props) {
             homeContextRole: homeDisplayRoleByMessageId.get(msg.id),
           };
           const sc = stakeCounts[msg.id];
-          const truthPro = sc?.truth.pro ?? 0;
-          const truthCon = sc?.truth.con ?? 0;
-          const valuePro = sc?.value.pro ?? 0;
-          const valueCon = sc?.value.con ?? 0;
-          const showTruthProCon = truthPro > 0 || truthCon > 0;
-          const showValueProCon = valuePro > 0 || valueCon > 0;
           const isTruthOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'TRUTH';
           const isValueOpen = settlementOpenMsgId === msg.id && settlementOpenType === 'VALUE';
           const hasCustomContent = isContentKind(msg.kind) && msg.kind !== 'round' && msg.kind !== 'round_result';
@@ -204,7 +205,6 @@ export default function WorkbenchMessageList(props: Props) {
               : msg.relationPayload?.correctionContent ?? correctionContent;
           })();
           const activeStanceInfo = activeStanceByRelMsgId.get(msg.id);
-          const stanceEffect = stanceEffectByRelMsgId.get(msg.id);
           const activeTargetStanceInfo = activeStanceMap.get(msg.id);
           const isCurrentComparisonTarget = comparisonReviewed && comparisonTargetId === msg.id;
           const recommendationMatchesUser = isCurrentComparisonTarget && activeTargetStanceInfo
@@ -231,18 +231,8 @@ export default function WorkbenchMessageList(props: Props) {
               onMouseDown={cardHandlers.onMouseDown}
               onMouseUp={cardHandlers.onMouseUp}
               onContentMouseUp={cardHandlers.onContentMouseUp}
-              headerBetweenIdAuthor={stanceEffect || (isCurrentComparisonTarget && activeTargetStanceInfo) ? (
+              headerBetweenIdAuthor={
                 <>
-                  {stanceEffect && (
-                    <>
-                      <span style={{ color: stanceEffect.local ? '#86efac' : '#fca5a5', fontWeight: 600 }}>
-                        {stanceEffect.local ? '本地生效' : '本地未生效'}
-                      </span>
-                      <span style={{ color: stanceEffect.global ? '#86efac' : '#fca5a5', fontWeight: 600 }}>
-                        {stanceEffect.global ? '对其他用户生效' : '对其他用户未生效'}
-                      </span>
-                    </>
-                  )}
                   {activeStanceInfo && activeStanceInfo.targetRelId === comparisonTargetId && comparisonReviewed && (
                     <span style={{ color: recommendationMatchesUser ? '#86efac' : '#fbbf24', fontWeight: 600 }}>
                       当前统计结果：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
@@ -253,8 +243,11 @@ export default function WorkbenchMessageList(props: Props) {
                       当前统计结果：{comparisonRecommendedDisplay === 'disagree' ? '反对' : '赞同'} · {recommendationMatchesUser ? '与你相同' : '与你不同'}
                     </span>
                   )}
+                  <JoinRecordBadges messageId={msg.id} memberRecords={relatedJoinRelations} containerRecords={outgoingJoinRelations}
+                    isContainer={isOrganizationMessage} isEffective={join => effectiveJoinRelationIds.has(join.id)} onOpen={onJoinFilter} compact />
                 </>
-              ) : undefined}
+              }
+              headerAuthor={<MessageAuthors message={msg} prefix="作者：" showSelfStake stakePlacement="inline" authorship={deriveMessageAuthorship(msg,correctionVersions.get(msg.id),msgMap,authorStakes[msg.id]??0)}/>}
               headerLabel={msg.kind === 'join' ? (
                 <span style={{ color: '#93c5fd', fontFamily: 'monospace', fontWeight: 600 }}>{msg.id}</span>
               ) : correctionFilterTargetId !== null && msg.relationType === 'correct' ? (
@@ -289,38 +282,17 @@ export default function WorkbenchMessageList(props: Props) {
                 <span><span role="button" tabIndex={0} style={{ color: '#fbbf24', fontWeight: 600, cursor:'pointer' }} title="双击查看更正记录"
                   onClick={event=>event.stopPropagation()} onDoubleClick={event=>{event.stopPropagation();props.onCorrectionHistory?.(event,correctionRecords[0].relationMessageId);}}
                   onKeyDown={event=>{if(event.key==='Enter'){event.stopPropagation();props.onCorrectionHistory?.(event as unknown as React.MouseEvent,correctionRecords[0].relationMessageId);}}}>
-                  ✏更正 {correctionRecords.length}
-                </span><MessageDisplayMarker messageId={msg.id} scope="corrections" /></span>
+                  ✏ {correctionRecords.length}
+                </span></span>
               ) : undefined}
               headerLeading={correctionFilterTargetId!==null && msg.relationType==='correct'?<></>:undefined}
               onSettlementTargetClick={(e, id) => { e.stopPropagation(); handleNavigateToMessage(id); }}
               headerExtra={
                 <>
-                  {(!ctx.isRelationRecord || (authorStakes[msg.id] ?? 0) > 0) && <div style={{ fontSize: 10, color: "#6b7280", textAlign: "right", width: ctx.isRelationRecord ? undefined : "100%" }}>自押 PRO {authorStakes[msg.id] ?? 0} 点</div>}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 1, minWidth: 0, width: ctx.isRelationRecord ? undefined : "100%", gap: 8, flexWrap: "nowrap", whiteSpace: "nowrap", overflow: "hidden" }}>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0, overflow: "hidden" }}>
-                      <JoinRecordBadges messageId={msg.id} memberRecords={relatedJoinRelations} containerRecords={outgoingJoinRelations}
-                        isContainer={isOrganizationMessage} isEffective={join => effectiveJoinRelationIds.has(join.id)} onOpen={onJoinFilter}/>
-                    </div>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                      <button data-settlement-toggle-truth onClick={(event) => { event.stopPropagation(); if (isTruthOpen) { closeSettlement(); } else { openSettlement(msg.id, 'TRUTH'); } }} style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: isTruthOpen ? "rgba(99,102,241,0.2)" : "none", border: isTruthOpen ? "1px solid #6366f1" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isTruthOpen ? "#a5b4fc" : "#6b7280" }} title="真假仲裁">⚖️</button>
-                      <button data-settlement-toggle-value onClick={(event) => { event.stopPropagation(); if (isValueOpen) { closeSettlement(); } else { openSettlement(msg.id, 'VALUE'); } }} style={{ flexShrink: 0, fontSize: 13, cursor: "pointer", background: isValueOpen ? "rgba(245,158,11,0.2)" : "none", border: isValueOpen ? "1px solid #f59e0b" : "1px solid transparent", borderRadius: 4, padding: "0 3px", color: isValueOpen ? "#fcd34d" : "#6b7280" }} title="价值仲裁">💎</button>
-                      {showTruthProCon && (
-                        <span style={{ color: "#a5b4fc" }} title="真假仲裁">
-                          ⚖️{truthPro > 0 && <span style={{ color: "#4ade80" }}>👍{truthPro}</span>}
-                          {truthPro > 0 && truthCon > 0 && ' '}
-                          {truthCon > 0 && <span style={{ color: "#f87171" }}>👎{truthCon}</span>}
-                        </span>
-                      )}
-                      {showValueProCon && (
-                        <span style={{ color: "#fcd34d" }} title="价值仲裁">
-                          💎{valuePro > 0 && <span style={{ color: "#4ade80" }}>👍{valuePro}</span>}
-                          {valuePro > 0 && valueCon > 0 && ' '}
-                          {valueCon > 0 && <span style={{ color: "#f87171" }}>👎{valueCon}</span>}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <MessageSettlementActions messageId={msg.id} counts={sc} fontSize={11}
+                    openMessageId={settlementOpenMsgId} openType={settlementOpenType}
+                    onTruth={id => isTruthOpen ? closeSettlement() : openSettlement(id, 'TRUTH')}
+                    onValue={id => isValueOpen ? closeSettlement() : openSettlement(id, 'VALUE')} />
                 </>
               }
               badges={
@@ -391,15 +363,22 @@ export default function WorkbenchMessageList(props: Props) {
               {msg.kind === 'join' ? (
                 <div style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.7, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', order: 1, minWidth: 0 }}>
                   <span>目标 ID：</span>
-                  {(msg.joinInfo?.targetIds ?? []).length > 0 ? msg.joinInfo!.targetIds.map(targetId => (
+                  {(msg.joinInfo?.targetIds ?? []).length > 0 ? msg.joinInfo!.targetIds.map(targetId => {
+                    const target=joinEntry?.targets.find(target=>target.id===targetId);
+                    return <span key={targetId} data-join-target={targetId} style={{display:'inline-flex',alignItems:'center',gap:4,maxWidth:'100%',flexWrap:'wrap',fontSize:12}}>
                     <button
-                      key={targetId}
                       type="button"
                       onClick={event => { event.stopPropagation(); handleNavigateToMessage(targetId); }}
                       style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.16)', color: '#93c5fd', cursor: 'pointer', fontFamily: 'monospace' }}
                       title={`跳转到目标消息 ${targetId}`}
                     >{targetId}</button>
-                  )) : <span>无</span>}
+                    {target&&<span data-join-target-location={target.location} data-join-target-adopted={target.adopted?'true':'false'}
+                      style={{fontSize:10,padding:'0 5px',borderRadius:3,background:target.location==='container'?'rgba(16,185,129,0.14)':target.location==='nested'?'rgba(59,130,246,0.14)':'rgba(148,163,184,0.12)',
+                        color:target.location==='container'?'#a7f3d0':target.location==='nested'?'#bfdbfe':'#cbd5e1'}}>
+                      {JOIN_TARGET_LOCATION_LABELS[target.location]}{joinEntry?.adopted&&!target.adopted?' · 此目标未采用':''}
+                    </span>}
+                    </span>;
+                  }) : <span>无</span>}
                   <span>容器 ID：</span>
                   {msg.joinInfo?.containerId ? (
                     <button
@@ -426,13 +405,15 @@ export default function WorkbenchMessageList(props: Props) {
                     )}
                   </div>
                   <div style={{ borderLeft: '3px solid #0d9488', background: 'rgba(13,148,136,0.12)', padding: '6px 8px', order: 3, flexBasis: '100%', minWidth: 0, fontSize: 12 }}>
-                    <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>{msg.relationPayload?.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · start={correctionRange.start} len={correctionRange.len}</div>
+                    {msg.relationPayload?.correctionKind === 'WIDTH' ? <div style={{color:'#5eead4'}}>宽度调整 · {msg.relationPayload.correctionWidth} px</div> : <>
+                    <div style={{ fontSize: 11, color: '#5eead4', marginBottom: 3 }}>{'修正文字'} · start={correctionRange.start} len={correctionRange.len}</div>
                     <div style={{ whiteSpace: 'pre-wrap', color: '#fca5a5' }}>
                       {correctionReplacement.length === 0
                         ? `删除${correctionTargetLabel}`
                         : correctionTargetText.length === 0 ? `在所选位置插入「${correctionReplacement}」`
                           : `将${correctionTargetLabel}修改为「${correctionReplacement}」`}
                     </div>
+                    </>}
                   </div>
                 </div>
               ) : msg.kind === 'round' || msg.kind === 'round_result' ? renderSettlementContentWithTarget({ handleNavigateToMessage }, msg)
@@ -440,8 +421,14 @@ export default function WorkbenchMessageList(props: Props) {
                 : hasCustomContent ? renderMessageContentWithAnchorsForList(msg) : undefined}
             </MessageCard>
           );
-        }}
-    </VirtualMessageList>
-
-  );
+        };
+  if(joinGroups)return <div data-container-join-records={props.joinRecordContext!.containerId} style={{display:'grid',gap:16}}>
+    {([{key:'adopted',label:'当前采用',entries:joinGroups.adopted},{key:'unadopted',label:'未采用',entries:joinGroups.unadopted}] as const).map(group=><section key={group.key}
+      aria-label={`${group.label}的被加入记录`} data-join-record-group={group.key}>
+      <h3 style={{fontSize:13,fontWeight:600,margin:'0 0 8px',padding:'5px 8px',borderLeft:`3px solid ${group.key==='adopted'?'#34d399':'#94a3b8'}`,color:group.key==='adopted'?'#a7f3d0':'#cbd5e1',background:'#1b2430'}}>{group.label}（{group.entries.length} 条）</h3>
+      {group.entries.length?<VirtualMessageList ids={group.entries.map(entry=>entry.id)} pinned={pins}>{renderMessage}</VirtualMessageList>
+        :<div style={{padding:'4px 8px',fontSize:12,color:'#94a3b8'}}>暂无{group.label}的被加入记录。</div>}
+    </section>)}
+  </div>;
+  return <VirtualMessageList ids={rowIds} pinned={pins}>{renderMessage}</VirtualMessageList>;
 }

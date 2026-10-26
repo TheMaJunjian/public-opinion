@@ -7,6 +7,19 @@ const buildId = randomUUID()
 export default defineConfig({
   base: './',
   worker: { format: 'es' },
+  build: {
+    rollupOptions: {
+      output: {
+        onlyExplicitManualChunks: true,
+        // Shared by the workbench, its lazy views and the reading controls.
+        manualChunks(id) {
+          const path = id.replaceAll('\\', '/');
+          if (path.endsWith('/src/utils/modelBridge.ts')) return 'message-model';
+          if (path.endsWith('/src/pages/workbench/model/readingProgress.ts')) return 'reading-progress';
+        },
+      },
+    },
+  },
   define: { __APP_BUILD_ID__: JSON.stringify(buildId) },
   plugins: [react(), {
     name: 'app-build-version',

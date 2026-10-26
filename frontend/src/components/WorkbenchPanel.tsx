@@ -1,4 +1,6 @@
 import { messageScopePath } from '../utils/messageRoutes';
+import {targetInvestmentDimension} from '@gonglun/core';
+import CardWidthEditor from './graph/CardWidthEditor';
 import { lazy, useMemo, useRef } from 'react';
 import DeferredWorkbench from './DeferredWorkbench';
 import { describeUnit as describeVisibleSelection } from '../utils/selectionLabel';
@@ -23,6 +25,8 @@ interface DraftGroup {
 }
 
 interface WorkbenchPanelProps {
+  contributionGroups:Array<{type:string;label:string;count:number;truth:number|'';value:number|'';total:number}>;
+  onContributionChange:(type:string,field:'truth'|'value',value:number|'')=>void;
   // Layout
   rightPanelRef: React.RefObject<HTMLDivElement | null> | React.Ref<HTMLDivElement>;
   leftPanelRef: React.RefObject<HTMLDivElement | null>;
@@ -89,6 +93,8 @@ interface WorkbenchPanelProps {
   hasSecondaryRelationSelector: boolean;
   tagSecondaryOptions: string[];
   correctSecondaryOptions: string[];
+  correctionWidth?: number;
+  setCorrectionWidth?: (width: number) => void;
   proposalSecondaryOptions: string[];
   isArrangeType: boolean;
   isClassifyType: boolean;
@@ -232,27 +238,27 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
 
   const renderSendControls = () => (
     <>
+      {showContributionControls && <div data-contribution-policy="true" style={{display:'flex',alignItems:'baseline',gap:8,fontSize:11,color:'#94a3b8',whiteSpace:'nowrap'}}>
+        <span style={{flexShrink:0}}>协议费 {p.stakeFeeAmountRef.current} 点/条</span>
+        <span>每条消息的真假、价值至少一项大于 0</span>
+      </div>}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {showContributionControls && <>
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>协议费 {p.stakeFeeAmountRef.current} 点/条</span>
-          <label style={{ fontSize: 11 }}>推荐（可选）
-            <input aria-label="推荐投入" type="number" min={0} max={p.availablePoints} value={p.recommendationAmount}
-              onChange={event => p.setRecommendationAmount(event.target.value === '' ? '' : Math.max(0, Math.min(Number(event.target.value), p.availablePoints)))}
-              style={{ width: 54, marginLeft: 4, padding: '2px 4px', background: '#1a1a1a', color: '#eee', border: '1px solid #555', borderRadius: 4 }} />
-          </label>
-          {(!p.relationType || p.totalConsumption?.hasText) && <label style={{ fontSize: 11 }}>文本自赞（可选）
-            <input aria-label="文本自赞押注" type="number" min={0} max={p.availablePoints} value={p.stakeAmount} data-guide-contribution-stake="true"
-              onChange={event => p.setStakeAmount(event.target.value === '' ? '' : Math.max(0, Math.min(Number(event.target.value), p.availablePoints)))}
-              style={{ width: 54, marginLeft: 4, padding: '2px 4px', background: '#1a1a1a', color: '#eee', border: '1px solid #555', borderRadius: 4 }} />
-          </label>}
-          {p.relationType && <label style={{ fontSize: 11 }}>{p.relationType === 'agree' || p.relationType === 'disagree' ? '对赌押注（可选）' : '关系自赞（可选）'}
-            <input aria-label="关系押注" type="number" min={0} max={p.availablePoints} value={p.relStakeAmount} data-guide-contribution-stake="true"
-              onChange={event => p.setRelStakeAmount(event.target.value === '' ? '' : Math.max(0, Math.min(Number(event.target.value), p.availablePoints)))}
-              style={{ width: 54, marginLeft: 4, padding: '2px 4px', background: '#1a1a1a', color: '#eee', border: '1px solid #555', borderRadius: 4 }} />
-          </label>}
+          {p.contributionGroups.map(group=><div key={group.type} data-contribution-type={group.type} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 6px',border:'1px solid #444',borderRadius:4}}>
+            <span style={{fontSize:11}}>{group.label}消息 × {group.count}</span>
+            {(['truth','value'] as const).map(field=><label key={field} style={{fontSize:11}}>{field==='truth'?'真假':'价值'}
+              <input aria-label={`${group.type==='TEXT'?'':group.label}${field==='truth'?'真假':'价值'}投入`} type="number" min={0} max={Math.max(0,p.availablePoints)} value={group[field]}
+                disabled={targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')}
+                title={targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')?'此项固定为 0，投入计入目标消息的另一维度':undefined}
+                data-guide-contribution-stake={field==='truth'?'true':undefined}
+                onChange={event=>p.onContributionChange(group.type,field,event.target.value===''?'':Math.max(0,Math.min(Number(event.target.value),Math.max(0,p.availablePoints))))}
+                style={{width:54,marginLeft:4,padding:'2px 4px',background:'#1a1a1a',color:targetInvestmentDimension(group.type)===(field==='truth'?'VALUE':'TRUTH')?'#666':'#eee',border:'1px solid #555',borderRadius:4}}/>
+            </label>)}
+            <span style={{fontSize:11,color:'#94a3b8'}}>每条同额，小计 {group.total} 点</span>
+          </div>)}
           <span style={{ fontSize: 11, color: '#94a3b8' }}>可用 {p.availablePoints} 点</span>
           {p.totalConsumption && <span data-guide-contribution-consumption="true" style={{ fontSize: 11, color: p.totalConsumption.total > p.availablePoints ? '#f87171' : '#f59e0b' }}>
-            预计 {p.totalConsumption.total} 点（协议费 {p.totalConsumption.protocolFeeTotal} + 推荐 {p.totalConsumption.recommendationTotal} + 押注 {p.totalConsumption.stakeTotal}{p.totalConsumption.delegationRewardStake > 0 ? ` + 委托报酬 ${p.totalConsumption.delegationRewardStake}` : ''}）
+            本次 {p.totalConsumption.messageCount} 条消息，预计 {p.totalConsumption.total} 点（协议费 {p.totalConsumption.protocolFeeTotal} + 真假 {p.totalConsumption.stakeTotal} + 价值 {p.totalConsumption.recommendationTotal}{p.totalConsumption.delegationRewardStake > 0 ? ` + 委托报酬 ${p.totalConsumption.delegationRewardStake}` : ''}）
           </span>}
         </>}
         <button data-guide-send="true" data-guide-text-message-send="true" onClick={() => { window.dispatchEvent(new Event('guide-send-selected')); p.handleQuickSendAndRelateFromDraftTargets(); }} disabled={p.isPreviewMode || !p.singleButtonEnabled}
@@ -462,8 +468,10 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
               </div>
             );
           })()}
+          {p.relationType === 'correct' && p.secondaryRelationType === 'width-adjustment' && <CardWidthEditor
+            width={p.correctionWidth ?? 320} onChange={width => p.setCorrectionWidth?.(width)} />}
           {p.relationType === 'correct' && <div style={{ fontSize: 11, color: '#9ca3af' }}>
-            正文按本人立场优先、公共统计其次显示有效更正。选字可基于显示内容，更正始终以原文为准。
+            {p.secondaryRelationType === 'width-adjustment' ? '宽度按本人立场优先、公共统计其次显示有效更正，不改变正文。' : '正文按本人立场优先、公共统计其次显示有效更正。选字可基于显示内容，更正始终以原文为准。'}
           </div>}
           {/* SubType selector */}
           {((p.relationType === "tag" && ['recommend','archive','attention','block'].includes(p.secondaryRelationType)) || ['recommend','archive','attention','block'].includes(p.relationType ?? '')) && (
@@ -509,7 +517,7 @@ export default function WorkbenchPanel(props: WorkbenchPanelProps) {
           />
           )}
           <div key={p.composerRefreshKey}>
-          {(() => {
+          {!(p.relationType === 'correct' && p.secondaryRelationType === 'width-adjustment') && (() => {
             const isCustomSubType = p.subType === 'CUSTOM' && ((p.relationType === "tag" && (p.secondaryRelationType === "recommend" || p.secondaryRelationType === "archive")) || p.relationType === "recommend" || p.relationType === "archive");
             const isTagWithoutSecondary = p.relationType === "tag" && p.secondaryRelationType === "none";
             const textAreaDisabled =

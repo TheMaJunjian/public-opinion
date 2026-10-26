@@ -14,11 +14,11 @@ it.each([42, { invalid: true }, ['correction', 42]])('keeps malformed imported s
   const model = convertMessagesToDemoModel([original], [correction, stance]);
   const versions = computeCorrectionVersions(model.messages, model.edges);
   const display = deriveCorrectionStanceDisplay(model.messages, model.edges, versions, {});
-  expect(display.counts.original.truth).toEqual({ pro: 0, con: 0 });
-  expect(display.excludedEdges.has(model.edges.find(edge => edge.relationMessageId === stance.id)!.id)).toBe(true);
+  expect(display.counts).toEqual({});
+  expect(display.excludedEdges.has(model.edges.find(edge => edge.relationMessageId === stance.id)!.id)).toBe(false);
 });
 
-it.each(['TEXT','MEANING',undefined] as const)('shares text-edit votes and separates meaning-edit votes (kind=%s)',kind=>{
+it.each(['TEXT','MEANING',undefined] as const)('shares ordinary votes and preserves historical context evidence (kind=%s)',kind=>{
   const user={id:'u',username:'u',createdAt:''};
   const original:Message={id:'original',kind:'TEXT',contentType:'TEXT',content:'原文',createdAt:'2026-01-01',createdBy:user};
   const relation=(id:string,type:string,target:string,date:string,payload:Relation['payload']={}):Relation=>({id,relationType:type,sourceMessageId:null,
@@ -32,24 +32,8 @@ it.each(['TEXT','MEANING',undefined] as const)('shares text-edit votes and separ
   const versions=computeCorrectionVersions(model.messages,model.edges),raw={original:{truth:{pro:34,con:3},value:{pro:9,con:0}}};
   const before=JSON.stringify(model),display=deriveCorrectionStanceDisplay(model.messages,model.edges,versions,raw);
   const statistics=computeTransitiveVoteStats(model.edges,model.messages,display.excludedEdges);
-  if(kind==='MEANING'){
-    expect(statistics.original).toMatchObject({agreeCount:1,disagreeCount:1});
-    expect(display.counts.original.truth).toEqual({pro:4,con:3});
-    expect(display.excludedEdges.has(model.edges.find(edge=>edge.relationMessageId==='old')!.id)).toBe(true);
-    const entry=versions.get('original')!;
-    const restored=deriveCorrectionStanceDisplay(model.messages,model.edges,new Map([['original',{...entry,current:undefined}]]),raw);
-    expect(computeTransitiveVoteStats(model.edges,model.messages,restored.excludedEdges).original).toMatchObject({agreeCount:1,disagreeCount:0});
-    expect(restored.counts.original.truth).toEqual({pro:30,con:0});
-    const textFix={...entry.versions[0],correctionId:'text-fix',correctionKind:'TEXT' as const,appliedCorrectionIds:['text-fix']};
-    const textDisplay=deriveCorrectionStanceDisplay(model.messages,model.edges,new Map([['original',{
-      current:textFix,versions:[...entry.versions,textFix],
-    }]]),raw);
-    expect(textDisplay.counts).toEqual(restored.counts);
-    expect(computeTransitiveVoteStats(model.edges,model.messages,textDisplay.excludedEdges).original).toMatchObject({agreeCount:1,disagreeCount:0});
-  }else{
-    expect(statistics.original).toMatchObject({agreeCount:2,disagreeCount:1});
-    expect(display.counts).toEqual(raw);expect(display.excludedEdges.size).toBe(0);
-  }
+  expect(statistics.original).toMatchObject({agreeCount:2,disagreeCount:1});
+  expect(display.counts).toEqual(raw);expect(display.excludedEdges.size).toBe(0);
   expect(statistics.correction.agreeCount).toBe(1);
   expect(computeTransitiveRelDecStats(model.edges,model.messages,display.excludedEdges).get('correction')?.agreeCount).toBe(1);
   expect(display.counts.original.value).toEqual(raw.original.value);

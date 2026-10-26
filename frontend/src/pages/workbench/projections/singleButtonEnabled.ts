@@ -13,7 +13,7 @@ interface DeriveSingleButtonEnabledInput {
   joinOnlyAction: boolean;
   relStakeAmount: number | "";
   effectiveMinStake: number;
-  totalConsumption: { stakeTotal: number; protocolFeeTotal: number; recommendationTotal: number; delegationRewardStake: number; total: number; perStake: number; textStake: number; relCount: number; joinCount: number; hasText: boolean; hasRel: boolean; joinStakeTotal: number; joinFeeTotal: number; refCount: number; refStakeTotal: number; newJoinCount: number; existingJoinAgreeCount: number; } | null;
+  totalConsumption: { groups?:unknown[]; contributionError?: string | null; stakeTotal: number; protocolFeeTotal: number; recommendationTotal: number; delegationRewardStake: number; total: number; perStake: number; textStake: number; relCount: number; joinCount: number; hasText: boolean; hasRel: boolean; joinStakeTotal: number; joinFeeTotal: number; refCount: number; refStakeTotal: number; newJoinCount: number; existingJoinAgreeCount: number; } | null;
   availablePoints: number;
   draftUnits: UnitSelection[];
   targetUnits: UnitSelection[];
@@ -47,12 +47,14 @@ interface DeriveSingleButtonEnabledInput {
 
 export function deriveSingleButtonEnabled(input: DeriveSingleButtonEnabledInput): boolean {
   const { relationType, newMessageContent, hasTextContent, stakeAmount, joinOnlyAction, relStakeAmount, effectiveMinStake, totalConsumption, availablePoints, draftUnits, targetUnits, hasInvalidCorrectTarget, hasInvalidContainerSource, hasInvalidJoinTarget, hasCrossLinkValidationError, hasOrphanContainerLabel, hasClassifyCycle, hasInvalidDelegationFormat, hasInvalidProposalFormat, hasCorrectionRelationTarget, isClassifyType, sourceUnits, relations, hasTargetsAvailable, isSummaryType, isMergeType, secondaryRelationType, effectiveTargetUnits, isGovernanceOrOpsType, msgMap, isTagWithInlineBadge, subType, isTagWithQuickAnnotate, isAgreeDisagreeType, isArrangeType, isNotifyType, hasAttentionNotifyTarget } = input;
-  if (relationType === null) return newMessageContent.trim().length > 0;
+  if (totalConsumption?.contributionError) return false;
+  if (relationType === null) return newMessageContent.trim().length > 0 && typeof stakeAmount === 'number' && stakeAmount >= 0
+    && (!totalConsumption || totalConsumption.total <= availablePoints);
   // Check that relation stake meets the effective minimum (type + subType combined)
-  if (hasTextContent && typeof stakeAmount !== 'number') return false;
-  if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 0) return false;
-  if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return false;
-  if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return false;
+  if ((totalConsumption?.hasText ?? hasTextContent) && typeof stakeAmount !== 'number') return false;
+  if ((totalConsumption?.hasText ?? hasTextContent) && typeof stakeAmount === 'number' && stakeAmount < 0) return false;
+  if (!joinOnlyAction && !totalConsumption?.groups && relationType && typeof relStakeAmount !== 'number') return false;
+  if (!joinOnlyAction && !totalConsumption?.groups && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return false;
   if (totalConsumption && totalConsumption.total > availablePoints) return false;
   // Ambiguous: both draft and target non-empty — force user to clear one
   if (draftUnits.length > 0 && targetUnits.length > 0) return false;

@@ -58,7 +58,7 @@ if (process.argv.includes('--worker')) {
       actors.push({ cookie: response.headers.get('set-cookie')!.split(';')[0], csrf: data.csrf, id: data.user.id });
     }
     let head = 0, expectedWrites = 0;
-    const command = (content: string) => ({requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/messages',body:{content}}]});
+    const command = (content: string) => ({requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/messages',body:{content,recommendation:1}}]});
     const post = async (index: number, body: unknown, actor = actors[index%actors.length]) => fetch(`${workers[index%2]}/api/ui/commands`, {
       method:'POST',headers:{'content-type':'application/json',cookie:actor.cookie,'x-csrf-token':actor.csrf},body:JSON.stringify(body),signal:AbortSignal.timeout(30000),
     });

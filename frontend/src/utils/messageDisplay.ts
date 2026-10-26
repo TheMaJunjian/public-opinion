@@ -47,6 +47,7 @@ const organizations = new Set(['classify', 'summary', 'merge', 'arrange']);
 export function isBodyCorrection(edge: DemoEdge, messages: ReadonlyMap<string, DemoMessage>): boolean {
   if (edge.relationType !== 'correct') return false;
   const correction = messages.get(edge.relationMessageId);
+  if (correction?.relationPayload?.correctionKind === 'WIDTH') return true;
   if (correction?.relationPayload?.correctionBeforeContent !== undefined) return true;
   const part = messages.get(edge.to.messageId)?.parts?.find(part => part.id === edge.to.reference?.partId);
   return !!part && ['text', 'code', 'web'].includes(part.type);

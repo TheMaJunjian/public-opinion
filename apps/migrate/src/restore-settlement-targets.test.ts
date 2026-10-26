@@ -40,11 +40,11 @@ it('restores version-7 settlement targets from the archive once, including revis
   expect(await financialFingerprint(store.db)).toBe(before);
   expect(await store.db.prepare('SELECT * FROM rounds').all()).toEqual(untouched);
   expect(await store.db.prepare('SELECT * FROM legacy_records ORDER BY position').all()).toEqual(originals);
-  expect(await store.latestSequence()).toBe(cursor+1);
+  expect(await store.latestSequence()).toBe(cursor+2);
   for(const [id,relation] of [['old-round','settlement'],['old-result','distribution']]){
     const message=await store.message(id),original=await store.message(id,1);
     expect(message.revision).toBe(1);
-    expect(relations(message).find(part=>part.relation===relation)?.roles.target).toEqual([{id:'target-0',reference:{messageId:'target'}}]);
+    expect(relations(message).find(part=>part.relation===relation)?.roles.target).toEqual([{id:'target-0',reference:{messageId:'target',context:{kind:'UNKNOWN'}}}]);
     expect(original.parts).toEqual(message.parts);
     expect(await store.db.prepare('SELECT "targetId" FROM refs WHERE "sourceId"=$1').all(id)).toEqual([{targetId:'target'}]);
   }
@@ -56,7 +56,7 @@ it('restores version-7 settlement targets from the archive once, including revis
   expect(await store.read(()=>settlementTargetRepairPlan(store.db))).toMatchObject({pending:0});
   await runMigrations(store.db,migrationsFor(store));
   expect(await store.transaction(()=>restoreArchivedSettlementTargets(store))).toBe(0);
-  expect(await store.latestSequence()).toBe(cursor+1);
+  expect(await store.latestSequence()).toBe(cursor+2);
 });
 
 it('rolls back a missing archived target without stamping version 8 or changing records',async()=>{
@@ -87,7 +87,7 @@ it('preserves settlement targets when converting an older exported view without 
     {id:'target',kind:'TEXT',content:'原文',authorId:'user',createdAt:''},
     {id:'result',kind:'ROUND_RESULT',content:'结算完成',authorId:'user',createdAt:'',targetRefs:[{messageId:'target'}],relationPayload:{settlementType:'TRUTH'}},
   ],relations:[]});
-  expect(relations(converted.messages.find((message:Message)=>message.id==='result')).find(part=>part.relation==='distribution')?.roles.target[0].reference).toEqual({messageId:'target'});
+  expect(relations(converted.messages.find((message:Message)=>message.id==='result')).find(part=>part.relation==='distribution')?.roles.target[0].reference).toEqual({messageId:'target',context:{kind:'UNKNOWN'}});
 });
 
 it('reads an isolated backup source when the live original archive is absent, without changing the backup database',async()=>{
@@ -101,7 +101,7 @@ it('reads an isolated backup source when the live original archive is absent, wi
   vi.stubEnv('GONGLUN_SETTLEMENT_SOURCE_DATABASE_SCHEMA',source.db.schema);
   expect(await store.read(()=>settlementTargetRepairPlan(store.db))).toMatchObject({pending:2,unresolved:0});
   await runMigrations(store.db,migrationsFor(store));
-  expect(relations(await store.message('old-result')).find(part=>part.relation==='distribution')?.roles.target[0].reference).toEqual({messageId:'target'});
+  expect(relations(await store.message('old-result')).find(part=>part.relation==='distribution')?.roles.target[0].reference).toEqual({messageId:'target',context:{kind:'UNKNOWN'}});
   expect(await source.db.prepare('SELECT * FROM "Message" ORDER BY id').all()).toEqual(before);
 });
 

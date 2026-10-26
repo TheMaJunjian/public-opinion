@@ -1,3 +1,4 @@
+import {withTestCommandContributions} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +14,7 @@ async function setup() {
     const app = await createTestApp(), agent = request.agent(app);
     const session = (await agent.post('/api/register').send({ name: 'membership-test', password: 'long-test-password' })).body;
     async function post(path: string, body: Record<string, unknown>, requestId = randomUUID()) {
-        const result = await agent.post(`/api/ui${path}`).set('x-csrf-token', session.csrf).set('x-request-id', requestId).send(body);
+        const result = await agent.post(`/api/ui${path}`).set('x-csrf-token', session.csrf).set('x-request-id', requestId).send(withTestCommandContributions(path,body as Record<string,unknown>));
         expect(result.status, result.text).toBe(201); return result.body;
     }
     const content = (parentMessageId?: string) => post('/messages', { content: randomUUID(), parentMessageId });
@@ -60,7 +61,7 @@ it.each(['CLASSIFY', 'SUMMARY', 'MERGE', 'ARRANGE'])('%s creates independently r
     const rejection = await t.stance(String(placement.sourceId));
     expect(await t.membership(a.id)).toBeUndefined(); expect((await t.membership(b.id))?.parentId).toBe(container.id);
     await t.parity();
-    await t.stance(rejection.id);
+    await t.stance(rejection.id, 'AGREE');
     expect((await t.membership(a.id))?.sourceId).toBe(placement.sourceId);
     await t.stance(container.id);
     expect(await t.membership(a.id)).toBeUndefined(); expect(await t.membership(b.id)).toBeUndefined();
@@ -97,8 +98,8 @@ it('rolls back generated JOINs when another command in the batch fails', async (
     const before = (await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM messages').get())!.n;
     const requestId = randomUUID();
     const response = await t.agent.post('/api/ui/commands').set('x-csrf-token', t.session.csrf).set('x-request-id', requestId).send({ requestId, commands: [
-        { id: randomUUID(), method: 'POST', path: '/relations', body: { relationType: 'CLASSIFY', targetRefs: [a, b].map(message => ({ kind: 'message', messageId: message.id })) } },
-        { id: randomUUID(), method: 'POST', path: '/relations', body: { relationType: 'JOIN', sourceMessageId: a.id, targetRefs: [{ kind: 'message', messageId: b.id }] } },
+        { id: randomUUID(), method: 'POST', path: '/relations', body: { recommendation:1, relationType: 'CLASSIFY', targetRefs: [a, b].map(message => ({ kind: 'message', messageId: message.id })) } },
+        { id: randomUUID(), method: 'POST', path: '/relations', body: { recommendation:1, relationType: 'JOIN', sourceMessageId: a.id, targetRefs: [{ kind: 'message', messageId: b.id }] } },
     ] });
     expect(response.status).toBe(400);
     expect(response.body.error).toBe('父消息必须是组织');
@@ -112,7 +113,7 @@ it.each([false, true])('returns generated JOINs with a classification batch befo
     const containerId = randomUUID(), body = { requestId: randomUUID(), commands: [
         { id: containerId, method: 'POST', path: '/relations', body: { parentMessageId: parent?.id, relationType: 'CLASSIFY', targetRefs: [a, b].map(message => ({ kind: 'message', messageId: message.id })) } },
     ] };
-    const send = () => t.agent.post('/api/ui/commands').set('x-csrf-token', t.session.csrf).set('x-request-id', body.requestId).send(body);
+    const send = () => t.agent.post('/api/ui/commands').set('x-csrf-token', t.session.csrf).set('x-request-id', body.requestId).send(withTestCommandContributions('/commands',body));
     const response = await send();
     expect(response.status, response.text).toBe(201);
     const committed = response.body.snapshots?.find((page: any) => page.scope.messageId === (parent?.id ?? null));
@@ -130,7 +131,7 @@ it('creates one shared JOIN record when an existing classification is selected t
     const t = await setup(), leaf = await t.content(), inner = await t.group([leaf.id]);
     const outerId = randomUUID(), requestId = randomUUID();
     const response = await t.agent.post('/api/ui/commands').set('x-csrf-token', t.session.csrf).set('x-request-id', requestId).send({ requestId, commands: [
-        { id: outerId, method: 'POST', path: '/relations', body: { relationType: 'CLASSIFY', payload: { title: '外层分类' }, targetRefs: [{ kind: 'relation', relationId: inner.id, reference: { messageId: inner.id } }] } },
+        { id: outerId, method: 'POST', path: '/relations', body: { recommendation:1, relationType: 'CLASSIFY', payload: { title: '外层分类' }, targetRefs: [{ kind: 'relation', relationId: inner.id, reference: { messageId: inner.id } }] } },
     ] });
     expect(response.status, response.text).toBe(201);
     const snapshot = response.body.snapshots[0];
@@ -201,25 +202,25 @@ it('requires container recovery before direct or indirect JOIN approval, without
     await t.stance(c.id);
     const before = await t.app.store.latestSequence(), account = await t.app.store.account(t.session.user.id);
     const count = (await t.app.store.db.prepare('SELECT COUNT(*) AS n FROM messages').get())!.n;
-    for (const [relationType, target] of [['AGREE', joining], ['DISAGREE', rejection.id]]) {
+    for (const [relationType, target] of [['AGREE', joining], ['AGREE', rejection.id]]) {
         const response = await t.agent.post('/api/ui/relations').set('x-csrf-token', t.session.csrf).set('x-request-id', randomUUID()).send({
-            relationType, targetRefs: [{ kind: 'relation', relationId: target, part: 'decoration' }],
+            wager:1, relationType, targetRefs: [{ kind: 'relation', relationId: target, part: 'decoration' }],
         });
         expect(response.status, response.text).toBe(409);
         expect(response.body.error).toContain('请先赞同并恢复容器');
     }
     const failedJoin = await t.agent.post('/api/ui/relations').set('x-csrf-token', t.session.csrf).set('x-request-id', randomUUID()).send({
-        relationType: 'JOIN', sourceMessageId: c.id, targetRefs: [{ kind: 'message', messageId: a.id }],
+        recommendation:1, relationType: 'JOIN', sourceMessageId: c.id, targetRefs: [{ kind: 'message', messageId: a.id }],
     });
     expect(failedJoin.status, failedJoin.text).toBe(409);
-    const native = await t.agent.post('/api/messages').set('x-csrf-token', t.session.csrf).send({ requestId: randomUUID(), parts: [
+    const native = await t.agent.post('/api/messages').set('x-csrf-token', t.session.csrf).send({ requestId: randomUUID(), wager:1, parts: [
         { id: 'stance', type: 'relation', relation: 'agree', roles: { target: [{ id: 'target', reference: { messageId: joining } }] } },
     ] });
     expect(native.status, native.text).toBe(409);
     const requestId = randomUUID(), draftId = randomUUID();
     const batch = await t.agent.post('/api/ui/commands').set('x-csrf-token', t.session.csrf).set('x-request-id', requestId).send({ requestId, commands: [
-        { id: draftId, method: 'POST', path: '/messages', body: { content: '不能留下的半成品理由' } },
-        { id: randomUUID(), method: 'POST', path: '/relations', body: { relationType: 'AGREE', sourceMessageId: draftId, targetRefs: [{ kind: 'relation', relationId: joining }] } },
+        { id: draftId, method: 'POST', path: '/messages', body: { content: '不能留下的半成品理由',recommendation:1 } },
+        { id: randomUUID(), method: 'POST', path: '/relations', body: { wager:1, relationType: 'AGREE', sourceMessageId: draftId, targetRefs: [{ kind: 'relation', relationId: joining }] } },
     ] });
     expect(batch.status, batch.text).toBe(409);
     expect(await t.app.store.latestSequence()).toBe(before);
@@ -254,7 +255,7 @@ it('keeps personal JOIN approval available when another viewer opposes the conta
     const joining = String((await t.membership(member.id))!.sourceId);
     const other = request.agent(t.app), session = (await other.post('/api/register').send({ name: 'other-viewer', password: 'long-test-password' })).body;
     const response = await other.post('/api/ui/relations').set('x-csrf-token', session.csrf).set('x-request-id', randomUUID()).send({
-        relationType: 'DISAGREE', targetRefs: [{ kind: 'relation', relationId: container.id, part: 'decoration' }],
+        wager:1, relationType: 'DISAGREE', targetRefs: [{ kind: 'relation', relationId: container.id, part: 'decoration' }],
     });
     expect(response.status, response.text).toBe(201);
     await t.stance(joining, 'AGREE');

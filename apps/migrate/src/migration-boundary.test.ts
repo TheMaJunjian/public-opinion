@@ -3,6 +3,7 @@ import {build} from 'esbuild';
 import {migratePendingSends} from './browser-state.js';
 import {cleanupTestDatabases,createTestApp,testDatabaseUrl} from '../../server/src/test-database.js';
 import {migrationPlan} from './preflight.js';
+import {DATABASE_MIGRATIONS} from '../../server/src/database-version.js';
 afterEach(cleanupTestDatabases);
 
 it('空库由主程序建立当前结构，预检不会补版本或创建旧版归档表',async()=>{
@@ -10,7 +11,7 @@ it('空库由主程序建立当前结构，预检不会补版本或创建旧版�
   expect(await app.store.db.prepare("SELECT tablename FROM pg_tables WHERE schemaname=$1 AND tablename LIKE 'legacy_%'").all(app.store.db.schema)).toEqual([]);
   await app.store.db.prepare('DELETE FROM schema_migrations WHERE version>3').run();
   const plan=await migrationPlan(testDatabaseUrl(),app.store.db.schema);
-  expect(plan.pending.map(item=>item.version)).toEqual([4,5,6,7,8,9,10]);
+  expect(plan.pending.map(item=>item.version)).toEqual(DATABASE_MIGRATIONS.map((_,index)=>index+1).filter(version=>version>3));
   expect((await app.store.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get())?.version).toBe(3);
 });
 

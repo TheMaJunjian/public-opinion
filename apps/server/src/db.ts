@@ -127,7 +127,7 @@ export class Mutation {
   removed = new Set<string>();
   affected = new Set<string>();
   private readonly ledgerStart: number;
-  constructor(public store: Store) { this.ledgerStart = store.db.ledger.length; }
+  constructor(public store: Store, public publication?: {authorId:string;joinContribution:{wager:number;recommendation:number}}) { this.ledgerStart = store.db.ledger.length; }
 
   async put(message: Message): Promise<void> {
     this.messages.set(message.id, message);

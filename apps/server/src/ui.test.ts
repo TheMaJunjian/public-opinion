@@ -1,16 +1,17 @@
+import {withTestCommandContributions} from './test-database.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { randomUUID, generateKeyPairSync, sign, createHash } from 'node:crypto';
 import { createApp } from './app.js';
 import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
-import { replayArchive, decodeWorkbenchSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
+import { bodyVersion, replayArchive, decodeWorkbenchSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
 import * as projections from './ui-projections.js';
 
 const apps:Awaited<ReturnType<typeof createApp>>[]=[];
 const make=async ()=>{const app=(await createTestApp());apps.push(app);return app;};
 afterEach(async ()=>{vi.restoreAllMocks();for(const app of apps.splice(0))(await app.close());await cleanupTestDatabases();});
 async function actor(app:Awaited<ReturnType<typeof make>>,username:string,extra:Record<string,unknown>={}) {const agent=request.agent(app);const response=await agent.post('/api/register').send({username,password:'a-test-password',...extra});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
-const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<string,unknown>={})=>user.agent.post(`/api/ui${path}`).set('x-csrf-token',user.session.csrf).set('x-request-id',(body as {requestId?:string}).requestId??randomUUID()).send(body);
+const post=(user:Awaited<ReturnType<typeof actor>>,path:string,body:Record<string,unknown>={})=>user.agent.post(`/api/ui${path}`).set('x-csrf-token',user.session.csrf).set('x-request-id',(body as {requestId?:string}).requestId??randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));
 const good=async(response:PromiseLike<request.Response>)=>{const value=await response;expect(value.status,value.text).toBe(201);return value.body;};
 
 it('builds batch snapshots after commit and can recover a failed projection without charging again', async () => {
@@ -150,7 +151,7 @@ describe('保留操作方式的消息 API',()=>{
   it.each(['CLASSIFY','SUMMARY'])('后台补拉 %s 时，分类页标题与卡片标题一致，不使用旧操作说明',async type=>{
     const app=await make(),user=await actor(app,'标题用户');
     const title='公共交通讨论',description=type==='CLASSIFY'?'建立分类':'建立总结';
-    const created=await user.agent.post('/api/messages').set('x-csrf-token',user.session.csrf).send({requestId:randomUUID(),parts:[
+    const created=await user.agent.post('/api/messages').set('x-csrf-token',user.session.csrf).send({requestId:randomUUID(),recommendation:1,parts:[
       {id:'body',type:'text',text:description},
       {id:'relation',type:'relation',relation:type.toLowerCase(),roles:{}},
       {id:'data',type:'data',value:{kind:'RELATION',uiType:type,title,legacyTopicId:'old-topic'}},
@@ -242,7 +243,7 @@ describe('保留操作方式的消息 API',()=>{
     expect(record.relationPayload.correctionAfterContent).toBe('为何应该试点');
     expect(record.state.suppressed).toBe(true);
     expect((await app.store.message(classification.id)).revision).toBe(1);
-    const reply=await good(post(other,'/relations',{relationType:'REPLY',targetRefs:[{kind:'text-fragment',messageId:classification.id,text:'是否',hash:'x',reference:fragment}],payload:{content:'讨论原来的用词'}}));expect(reply.targetRefs[0].reference).toEqual(fragment);
+    const reply=await good(post(other,'/relations',{relationType:'REPLY',targetRefs:[{kind:'text-fragment',messageId:classification.id,text:'是否',hash:'x',reference:fragment}],payload:{content:'讨论原来的用词'}}));expect(reply.targetRefs[0].reference).toEqual({...fragment,context:{kind:'MESSAGE',version:bodyVersion(classification.id)}});
   });
   it('总结正文更正保留所有上下文，仅替换所选范围并拒绝无效替换',async()=>{
     const app=await make(),user=await actor(app,'总结作者'),editor=await actor(app,'更正者');
@@ -276,7 +277,7 @@ describe('保留操作方式的消息 API',()=>{
   });
   it('签名绑定到设备、请求路径和幂等编号，历史保留签名',async()=>{
     const app=(await make()),keys=generateKeyPairSync('ed25519'),deviceId='test-device',publicKey=JSON.stringify(keys.publicKey.export({format:'jwk'})),user=await actor(app,'签名用户',{deviceId,publicKey});
-    const path='/api/ui/messages',body={content:'签名发言'},requestId=randomUUID(),payload=JSON.stringify({method:'POST',path,bodyHash:createHash('sha256').update(JSON.stringify(body)).digest('hex'),requestId}),signature=sign(null,Buffer.from(payload),keys.privateKey).toString('base64');
+    const path='/api/ui/messages',body:Record<string,unknown>={content:'签名发言',recommendation:1},requestId=randomUUID(),payload=JSON.stringify({method:'POST',path,bodyHash:createHash('sha256').update(JSON.stringify(body)).digest('hex'),requestId}),signature=sign(null,Buffer.from(payload),keys.privateKey).toString('base64');
     const send=(changedBody=body,changedPath=path)=>user.agent.post(changedPath).set('x-csrf-token',user.session.csrf).set('x-device-id',deviceId).set('x-request-id',requestId).set('x-signed-payload',Buffer.from(payload).toString('base64')).set('x-signature',signature).send(changedBody);
     expect((await post(user,'/messages',body)).status).toBe(401);
     const response=await send();expect(response.status,response.text).toBe(201);expect((await app.store.db.prepare("SELECT signature FROM signatures WHERE \"messageId\"=$1").get(response.body.id))?.signature).toBe(signature);
@@ -290,9 +291,9 @@ describe('保留操作方式的消息 API',()=>{
     await good(post(follower,'/relations',{relationType:'ATTENTION',payload:{subType:'NO'},targetRefs:[{kind:'message',messageId:message.id}]}));
     expect((await follower.agent.get('/api/me/notifications')).body.messages.some((m:any)=>m.id===notice.id)).toBe(true);
   });
-  it('价值讨论是独立评价消息，推荐不押注，评价反转平反且不触碰原真假赌池',async()=>{
+  it('推荐进入目标价值赌池，评价反转平反且不触碰原真假赌池',async()=>{
     const app=(await make()),author=await actor(app,'发起人'),critic=await actor(app,'评价者'),message=await good(post(author,'/messages',{content:'待评价的消息'}));
-    await good(post(author,'/relations',{relationType:'RECOMMEND',targetRefs:[{kind:'message',messageId:message.id}],recommendation:3}));expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM bets').get())!.n).toBe(0);
+    await good(post(author,'/relations',{relationType:'RECOMMEND',targetRefs:[{kind:'message',messageId:message.id}],recommendation:3}));expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM bets').get())!.n).toBe(1);
     const round=await good(post(critic,`/messages/${message.id}/rounds`,{settlementType:'VALUE'}));expect(round.settlementType).toBe('VALUE');expect(round.reference.messageId).not.toBe(message.id);
     await good(post(critic,`/rounds/${round.id}/votes`,{vote:'FALSE',amount:4}));const before=(await app.store.account(author.session.user.id)).available;await good(post(critic,`/rounds/${round.id}/close-and-settle`));expect((await app.store.account(author.session.user.id)).available).toBe(before-5);
     const stakes=(await author.agent.get(`/api/ui/messages/${message.id}/stakes`)).body;expect(stakes.countsByType.VALUE.con).toBe(4);expect(stakes.countsByType.TRUTH.con).toBe(0);

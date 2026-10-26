@@ -1,10 +1,12 @@
-import { relations, replaceReference, type Change, type Membership, type Message, type Part, type RelationPart, type SendResult, type User } from '@gonglun/core';
+import { relations, replaceReference, targetInvestmentDimension, type Change, type Membership, type Message, type Part, type RelationPart, type SendResult, type User } from '@gonglun/core';
 import { DomainError, Mutation, now, Store } from './db.js';
 import { applyOrganization, reconcileOrganizationEffects, reconcileOrganizationRevision } from './organizations.js';
 import { dataOf, distributeOperations, grant, hasEffect, injectRevenue, lockDelegation, markEffect, oneTarget, openSettlement, placeValueWager, placeWager, relationTarget, settleDue, terminate } from './economy.js';
 import { parseSend, partsSchema, readReference, rulesSchema, validateReferences } from './validation.js';
 import { recordPersonal } from './personal-actions.js';
 import { normalizeAnnotationStance } from './annotation-stances.js';
+import {chargeMessage} from './message-spending.js';
+import {bindCommandContexts} from './reference-contexts.js';
 
 const actions=new Set(['agree','disagree','terminate','authorize','delegate','distribute','credit']);
 async function authorize(tx: Mutation, message: Message, user: User) {
@@ -117,12 +119,21 @@ export async function send(store: Store, user: User, raw: unknown, options: {
         if (actionParts.length > 1)
             throw new DomainError('一条消息只能执行一个资金或授权操作');
         const wager = input.wager ?? 0, recommendation = input.recommendation ?? 0;
-        if (input.selfStance && actionParts.length)
+        if (wager === 0 && recommendation === 0)
+            throw new DomainError('真假和价值至少一项须大于 0');
+        if (input.selfStance && actionParts.some(p => p.type === 'relation' && ['agree', 'disagree'].includes(p.relation)))
             throw new DomainError('自我表态不能同时执行其他资金操作');
-        const normalized = await normalizeAnnotationStance(store, input);
-        const annotations = normalized.parts.filter((part): part is RelationPart => part.type === 'relation' && (part.relation === 'recommend' || part.relation === 'archive'));
+        const normalized = await bindCommandContexts(store,await normalizeAnnotationStance(store, input));
+        if(normalized.parts.some(part=>part.type==='relation'&&['read','unread'].includes(part.relation.toLowerCase())))
+            throw new DomainError('已读是个人查看状态，请使用标记已读操作');
+        const annotations = normalized.parts.filter((part): part is RelationPart => part.type === 'relation' && targetInvestmentDimension(part.relation) === 'VALUE');
         const valueVote = annotations.length === 1 && annotations[0]!.roles.target?.length === 1
             && !normalized.parts.some(part => part.type === 'relation' && actions.has(part.relation)) ? annotations[0] : undefined;
+        if (annotations.length && !valueVote) throw new DomainError('标注投入必须对应一个明确目标，且不能同时执行其他资金操作');
+        if (valueVote && wager !== 0) throw new DomainError('标注的真假投入必须为 0，请使用价值投入');
+        const truthVote = normalized.parts.some(part => part.type === 'relation' && ['agree','disagree'].includes(part.relation));
+        if (truthVote && recommendation !== 0) throw new DomainError('赞同、反对的价值投入必须为 0，请使用真假投入');
+        if (valueVote && normalized.selfStance) throw new DomainError('标注投入属于目标消息，不能同时对标注自身押注');
         if (wager > 0 && annotations.length && !valueVote && !actionParts.length)
             throw new DomainError('价值投票押注必须对应一个明确目标');
         if (normalized.selfStance && normalized.parts.some(part => part.id === 'self-stance'))
@@ -133,24 +144,19 @@ export async function send(store: Store, user: User, raw: unknown, options: {
         }
         if (wager > 0 && !input.selfStance && !valueVote && !actionParts.some(p => p.type === 'relation' && ['agree', 'disagree'].includes(p.relation)))
             throw new DomainError('押注须选择赞同、反对、推荐或冷藏');
-        const tx = new Mutation(store);
+        const tx = new Mutation(store,{authorId:user.id,joinContribution:input.joinContribution??{wager,recommendation}});
         // Finish elapsed rounds before accepting an incoming wager at the new cutoff.
         await settleDue(tx);
         const protocol = (await store.rules()).protocolFee;
         const message = await tx.create(user.id, normalized.parts, { protocol, recommendation, wager }, options.messageId);
         // A value annotation's wager belongs to its subject, so it needs no self-agreement message.
         if (normalized.selfStance && !valueVote) {
-            message.parts.push({ id: 'self-stance', type: 'relation', relation: normalized.selfStance === 'pro' ? 'agree' : 'disagree', roles: { target: [{ id: 'self', reference: { messageId: message.id } }] } });
+            message.parts.push({ id: 'self-stance', type: 'relation', relation: normalized.selfStance === 'pro' ? 'agree' : 'disagree', roles: { target: [{ id: 'self', reference: { messageId: message.id,revision:message.revision,context:{kind:'MESSAGE'} } }] } });
             await tx.put(message);
         }
-        await store.ledger(user.id, message.id, -protocol, 0, '协议费');
-        await store.operating(protocol, true);
-        if (recommendation) {
-            await store.ledger(user.id, message.id, -recommendation, 0, '推荐投入');
-            await store.operating(recommendation, true);
-        }
+        await chargeMessage(store,message,!!valueVote);
         await applyOrganization(tx, message);
-        if (valueVote) await placeValueWager(tx, message, valueVote, wager);
+        if (valueVote) await placeValueWager(tx, message, valueVote, recommendation);
         for (const part of relations(message)) {
             if (part.relation === 'agree' || part.relation === 'disagree')
                 await placeWager(tx, message, wager);

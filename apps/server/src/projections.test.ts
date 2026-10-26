@@ -65,7 +65,7 @@ describe('authoritative organization display states', () => {
     const original = await stance({ messageId: summary.id, revision: 1 }, 'con');
     await stance({ messageId: original.id, revision: 1, partId: 'stance' }, 'con');
     const before = await statesFor(store, [summary.id]);
-    expect(before[0]).toMatchObject({ suppressed: false, supportCount: 1, oppositionCount: 0 });
+    expect(before[0]).toMatchObject({ suppressed: true, supportCount: 0, oppositionCount: 1 });
 
     await store.transaction(async () => {
       const tx = new Mutation(store);

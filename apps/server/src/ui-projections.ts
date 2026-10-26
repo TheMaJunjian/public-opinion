@@ -3,6 +3,8 @@ import { DomainError, Store } from './db.js';
 import { dataOf } from './economy.js';
 import { statesFor } from './projections.js';
 import { personalMarks } from './personal.js';
+import { messageDisplayDependency } from '@gonglun/core';
+import { displayAttachmentSql } from './display-dependencies.js';
 export type RecordData = Record<string, any>;
 export const userView = async (store: Store, userId: string) => {
     if(userId==='system') return {id:'system',username:'公论规则',name:'公论规则',founder:false,createdAt:''};
@@ -16,9 +18,22 @@ interface ViewContext {
     rounds: Map<string, RecordData>;
     recipients: Map<string, string[]>;
 }
-const cachedMessage = async (store: Store, id: string, revision?: number, context?: ViewContext) => context?.messages.get(`${id}:${revision ?? 'current'}`) ?? (await store.message(id, revision));
+const cachedMessage = async (store: Store, id: string, revision?: number, context?: ViewContext): Promise<Message> => {
+    const cached = context?.messages.get(`${id}:${revision ?? 'current'}`);
+    if (cached) return cached;
+    try { return await store.message(id, revision); }
+    catch (error) {
+        if (revision !== undefined || !(error instanceof DomainError) || error.status !== 404) throw error;
+        const historical = await store.db.prepare('SELECT body FROM revisions WHERE "messageId"=$1 ORDER BY revision DESC LIMIT 1').get(id);
+        if (!historical) throw error;
+        return JSON.parse(String(historical.body)) as Message;
+    }
+};
 const cachedUser = async (store: Store, id: string, context?: ViewContext) => context?.users.get(id) ?? (await userView(store, id));
-export const primaryRelation = (message: Message) => relations(message).find(part => part.relation !== 'member-of'||!!part.roles.member?.length);
+export const primaryRelation = (message: Message) => relations(message).find(part =>
+    !((part.id === 'self-stance' || part.id.startsWith('minimum-self-stance-'))
+      && ['agree','disagree'].includes(part.relation) && part.roles.target?.length === 1 && part.roles.target[0]!.reference.messageId === message.id)
+    && (part.relation !== 'member-of'||!!part.roles.member?.length));
 const relationViewTypes: Record<string, string> = { follow: 'ATTENTION', amend: 'CORRECT', 'rule-change': 'PROPOSAL', recharge: 'PROPOSAL', 'revenue-injection': 'PROPOSAL', delegate: 'DELEGATION', fulfill: 'DELEGATION', 'member-of': 'JOIN', 'low-quality': 'ARCHIVE', 'open-settlement': 'ROUND', settlement: 'ROUND', distribution: 'ROUND_RESULT', terminate: 'OPERATIONS', release: 'CODE_CHANGE' };
 export function relationViewType(message: Message): string | null { const relation = primaryRelation(message); return String(dataOf(message).uiType ?? (relation ? (relationViewTypes[relation.relation] ?? relation.relation.toUpperCase()) : '')) || null; }
 export async function referenceView(store: Store, reference: Reference, context?: ViewContext): Promise<TargetRef & { reference: Reference }> {
@@ -26,7 +41,8 @@ export async function referenceView(store: Store, reference: Reference, context?
     if (reference.range) {
         const part = target.parts.find(p => p.id === reference.partId);
         const text = part?.type === 'text' ? part.text : part?.type === 'code' ? part.source : part?.type === 'web' ? part.excerpt : '';
-        return { kind: 'text-fragment', messageId: target.id, text: text.slice(reference.range.start, reference.range.end), hash: `${target.id}:${target.revision}:${reference.partId}:${reference.range.start}:${reference.range.end}`, reference };
+        const quoted=reference.context&&'version' in reference.context&&reference.context.version?await readReference(store,reference):text.slice(reference.range.start,reference.range.end);
+        return { kind: 'text-fragment', messageId: target.id, text:String(quoted), hash: `${target.id}:${target.revision}:${reference.partId}:${reference.range.start}:${reference.range.end}`, reference };
     }
     return relation ? { kind: 'relation', relationId: target.id, part: reference.partId === relation.id ? 'decoration' : reference.partId ? 'label' : 'whole', reference } : { kind: 'message', messageId: target.id, reference };
 }
@@ -44,7 +60,10 @@ export function scopeSql(parent: string): {
         WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(source.body::jsonb->'parts') part,jsonb_each(part.value->'roles') role,jsonb_array_elements(role.value) binding
             WHERE (part.value->>'relation'<>'member-of' OR part.value->'roles' ? 'member') AND binding.value #>> '{reference,messageId}'=r."targetId")
         OR EXISTS (SELECT 1 FROM jsonb_array_elements(source.body::jsonb->'parts') part WHERE part.value->>'type'='display' AND part.value #>> '{target,messageId}'=r."targetId")
-    )`, predicate: 'm.id IN (SELECT id FROM scoped) AND m.id<>$1', params: [parent] };
+    ), attached(id) AS (
+        SELECT id FROM scoped UNION SELECT source.id FROM attached host JOIN refs r ON r."targetId"=host.id
+        JOIN messages source ON source.id=r."sourceId" WHERE source.id<>host.id AND ${displayAttachmentSql('source','host.id')}
+    )`, predicate: 'm.id IN (SELECT id FROM attached) AND m.id<>$1', params: [parent] };
 }
 export async function scopeMessages(store: Store, parent = 'root'): Promise<Message[]> {
     if (parent !== 'root')
@@ -52,7 +71,21 @@ export async function scopeMessages(store: Store, parent = 'root'): Promise<Mess
     const scope = scopeSql(parent);
     return (await store.db.prepare(`${scope.cte} SELECT m.body FROM messages m WHERE ${scope.predicate} ORDER BY m."createdAt",m.id`).all(...scope.params)).map(row => JSON.parse(String(row.body)) as Message);
 }
-export async function parentOf(store: Store, messageId: string): Promise<string> { return String((await store.db.prepare("SELECT \"parentId\" FROM memberships WHERE \"memberId\"=$1").get(messageId))?.parentId ?? 'root'); }
+export async function parentOf(store: Store, messageId: string): Promise<string> {
+    const visited = new Set<string>();
+    while (!visited.has(messageId)) {
+        visited.add(messageId);
+        const dependency = messageDisplayDependency(await store.message(messageId));
+        if (dependency !== null) {
+            const host = dependency.find(ref => ref.messageId !== messageId)?.messageId;
+            if (!host) return 'root';
+            messageId = host;
+            continue;
+        }
+        return String((await store.db.prepare('SELECT "parentId" FROM memberships WHERE "memberId"=$1').get(messageId))?.parentId ?? 'root');
+    }
+    return 'root';
+}
 /** Organization titles are saved independently from their descriptive bodies.
  * Use the same saved name for cards, scope headers, deltas and archives. */
 function organizationTitle(message: Message): string {
@@ -106,7 +139,7 @@ export async function messageView(store: Store, message: Message, parent?: strin
     delete payload.kind;
     delete payload.contentType;
     if (type === 'CORRECT') {
-        payload.correctionKind = data.correctionKind === 'MEANING' ? 'MEANING' : 'TEXT';
+        payload.correctionKind = data.correctionKind === 'WIDTH' ? 'WIDTH' : data.correctionKind === 'MEANING' ? 'MEANING' : 'TEXT';
         const body = message.parts.find(part => part.id === 'corrected-body' && part.type === 'text');
         if (body?.type === 'text') {
             payload.correctionAfterContent = body.text; payload.correctionContent = body.text;
@@ -236,7 +269,20 @@ export async function accountView(store: Store, userId: string) {
 }
 export async function stakesFor(store: Store, ids: string[], knownUsers?: UserView[]): Promise<Record<string, NativeMessageStakes>> {
   const users=new Map((knownUsers??[]).map(user=>[user.id,user])),result:Record<string,NativeMessageStakes>={};
-  for(const id of ids)result[id]={messageId:id,pool:{lockedPro:0,lockedCon:0},pools:{TRUTH:{lockedPro:0,lockedCon:0},VALUE:{lockedPro:0,lockedCon:0}},
+  const claims=new Map<string,Reference>();
+  const scopeFor=async(reference:Reference|undefined,type:string)=>{
+    if(type==='VALUE'&&reference){
+      let subject=claims.get(reference.messageId);
+      if(!subject){const claim=await store.message(reference.messageId,reference.revision);subject=relations(claim).find(part=>part.relation==='open-value-settlement')?.roles.target?.[0]?.reference??reference;claims.set(reference.messageId,subject);}
+      reference=subject;
+    }
+    return contextKey(reference?.context??{kind:'UNKNOWN'});
+  };
+  const scopeValue=(value:NativeMessageStakes,key:string)=>{
+    const contexts=value.contexts??={};
+    return contexts[key]??={messageId:value.messageId,pool:{lockedPro:0,lockedCon:0},pools:{TRUTH:{lockedPro:0,lockedCon:0},VALUE:{lockedPro:0,lockedCon:0}},stakes:[],counts:{pro:0,con:0},countsByType:{TRUTH:{pro:0,con:0},VALUE:{pro:0,con:0}}};
+  };
+  for(const id of ids)result[id]={messageId:id,contexts:{},pool:{lockedPro:0,lockedCon:0},pools:{TRUTH:{lockedPro:0,lockedCon:0},VALUE:{lockedPro:0,lockedCon:0}},
     stakes:[],counts:{pro:0,con:0},countsByType:{TRUTH:{pro:0,con:0},VALUE:{pro:0,con:0}}};
   for(let offset=0;offset<ids.length;offset+=200){
     const batch=ids.slice(offset,offset+200);
@@ -247,14 +293,16 @@ export async function stakesFor(store: Store, ids: string[], knownUsers?: UserVi
       value.counts[side]+=Number(row.amount);value.countsByType[type][side]+=Number(row.amount);
       value.stakes.push({id:row.id,side:side==='pro'?'PRO':'CON',amount:row.amount,createdAt:row.createdAt,roundId:row.roundId,
         settlementType:type,user:users.get(row.userId)!,...(row.reference?{reference:row.reference}:{})});
+      const scoped=scopeValue(value,await scopeFor(row.reference,type));scoped.stakes.push(value.stakes.at(-1)!);scoped.counts[side]+=Number(row.amount);scoped.countsByType![type][side]+=Number(row.amount);
     }
     const pools=await store.db.prepare(`SELECT COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}') AS subject,
-      COALESCE(r.body::jsonb->>'settlementType','TRUTH') AS type,b.side,SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
+      COALESCE(r.body::jsonb->>'settlementType','TRUTH') AS type,b.side,r.body::jsonb->'target' AS reference,SUM(b.amount) AS amount FROM bets b JOIN rounds r ON r.id=b."roundId"
       WHERE COALESCE(r.body::jsonb->>'subjectId',r.body::jsonb #>> '{target,messageId}')=ANY($1::text[])
-      AND r.body::jsonb->>'status'<>'settled' GROUP BY subject,type,b.side`).all(batch);
+      AND r.body::jsonb->>'status'<>'settled' GROUP BY subject,type,b.side,reference`).all(batch);
     for(const row of pools){
       const value=result[row.subject],type=String(row.type),key=row.side==='pro'?'lockedPro':'lockedCon';
       value.pools[type]??={lockedPro:0,lockedCon:0};value.pools[type][key]+=Number(row.amount);value.pool[key]+=Number(row.amount);
+      const scoped=scopeValue(value,await scopeFor(row.reference,type));scoped.pools![type]??={lockedPro:0,lockedCon:0};scoped.pools![type][key]+=Number(row.amount);scoped.pool[key]+=Number(row.amount);
     }
     for(const row of await store.db.prepare('SELECT "messageId",amount FROM escrows WHERE "messageId"=ANY($1::text[]) AND "recipientId" IS NULL').all(batch)){
       const value=result[row.messageId];value.pools.DELEGATION??={lockedPro:0,lockedCon:0};
@@ -291,7 +339,9 @@ export async function roundView(store: Store, id: string, userId?: string): Prom
             personalSettlement = { principal: principal + protocolFee, stakePrincipal: principal, protocolFee, after, change: after - (previousAfter ?? 0), ...(previousAfter === undefined ? {} : { previousAfter }) };
         }
     }
-    return { id, roundMessageId: id, messageId: round.subjectId ?? round.target.messageId, reference: round.target, createdByUserId: authorId, createdBy: (await userView(store, authorId)), status: round.status === 'settled' ? 'SETTLED' : round.status === 'waiting' ? 'VOTING' : 'OPEN', settlementType: round.settlementType ?? 'TRUTH', result: round.result === 'pro' ? 'TRUE' : round.result === 'con' ? 'FALSE' : round.result === 'tie' ? 'UNKNOWN' : null, previousRoundId: round.previousRoundId, openedAt: round.createdAt, closedAt: round.status === 'settled' ? round.endsAt : null, endsAt: round.endsAt, note: null, settlementPro: round.pro, settlementCon: round.con, totalProAtSettlement: round.pro, totalConAtSettlement: round.con, weights: { TRUE: sum('pro'), FALSE: sum('con'), UNKNOWN: 0 }, roundWeights: { TRUE: sum('pro', active), FALSE: sum('con', active), UNKNOWN: 0 }, totalWeight: sum('pro') + sum('con'), votes: (await Promise.all(active.map(async (b) => ({ id: b.messageId, vote: b.side === 'pro' ? 'TRUE' : 'FALSE', amount: b.amount, createdAt: b.createdAt, user: (await userView(store, String(b.userId))) })))), _count: { votes: active.length }, personalSettlement, distributionId: round.distributionId };
+    const evaluated=await store.message(round.target.messageId,round.target.revision);
+    const subjectReference=relations(evaluated).find(part=>part.relation==='open-value-settlement')?.roles.target?.[0]?.reference??round.target;
+    return { id, roundMessageId: id, messageId: round.subjectId ?? round.target.messageId, reference: round.target,subjectReference, createdByUserId: authorId, createdBy: (await userView(store, authorId)), status: round.status === 'settled' ? 'SETTLED' : round.status === 'waiting' ? 'VOTING' : 'OPEN', settlementType: round.settlementType ?? 'TRUTH', result: round.result === 'pro' ? 'TRUE' : round.result === 'con' ? 'FALSE' : round.result === 'tie' ? 'UNKNOWN' : null, previousRoundId: round.previousRoundId, openedAt: round.createdAt, closedAt: round.status === 'settled' ? round.endsAt : null, endsAt: round.endsAt, note: null, settlementPro: round.pro, settlementCon: round.con, totalProAtSettlement: round.pro, totalConAtSettlement: round.con, weights: { TRUE: sum('pro'), FALSE: sum('con'), UNKNOWN: 0 }, roundWeights: { TRUE: sum('pro', active), FALSE: sum('con', active), UNKNOWN: 0 }, totalWeight: sum('pro') + sum('con'), votes: (await Promise.all(active.map(async (b) => ({ id: b.messageId, vote: b.side === 'pro' ? 'TRUE' : 'FALSE', amount: b.amount, createdAt: b.createdAt, user: (await userView(store, String(b.userId))) })))), _count: { votes: active.length }, personalSettlement, distributionId: round.distributionId };
 }
 export function tagCounts(views: RecordData[]) { const counts: Record<string, Record<string, number>> = {}; for (const message of views) {
     if (!['TAG', 'RECOMMEND', 'ARCHIVE'].includes(message.relationType))
@@ -352,7 +402,7 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
     if (query.after !== undefined) {
         if ((query.regionId !== undefined && query.regionId !== regionId) || after > await store.latestSequence())
             throw new DomainError('本地消息缓存已失效，请重新加载', 409);
-        const changeRows = (await store.db.prepare("SELECT sequence,body FROM changes WHERE sequence>$1 ORDER BY sequence LIMIT 101").all(after)), selected = changeRows.slice(0, 100), changes = selected.map(r => JSON.parse(String(r.body)) as Change), changedIds = [...new Set<string>(changes.flatMap(change => [...change.messages.map((m: Message) => m.id), ...change.states.map((s: RecordData) => s.messageId), ...change.memberships.flatMap((m: RecordData) => [m.memberId, m.parentId]), ...change.removedMemberships]))];
+        const changeRows = (await store.db.prepare("SELECT sequence,body FROM changes WHERE sequence>$1 ORDER BY sequence LIMIT 101").all(after)), selected = changeRows.slice(0, 100), changes = selected.map(r => JSON.parse(String(r.body)) as Change), changedIds = [...new Set<string>(changes.flatMap(change => [...change.messages.map((m: Message) => m.id), ...change.states.map((s: RecordData) => s.messageId), ...change.memberships.flatMap((m: RecordData) => [m.memberId, m.parentId]), ...change.removedMemberships, ...(change.removedMessageIds ?? [])]))];
         const scope = scopeSql(parent), messages: Message[] = [], present = new Set<string>();
         for (let i = 0; i < changedIds.length; i += 200) {
             const batch = changedIds.slice(i, i + 200);
@@ -395,6 +445,7 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
         for (const row of (await store.db.prepare("SELECT body FROM changes WHERE sequence>$1").all(after))) {
             const change = JSON.parse(String(row.body));
             removedMemberships.push(...change.removedMemberships);
+            removedMessageIds.push(...(change.removedMessageIds ?? []));
             if (parent !== 'root')
                 for (const membership of change.memberships)
                     if (membership.parentId !== parent)
@@ -407,3 +458,5 @@ export async function snapshot(store: Store, parent: string, query: RecordData, 
             marks.push(...(await personalMarks(store, userId, ids.slice(i, i + 100))));
     return { regionId, scope: (await scopeView(store, parent)), messages: views, relations: views.filter(isRelationView), users, stakes: (await stakesFor(store, ids, users)), tagCounts: (await tagCountsFor(store, ids)), attentionUsers: (await attentionUsers(store, ids)), personalStates: marks, sequence: (await store.latestSequence()), hasMore: false, nextCursor: rows.length > limit && last ? Buffer.from(JSON.stringify({ sequence: last.sequence, id: last.id })).toString('base64url') : null, removedMemberships: [...new Set(removedMemberships)], removedMessageIds: [...new Set(removedMessageIds)] };
 }
+import {readReference} from './validation.js';
+import {contextKey} from '@gonglun/core';

@@ -2,6 +2,7 @@ import { isRelationView, relations, type Message, type WorkbenchSnapshot } from 
 import { z } from 'zod';
 import { DomainError, type Store } from './db.js';
 import { attentionUsers, scopeSql, scopeView, stakesFor, tagCountsFor, usersFor, viewsFor } from './ui-projections.js';
+import { displayAttachmentSql, isDependentMessageSql } from './display-dependencies.js';
 
 const input = z.object({
   parent: z.string().min(1).max(100).default('root'), mode: z.literal('window'),
@@ -25,7 +26,7 @@ export async function windowSnapshot(store: Store, raw: unknown): Promise<Workbe
   const params: unknown[] = [query.relatedTo ?? query.viewParent ?? parent];
   const clauses = [query.relatedTo ? `EXISTS(SELECT 1 FROM refs r WHERE (r."sourceId"=m.id AND r."targetId"=$1) OR (r."targetId"=m.id AND r."sourceId"=$1))`
     : `COALESCE((SELECT membership."parentId" FROM memberships membership WHERE membership."memberId"=m.id),'root')=$1
-      AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(m.body::jsonb->'parts') part WHERE part->>'relation'='member-of' AND part->'roles' ? 'member')`];
+      AND NOT ${isDependentMessageSql('m')}`];
   if (query.cursor) {
     let cursor: z.infer<typeof cursorSchema>;
     try { cursor = cursorSchema.parse(JSON.parse(Buffer.from(query.cursor, 'base64url').toString())); }
@@ -57,6 +58,7 @@ export async function windowSnapshot(store: Store, raw: unknown): Promise<Workbe
       UNION SELECT item->>'memberId' FROM recent, jsonb_array_elements(data->'memberships') item
       UNION SELECT item->>'parentId' FROM recent, jsonb_array_elements(data->'memberships') item
       UNION SELECT jsonb_array_elements_text(data->'removedMemberships') FROM recent
+      UNION SELECT jsonb_array_elements_text(data->'removedMessageIds') FROM recent
     ) SELECT id FROM affected WHERE id=ANY($2::text[])`).all(query.after, knownIds);
     const scoped = scopeSql(parent);
     const present = await store.db.prepare(`${scoped.cte} SELECT m.id FROM messages m WHERE ${scoped.predicate} AND m.id=ANY($${scoped.params.length + 1}::text[])`).all(...scoped.params, knownIds);
@@ -79,9 +81,11 @@ export async function windowSnapshot(store: Store, raw: unknown): Promise<Workbe
       UNION SELECT "parentId" FROM memberships WHERE "memberId"=ANY($2::text[])
     ) AND NOT(id=ANY($2::text[])) ORDER BY sequence DESC,id DESC LIMIT 100`).all(expandable, seeds);
     for (const row of context) { const message = JSON.parse(String(row.body)) as Message; messages.set(message.id, message); }
-    const attached = await store.db.prepare(`SELECT m.body FROM messages m JOIN refs r ON r."sourceId"=m.id
-      WHERE r."targetId"=ANY($1::text[]) AND NOT(m.id=ANY($1::text[]))
-      GROUP BY m.id ORDER BY m.sequence DESC,m.id DESC LIMIT 50`).all(seeds);
+    const attached = await store.db.prepare(`WITH RECURSIVE attached(id) AS (
+      SELECT unnest($1::text[]) UNION SELECT m.id FROM attached host JOIN refs r ON r."targetId"=host.id
+      JOIN messages m ON m.id=r."sourceId" WHERE m.id<>host.id AND ${displayAttachmentSql('m','host.id')}
+    ) SELECT m.body FROM messages m JOIN attached a ON a.id=m.id WHERE NOT(m.id=ANY($1::text[]))
+      ORDER BY m.sequence DESC,m.id DESC LIMIT 50`).all(seeds);
     for (const row of attached) { const message = JSON.parse(String(row.body)) as Message; messages.set(message.id, message); }
   }
   const records = [...messages.values()], ids = records.map(message => message.id);

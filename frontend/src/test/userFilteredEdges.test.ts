@@ -465,7 +465,7 @@ describe('computeUserSuppressedRelIds', () => {
 
   // ── Meta-stance: disagree with own disagree → cancel ──
 
-  it('disagreeing with own disagree cancels the original suppression', () => {
+  it('disagreeing with own disagree keeps the original target suppressed', () => {
     // Bob disagrees with rel-arr (creates rel-dis-1).
     // Then Bob disagrees with rel-dis-1 itself (creates rel-dis-2).
     // With transitive resolution: DISAGREE on DISAGREE on rel-arr = AGREE on rel-arr.
@@ -488,8 +488,8 @@ describe('computeUserSuppressedRelIds', () => {
     ];
 
     const result = computeUserSuppressedRelIds(edges, msgs, 'bob');
-    // rel-arr NOT suppressed: effective stance = DISAGREE(DISAGREE(rel-arr)) = AGREE
-    expect(result.has('rel-arr')).toBe(false);
+    // The latest DISAGREE still opposes the original target.
+    expect(result.has('rel-arr')).toBe(true);
     // rel-dis-1 is not an ultimate target, so it's not in the suppressed set
     expect(result.has('rel-dis-1')).toBe(false);
   });
@@ -544,9 +544,9 @@ describe('computeTransitiveVoteStats', () => {
     expect(stats['rel-arr'].disagreeCount).toBe(1);
   });
 
-  it('projects agree-on-disagree as disagree on the original target', () => {
+  it('projects agree-on-disagree as agree on the original target', () => {
     // Bob disagrees with rel-arr. Charlie agrees with Bob's disagree.
-    // Charlie's AGREE should count as DISAGREE on rel-arr.
+    // Charlie's AGREE counts as AGREE on rel-arr.
     const msgs: DemoMessage[] = [
       makeNormalMsg('m1', 'alice'), makeRelationMsg('rel-arr', 'alice', 'arrange'),
       makeNormalMsg('m-bob-dis', 'bob'), makeRelationMsg('rel-bob-dis', 'bob', 'disagree'),
@@ -559,14 +559,14 @@ describe('computeTransitiveVoteStats', () => {
     ];
     const stats = computeTransitiveVoteStats(edges, msgs);
     // Direct: Bob disagrees with rel-arr → +1 disagree
-    // Transitive: Charlie agrees with rel-bob-dis (which is disagree on rel-arr) → +1 disagree on rel-arr
-    expect(stats['rel-arr'].disagreeCount).toBe(2);
-    expect(stats['rel-arr'].agreeCount || 0).toBe(0);
+    // The new action supplies the direction, independently of the earlier stance.
+    expect(stats['rel-arr'].disagreeCount).toBe(1);
+    expect(stats['rel-arr'].agreeCount).toBe(1);
   });
 
-  it('projects disagree-on-disagree as agree on the original target', () => {
+  it('projects disagree-on-disagree as disagree on the original target', () => {
     // Bob disagrees with rel-arr. Charlie disagrees with Bob's disagree.
-    // Charlie's DISAGREE should count as AGREE on rel-arr.
+    // Charlie's DISAGREE also counts as DISAGREE on rel-arr.
     const msgs: DemoMessage[] = [
       makeNormalMsg('m1', 'alice'), makeRelationMsg('rel-arr', 'alice', 'arrange'),
       makeNormalMsg('m-bob-dis', 'bob'), makeRelationMsg('rel-bob-dis', 'bob', 'disagree'),
@@ -578,13 +578,13 @@ describe('computeTransitiveVoteStats', () => {
       makeEdge('e3', 'rel-charlie-dis', 'disagree', 'm-charlie-dis', 'rel-bob-dis'),
     ];
     const stats = computeTransitiveVoteStats(edges, msgs);
-    expect(stats['rel-arr'].disagreeCount).toBe(1);  // Bob's direct disagree
-    expect(stats['rel-arr'].agreeCount).toBe(1);      // Charlie's disagree-on-disagree → agree
+    expect(stats['rel-arr'].disagreeCount).toBe(2);
+    expect(stats['rel-arr'].agreeCount || 0).toBe(0);
   });
 
-  it('same user disagreeing with own disagree: both counts present', () => {
+  it('same user disagreeing with own disagree: both opposition investments remain', () => {
     // Bob disagrees with rel-arr, then disagrees with his own disagree.
-    // Both stances should count: 1 disagree + 1 agree on rel-arr.
+    // Both investments oppose rel-arr.
     const msgs: DemoMessage[] = [
       makeNormalMsg('m1', 'alice'), makeRelationMsg('rel-arr', 'alice', 'arrange'),
       makeNormalMsg('m-dis1', 'bob'), makeRelationMsg('rel-dis-1', 'bob', 'disagree'),
@@ -596,11 +596,11 @@ describe('computeTransitiveVoteStats', () => {
       makeEdge('e3', 'rel-dis-2', 'disagree', 'm-dis2', 'rel-dis-1'),
     ];
     const stats = computeTransitiveVoteStats(edges, msgs);
-    expect(stats['rel-arr'].disagreeCount).toBe(1);
-    expect(stats['rel-arr'].agreeCount).toBe(1);
+    expect(stats['rel-arr'].disagreeCount).toBe(2);
+    expect(stats['rel-arr'].agreeCount || 0).toBe(0);
   });
 
-  it('same user pure-stance disagree-on-own-disagree: both counts present', () => {
+  it('same user pure-stance disagree-on-own-disagree: both oppose the original target', () => {
     // Same as above, but using anon: sources (like the UI's quick disagree).
     const msgs: DemoMessage[] = [
       makeNormalMsg('m1', 'alice'), makeRelationMsg('rel-arr', 'alice', 'arrange'),
@@ -613,8 +613,8 @@ describe('computeTransitiveVoteStats', () => {
       { id: 'e3', relationMessageId: 'rel-dis-2', relationType: 'disagree' as any, from: wholeSel('anon:rel-dis-2'), to: wholeSel('rel-dis-1'), relationLabel: 'disagree' },
     ];
     const stats = computeTransitiveVoteStats(edges, msgs);
-    expect(stats['rel-arr'].disagreeCount).toBe(1);
-    expect(stats['rel-arr'].agreeCount).toBe(1);
+    expect(stats['rel-arr'].disagreeCount).toBe(2);
+    expect(stats['rel-arr'].agreeCount || 0).toBe(0);
   });
 
   it('agree-on-agree stays agree', () => {

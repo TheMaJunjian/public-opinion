@@ -208,16 +208,16 @@ describe('core message identity and execution state', () => {
     expect(computeCorrectionVersions(messages, converted.edges, new Set([correction.id])).get(target.id)?.current).toBeUndefined();
   });
 
-  it('reverses an opposition to the stance part but does not reverse an opposition to the reason', () => {
+  it('forwards an opposition on a stance to its target while keeping the reason separate', () => {
     const original = { ...message(), id: 'original' };
     const opposed: DemoMessage = { ...message(), id: 'opposed', kind: 'relation', relationType: 'disagree', parts: [body,
       { id: 'stance', type: 'relation', relation: 'disagree', roles: { target: [{ id: 'target-0', reference: { messageId: original.id } }] } }] };
     const stanceEdge = makeEdge('anti-stance', { messageId: opposed.id, partId: 'stance' });
     const reasonEdge = makeEdge('anti-reason', { messageId: opposed.id, partId: 'body' });
     const stats = computeTransitiveVoteStats([stanceEdge, reasonEdge], [original, opposed]);
-    expect(stats.original).toMatchObject({ agreeCount: 1, disagreeCount: 0 });
+    expect(stats.original).toMatchObject({ agreeCount: 0, disagreeCount: 1 });
     expect(stats.opposed).toBeUndefined();
-    expect(Object.values(stats).reduce((sum, item) => sum + item.disagreeCount, 0)).toBe(1);
+    expect(Object.values(stats).reduce((sum, item) => sum + item.disagreeCount, 0)).toBe(2);
   });
 
   it('uses recorded execution after the target is edited, and keeps historical whole-message votes separate', () => {
@@ -237,18 +237,18 @@ describe('core message identity and execution state', () => {
 });
 
 describe('independent protocol, recommendation and wager spending', () => {
-  const deps = { relationType: null, draftUnits: [], targetUnits: [], newMessageContent: '新发言', stakeAmount: 0, relStakeAmount: 0, recommendationAmount: 0 };
-  it('charges only the protocol fee for a default message', () => {
-    expect(calculateSendCost(deps, 1)).toMatchObject({ stakeTotal: 0, recommendationTotal: 0, protocolFeeTotal: 1, total: 1 });
+  const deps = { relationType: null, draftUnits: [], targetUnits: [], newMessageContent: '新发言', stakeAmount: 1, relStakeAmount: 1, recommendationAmount: 0 };
+  it('charges truth and the protocol fee for a default message', () => {
+    expect(calculateSendCost(deps, 1)).toMatchObject({ stakeTotal: 1, recommendationTotal: 0, protocolFeeTotal: 1, total: 2, contributionError:null });
   });
   it('keeps recommendation independent from the optional self-agreement wager', () => {
     expect(calculateSendCost({ ...deps, stakeAmount: 9, recommendationAmount: 5 }, 2)).toMatchObject({ stakeTotal: 9, recommendationTotal: 5, protocolFeeTotal: 2, total: 16 });
   });
-  it('charges a single organization declaration without phantom JOIN or self-agreement fees', () => {
-    expect(calculateSendCost({ ...deps, relationType: 'classify', targetUnits: [{ messageId: 'a' }, { messageId: 'b' }] }, 1)).toMatchObject({ relCount: 1, joinCount: 0, stakeTotal: 0, total: 1 });
+  it('charges the organization declaration and each real JOIN without adding self-agreement messages', () => {
+    expect(calculateSendCost({ ...deps, relationType: 'classify', targetUnits: [{ messageId: 'a' }, { messageId: 'b' }] }, 1)).toMatchObject({ relCount: 1, joinCount: 2, messageCount:3, stakeTotal: 3, total: 6 });
   });
   it('counts a new reason plus its reply, or a relation for each selected source and target', () => {
-    expect(calculateSendCost({ ...deps, relationType: 'reply', targetUnits: [{ messageId: 'a' }] }, 1)).toMatchObject({ hasText: true, protocolFeeTotal: 2, total: 2 });
-    expect(calculateSendCost({ ...deps, relationType: 'reply', sourceUnits: [{ messageId: 's1' }, { messageId: 's2' }], targetUnits: [{ messageId: 'a' }, { messageId: 'b' }] }, 1)).toMatchObject({ hasText: false, relCount: 4, protocolFeeTotal: 4, total: 4 });
+    expect(calculateSendCost({ ...deps, relationType: 'reply', targetUnits: [{ messageId: 'a' }] }, 1)).toMatchObject({ hasText: true, protocolFeeTotal: 2, total: 4 });
+    expect(calculateSendCost({ ...deps, relationType: 'reply', sourceUnits: [{ messageId: 's1' }, { messageId: 's2' }], targetUnits: [{ messageId: 'a' }, { messageId: 'b' }] }, 1)).toMatchObject({ hasText: false, relCount: 4, protocolFeeTotal: 4, total: 8 });
   });
 });

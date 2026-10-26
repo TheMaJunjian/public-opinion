@@ -27,7 +27,7 @@ export function deriveNormalGraphProjection(input: DeriveNormalGraphProjectionIn
   const { graphMessagesToRender, correctionVersions, cleanVisibleIds, homeFilterResult, msgFilter, edges, messages, displayUser, graphEdgesToRender, relations, effectiveJoinRelationIds } = input;
   const corrected = graphMessagesToRender.map(message => {
     const version = correctionVersions.get(message.id)?.current;
-    return version ? withCorrectionContent(message, version.content, version.changes) : message;
+    return version ? withCorrectionContent(message, version.content, version.changes, version.snapshot) : message;
   });
   const scopedCleanMessages = cleanVisibleIds
     ? corrected.filter(message =>

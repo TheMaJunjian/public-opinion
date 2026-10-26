@@ -31,6 +31,8 @@ export default function GovernancePanel({ scopeMessageId }: { scopeMessageId: st
         kind: 'GOVERNANCE',
         contentType: 'TEXT',
         content: content.trim(),
+        wager: 1,
+        selfAgree: true,
       });
       setContent('');
       // Refresh

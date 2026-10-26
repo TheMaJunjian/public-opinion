@@ -1,5 +1,5 @@
 import { signPayloadWithPrivateJwk } from '../utils/signature';
-import type { Session, Reference } from '@gonglun/core';
+import type { Session, Reference, ReadingMark,BodyVersion,Message as CoreMessage } from '@gonglun/core';
 import { decodeWorkbenchSnapshot, type CompactSnapshot } from '@gonglun/core';
 import { cancelCommandBatch, isPendingMessage, queueCommand, runCommandBatch } from './commandBatch';
 import { beginRequestOperation, clearWriteRequestIdentity, fetchJsonWithDeadline, requestOwner, singleRequest, UncertainRequestError, writeRequestIdentity } from '../utils/requestLifecycle';
@@ -63,9 +63,10 @@ export function getPrivateKeyForUser(username: string): string | null {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const queued = options.method && options.method !== 'GET' ? queueCommand(path, options) : null;
+  const readOnly=['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
+  const queued = options.method && options.method !== 'GET' && path !== '/reading-state'&&!readOnly ? queueCommand(path, options) : null;
   if (queued) return queued as T;
-  const writes = !!options.method && options.method !== 'GET' && path.split('?')[0] !== '/snapshot/query';
+  const writes = !!options.method && options.method !== 'GET'&&!readOnly;
   let explicitRead = path.split('?')[0] === '/message-context' && new URLSearchParams(path.split('?')[1]).has('id');
   if (path.split('?')[0] === '/snapshot/query') {
     try { const ids = JSON.parse(String(options.body ?? '{}')).ids; explicitRead = Array.isArray(ids) && ids.length > 0; }
@@ -92,6 +93,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return writes ? singleRequest(operationKey, perform) : perform();
 }
 
+export const getReadingState = () => request<{marks:ReadingMark[]}>('/reading-state');
+export const resolveBodyVersion=(version:BodyVersion)=>request<{message:CoreMessage}>('/body-versions/resolve',{method:'POST',body:JSON.stringify(version)});
+export async function markReading(marks:ReadingMark[]) {
+  const saved:ReadingMark[]=[];
+  for(let offset=0;offset<marks.length;offset+=500){
+    const result=await request<{marks:ReadingMark[]}>('/reading-state', {method:'POST',body:JSON.stringify({marks:marks.slice(offset,offset+500)})});
+    saved.push(...result.marks);
+  }
+  return {marks:saved};
+}
+
 async function requestCore<T>(path: string, options: RequestInit, owner = requestOwner()): Promise<T> {
   options.signal?.throwIfAborted();
   const core = ['/setup', '/session', '/login', '/register', '/logout'].includes(path);
@@ -102,14 +114,15 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   };
   headers['X-Device-Id'] = getDeviceId();
   const isAuthBootstrap = ['/login', '/register', '/logout', '/auth/signing-key'].includes(path);
-  const readOnlySnapshot = path.split('?')[0] === '/snapshot/query';
+  const privateReading=path==='/reading-state';
+  const readOnlySnapshot = ['/snapshot/query','/body-versions/resolve'].includes(path.split('?')[0]);
   let identityKey: string | undefined;
   const checkOwner = () => { if (requestOwner() !== owner) throw new DOMException('账户已切换，请重新操作', 'AbortError'); };
-  if (path === '/auth/signing-key' || path === '/logout') {
+  if (path === '/auth/signing-key' || path === '/logout' || privateReading&&options.method==='POST') {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
   }
-  if (options.method && options.method !== 'GET' && !isAuthBootstrap && !readOnlySnapshot) {
+  if (options.method && options.method !== 'GET' && !isAuthBootstrap && !readOnlySnapshot && !privateReading) {
     if (!csrf) await getSession();
     headers['X-CSRF-Token'] = csrf;
     const body = JSON.parse(typeof options.body === 'string' ? options.body : '{}');
@@ -133,10 +146,10 @@ async function requestCore<T>(path: string, options: RequestInit, owner = reques
   // Both attempts consume the body within the deadline and reuse the exact signature.
   let received!: { response: Response; data: unknown };
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey) checkOwner(); }
+    if (attempt === 0) { options.signal?.throwIfAborted(); if (identityKey||privateReading) checkOwner(); }
     try {
       options.signal?.throwIfAborted();
-      if (identityKey) checkOwner();
+      if (identityKey||privateReading) checkOwner();
       received = await fetchJsonWithDeadline(url, { ...options, headers, credentials: 'same-origin' });
       break;
     } catch (error) {
@@ -274,6 +287,7 @@ export async function getAllMessages(scopeMessageId: string, limit = 200, cursor
 }
 
 export function createMessage(scopeMessageId: string, data: {
+  joinContribution?: {wager:number;recommendation:number};
   kind?: 'TEXT' | 'GOVERNANCE' | 'CODE' | 'ROUND' | 'ROUND_RESULT' | 'OPERATIONS';
   contentType?: 'TEXT' | 'MARKDOWN';
   content?: string;
@@ -305,6 +319,7 @@ export function getAttentionUsers(scopeMessageId: string) {
 }
 
 export function createRelation(scopeMessageId: string, data: {
+  joinContribution?: {wager:number;recommendation:number};
   relationType: string;
   sourceMessageId?: string | null;
   targetRefs: import('../types').TargetRef[];
@@ -384,7 +399,7 @@ export function getMessageStakes(messageId: string, settlementType?: 'TRUTH' | '
 // Settlement API (Phase 3)
 // ============================================================
 
-export function createRound(messageId: string, data?: { note?: string; settlementType?: 'TRUTH' | 'VALUE' }) {
+export function createRound(messageId: string, data?: { note?: string; settlementType?: 'TRUTH' | 'VALUE';reference?:import('@gonglun/core').Reference }) {
   return request<import('../types').SettlementRoundItem>(`/messages/${messageId}/rounds`, {
     method: 'POST',
     body: JSON.stringify(data ?? {}),

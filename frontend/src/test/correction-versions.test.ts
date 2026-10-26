@@ -298,10 +298,10 @@ describe('correction versions', () => {
     expect(rejected?.current).toBeUndefined();
   });
 
-  it('keeps non-overlapping corrections valid when each uses the current left fragment', () => {
+  it('keeps non-overlapping corrections valid when each records the original base', () => {
     const target = message('split-target', '2026-01-01T00:00:00.000Z', 'abcde', 'normal');
     const first = { ...message('split-1', '2026-01-01T00:01:00.000Z', 'Abcde', 'relation'), relationPayload: { correctionContent: 'Abcde' } };
-    const second = { ...message('split-2', '2026-01-01T00:02:00.000Z', 'AbCde', 'relation'), relationPayload: { correctionContent: 'AbCde' } };
+    const second = { ...message('split-2', '2026-01-01T00:02:00.000Z', 'abCde', 'relation'), relationPayload: { correctionContent: 'abCde' } };
     const edge = (id: string, correctionId: string, start: number, text: string): DemoEdge => ({
       id,
       relationMessageId: correctionId,

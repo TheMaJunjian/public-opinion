@@ -35,7 +35,7 @@ function getReasonLabel(payload: RelationPayload | undefined): string | undefine
 export function getRelationRecordContentLabel(message: DemoMessage): string | undefined {
   const type = message.relationType;
   const payload = message.relationPayload;
-  if (type === 'correct') return undefined; // Already shown in the correction details.
+  if (type === 'correct') return payload?.correctionKind === 'WIDTH' ? `${payload.correctionWidth} px` : undefined;
   if (type === 'recommend' || type === 'archive') {
     return payload?.subType === 'CUSTOM' ? payload.customLabel?.trim() || '自定义' : getReasonLabel(payload);
   }
@@ -63,7 +63,7 @@ const OPERATION_LABELS: Record<string, string> = {
 export function getRelationMessageLabel(message: DemoMessage): string | undefined {
   const relationType = String(message.relationType ?? '').toLowerCase();
   const payload = message.relationPayload;
-  if (relationType === 'correct') return `更正 · ${payload?.correctionKind === 'MEANING' ? '修改原意' : '修正文字'}`;
+  if (relationType === 'correct') return `更正 · ${payload?.correctionKind === 'WIDTH' ? '宽度调整' : '修正文字'}`;
   if (message.kind !== 'relation' && message.backendKind !== 'GOVERNANCE') return undefined;
   if (relationType === 'delegation') {
     return payload?.delegationKind === 'FULFILL' ? '完成委托' : '创建委托';

@@ -30,7 +30,7 @@ it('主程序拒绝旧格式，独立命令只迁移一次，覆盖版本、日�
       expect(message).toEqual(revision);
       expect(message.parts[0]).toMatchObject({id:'relation',relation:name,reason,roles:{target:[{reference:{messageId:'target',revision:1,partId:'body',range:{start:0,end:1}}}]}});
     }
-    expect(await upgraded.latestSequence()).toBe(before+1);
+    expect(await upgraded.latestSequence()).toBe(before+2);
     expect(await upgraded.db.prepare('SELECT * FROM ledger').all()).toEqual(ledger);
     const retry=await upgraded.db.prepare('SELECT input,result FROM requests').get();
     expect(retry?.input).toBe('original signed input');
@@ -41,5 +41,5 @@ it('主程序拒绝旧格式，独立命令只迁移一次，覆盖版本、日�
     expect(replayArchive(archive).messages.find(message=>message.id==='unfollow')?.parts[0]).toMatchObject({relation:'follow',reason:'NO'});
   }finally{await upgraded.close();}
   const again=await openMigratingStore(testDatabaseUrl(),{schema});
-  try{expect(await again.latestSequence()).toBe(before+1);}finally{await again.close();}
+  try{expect(await again.latestSequence()).toBe(before+2);}finally{await again.close();}
 });

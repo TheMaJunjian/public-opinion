@@ -2,6 +2,7 @@ import type { Relation, TargetRef } from '../../../types';
 import { getEffectiveJoinByTarget } from './membership';
 import type { DemoEdge, DemoMessage } from '../../../utils/modelBridge';
 import { expandTextIdsWithCorrections } from './correction';
+import { displayDependencyIds } from '../../../utils/displayDependency';
 type ContainerRelation = Pick<Relation,'id'|'relationType'|'sourceMessageId'|'targetRefs'> & Partial<Pick<Relation,'payload'|'state'|'createdAt'>>;
 const containerTypes=new Set(['CLASSIFY','SUMMARY','MERGE','ARRANGE']);
 
@@ -126,22 +127,16 @@ export interface FindContainingClassificationInput {
 export function findContainingClassification(dependencies: FindContainingClassificationInput, messageId: string): string | null {
   const { relationById, relations, rejectedContainerIds, rejectedJoinRelationIds, edges, msgMap } = dependencies;
   const ownership = dependencies.containerOwnership ?? createContainerOwnership(relations, rejectedContainerIds, rejectedJoinRelationIds);
-  const targetRelation = relationById.get(messageId);
   let anchorId = messageId;
-  if (targetRelation) {
-    const relationType = targetRelation.relationType.toUpperCase();
-    const sourceId = targetRelation.sourceMessageId ?? null;
-    const firstTarget = (targetRelation.targetRefs ?? []).find(ref =>
-      ref.kind === 'message' || ref.kind === 'text-fragment' || ref.kind === 'relation',
-    );
-    const targetId = firstTarget?.kind === 'relation'
-      ? firstTarget.relationId
-      : firstTarget?.messageId;
-    if (['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT'].includes(relationType)) {
-      anchorId = sourceId || messageId;
-    } else if (['AGREE', 'DISAGREE', 'TAG'].includes(relationType)) {
-      anchorId = targetId || messageId;
-    }
+  const visited = new Set<string>();
+  while (!visited.has(anchorId)) {
+    visited.add(anchorId);
+    const relation = relationById.get(anchorId);
+    // JOIN records have their own history navigation, rather than entering the parent's scope.
+    if (relation?.relationType.toUpperCase() === 'JOIN') break;
+    const host = relation && displayDependencyIds(relation)?.[0];
+    if (!host) break;
+    anchorId = host;
   }
   let match: { id: string; size: number } | null = null;
   for (const relation of relations) {

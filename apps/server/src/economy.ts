@@ -1,4 +1,4 @@
-import { bindRoles, referenceKey, relations, resolveStance, textOf, type Allocation, type Distribution, type Json, type Message, type Reference, type RelationPart, type Round } from '@gonglun/core';
+import { annotationValueSide, bindRoles, referenceKey, relations, resolveStance, textOf, type Allocation, type Distribution, type Json, type Message, type Reference, type RelationPart, type Round } from '@gonglun/core';
 import { DomainError, id, integer, Mutation, now, Store } from './db.js';
 import { recordStance } from './projections.js';
 import { validateJoinApproval } from './organizations.js';
@@ -64,8 +64,10 @@ async function newRound(tx: Mutation, selected: {
     revision: number;
 }, trigger: Message, previous?: SavedRound): Promise<SavedRound> {
     const evaluated = await tx.store.message(selected.target.messageId, selected.target.revision), valueRelation = relations(evaluated).find(part => part.relation === 'open-value-settlement'), subjectId = valueRelation?.roles.target?.[0]?.reference.messageId;
+    const {readReference}=await import('./validation.js');
+    const displayed=selected.target.context&&'version' in selected.target.context&&selected.target.context.version&&!selected.target.partId?await readReference(tx.store,selected.target) as Message:evaluated;
     const declaration = await tx.create('system', [
-        { id: 'body', type: 'text', text: `发起结算：${textOf(evaluated).slice(0, 160) || '所选消息部件'}。发起人：${(await tx.store.user(trigger.authorId)).name}。` },
+        { id: 'body', type: 'text', text: `发起结算：${textOf(displayed).slice(0, 160) || '所选消息部件'}。发起人：${(await tx.store.user(trigger.authorId)).name}。` },
         { id: 'settlement', type: 'relation', relation: 'settlement', roles: bindRoles({ target: [selected.target], trigger: [{ messageId: trigger.id }] }) },
         { id: 'basis', type: 'data', value: { openedBy: trigger.authorId, triggerId: trigger.id, previousRoundId: previous?.id ?? null, settlementType: subjectId ? 'VALUE' : 'TRUTH', subjectId: subjectId ?? selected.target.messageId } },
     ]);
@@ -84,7 +86,9 @@ async function targetKey(store: Store, target: Reference): Promise<{
     target: Reference;
     revision: number;
 }> {
-    const revision = (await store.message(target.messageId, target.revision)).revision;
+    const current = await store.message(target.messageId);
+    const revision = target.revision === undefined || target.revision === current.revision
+        ? current.revision : (await store.message(target.messageId, target.revision)).revision;
     const pinned = { ...target, revision };
     const policy=await store.db.prepare('SELECT allowed_keys FROM settlement_access WHERE "messageId"=$1').get(target.messageId);
     if(policy && !policy.allowed_keys.includes(referenceKey(pinned))) throw new DomainError('该消息已关闭资金操作，请创建新消息',409);
@@ -97,7 +101,7 @@ export async function roundsFor(store: Store, messageId: string): Promise<Round[
     });
 }
 /** Interpret an existing stance using the content and direction it actually executed. */
-async function executionResolver(store: Store, messageId: string, revision?: number): Promise<Message> {
+async function executionResolver(store: Pick<Store,'db'|'message'>, messageId: string, revision?: number): Promise<Message> {
     const message = await store.message(messageId, revision);
     const executed = await store.db.prepare(`SELECT "partId",target,side FROM execution_stances WHERE "sourceId"=$1 AND revision=$2`).all(message.id, message.revision);
     if (executed.length === 0)
@@ -110,7 +114,7 @@ async function executionResolver(store: Store, messageId: string, revision?: num
         }) };
 }
 /** Load historical messages asynchronously while keeping the shared stance resolver authoritative. */
-async function resolveExecutedStance(store: Store, target: Reference, side: 'pro' | 'con') {
+export async function resolveExecutedStance(store: Pick<Store,'db'|'message'>, target: Reference, side: 'pro' | 'con') {
     const loaded = new Map<string, Message>();
     const missing = new Error('Historical stance message not loaded');
     let requested: { messageId: string; revision?: number } | undefined;
@@ -129,15 +133,16 @@ async function resolveExecutedStance(store: Store, target: Reference, side: 'pro
         }
     }
 }
-export async function placeWager(tx: Mutation, message: Message, amount: number) {
+export async function placeWager(tx: Mutation, message: Message, amount: number, allowDebt = false) {
     const stance = relations(message).filter(r => r.relation === 'agree' || r.relation === 'disagree');
     if (stance.length !== 1 || stance[0]!.roles.target?.length !== 1)
         throw new DomainError('押注必须对应一项明确的赞同或反对');
     const resolved = await resolveExecutedStance(tx.store, stance[0]!.roles.target![0]!.reference, stance[0]!.relation === 'agree' ? 'pro' : 'con');
-    await placeResolvedWager(tx, message, amount, stance[0]!.id, resolved);
+    await placeResolvedWager(tx, message, amount, stance[0]!.id, resolved, false, allowDebt);
 }
-export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number) {
+export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number, allowDebt = false) {
     const reference = relationTarget(annotation);
+    if (reference.revision !== undefined) await tx.store.message(reference.messageId);
     const subject = await tx.store.message(reference.messageId, reference.revision);
     const pinned = { ...reference, revision: subject.revision };
     const previous = await valueRoundFor(tx.store, pinned);
@@ -152,17 +157,55 @@ export async function placeValueWager(tx: Mutation, message: Message, annotation
         ]);
         target = { messageId: claim.id, revision: claim.revision, partId: 'relation' };
     }
-    await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotation.relation === 'recommend' ? 'pro' : 'con' });
+    await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotationValueSide(annotation) }, false, allowDebt);
 }
-async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }) {
-    await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
+/** Maintenance only: backfill an author's self-agreement without replaying the message's actions. */
+export async function placeHistoricalSelfWager(tx: Mutation, message: Message, partId: string) {
+    await placeResolvedWager(tx, message, 1, partId, { target: { messageId: message.id, revision: message.revision }, side: 'pro' }, true);
+}
+/** Reassign existing principal while preserving the original execution address and version. */
+export async function relocateHistoricalTargetWager(tx:Mutation,message:Message,amount:number,partId:string,target:Reference,side:'pro'|'con'){
+    await placeResolvedWager(tx,message,amount,partId,{target,side},false,true);
+}
+/** Maintenance can fund an already executed JOIN without executing or approving it again. */
+export async function relocateRecordedTargetWager(tx:Mutation,message:Message,amount:number,partId:string,target:Reference,side:'pro'|'con'){
+    const execution=await tx.store.db.prepare('SELECT target,side FROM execution_stances WHERE "sourceId"=$1 AND revision=$2 AND "partId"=$3').get(message.id,message.revision,partId);
+    const display=await tx.store.db.prepare('SELECT "targetKey",side FROM display_stances WHERE "sourceId"=$1').get(message.id);
+    const key=referenceKey(target);
+    if(!execution||referenceKey(JSON.parse(String(execution.target)))!==key||execution.side!==side||display?.targetKey!==key||display.side!==side)
+        throw new Error('历史投入缺少一致的原始执行和展示记录');
+    await tx.store.db.prepare('DELETE FROM execution_stances WHERE "sourceId"=$1 AND revision=$2 AND "partId"=$3').run(message.id,message.revision,partId);
+    await placeResolvedWager(tx,message,amount,partId,{target,side},false,true,false);
+}
+/** Reverse only an unsettled migration stake mistakenly attached to an automatic record. */
+export async function refundHistoricalSelfWager(tx: Mutation, message: Message, partId: string, reason='系统自动记录真假补扣退回') {
+    const key=referenceKey({messageId:message.id,revision:message.revision});
+    const bets=await tx.store.db.prepare('SELECT * FROM bets WHERE "messageId"=$1 AND "targetKey"=$2 ORDER BY position DESC LIMIT 1').all<Bet>(message.id,key);
+    if(bets.length!==1||bets[0]!.amount!==1||bets[0]!.userId!==message.authorId||bets[0]!.side!=='pro')throw new Error('系统记录补扣缺少唯一押注，停止退款');
+    const bet=bets[0]!,round=(await savedRounds(tx.store,key)).find(round=>round.id===bet.roundId);
+    if(!round||round.status!=='open'||round.pro<1)throw new Error('系统记录补扣已进入结算，停止自动退款');
+    await tx.store.db.prepare('DELETE FROM bets WHERE id=$1').run(bet.id);
+    await tx.store.db.prepare('DELETE FROM stake_positions WHERE id=$1').run(bet.id);
+    round.pro-=1;
+    await saveRound(tx.store,round);
+    await tx.store.db.prepare('DELETE FROM execution_stances WHERE "sourceId"=$1 AND revision=$2 AND "partId"=$3').run(message.id,message.revision,partId);
+    await tx.store.db.prepare('DELETE FROM display_stances WHERE "sourceId"=$1 AND "targetId"=$1').run(message.id);
+    await tx.store.db.prepare('DELETE FROM message_state_checkpoints WHERE "messageId"=$1').run(message.id);
+    await tx.store.ledger(message.authorId,message.id,1,-1,reason,true);
+    // Close the migration's now-empty round without affecting any prior settlement.
+    if(!round.previousRoundId&&!await tx.store.db.prepare('SELECT 1 FROM bets WHERE "targetKey"=$1').get(key))await settle(tx,round,message.id);
+}
+async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }, historical = false, allowDebt = false, validateApproval = true) {
+    if (!historical && validateApproval) await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
     if(amount===0 && await tx.store.db.prepare('SELECT 1 FROM settlement_access WHERE "messageId"=$1').get(resolved.target.messageId)) {
         const target={...resolved.target,revision:(await tx.store.message(resolved.target.messageId,resolved.target.revision)).revision};
         await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id,message.revision,partId,JSON.stringify(target),resolved.side);
         tx.affected.add(await recordStance(tx.store,message,{target,side:resolved.side}));
         return;
     }
-    const selected = await targetKey(tx.store, resolved.target);
+    const selected = historical
+        ? { key: referenceKey(resolved.target), target: resolved.target, revision: message.revision }
+        : await targetKey(tx.store, resolved.target);
     await tx.store.db.prepare(`INSERT INTO execution_stances("sourceId",revision,"partId",target,side) VALUES ($1,$2,$3,$4,$5)`).run(message.id, message.revision, partId, JSON.stringify(selected.target), resolved.side);
     tx.affected.add((await recordStance(tx.store, message, { target: selected.target, side: resolved.side })));
     const history = await savedRounds(tx.store, selected.key);
@@ -173,9 +216,10 @@ async function placeResolvedWager(tx: Mutation, message: Message, amount: number
         const previous = history.at(-1);
         round = (await newRound(tx, selected, message, previous));
     }
+    const requested=dataOf(message).roundId;if(requested!==undefined&&requested!==round.id)throw new DomainError('投票目标与轮次固定依据不一致',409);
     round[resolved.side] = integer(round[resolved.side] + amount);
     if (amount > 0) {
-        await tx.store.ledger(message.authorId, message.id, -amount, amount, '对赌锁定');
+        await tx.store.ledger(message.authorId, message.id, -amount, amount, historical ? '历史消息真假补扣' : '对赌锁定', historical || allowDebt);
         const betId = id();
         await tx.store.db.prepare(`INSERT INTO bets(id,"roundId","targetKey","userId","messageId",side,amount) VALUES ($1,$2,$3,$4,$5,$6,$7)`).run(betId, round.id, selected.key, message.authorId, message.id, resolved.side, amount);
         await tx.store.db.prepare('INSERT INTO stake_positions VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)').run(betId,message.authorId,

@@ -44,7 +44,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
         confirmDisabled={isSending} onConfirm={() => void reversePreview.onConfirm()} onCancel={onClose}
         lockScroll={false} dialogProps={{ style: { width: 'min(700px, 100%)' } }} message={
           <CorrectionTextComparison before={reversePreview.before} after={reversePreview.after}
-            status={`附加关系：${reversePreview.correctionKind === 'MEANING' ? '修改原意' : '修正文字'}。发送后其他用户即可查看，并按本人立场及公共统计决定正文显示。`} />
+            status={`附加关系：${'修正文字'}。发送后其他用户即可查看，并按本人立场及公共统计决定正文显示。`} />
         } />
     );
   }
@@ -52,6 +52,8 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
   if (relType === 'correct' && targetMsgs.length > 0) {
     const origMsg = targetMsgs[0];
     const payload = msgMap.get(popup.relMsgId)?.relationPayload;
+    if (payload?.correctionKind === 'WIDTH') return <PromptModal open title="更正 · 宽度调整" onConfirm={onClose} confirmText="关闭" onCancel={onClose}
+      message={`目标消息：${origMsg.id}；消息卡宽度：${payload.correctionWidth} px。ID 所需的最小宽度会自动保留，正文保持不变。`} />;
     if (typeof payload?.correctionBeforeContent === 'string' && typeof payload.correctionAfterContent === 'string') {
       const active = !invalidCorrectionIds.has(popup.relMsgId);
       return <PopupOverlay contentRef={contentRef} zIndex={200} background={DIALOG_BACKDROP} onClick={onClose}>
@@ -60,7 +62,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
           onClick={event => event.stopPropagation()}>
           <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
           <CorrectionTextComparison before={payload.correctionBeforeContent} after={payload.correctionAfterContent}
-            status={`附加关系：${payload.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · ${active ? '当前对你有效' : '当前对你无效'}。以下展示更正前后全文；消息卡按本人立场及公共统计显示有效正文。`} />
+            status={`附加关系：${'修正文字'} · ${active ? '当前对你有效' : '当前对你无效'}。以下展示更正前后全文；消息卡按本人立场及公共统计显示有效正文。`} />
           <CloseRow onClose={onClose} />
         </div>
       </PopupOverlay>;
@@ -145,7 +147,7 @@ export default function CorrectionComparisonPopup({ popup, messages, edges, inva
             onClick={e => e.stopPropagation()}>
             <div style={{ ...dialogStyles.header, margin: '-16px -16px 16px' }}>✏ 更正对比</div>
             <div style={{ fontSize: 11, color: '#fbbf24', marginBottom: 8 }}>
-              附加关系：{payload?.correctionKind === 'MEANING' ? '修改原意' : '修正文字'} · {selectedVersion.valid ? '当前对你有效' : '当前对你无效'}。以下展示更正前后全文；消息卡按本人立场及公共统计显示有效正文。
+              附加关系：{'修正文字'} · {selectedVersion.valid ? '当前对你有效' : '当前对你无效'}。以下展示更正前后全文；消息卡按本人立场及公共统计显示有效正文。
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
               <MessageDiffColumn title="原文" message={{ ...origMsg, content: beforeContent }} isCorrected={false} border="#554" background="#211e14">

@@ -8,6 +8,19 @@ export const ANNOTATION_OPPOSITES: Readonly<Record<string, string>> = {
 export const ANNOTATION_TYPES = new Set(['tag', 'follow', 'block', ...Object.keys(ANNOTATION_OPPOSITES)]);
 export const ANNOTATION_WITHOUT_OPPOSITE = '该标注没有互斥项，不能发送反对';
 
+/** Investments on these actions belong to their subject, never the action record itself. */
+export function targetInvestmentDimension(relation: string): 'TRUTH' | 'VALUE' | undefined {
+  const name = relation.toLowerCase() === 'attention' ? 'follow' : relation.toLowerCase();
+  return name === 'agree' || name === 'disagree' ? 'TRUTH' : ANNOTATION_TYPES.has(name) ? 'VALUE' : undefined;
+}
+
+export function annotationValueSide(action: {relation:string;reason?:string;payload?:RelationPayload}): 'pro' | 'con' {
+  const reason = action.reason ?? action.payload?.subType;
+  if (action.relation === 'block') return reason === 'NO' ? 'pro' : 'con';
+  if (action.relation === 'follow') return reason === 'NO' ? 'con' : 'pro';
+  return ['archive','unread'].includes(action.relation) ? 'con' : 'pro';
+}
+
 interface AnnotationMessage {
   id?: string;
   revision?: number;
@@ -34,10 +47,10 @@ export function annotationAtReference(message: AnnotationMessage, reference: Ref
       && part.relation !== 'member-of' && !(part.id === 'self-stance' && ['agree','disagree'].includes(part.relation)
         && part.roles.target?.length === 1 && part.roles.target[0]?.reference.messageId === message.id));
     const part = reference.partId ? candidates.find(part => part.id === reference.partId) : candidates.length === 1 ? candidates[0] : undefined;
-    if (!part || !ANNOTATION_TYPES.has(part.relation)) return;
+    if (!part || !ANNOTATION_TYPES.has(part.relation) && part.relation !== 'open-value-settlement') return;
     const data = Object.assign({}, ...message.parts.flatMap(part => part.type === 'data' && part.value
       && typeof part.value === 'object' && !Array.isArray(part.value) ? [part.value] : []));
-    return {relation:part.relation, targets:(part.roles.target ?? []).map(binding => binding.reference),
+    return {relation:part.relation === 'open-value-settlement' ? 'recommend' : part.relation, targets:(part.roles.target ?? []).map(binding => binding.reference),
       payload:{...data,...message.payload,...message.relationPayload,...(part.reason ? {subType:part.reason} : {})}};
   }
   // Relation projections used during command preparation also carry exact target addresses.

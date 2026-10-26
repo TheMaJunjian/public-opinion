@@ -41,8 +41,8 @@ export type RelationType =
   | 'AGREE'        // 赞同（有文本时视为支持）
   | 'DISAGREE'     // 反对（有文本时视为反驳）
   | 'TAG'          // 标注（消息旁的装饰标签）
-  | 'READ'         // 已读标注（仅协议费）
-  | 'UNREAD'       // 未读标注（仅协议费）
+  | 'READ'         // 已读标注
+  | 'UNREAD'       // 未读标注
   | 'NOTIFY'       // 回复通知
   | 'CORRECT'      // 更正
   | 'ARRANGE'      // 排列（边框包裹目标消息；payload.targetLayout 控制横/纵排列）
@@ -101,7 +101,9 @@ export interface RelationPayload {
   /** CORRECT stores the complete replacement content directly on the correction relation. */
   correctionContent?: string;
   correctionValue?: Json;
-  correctionKind?: 'TEXT' | 'MEANING';
+  correctionKind?: 'TEXT' | 'MEANING' | 'WIDTH';
+  /** Requested graph card width in canvas CSS pixels; independent of body edits. */
+  correctionWidth?: number;
   /** Full readable content around a suggested text edit, for comparison only. */
   correctionBeforeContent?: string;
   correctionAfterContent?: string;
@@ -147,6 +149,7 @@ export interface StakeItem {
 }
 
 export interface MessageStakes {
+  contexts?: Record<string,Omit<MessageStakes,'contexts'>>;
   messageId: string;
   pool: {
     lockedPro: number;
@@ -197,4 +200,28 @@ export interface WorkbenchSnapshot {
   hasMore?: boolean;
   removedMessageIds?: string[];
   removedMemberships?: string[];
+}
+/** Private viewing progress. These records are never public messages or investments. */
+export interface ReadingMark {
+  firstConfirmedAt?:string;
+  baselineSequence?:number;
+  originalSeen?:true;
+  unknownContext?: true;
+  format?: 2|3;
+  position?: number;
+  version?: import('./types.js').BodyVersion;
+  eventId?: string;
+  resultKey?: string;
+  state?: 'READ' | 'UNREAD';
+  selection?: {versionKey:string;outcomes:Record<string,string>;signature:string};
+  messageId: string;
+  scope: 'message' | 'corrections' | 'influence' | 'original';
+  key: string;
+  signature?: string;
+  bodySignature?: string;
+  confirmation?: {kind:'direct'|'included';messageId:string};
+  /** Server-maintained evidence survives later included confirmations. */
+  directConfirmedAt?: string;
+  legacyConfirmation?: true;
+  updatedAt?: string;
 }

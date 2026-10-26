@@ -3,15 +3,16 @@ export interface MessageStakeCounts {
   value: { pro: number; con: number };
 }
 
-export default function MessageSettlementActions({ messageId, counts, openMessageId, openType, onTruth, onValue }: {
+export default function MessageSettlementActions({ messageId, counts, openMessageId, openType, onTruth, onValue, fontSize = 10 }: {
   messageId: string;
   counts?: MessageStakeCounts;
   openMessageId?: string | null;
   openType?: 'TRUTH' | 'VALUE' | null;
   onTruth?: (messageId: string) => void;
   onValue?: (messageId: string) => void;
+  fontSize?: number;
 }) {
-  return <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10 }}>
+  return <div data-message-settlement-actions={messageId} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize, flexShrink: 0, whiteSpace: 'nowrap' }}>
     {(['TRUTH', 'VALUE'] as const).map(type => {
       const truth = type === 'TRUTH';
       const stake = truth ? counts?.truth : counts?.value;
@@ -19,12 +20,12 @@ export default function MessageSettlementActions({ messageId, counts, openMessag
       const open = openMessageId === messageId && openType === type;
       const color = truth ? '#a5b4fc' : '#fcd34d';
       return <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-        {!!stake && (stake.pro > 0 || stake.con > 0) && <span>
-          <span style={{ color }}>{truth ? '⚖️' : '💎'}</span>
-          {stake.pro > 0 && <span style={{ color: '#4ade80' }}>👍{stake.pro}</span>}
-          {stake.con > 0 && <span style={{ color: '#f87171' }}>👎{stake.con}</span>}
+        {!!stake && (stake.pro > 0 || stake.con > 0) && <span data-settlement-statistics={type} title={truth ? '真假统计' : '价值统计'} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {stake.pro > 0 && <span aria-label={`${truth ? '真' : '有价值'} ${stake.pro} 点`} style={{ color: '#4ade80' }}>{truth ? '✓' : <span aria-hidden="true" style={{ marginRight: 2, fontSize: '1em', lineHeight: 1, verticalAlign: '-0.05em' }}>▲</span>}<span style={{fontWeight:stake.pro>stake.con?700:undefined,textDecorationLine:stake.pro>stake.con?'underline':undefined,textDecorationThickness:1,textUnderlineOffset:3}}>{stake.pro}</span></span>}
+          {stake.con > 0 && <span aria-label={`${truth ? '假' : '低价值'} ${stake.con} 点`} style={{ color: '#f87171' }}>{truth ? '✕' : <span aria-hidden="true" style={{ marginRight: 2, fontSize: '1em', lineHeight: 1, verticalAlign: '-0.05em' }}>▼</span>}<span style={{fontWeight:stake.con>stake.pro?700:undefined,textDecorationLine:stake.con>stake.pro?'underline':undefined,textDecorationThickness:1,textUnderlineOffset:3}}>{stake.con}</span></span>}
         </span>}
         {toggle && <button
+          type="button"
           data-settlement-toggle-truth={truth ? true : undefined}
           data-settlement-toggle-value={truth ? undefined : true}
           data-guide-settlement-entry="true" data-guide-target-message={messageId}

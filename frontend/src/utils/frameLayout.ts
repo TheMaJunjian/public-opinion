@@ -1,6 +1,8 @@
 import type { DemoEdge, DemoMessage } from './modelBridge';
 import type { RelationTargetLayout } from '../types';
 import { CARD_W, MIN_CARD_H, GRID_LEFT, GRID_TOP, COL_GAP, ROW_GAP, FRAME_PAD, MERGE_CARD_H, CANVAS_BOTTOM_PAD } from './layout';
+import { siblingColumns, type ColumnConstraints } from './graphSiblingColumns';
+import { computeMinColumnsForAnnoRefRule1, applyReplyLayoutAdjustmentsWithConstraints, applyAgreeDisagreeColumnOverride } from './graphColumnRules';
 
 export interface FrameBlock {
   relMsgId: string;
@@ -36,7 +38,7 @@ interface Item {
   time: number;
   frame?: FrameBlock;
   header: number;
-  children: Array<{ item: Item; x: number; y: number }>;
+  children: Array<{ item: Item; x: number; y: number; column: number }>;
 }
 
 /** A skyline stores only occupied horizontal intervals, never every prior card. */
@@ -88,11 +90,70 @@ export function computeSceneLayout(input: SceneLayoutInput) {
   for (const frame of frames.values()) for (const id of frame.directCardIds) {
     if (id !== frame.relMsgId && cards.has(id) && !frames.has(id) && !owners.has(id)) owners.set(id, frame.relMsgId);
   }
+  // Resolve both endpoints to siblings in their nearest shared container. The
+  // original endpoints remain intact for selection, statistics and arrow routing.
+  const scopeConstraints = new Map<string | undefined, ColumnConstraints>();
+  const scopeEdges = new Map<string | undefined, DemoEdge[]>();
+  const edgesByRelation = new Map<string, DemoEdge[]>();
+  for (const edge of input.edges ?? []) {
+    const own = edgesByRelation.get(edge.relationMessageId) ?? [];
+    own.push(edge); edgesByRelation.set(edge.relationMessageId, own);
+  }
+  const ancestry = (id: string): string[] => {
+    const chain: string[] = [], visited = new Set<string>();
+    if (!cards.has(id) && !frames.has(id)) return chain;
+    let current: string | undefined = id;
+    while (current && !visited.has(current)) {
+      chain.push(current); visited.add(current); current = owners.get(current) ?? parents.get(current);
+    }
+    return chain;
+  };
+  for (const edge of input.edges ?? []) {
+    if (!['annotation', 'reference', 'notify', 'agree', 'disagree', 'reply'].includes(edge.relationType)) continue;
+    const source = ancestry(edge.from.messageId);
+    if (!source.length) continue;
+    // A reference to an arrow still depends on both endpoints of that arrow.
+    // Expand only layout anchors; preserve the selected relation's identity.
+    const targets = new Set<string>(), visited = new Set<string>(), queue = [edge.to.messageId];
+    for (let index = 0; index < queue.length; index++) {
+      const id = queue[index];
+      if (visited.has(id)) continue;
+      visited.add(id);
+      if (cards.has(id) || frames.has(id)) { targets.add(id); continue; }
+      if (edge.relationType === 'agree' || edge.relationType === 'disagree') continue;
+      for (const own of edgesByRelation.get(id) ?? []) for (const endpoint of [own.from.messageId, own.to.messageId])
+        if (!endpoint.startsWith('anon:')) queue.push(endpoint);
+    }
+    for (const anchor of targets) {
+      const target = ancestry(anchor), targetAncestors = new Set(target), scope = source.find(id => targetAncestors.has(id));
+      const sourceId = scope ? source[source.indexOf(scope) - 1] : source.at(-1);
+      const targetId = scope ? target[target.indexOf(scope) - 1] : target.at(-1);
+      if (!sourceId || !targetId || sourceId === targetId) continue;
+      const relationType = edge.relationType === 'reply' && anchor !== edge.to.messageId ? 'reference' : edge.relationType;
+      const localEdges = scopeEdges.get(scope) ?? [];
+      localEdges.push({ ...edge, relationType, from: { ...edge.from, messageId: sourceId }, to: { ...edge.to, messageId: targetId } });
+      scopeEdges.set(scope, localEdges);
+      if (relationType === 'reply' && !frames.has(edge.to.messageId)) continue;
+      const constraints = scopeConstraints.get(scope) ?? [];
+      constraints.push(relationType === 'agree' ? [sourceId, targetId] : [targetId, sourceId]);
+      scopeConstraints.set(scope, constraints);
+    }
+  }
   const time = (id: string) => {
     const result = Date.parse(messages.get(id)?.createdAt ?? '');
     return Number.isFinite(result) ? result : 0;
   };
   const order = (a: Item, b: Item) => a.time - b.time || a.id.localeCompare(b.id);
+  const positionsForScope = (items: Item[], scope: string | undefined, compact = true) => {
+    if (!input.edges) return siblingColumns(items, [], compact);
+    const localEdges = scopeEdges.get(scope) ?? [];
+    const normals = items.map(item => messages.get(item.id) ?? { id: item.id, author: '', createdAt: '', content: '', kind: 'normal' as const });
+    const relIds = new Set<string>();
+    const base = computeMinColumnsForAnnoRefRule1(items.map(item => item.id), localEdges, relIds);
+    const reply = applyReplyLayoutAdjustmentsWithConstraints({ normals, edges: localEdges, baseCol: base.col, baseMaxCol: base.maxCol, relIds });
+    const stance = applyAgreeDisagreeColumnOverride({ normals, edges: localEdges, ...reply });
+    return siblingColumns(items.map(item => ({ ...item, column: stance.col[item.id] ?? 0 })), scopeConstraints.get(scope) ?? [], compact);
+  };
   const cache = new Map<string, Item>();
   let measuredFrames = 0;
   const measure = (id: string): Item => {
@@ -116,9 +177,8 @@ export function computeSceneLayout(input: SceneLayoutInput) {
       const positions=new Map([...frame.cardIds].map((member,index)=>[member,index]));
       children.sort((a,b)=>(positions.get(a.id)??Infinity)-(positions.get(b.id)??Infinity)||order(a,b));
     } else children.sort(order);
-    const columns = [...new Set(children.map(child => child.column))].sort((a, b) => a - b);
-    const columnIndexes = new Map(columns.map((column, index) => [column, index]));
-    item.column = columns[0] ?? item.column;
+    const positions = positionsForScope(children, id);
+    item.column = Math.min(...children.map(child => child.column), item.column);
     item.time = children.length ? Math.min(item.time, ...children.map(child => child.time)) : item.time;
     item.header = frame.hasGroupHeader ? Math.max(56, input.measuredHeights[id] ?? 56) : 0;
     const insideHeader = frame.isMerge || frame.hasCardHeader ? Math.max(MERGE_CARD_H, input.measuredHeights[id] ?? MERGE_CARD_H) + 8 : 0;
@@ -129,15 +189,15 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     let rowX = GRID_LEFT;
     for (const child of children) {
       const horizontal = !frame.isMerge && frame.targetLayout === 'single-row';
-      const x = horizontal ? rowX : GRID_LEFT + (columnIndexes.get(child.column) ?? 0) * (CARD_W + COL_GAP);
+      const x = horizontal ? rowX : positions.xById.get(child.id)!;
       const y = horizontal ? top : frontier.top(x, child.width, top);
-      item.children.push({ item: child, x, y });
+      item.children.push({ item: child, x, y, column: horizontal ? item.children.length : positions.columns.get(child.id)! });
       frontier.add(x, child.width, y + child.height + ROW_GAP);
       rowX = x + child.width + COL_GAP;
       right = Math.max(right, x + child.width);
       bottom = Math.max(bottom, y + child.height);
     }
-    item.width = right + GRID_LEFT;
+    item.width = Math.max(right + GRID_LEFT, (input.measuredWidths[id] ?? CARD_W) + 24);
     item.height = bottom + FRAME_PAD;
     return item;
   };
@@ -151,29 +211,17 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     item.children.forEach(child => indexRoot(child.item, root));
   };
   roots.forEach(root => indexRoot(root, root));
-  // Frame widths are already known. Fit external annotations beside their target
-  // before placement, avoiding the old full-scene measure/correct/re-measure loop.
-  const constraints = new Map<string, Set<string>>();
-  for (const edge of input.edges ?? []) {
-    if (!['annotation', 'reference', 'notify', 'reply'].includes(edge.relationType)) continue;
-    const source = rootByMember.get(edge.from.messageId);
-    const target = rootByMember.get(edge.to.messageId);
-    if (!source || !target || source === target || (edge.relationType === 'reply' && !frames.has(edge.to.messageId))) continue;
-    if (!target.frame && !frames.has(edge.to.messageId)) continue;
-    const dependents = constraints.get(target.id) ?? new Set<string>();
-    dependents.add(source.id); constraints.set(target.id, dependents);
-  }
   const layout: Record<string, Box> = {};
   const frameRects: Record<string, Box> = {};
   const colOf = { ...input.colOf };
   const placementOrder: string[] = [];
-  const emit = (item: Item, x: number, y: number) => {
+  const emit = (item: Item, x: number, y: number, column: number) => {
     placementOrder.push(item.id);
-    colOf[item.id] = Math.round((x - GRID_LEFT) / (CARD_W + COL_GAP));
+    colOf[item.id] = column;
     if (item.frame) {
       frameRects[item.id] = { x, y: y + item.header, width: item.width, height: item.height - item.header };
     } else layout[item.id] = { x, y, width: item.width, height: item.height };
-    item.children.forEach(child => emit(child.item, x + child.x, y + child.y));
+    item.children.forEach(child => emit(child.item, x + child.x, y + child.y, column + child.column));
   };
   const componentParent = new Map(roots.map(root => [root.id, root.id]));
   const find = (id: string): string => {
@@ -183,7 +231,7 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     return root;
   };
   const anchors = new Map<string, Set<string>>();
-  for (const edge of input.edges ?? []) {
+  for (const edge of [...input.edges ?? [], ...scopeEdges.get(undefined) ?? []]) {
     const source = rootByMember.get(edge.from.messageId);
     const target = rootByMember.get(edge.to.messageId);
     if (!source || !target || source === target) continue;
@@ -213,26 +261,8 @@ export function computeSceneLayout(input: SceneLayoutInput) {
   for (const component of orderedComponents) {
     // Column numbers express ordering, not reserved empty screen space. Each
     // discussion starts at the left and occupies only its visible columns.
-    const columns = [...new Set(component.map(root => root.column))].sort((a, b) => a - b);
-    const columnIndexes = new Map(columns.map((column, index) => [column, index]));
-    const xByRoot = new Map(component.map(root => [root.id,
-      GRID_LEFT + (input.edges ? columnIndexes.get(root.column)! : root.column) * (CARD_W + COL_GAP)]));
-    const byId = new Map(component.map(root => [root.id, root]));
-    const degree = new Map(component.map(root => [root.id, 0]));
-    for (const root of component) for (const id of constraints.get(root.id) ?? []) {
-      degree.set(id, (degree.get(id) ?? 0) + 1);
-    }
-    const ready = component.filter(root => degree.get(root.id) === 0).map(root => root.id);
-    for (let index = 0; index < ready.length; index++) {
-      const id = ready[index];
-      for (const dependent of constraints.get(id) ?? []) {
-        const minimum = xByRoot.get(id)! + byId.get(id)!.width + COL_GAP;
-        xByRoot.set(dependent, Math.max(xByRoot.get(dependent)!, minimum));
-        const remaining = degree.get(dependent)! - 1;
-        degree.set(dependent, remaining);
-        if (remaining === 0) ready.push(dependent);
-      }
-    }
+    const positions = positionsForScope(component, undefined, !!input.edges);
+    const xByRoot = positions.xById;
     const frontier = new Frontier();
     const placedY = new Map<string, number>();
     for (const root of component) {
@@ -252,7 +282,7 @@ export function computeSceneLayout(input: SceneLayoutInput) {
     for (const root of component) {
       const x = xByRoot.get(root.id)!;
       const y = top + placedY.get(root.id)!;
-      emit(root, x, y);
+      emit(root, x, y, positions.columns.get(root.id)!);
       occupied.add(x, root.width, y + root.height + ROW_GAP);
       bottom = Math.max(bottom, y + root.height);
     }

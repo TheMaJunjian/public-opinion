@@ -2,6 +2,20 @@ import { act, render } from '@testing-library/react';
 import { Profiler, useRef } from 'react';
 import { expect, it, vi } from 'vitest';
 import PopupOverlay from '../components/PopupOverlay';
+import startupHtml from '../../index.html?raw';
+
+it('启动脚本执行前也显示与后续弹窗相同的单路径流动背景', () => {
+  const startup = new DOMParser().parseFromString(startupHtml, 'text/html');
+  expect(startup.head.querySelector('link[rel="stylesheet"]')?.getAttribute('href')).toBe('/src/index.css');
+  const dialog = startup.querySelector('[data-app-startup="true"]')!;
+  expect(dialog.textContent).toContain('正在启动公论');
+  expect(dialog.querySelectorAll('.popup-backdrop-flow')).toHaveLength(1);
+  const flow = dialog.querySelector('.popup-backdrop-flow')!;
+  expect(flow.getAttribute('d')?.match(/M/g)).toHaveLength(100);
+  expect(flow.getAttribute('d')?.match(/L500,500/g)).toHaveLength(100);
+  expect(flow.closest('svg')?.getAttribute('preserveAspectRatio')).toBe('none');
+  expect(flow.closest('svg')?.getAttribute('aria-hidden')).toBe('true');
+});
 
 it('相同布局的测量不重复绘制遮罩，真实尺寸变化仍会更新，关闭后释放观察器', () => {
   const callbacks: (() => void)[] = [];

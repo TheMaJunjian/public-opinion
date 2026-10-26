@@ -2,7 +2,7 @@ import type { DemoMessage, DemoEdge } from './modelBridge';
 import { isContentKind } from './modelBridge';
 import { getPresentationSpec } from '../types';
 import type { PresentationKind } from '../types';
-import { GRID_LEFT, FRAME_PAD, MERGE_CARD_H } from './layout';
+import { CARD_W, GRID_LEFT, FRAME_PAD, MERGE_CARD_H } from './layout';
 import type { LayoutBox, Rect } from './layout';
 type RelationBounds = { rect: LayoutBox; cardIds: Set<string> };
 
@@ -67,6 +67,8 @@ export const SHOW_SELECTED_ACTUAL_RECTS = false;
 export const INLINE_BADGE_COLOR: Record<string,string> = {
   orange: 'rgba(200,90,0,0.9)',
   slate: 'rgba(80,90,100,0.9)',
+  green: 'rgba(21,128,61,0.9)',
+  red: 'rgba(185,28,28,0.9)',
 };
 
 
@@ -118,16 +120,16 @@ export function getGroupHeaderRect(frameRect: Rect, height = GROUP_HEADER_HEIGHT
   return {
     x: frameRect.x + GROUP_HEADER_X_OFFSET,
     y: frameRect.y - height,
-    width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
+    width: Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24),
     height,
   };
 }
 
-export function getMergeCardHeaderRect(frameRect: Rect): Rect {
+export function getMergeCardHeaderRect(frameRect: Rect, cardWidth = CARD_W): Rect {
   return {
     x: frameRect.x + MERGE_CARD_HEADER_X_OFFSET,
     y: frameRect.y + MERGE_CARD_HEADER_Y_OFFSET,
-    width: Math.min(GROUP_HEADER_MAX_W, Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24)),
+    width: Math.min(Math.max(GROUP_HEADER_MIN_W, frameRect.width - 24), Math.max(CARD_W, cardWidth)),
     height: MERGE_CARD_H,
   };
 }

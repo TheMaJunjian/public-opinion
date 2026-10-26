@@ -1,13 +1,14 @@
 import { cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
-import type { RelationPayload, TargetRef } from '../types';
+import type { Relation, RelationPayload, TargetRef } from '../types';
 import { MemoryRouter } from 'react-router-dom';
 import WorkbenchMessageList from '../pages/workbench/ui/WorkbenchMessageList';
 import type { DemoMessage, RelationType } from '../utils/modelBridge';
 import { convertMessagesToDemoModel } from '../utils/modelBridge';
 import { capturePartSelection } from '../utils/partSelection';
 import { renderMessageContentWithAnchorsForList, renderRelationContentWithTargets } from '../pages/workbench/actions/messageRendering';
+import {deriveContainerEffect} from '../pages/workbench/model/containerEffect';
 
 const message = (id: string, extra: Partial<DemoMessage> = {}): DemoMessage => ({
   id, revision: 1, kind: 'normal', author: '作者', authorId: 'author', createdAt: '2026-10-20T00:00:00Z', content: `正文 ${id}`, ...extra,
@@ -24,7 +25,7 @@ function listProps(messages: DemoMessage[]): ComponentProps<typeof WorkbenchMess
     display: { embeddedMessageIds: new Set(), suppressedRelIds: new Set(), rejectedContainerIds: new Set(), overriddenStanceRelIds: new Set(),
       readStatusByMessageId: new Map(), homeDisplayRoleByMessageId: new Map(), authorStakes: {}, stakeCounts: {}, correctionFilterTargetId: null, joinFilterTargetId: null },
     comparison: { comparisonReviewed: false, comparisonTargetId: null, comparisonRecommendedDisplay: 'agree',
-      activeStanceByRelMsgId: new Map(), activeStanceMap: new Map(), stanceEffectByRelMsgId: new Map() },
+      activeStanceByRelMsgId: new Map(), activeStanceMap: new Map() },
     settlement: { settlementOpenMsgId: null, settlementOpenType: null, settlementEntryHighlight: null,
       closeSettlement: vi.fn(), openSettlement: vi.fn(), onMessageCreated: vi.fn() },
     selection: { draftUnits: [], activeTextSelectId: null, lastClickedMessageId: null },
@@ -39,6 +40,50 @@ const renderList = (messages: DemoMessage[], props = listProps(messages)) => ren
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.getSelection()?.removeAllRanges(); });
 
 describe('native list content and navigation regressions', () => {
+  it('groups received JOIN history, labels each current target location and updates after ownership changes',()=>{
+    const user={id:'author',username:'作者',createdAt:''};
+    const make=(id:string,type:string,parent:string|null,targets:string[],day=1):Relation=>({id,relationType:type,sourceMessageId:parent,
+      targetRefs:targets.map(messageId=>({kind:'message',messageId})),createdAt:`2026-10-${String(day).padStart(2,'0')}`,createdBy:user});
+    const relations=[make('parent','CLASSIFY',null,[]),make('nested','CLASSIFY',null,[]),make('elsewhere','CLASSIFY',null,[]),
+      make('nested-join','JOIN','parent',['nested']),make('old-direct','JOIN','parent',['direct']),make('active-direct','JOIN','parent',['direct'],2),
+      make('old-nested','JOIN','parent',['nested-leaf']),make('active-nested','JOIN','nested',['nested-leaf'],2),
+      make('old-outside','JOIN','parent',['outside']),make('active-outside','JOIN','elsewhere',['outside'],2)];
+    const model=convertMessagesToDemoModel([],relations),effect=deriveContainerEffect({...model,relations,username:'viewer',stakeCounts:{}});
+    const props=listProps(model.messages);props.visibleMessages=model.messages.filter(item=>item.kind==='join'&&item.joinInfo?.containerId==='parent');
+    props.catalog.relationById=effect.relationById;props.catalog.containerOwnership=effect.ownership;props.catalog.effectiveJoinRelationIds=effect.effectiveJoinIds;
+    props.joinRecordContext={containerId:'parent',effect};
+    const view=renderList(model.messages,props),adopted=within(view.getByRole('region',{name:'当前采用的被加入记录'})),unadopted=within(view.getByRole('region',{name:'未采用的被加入记录'}));
+    expect(adopted.getByRole('heading')).toHaveTextContent('当前采用（2 条）');expect(unadopted.getByRole('heading')).toHaveTextContent('未采用（3 条）');
+    for(const [id,label] of [['old-direct','本容器'],['old-nested','嵌套容器中'],['old-outside','范围外']]){
+      const row=view.container.querySelector<HTMLElement>(`[data-msgid="${id}"]`)!;
+      expect(unadopted.getByRole('group',{name:`消息 ${id}，未选中`})).toBe(row);expect(row.querySelector('[data-join-target-location]')).toHaveTextContent(label);
+    }
+    fireEvent.click(within(view.container.querySelector<HTMLElement>('[data-msgid="old-nested"]')!).getByRole('button',{name:'nested-leaf'}));
+    expect(props.onNavigate).toHaveBeenCalledWith('nested-leaf');expect(props.cardHandlers.onClick).not.toHaveBeenCalled();
+    const changed=deriveContainerEffect({...model,relations,username:'viewer',stakeCounts:{},assumption:{messageId:'active-nested',side:'disagree'}});
+    view.rerender(<MemoryRouter><WorkbenchMessageList {...props} joinRecordContext={{containerId:'parent',effect:changed}} catalog={{...props.catalog,effectiveJoinRelationIds:changed.effectiveJoinIds}}/></MemoryRouter>);
+    const moved=view.container.querySelector<HTMLElement>('[data-msgid="old-nested"]')!;
+    expect(view.getByRole('region',{name:'当前采用的被加入记录'})).toContainElement(moved);expect(moved.querySelector('[data-join-target-location]')).toHaveTextContent('本容器');
+  });
+  it.each(['normal', 'relation'] as const)('pairs each statistic with its arbitration entry on a %s list message', kind => {
+    const target = message('target', { kind, ...(kind === 'relation' ? { relationType: 'agree' as const } : {}) });
+    const props = listProps([target]);
+    props.display.stakeCounts.target = { truth: { pro: 7, con: 2 }, value: { pro: 11, con: 3 } };
+    const view = renderList([target], props);
+    const row = view.container.querySelector<HTMLElement>('[data-msgid="target"]')!;
+    const actions = row.querySelector('[data-message-settlement-actions]')!;
+    expect([...actions.querySelectorAll('[title]')].map(element => element.getAttribute('title')))
+      .toEqual(['真假统计', '真假仲裁', '价值统计', '价值仲裁']);
+    expect(within(row).getByTitle('真假统计')).toHaveTextContent('✓7✕2');
+    expect(within(row).getByTitle('价值统计')).toHaveTextContent('▲11▼3');
+    for (const title of ['真假统计', '价值统计']) expect(within(row).getByTitle(title)).not.toHaveTextContent(/⚖️|💎/);
+    fireEvent.click(within(row).getByTitle('真假仲裁'));
+    expect(props.settlement.openSettlement).toHaveBeenLastCalledWith('target', 'TRUTH');
+    fireEvent.click(within(row).getByTitle('价值仲裁'));
+    expect(props.settlement.openSettlement).toHaveBeenLastCalledWith('target', 'VALUE');
+    expect(props.cardHandlers.onClick).not.toHaveBeenCalled();
+  });
+
   it.each(['classify', 'summary', 'delegation'] as const)('keeps the %s text card unchanged while only pure relation records use the compact layout', relationType => {
     const textRelation = message('text-relation', { kind: 'relation', relationType,
       relationPayload: { title: '完整的关系正文' }, parts: [{ id: 'body', type: 'text', text: '完整的关系正文' }] });
@@ -50,11 +95,14 @@ describe('native list content and navigation regressions', () => {
     expect(textCard).not.toHaveAttribute('data-relation-record');
     expect(textCard.style.backgroundColor).not.toBe('transparent');
     expect(textCard).toHaveTextContent('完整的关系正文');
+    expect(within(textCard).getAllByTitle('作者')).toHaveLength(1);
+    expect(textCard).not.toHaveTextContent('发起');
     expect(recordRow).toHaveAttribute('data-relation-record', 'true');
     const textRow = view.container.querySelector<HTMLElement>('[data-msgid="text"]')!;
-    expect(recordRow.style.backgroundColor).toBe(textRow.style.backgroundColor);
-    expect(recordRow.style.borderTop).toBe(textRow.style.borderTop);
-    expect(recordRow.style.borderRadius).toBe(textRow.style.borderRadius);
+    expect(recordRow.style.backgroundColor).not.toBe(textRow.style.backgroundColor);
+    expect(recordRow.style.borderTopStyle).toBe('dashed');
+    expect(textRow.style.borderTopStyle).toBe('solid');
+    expect(recordRow.style.borderRadius).not.toBe(textRow.style.borderRadius);
     expect(within(recordRow).getAllByText('text-relation')).toHaveLength(1);
   });
 

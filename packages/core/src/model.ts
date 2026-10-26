@@ -1,4 +1,5 @@
 import { ORGANIZATIONS, type Binding, type Message, type Membership, type MessageState, type Part, type Reference } from './types.js';
+import {materializeBodyVersion,scopedReferenceKey,referenceVersion} from './body-versions.js';
 
 export type RelationPart = Extract<Part, { type: 'relation' }>;
 export type Resolver = (id: string, revision?: number) => Message | undefined;
@@ -16,10 +17,13 @@ export function textOf(message: Message): string {
   return message.parts.flatMap(p => p.type === 'text' ? [p.text] : p.type === 'web' ? [p.excerpt || p.url] : p.type === 'code' ? [p.source] : []).join('\n');
 }
 export function referenceKey(reference: Reference): string {
-  return JSON.stringify([reference.messageId, reference.revision ?? null, reference.partId ?? null, reference.memberId ?? null, reference.path ?? [], reference.range ?? null]);
+  return scopedReferenceKey(reference,[reference.messageId, reference.revision ?? null, reference.partId ?? null, reference.memberId ?? null, reference.path ?? [], reference.range ?? null]);
 }
 export function resolveReference(reference: Reference, resolver: Resolver): unknown {
-  const message = resolver(reference.messageId, reference.revision);
+  const context=reference.context;
+  let message:Message|undefined;
+  try {const version=referenceVersion(context);message=version?materializeBodyVersion(version,resolver):resolver(reference.messageId,reference.revision);}
+  catch{return undefined;}
   if (!message || (reference.revision !== undefined && message.revision !== reference.revision)) return undefined;
   let value: unknown = reference.partId ? message.parts.find(p => p.id === reference.partId) : message;
   if (reference.memberId) {
@@ -43,10 +47,10 @@ export function resolveReference(reference: Reference, resolver: Resolver): unkn
   return value;
 }
 
-/** Only a reference to the stance component itself can reverse the underlying stance. */
+/** Whole stances forward the address; the new action alone determines its direction. */
 export function resolveStance(target: Reference, side: 'pro' | 'con', resolver: Resolver): { target: Reference; side: 'pro' | 'con'; chain: Reference[] } {
   let current = target;
-  let currentSide = side;
+  const currentSide = side;
   const seen = new Set<string>();
   const chain: Reference[] = [];
   for (let depth = 0; depth < 128; depth++) {
@@ -55,15 +59,16 @@ export function resolveStance(target: Reference, side: 'pro' | 'con', resolver: 
     seen.add(key);
     chain.push(current);
     const message = resolver(current.messageId, current.revision);
-    if (!message || (current.revision !== undefined && message.revision !== current.revision) || current.memberId || current.path?.length || current.range) return { target: current, side: currentSide, chain };
+    if (!message || (current.revision !== undefined && message.revision !== current.revision) || referenceVersion(current.context) || current.memberId || current.range
+      || current.path?.length && !(current.partId && current.path.length === 1 && current.path[0] === 'relation')) return { target: current, side: currentSide, chain };
+    const stances = relations(message).filter(part => ['agree','disagree'].includes(part.relation)
+      && !(part.roles.target?.length === 1 && part.roles.target[0]?.reference.messageId === message.id));
     const part = current.partId
       ? message.parts.find(p => p.id === current.partId)
-      : message.parts.filter(p => !(p.type === 'relation' && p.relation === 'member-of')).length === 1
-        ? message.parts.find(p => !(p.type === 'relation' && p.relation === 'member-of')) : undefined;
+      : stances.length === 1 ? stances[0] : undefined;
     if (part?.type !== 'relation' || !['agree', 'disagree'].includes(part.relation) || part.roles.target?.length !== 1) {
       return { target: current, side: currentSide, chain };
     }
-    if (part.relation === 'disagree') currentSide = currentSide === 'pro' ? 'con' : 'pro';
     current = part.roles.target[0].reference;
   }
   throw new Error('立场引用链过深');

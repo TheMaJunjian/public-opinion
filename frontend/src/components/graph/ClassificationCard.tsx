@@ -10,6 +10,8 @@ import MessageElement from '../MessageElement';
 import { MessageDisplayMarker } from '../MessageDisplayHints';
 import MessageSettlementActions from '../MessageSettlementActions';
 import JoinRecordBadges from '../JoinRecordBadges';
+import { CardWidthHandle } from './CardWidthContext';
+import MessageAuthors from '../MessageAuthors';
 
 type CardCallbacks = Pick<GraphViewProps, 'onMessageClick' | 'onMessageDoubleClick' | 'onMessageMouseDown' | 'onMessageMouseUp' | 'onTextMouseUp' | 'onSettlementToggleTruth' | 'onSettlementToggleValue' | 'onJoinFilterClick' | 'settlementOpenMsgId' | 'settlementOpenType'>;
 interface ClassificationCardProps extends CardCallbacks {
@@ -55,15 +57,16 @@ export default function ClassificationCard({
                   borderLeft:"3px solid #a78bfa",
                   padding:"12px 16px",boxShadow:isStanceTarget?"0 0 16px rgba(245,158,11,0.35), 0 4px 10px rgba(0,0,0,0.5)":isWhole?"0 8px 20px rgba(251,191,36,0.28)":isActive?"0 6px 16px rgba(56,189,248,0.14)":"0 4px 10px rgba(0,0,0,0.5)",display:"flex",flexDirection:"column",
                   gap:8,cursor:"pointer",outline:isWhole?"none":isActive?"1px dashed #0b84ff":"none",userSelect:"none",color:"#f5f5f5",backgroundImage:isWhole?undefined:prominence.backgroundImage}}>
-                <div ref={headerRef} style={{fontSize:11,opacity:0.85,display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",justifyContent:"space-between"}}>
-                  <span style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:6}}>
+                <CardWidthHandle messageId={msg.id} />
+                <div data-card-header="true" data-card-header-content="true" ref={headerRef} style={{fontSize:11,opacity:0.85,display:"flex",whiteSpace:'nowrap',width:'max-content',minWidth:'100%',gap:12,alignItems:"center",justifyContent:"space-between"}}>
+                  <span style={{display:"flex",alignItems:"center",flexShrink:0,gap:6}}>
                     <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(selectedUnits, messageTypeReference(msg))} label="分类" style={{fontSize:10,fontWeight:800,padding:"2px 6px",borderRadius:4,background:isWhole?"#fbbf24":"rgba(167,139,250,0.18)",color:isWhole?"#111827":"#a78bfa",lineHeight:"16px",border:isWhole?"1px solid #fbbf24":"1px solid rgba(167,139,250,0.35)"}}>分类</MessageElement>
                     {homeLabel && <span style={{fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:homeLabel==='命中'?"#0e7490":"#374151",color:homeLabel==='命中'?"#cffafe":"#d1d5db"}}>{homeLabel}</span>}
-                    <span>{msg.author}</span>
+                    <MessageAuthors message={msg} showSelfStake/>
                     {correctionRecords}
                   </span>
-                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,maxWidth:'100%',marginLeft:'auto'}}>
-                    <span style={{display:'inline-flex',alignItems:'center',maxWidth:'100%'}}><span style={{overflowWrap:'anywhere'}}>{msg.id}</span><MessageDisplayMarker messageId={msg.id} /></span>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0,marginLeft:'auto'}}>
+                    <span data-card-header-content="true" style={{display:'inline-flex',alignItems:'center',whiteSpace:'nowrap',width:'max-content'}}><span>{msg.id}</span><MessageDisplayMarker messageId={msg.id} /></span>
                     <MessageSettlementActions messageId={msg.id} counts={stakes}
                       openMessageId={settlementOpenMsgId} openType={settlementOpenType}
                       onTruth={onSettlementToggleTruth} onValue={onSettlementToggleValue} />

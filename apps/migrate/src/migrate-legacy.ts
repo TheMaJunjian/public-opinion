@@ -13,6 +13,7 @@ import { migrateAnnotationReasons, upgradeAnnotationRecords } from './migrate-an
 import {migrateQueryRecords} from './migrate-query-records.js';
 import {repairValueVoteMessages} from './repair-value-vote-messages.js';
 import {repairAnnotationStanceMessages} from './repair-annotation-stance-messages.js';
+import {backfillMinimumContributions} from './backfill-minimum-contributions.js';
 
 type Row = Record<string, any>;
 type Snapshot = Record<string, Row[]>;
@@ -29,6 +30,7 @@ export interface MigrationReport {
   activeStatePreserved?:boolean;
   financialAudit?:{accountLocked:number;poolExposure:number;activePrincipal:number;fundingGap:number;differences:Array<{userId:string;locked:number;activePrincipal:number;difference:number}>};
   fundingAdjustments?:{userId:string;amount:number;remaining:number}[];
+  minimumContributionBackfill?:number;
 }
 const quote = (name: string) => `"${name.replaceAll('"','""')}"`;
 const canonical = (value: any): any => Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
@@ -349,6 +351,8 @@ export async function migrateLegacy(options: MigrationOptions): Promise<Migratio
         const adjustment=report.fundingAdjustments?.find(row=>row.userId===user.id)?.amount??0;
         if(account.available!==expected.available-adjustment||account.locked!==expected.locked+adjustment||JSON.stringify(account)!==JSON.stringify(replay.accounts.get(user.id))) throw new Error(`目标资金对账失败: ${user.id}`);
       }
+      report.minimumContributionBackfill=await backfillMinimumContributions(store);
+      if(report.minimumContributionBackfill)report.notes.push(`为 ${report.minimumContributionBackfill} 条未投入的用户消息各补扣 1 点真假自赞，允许余额为负数。`);
       const archiveCount=(await store.db.prepare('SELECT COUNT(*)::integer AS n FROM legacy_records').get())!.n;
       if(archiveCount!==Object.values(snapshot).reduce((total,rows)=>total+rows.length,0)) throw new Error('旧原文归档数量不一致');
       report.applied=true;

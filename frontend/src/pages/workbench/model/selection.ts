@@ -26,6 +26,12 @@ export function mergeUnits(base: UnitSelection[], added: UnitSelection[]) {
   return res;
 }
 
+/** A whole relation already covers its edge; separately addressed parts stay independent. */
+export function relationTargetUnits(units:UnitSelection[],messages:ReadonlyMap<string,DemoMessage>):UnitSelection[]{
+  const wholeRelations=new Set(units.filter(unit=>messages.get(unit.messageId)?.kind==='relation'&&isWholeMessageSelection(unit,unit.messageId)).map(unit=>unit.messageId));
+  return units.filter(unit=>!(unit.selection.kind==='edge'&&wholeRelations.has(unit.messageId)));
+}
+
 let nextIdCounter = 1;
 
 export function nextId(prefix: string): string {

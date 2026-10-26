@@ -6,6 +6,8 @@ import MessageElement from '../MessageElement';
 import { MessageDisplayMarker } from '../MessageDisplayHints';
 import MessageTextPart from '../MessageTextPart';
 import MessageSettlementActions, { type MessageStakeCounts } from '../MessageSettlementActions';
+import { CardWidthHandle } from './CardWidthContext';
+import MessageAuthors from '../MessageAuthors';
 
 export default function OrganizationFrameHeader({ message, messageId, kind, memberCount, selectedUnits, activeText,
   counts, openMessageId, openType, onTruth, onValue, onTextMouseUp, joinBadges, correctionRecords,
@@ -35,6 +37,7 @@ export default function OrganizationFrameHeader({ message, messageId, kind, memb
     style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 999, background: kind === 'arrange' ? 'rgba(167,139,250,0.2)' : kind === 'merge' ? 'rgba(148,163,184,0.22)' : kind === 'summary' ? 'rgba(52,211,153,0.2)' : 'rgba(34,197,94,0.2)', color: kind === 'arrange' ? '#c4b5fd' : kind === 'merge' ? '#cbd5e1' : kind === 'summary' ? '#6ee7b7' : '#86efac' }}
   >{label}</MessageElement>;
   return <>
+    <CardWidthHandle messageId={messageId} />
     {activeText && <div style={{fontSize:11,color:'#0b84ff',marginBottom:4}}>拖选文字即可选择片段，或点击已有高亮片段</div>}
     <div style={{ display: 'flex', flexWrap: hasFrameCard ? 'nowrap' : 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: '#f3f4f6', flex: hasFrameCard ? 1 : '1 0 80px', minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
@@ -45,7 +48,7 @@ export default function OrganizationFrameHeader({ message, messageId, kind, memb
         ? <div style={{ marginLeft: 'auto', flexShrink: 0 }}><MessageSettlementActions messageId={messageId} counts={counts} openMessageId={openMessageId} openType={openType} onTruth={onTruth} onValue={onValue} /></div>
         : <>{joinBadges}{typeBadge}</>}
     </div>
-    <div style={{fontSize:10,color:'#9ca3af',textAlign:'right'}}><span>{messageId}</span><MessageDisplayMarker messageId={messageId} /></div>
+    <div data-card-header="true" style={{fontSize:10,color:'#9ca3af',textAlign:'right'}}><span data-card-header-content="true" style={{display:'inline-flex',whiteSpace:'nowrap',width:'max-content'}}><span>{messageId}</span><MessageDisplayMarker messageId={messageId} /></span></div>
     {hasFrameCard && <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
       {joinBadges}
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
@@ -54,9 +57,10 @@ export default function OrganizationFrameHeader({ message, messageId, kind, memb
       </div>
     </div>}
     {kind === 'classify' && <div style={{ marginTop: 4, fontSize: 10, color: '#9ca3af', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>由 {message?.author ?? '系统'} 发起</span>
+      {message&&<MessageAuthors message={message} showSelfStake/>}
       <MessageElement reference={membersRef} selected={isMessageElementSelected(selectedUnits, membersRef)} label="所含消息" style={{ flexShrink: 0 }}>💬 {memberCount}</MessageElement>
       <span style={{ flexShrink: 0 }}>{message ? new Date(message.createdAt).toLocaleDateString('zh-CN') : ''}</span>
     </div>}
+    {kind==='summary'&&message&&<div style={{marginTop:4,fontSize:10,color:'#9ca3af'}}><MessageAuthors message={message} showSelfStake/></div>}
   </>;
 }

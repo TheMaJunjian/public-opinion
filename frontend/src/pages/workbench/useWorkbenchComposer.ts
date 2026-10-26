@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useReducer, useRef, type Dispatch, type SetStateAction } from 'react';
 import type { RelationType, UnitSelection } from '../../utils/modelBridge';
+import {primaryContributionType,type ContributionDraft,type ContributionDrafts} from './model/contributions';
 
 export interface ComposerState {
   draftUnits: UnitSelection[]; sourceUnits: UnitSelection[]; targetUnits: UnitSelection[];
   activeTextSelectId: string | null; relationType: RelationType | null;
   secondaryRelationType: string; subType: string; subTypeCustomLabel: string;
   relationLabel: string; newMessageContent: string;
+  correctionWidth: number;
   stakeAmount: number | ''; relStakeAmount: number | ''; recommendationAmount: number | '';
+  contributions:ContributionDrafts;
 }
 export interface ComposerCheckpoint {
   state: ComposerState;
@@ -16,7 +19,9 @@ export interface ComposerCheckpoint {
 const initialState: ComposerState = {
   draftUnits: [], sourceUnits: [], targetUnits: [], activeTextSelectId: null, relationType: null,
   secondaryRelationType: 'none', subType: '', subTypeCustomLabel: '', relationLabel: '', newMessageContent: '',
-  stakeAmount: 0, relStakeAmount: 0, recommendationAmount: 0,
+  stakeAmount: 1, relStakeAmount: 1, recommendationAmount: 0,
+  contributions:{},
+  correctionWidth: 320,
 };
 type Action = { type: 'restore'; state: ComposerState } | { type: 'update'; apply(state: ComposerState): ComposerState };
 const reducer = (state: ComposerState, action: Action) => action.type === 'restore' ? action.state : action.apply(state);
@@ -43,6 +48,7 @@ export function useWorkbenchComposer() {
       setSubTypeCustomLabel: field('subTypeCustomLabel'), setRelationLabel: field('relationLabel'),
       setNewMessageContent: field('newMessageContent'), setStakeAmount: field('stakeAmount'),
       setRelStakeAmount: field('relStakeAmount'), setRecommendationAmount: field('recommendationAmount'),
+      setCorrectionWidth: field('correctionWidth'),
     };
   }, []);
   const recovery = useMemo(() => ({
@@ -60,6 +66,16 @@ export function useWorkbenchComposer() {
       dispatch({ type: 'restore', state: checkpoint.state });
     },
   }), []);
+  const setContribution=useMemo(()=>(type:string,field:keyof ContributionDraft,value:number|'')=>{
+    dispatch({type:'update',apply:current=>{
+      const primary=primaryContributionType(current.relationType,current.secondaryRelationType);
+      const old=current.contributions?.[type]??{truth:type==='TEXT'?current.stakeAmount:type===primary?current.relStakeAmount:1,value:type===primary?current.recommendationAmount:0};
+      return {...current,contributions:{...current.contributions,[type]:{...old,[field]:value}},
+        ...(field==='truth'&&type==='TEXT'?{stakeAmount:value}:{}),
+        ...(field==='truth'&&type===primary&&type!=='TEXT'?{relStakeAmount:value}:{}),
+        ...(field==='value'&&type===primary?{recommendationAmount:value}:{})};
+    }});
+  },[]);
   const { relationType, secondaryRelationType } = state;
   useEffect(() => {
     const mode = `${relationType ?? 'plain'}::${secondaryRelationType}`;
@@ -88,7 +104,7 @@ export function useWorkbenchComposer() {
     } else if (wasDelegation) setters.setNewMessageContent(savedTextBeforeDelegationRef.current);
     previousComposerModeRef.current = mode;
   }, [relationType, secondaryRelationType, setters]);
-  return { ...state, ...setters, ...recovery, subTypeCustomBufferRef, savedTextOnTypeSwitchRef,
+  return { ...state, ...setters, ...recovery,setContribution, subTypeCustomBufferRef, savedTextOnTypeSwitchRef,
     savedTextBeforeDelegationRef, lastTagSecondaryRef, lastDelegationSecondaryRef, delegationContentBufferRef };
 }
 export type WorkbenchComposer = ReturnType<typeof useWorkbenchComposer>;

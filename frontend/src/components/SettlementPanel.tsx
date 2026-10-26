@@ -4,7 +4,7 @@ import { useAuth, useOptionalAuth } from '../context/AuthContext';
 import type { SettlementRoundItem, MessageStakes } from '../types';
 import { operationLog } from '../utils/debugLog';
 import PromptModal from './PromptModal';
-import { useStanceCorrections } from './MessageDisplayHints';
+import { useViewedBodyReference } from './MessageDisplayHints';
 
 interface Props {
   messageId: string;
@@ -38,9 +38,11 @@ type PersonalSettlement = NonNullable<SettlementRoundItem['personalSettlement']>
  * 显示押注池状态、结算轮次、投票和结算操作
  */
 export default function SettlementPanel({ messageId, highlightRoundId, entryHighlight, onMessageCreated, filterSettlementType }: Props) {
+  const viewedReference=useViewedBodyReference(messageId);
   const { user: currentUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [stakes, setStakes] = useState<MessageStakes | null>(null);
+  const [allStakes,setAllStakes]=useState<MessageStakes|null>(null);
   const [rounds, setRounds] = useState<SettlementRoundItem[]>([]);
   const [activeRounds, setActiveRounds] = useState<SettlementRoundItem[]>([]);
   const [latestPersonalSettlement, setLatestPersonalSettlement] = useState<PersonalSettlement | null>(null);
@@ -63,6 +65,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
         api.getMessageRounds(messageId),
       ]);
       if (loadId !== loadIdRef.current) return; // cancelled by newer load
+      setAllStakes(stakesData);
       setStakes(stakesData);
       setRounds(roundsData.data);
 
@@ -79,7 +82,8 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       } else {
         setActiveRounds([]);
         const latestSettled = roundsData.data.find(r =>
-          r.status === 'SETTLED' && (!filterSettlementType || r.settlementType === filterSettlementType),
+          r.status === 'SETTLED' && (!filterSettlementType || r.settlementType === filterSettlementType)
+          ,
         );
         if (latestSettled) {
           const detail = await api.getRoundDetail(latestSettled.id);
@@ -135,7 +139,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       setError(null);
       setCreatingRound(true);
       const stype = filterSettlementType ?? 'TRUTH';
-      const round = await api.createRound(messageId, { settlementType: stype });
+      const round = await api.createRound(messageId, { settlementType: stype,reference:viewedReference });
       operationLog('发起结算', `message=${messageId} round=${round.id} type=${stype}`);
       setActiveRounds(prev => [...prev, round]);
       setRounds(prev => [round, ...prev]);
@@ -181,6 +185,8 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
   const filteredCon = filteredStakes.filter(s => s.side === 'CON').reduce((sum, s) => sum + s.amount, 0);
   const totalStaked = filteredPro + filteredCon;
   const hasAnyActive = activeRounds.length > 0;
+  const currentActive=activeRounds;
+  const hasCurrentActive=currentActive.length>0;
 
   const titleLabel = filterSettlementType === 'VALUE' ? '💎 价值仲裁' : filterSettlementType === 'TRUTH' ? '⚖️ 真假仲裁' : '⚖️ 结算市场';
   const settledRounds = rounds.filter(r => r.status === 'SETTLED' && (!filterSettlementType || r.settlementType === filterSettlementType));
@@ -201,12 +207,12 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
     ? currentUserStake
     : Math.round((projectedResult === 'TRUE' ? currentUserProStake : currentUserConStake) * (1 + projectedProfit))
       - (projectedResult === 'TRUE' ? currentUserConStake : currentUserProStake);
-  const personalSettlement = activeRounds[0]?.personalSettlement ?? latestPersonalSettlement;
+  const personalSettlement = currentActive[0]?.personalSettlement ?? latestPersonalSettlement;
   const investedContribution = personalSettlement?.principal ?? currentUserStake;
-  const projectedAfter = activeRounds.length > 0
+  const projectedAfter = hasCurrentActive
     ? Math.max(0, projectedPayout)
     : personalSettlement?.after ?? currentUserStake;
-  const projectedChange = activeRounds.length > 0
+  const projectedChange = hasCurrentActive
     ? projectedAfter - investedContribution
     : personalSettlement?.change ?? 0;
 
@@ -225,7 +231,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
         <h3 className="font-semibold text-gray-800 text-sm">
           {titleLabel}
         </h3>
-        {activeRounds.length === 0 && (
+        {!hasCurrentActive && (
           <button
             onClick={handleCreateRound}
             disabled={creatingRound}
@@ -267,12 +273,13 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       )}
 
       {/* Active Rounds — each TRUTH/VALUE round in its own card */}
-      {activeRounds.map(round => (
+      {activeRounds.map(round => <div key={round.id}>
+        <div style={{fontSize:11,color:'#64748b'}}>投票和结算保留本轮原依据，各显示版本共享本消息的投入。</div>
         <ActiveRoundCard
           key={round.id}
           round={round}
           messageId={messageId}
-          stakes={stakes}
+          stakes={allStakes}
           rounds={rounds}
           totalRoundStake={allRoundStake}
           totalRoundPro={allRoundPro}
@@ -284,7 +291,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
             load();
           }}
         />
-      ))}
+      </div>)}
 
       {/* Settled Rounds History */}
       {settledRounds.length > 0 && (
@@ -339,7 +346,7 @@ export default function SettlementPanel({ messageId, highlightRoundId, entryHigh
       {/* Summary footer */}
       {!hasAnyActive && totalStaked > 0 && rounds.filter(r => r.status === 'SETTLED').length === 0 && (
         <div className="text-xs text-gray-500 text-center">
-          尚无结算记录。点击「发起结算」创建新一轮投票。
+          尚无结算记录。点击「发起结算」创建新一轮投票，发送请求需投入价值 1 点并另付协议费。
         </div>
       )}
 
@@ -377,7 +384,6 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
   }) => void;
   onSettled: (settledId: string) => void;
 }) {
-  const stanceCorrections=useStanceCorrections(messageId);
   const { user: currentUser } = useAuth();
   const [voteDirection, setVoteDirection] = useState<'TRUE' | 'FALSE'>('TRUE');
   const [voteAmount, setVoteAmount] = useState<number | ''>(1);
@@ -447,8 +453,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
       setSettleError(null);
       setSettleNotice(null);
       setVoting(true);
-      const result = await api.castVote(localRound.id, { vote: voteDirection, amount: voteAmount,
-        ...(stanceCorrections?{stanceCorrections:{[messageId]:stanceCorrections}}:{}) });
+      const result = await api.castVote(localRound.id, { vote: voteDirection, amount: voteAmount });
       operationLog('投票', `round=${localRound.id} vote=${voteDirection} amount=${voteAmount}`);
       setVoteAmount(1);
       window.dispatchEvent(new Event('points-refresh'));
@@ -716,7 +721,7 @@ function ActiveRoundCard({ round, messageId, stakes, rounds, totalRoundStake, to
         open={confirmOpen}
         title="确认结算"
         guideSettlementConfirm
-        message={`${settlementPrompt}\n\n发送后按当前规则终止并分配押注池贡献点；若规则设有等待时间，将在截止后计算。之后的结算可更新结果并重新分配。\n确定要终止此轮次吗？`}
+        message={`${settlementPrompt}\n\n发送终止请求需投入价值 1 点并另付协议费。发送后按当前规则终止并分配押注池贡献点；若规则设有等待时间，将在截止后计算。之后的结算可更新结果并重新分配。\n确定要终止此轮次吗？`}
         confirmText={settling ? '结算中...' : '确认结算'}
         confirmDisabled={settling}
         cancelText="取消"

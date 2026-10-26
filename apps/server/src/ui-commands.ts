@@ -1,10 +1,12 @@
 import { bindRoles, organization, relations, replaceReference, textOf, type Json, type Part, type Reference, type User } from '@gonglun/core';
 import { z } from 'zod';
+import { messageDisplayDependency } from '@gonglun/core';
 import { DomainError, id, Store } from './db.js';
 import { send } from './messages.js';
 import { dataOf, valueRoundFor } from './economy.js';
 import { relationViewType, messageView, parentOf, primaryRelation, roundView, snapshot, type RecordData } from './ui-projections.js';
-import { readReference } from './validation.js';
+import { readReference, validateBodyVersion } from './validation.js';
+import {bindCommandContexts} from './reference-contexts.js';
 export type Signature = {
     deviceId: string;
     publicKey: string;
@@ -53,7 +55,7 @@ export async function referenceFrom(store: Store, raw: RecordData): Promise<Refe
 }
 function membership(parent: string): Part[] { return parent === 'root' ? [] : [relation('member-of', { parent: [{ messageId: parent }] }, 'placement')]; }
 async function submit(context: CommandContext, parts: Part[], body: RecordData) {
-    return send(context.store, context.user, { requestId: context.requestId, parts, recommendation: number(body.recommendation), wager: number(body.wager), ...(body.selfAgree ? { selfStance: 'pro' } : {}) }, { messageId: context.messageId, signature: context.signature });
+    return send(context.store, context.user, { requestId: context.requestId, parts, recommendation: number(body.recommendation), wager: number(body.wager), ...(body.selfAgree ? { selfStance: 'pro' } : {}),...(body.joinContribution!==undefined?{joinContribution:body.joinContribution}:{}) }, { messageId: context.messageId, signature: context.signature });
 }
 async function publish(context: CommandContext, parts: Part[], body: RecordData) {
     return (await submit(context, parts, body)).message;
@@ -81,7 +83,8 @@ export async function createContent(context: CommandContext, parent: string, bod
         parts.push(relation('proposal', {}));
     if (kind === 'OPERATIONS')
         parts.push(relation('operations', {}));
-    parts.push({ id: 'data', type: 'data', value: meta }, ...membership(parent));
+    parts.push({ id: 'data', type: 'data', value: meta });
+    if (messageDisplayDependency({ id: context.messageId ?? '', parts }) === null) parts.push(...membership(parent));
     const recommendation = body.recommendation ?? (!body.selfAgree ? body.stakeAmount : 0), wager = body.wager ?? (body.selfAgree ? body.stakeAmount : 0);
     return publishView(context, parts, { ...body, recommendation, wager }, parent);
 }
@@ -91,6 +94,7 @@ export async function createRelation(context: CommandContext, parent: string, bo
     const store = context.store, type = text(body.relationType, 80).toUpperCase();
     if (!type)
         throw new DomainError('缺少关系类型');
+    if(type==='READ'||type==='UNREAD')throw new DomainError('已读是个人查看状态，请使用标记已读操作');
     const payload = body.payload === undefined ? {} : object.parse(body.payload) as RecordData;
     const refs = (await Promise.all(z.array(object).max(200).parse(body.targetRefs ?? []).map(async (raw) => (await referenceFrom(store, raw)))));
     if (payload.operationType === 'TERMINATE_SETTLEMENT' && !refs.length && Array.isArray(payload.targetMessageIds))
@@ -103,6 +107,7 @@ export async function createRelation(context: CommandContext, parent: string, bo
     const sourceRefs: Array<Reference> = body.sourceRefs ? (await Promise.all(z.array(object).max(100).parse(body.sourceRefs).map(async (raw) => { (await readReference(store, raw as unknown as Reference)); return raw as unknown as Reference; }))) : body.sourceMessageId ? [{ messageId: text(body.sourceMessageId, 100) }] : [];
     for (const ref of sourceRefs)
         (await readReference(store, ref));
+    if(payload.stanceCorrections!==undefined&&Object.values(stanceCorrectionsSchema.parse(payload.stanceCorrections)).some(ids=>ids.length))throw new DomainError('修改原意请发送新消息');
     let name = names[type] ?? type.toLowerCase(), roles: Record<string, Reference[]> = { target: refs };
     if (sourceRefs.length)
         roles.source = sourceRefs;
@@ -132,14 +137,22 @@ export async function createRelation(context: CommandContext, parent: string, bo
         if (part.type === 'relation') part.reason = z.enum(['YES','NO']).parse(payload.subType);
     }
     const content = text(payload.content ?? payload.title ?? payload.label);
-    if (content && type !== 'CORRECT')
+    if (content && !['CORRECT', 'READ', 'UNREAD'].includes(type))
         parts.unshift({ id: 'body', type: 'text', text: content });
     const data: RecordData = { ...payload, uiType: type };
-    if (payload.stanceCorrections !== undefined) data.stanceCorrections = stanceCorrectionsSchema.parse(payload.stanceCorrections);
-    if (type === 'CORRECT') data.correctionKind = z.enum(['TEXT', 'MEANING']).parse(payload.correctionKind ?? 'TEXT');
+    delete data.stanceCorrections;
+    if (type === 'CORRECT') data.correctionKind = z.enum(['TEXT', 'WIDTH']).parse(payload.correctionKind ?? 'TEXT');
     delete data.membershipHistory;
     if (['CLASSIFY', 'MERGE', 'SUMMARY', 'ARRANGE'].includes(type)) data.independentMemberships = true;
-    if (name === 'amend') {
+    if (name === 'amend' && data.correctionKind === 'WIDTH') {
+        if (refs.length !== 1 || sourceRefs.length || refs.some(ref => ref.revision !== undefined || ref.partId || ref.memberId || ref.range || ref.path?.length))
+            throw new DomainError('宽度调整需要选择一条当前完整消息，且不能有来源');
+        data.correctionWidth = z.number().int().min(320).max(2400).parse(payload.correctionWidth);
+        const correction = parts.find(part => part.type === 'relation' && part.relation === 'amend');
+        if (correction?.type === 'relation') correction.relation = 'correct';
+        delete data.correctionContent; delete data.correctionValue;
+        delete data.correctionBeforeContent; delete data.correctionAfterContent;
+    } else if (name === 'amend') {
         if (refs.length !== 1)
             throw new DomainError('修改需要一个明确目标');
         const target = await store.message(refs[0]!.messageId, refs[0]!.revision);
@@ -178,12 +191,12 @@ export async function createRelation(context: CommandContext, parent: string, bo
     if (['CLASSIFY', 'MERGE', 'SUMMARY', 'ARRANGE'].includes(type))
         parts.push({ id: 'display', type: 'display', relationPartId: 'relation', layout: type === 'SUMMARY' ? 'summary' : payload.targetLayout === 'single-row' ? 'row' : payload.targetLayout === 'multi-column' ? 'columns' : 'flow' });
     parts.push({ id: 'data', type: 'data', value: data });
-    // Grouping inherits the common parent atomically; explicit placement only applies to a new empty organization.
-    if (!['JOIN', 'CLASSIFY', 'MERGE', 'SUMMARY', 'ARRANGE'].includes(type) || refs.length === 0)
+    // Standalone content needs placement. Ordinary relations remain visible through their endpoints.
+    if (['CLASSIFY','MERGE','SUMMARY','ARRANGE'].includes(type) ? refs.length===0 : ['PROPOSAL','OPERATIONS','CODE_CHANGE','DELEGATION'].includes(type))
         parts.push(...membership(parent));
     if (body.supersedesRelationId) {
         const previous = (await store.message(text(body.supersedesRelationId, 100)));
-        const amendment = (await publish(context, [relation('amend', { target: [{ messageId: previous.id, revision: previous.revision }] }), { id: 'data', type: 'data', value: { parts: parts as unknown as Json, expectedRevision: previous.revision, uiType: 'CORRECT' } }, ...membership(parent)], body));
+        const amendment = (await publish(context, [relation('amend', { target: [{ messageId: previous.id, revision: previous.revision }] }), { id: 'data', type: 'data', value: { parts: parts as unknown as Json, expectedRevision: previous.revision, uiType: 'CORRECT' } }], body));
         return (await messageView(store, amendment, parent));
     }
     const stance = name === 'agree' || name === 'disagree';
@@ -192,12 +205,16 @@ export async function createRelation(context: CommandContext, parent: string, bo
 }
 export async function createRound(context: CommandContext, target: string, body: RecordData) {
     const value = body.settlementType === 'VALUE';
-    const original = (await context.store.message(target));
-    const previous = value ? await valueRoundFor(context.store, { messageId: target, revision: original.revision }) : undefined;
+    const original=await context.store.message(target);
+    const requested:Reference=body.reference?await referenceFrom(context.store,{reference:body.reference}):{messageId:target,revision:original.revision,context:{kind:'MESSAGE'}};
+    const normalized=await bindCommandContexts(context.store,{requestId:context.requestId,parts:[{id:'relation',type:'relation',relation:value?'open-value-settlement':'open-settlement',roles:bindRoles({target:[requested]})}]});
+    const selected=relations({parts:normalized.parts} as any)[0]!.roles.target![0]!.reference;
+    if(selected.messageId!==target)throw new DomainError('结算正文与消息不一致');
+    const previous = value ? await valueRoundFor(context.store,selected) : undefined;
     const reuse = previous?.target;
     if (previous && previous.status !== 'settled')
         return { ...(await roundView(context.store, previous.id, context.user.id)), requestMessageId: previous.target.messageId };
-    const message = (await publish(context, [...(value && !reuse ? [{ id: 'body', type: 'text', text: '这条消息具有讨论价值。' } as Part] : []), relation(value && !reuse ? 'open-value-settlement' : 'open-settlement', { target: [reuse ?? { messageId: target, revision: original.revision }] }), { id: 'data', type: 'data', value: { note: text(body.note), uiType: 'ROUND', settlementType: value ? 'VALUE' : 'TRUTH' } }, ...membership((await parentOf(context.store, target)))], {}));
+    const message = (await publish(context, [...(value && !reuse ? [{ id: 'body', type: 'text', text: '这条消息具有讨论价值。' } as Part] : []), relation(value && !reuse ? 'open-value-settlement' : 'open-settlement', { target: [reuse ?? selected] }), { id: 'data', type: 'data', value: { note: text(body.note), uiType: 'ROUND', settlementType: value ? 'VALUE' : 'TRUTH' } }, ...membership((await parentOf(context.store, target)))], { recommendation: 1 }));
     const row = (await context.store.db.prepare("SELECT id FROM rounds WHERE (body::jsonb #>> '{target,messageId}')=$1 AND (body::jsonb #>> '{status}')<>'settled' ORDER BY position DESC LIMIT 1").get(reuse?.messageId ?? (value ? message.id : target)));
     if (!row)
         throw new DomainError('结算创建失败');
@@ -220,7 +237,7 @@ async function executeWithinTransaction(context: CommandContext, method: string,
             throw new DomainError('目标不是组织关系');
         const refs = (await Promise.all(z.array(object).max(200).parse(body.targetRefs).map(async (raw) => (await referenceFrom(store, raw)))));
         const parts = message.parts.map(p => p.id === org.id ? { ...org, roles: { ...org.roles, members: bindRoles({ members: refs.map(r => ({ messageId: r.messageId })) }).members! } } : p);
-        return (await messageView(store, (await publish(context, [relation('amend', { target: [{ messageId: message.id, revision: message.revision }] }), { id: 'data', type: 'data', value: { parts: parts as any, expectedRevision: message.revision, uiType: 'CORRECT' } }, ...membership(parent)], {})), parent));
+        return (await messageView(store, (await publish(context, [relation('amend', { target: [{ messageId: message.id, revision: message.revision }] }), { id: 'data', type: 'data', value: { parts: parts as any, expectedRevision: message.revision, uiType: 'CORRECT' } }], { recommendation: 1 })), parent));
     }
     if ((match = path.match(/^\/messages\/([^/]+)\/rounds$/)) && method === 'POST')
         return (await createRound(context, match[1]!, body));
@@ -231,6 +248,10 @@ async function executeWithinTransaction(context: CommandContext, method: string,
         if (round.status === 'SETTLED')
             throw new DomainError('该轮已结束', 409);
         const stanceCorrections=body.stanceCorrections===undefined?undefined:stanceCorrectionsSchema.parse(body.stanceCorrections);
+        if(stanceCorrections){
+          const context=round.reference.context,expected=context&&(context.kind==='BODY'||context.kind==='MEANING')?context.version.corrections.filter((entry:{kind:string})=>entry.kind==='MEANING').map((entry:{messageId:string})=>entry.messageId).sort():[];
+          for(const [subject,ids] of Object.entries(stanceCorrections))if(subject!==round.messageId||JSON.stringify([...new Set(ids)].sort())!==JSON.stringify(expected))throw new DomainError('投票正文语境与该轮固定依据不一致');
+        }
         if (round.settlementType === 'VALUE') {
             const evaluated = await store.message(round.reference.messageId, round.reference.revision);
             const subject = relations(evaluated).find(part => part.relation === 'open-value-settlement')?.roles.target?.[0]?.reference
@@ -238,13 +259,13 @@ async function executeWithinTransaction(context: CommandContext, method: string,
             return messageView(store, await publish(context, [
                 relation(body.vote === 'TRUE' ? 'recommend' : 'archive', { target: [subject] }),
                 { id: 'data', type: 'data', value: { roundId: round.id } },
-            ], { wager: number(body.amount) }));
+            ], { recommendation: number(body.amount) }));
         }
         return (await messageView(store, (await publish(context, [relation(body.vote === 'TRUE' ? 'agree' : 'disagree', { target: [round.reference] }), { id: 'data', type: 'data', value: { roundId: round.id,...(stanceCorrections?{stanceCorrections}:{}) } }], { wager: number(body.amount) }))));
     }
     if ((match = path.match(/^\/rounds\/([^/]+)\/close-and-settle$/)) && method === 'POST') {
         const round = (await roundView(store, match[1]!, context.user.id));
-        const message = (await publish(context, [relation('terminate', { target: [round.reference] }), { id: 'data', type: 'data', value: { roundId: round.id } }], {})), settled = (await roundView(store, round.id, context.user.id));
+        const message = (await publish(context, [relation('terminate', { target: [round.reference] }), { id: 'data', type: 'data', value: { roundId: round.id } }], { recommendation: 1 })), settled = (await roundView(store, round.id, context.user.id));
         const output = settled.distributionId ? (await store.message(settled.distributionId)) : null;
         return { message: settled.status === 'SETTLED' ? '结算已完成' : '已请求终止，等待规则规定的截止时间', status: settled.status, endsAt: settled.endsAt, roundId: round.id, messageId: round.messageId, result: settled.result, weights: settled.weights, totalPro: settled.weights.TRUE, totalCon: settled.weights.FALSE, settlementType: settled.settlementType, resultMessage: output ? (await messageView(store, output)) : undefined, requestMessage: (await messageView(store, message)), affectedUsers: new Set((settled.votes ?? []).map((v: RecordData) => v.user.id)).size };
     }

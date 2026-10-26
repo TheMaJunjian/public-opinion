@@ -12,10 +12,11 @@ describe('addressable message components', () => {
     expect(resolveReference({ messageId: b.id, partId: 'stance', memberId: 'target-0', path: ['reference', 'messageId'] }, resolver)).toBe('claim');
     expect(resolveReference({ messageId: a.id, partId: 'body', range: { start: 4, end: 6 } }, resolver)).toBe('种树');
   });
-  it('opposing a stance reverses it but opposing its reason does not', () => {
-    expect(resolveStance({ messageId: b.id, partId: 'stance' }, 'con', resolver)).toMatchObject({ target: { messageId: a.id }, side: 'pro' });
+  it('stance chains forward the target while the new action keeps its direction; reason fragments stay separate', () => {
+    expect(resolveStance({ messageId: b.id, partId: 'stance' }, 'con', resolver)).toMatchObject({ target: { messageId: a.id }, side: 'con' });
     expect(resolveStance({ messageId: b.id, partId: 'reason' }, 'con', resolver)).toMatchObject({ target: { messageId: b.id, partId: 'reason' }, side: 'con' });
-    expect(resolveStance({ messageId: b.id }, 'con', resolver).target.messageId).toBe(b.id);
+    expect(resolveStance({ messageId: b.id }, 'con', resolver)).toMatchObject({target:{messageId:a.id},side:'con'});
+    expect(resolveStance({ messageId: b.id }, 'pro', resolver)).toMatchObject({target:{messageId:a.id},side:'pro'});
   });
   it('resolves pinned versions and refuses stale resolver results', () => {
     expect(resolveReference({ messageId: a.id, revision: 2 }, resolver)).toBeUndefined();

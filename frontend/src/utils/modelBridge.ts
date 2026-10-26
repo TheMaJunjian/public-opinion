@@ -1,6 +1,7 @@
 import type { Message as BackendMessage, Relation as BackendRelation, RelationPayload, TargetRef } from '../types';
-import { resolveStance, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
+import { bodyVersion, resolveStance, type BodyVersion, type Message as CoreMessage, type Part, type Reference, type ExecutedStance, type MessageState } from '@gonglun/core';
 import { getPresentationSpec, getRelationLabel, getRelationTitle } from '../types';
+import type {AuthorInvestment} from './messageAuthorship';
 
 export type MessageKind = "normal" | "join" | "relation" | "round" | "round_result" | "governance" | "code" | "operations";
 
@@ -16,7 +17,8 @@ export function isCorrectionProposal(message: { parts?: Part[]; relationPayload?
 }
 
 /** Project readable text for this viewer without changing the stored message or its identity. */
-export function withCorrectionContent(message: DemoMessage, content: string, changes?: CorrectionVersion['changes']): DemoMessage {
+export function withCorrectionContent(message: DemoMessage, content: string, changes?: CorrectionVersion['changes'],snapshot?:CoreMessage): DemoMessage {
+  if(snapshot)return {...message,content,parts:snapshot.parts,revision:snapshot.revision,...(['classify','summary'].includes(message.relationType??'')?{relationPayload:{...message.relationPayload,title:content}}:{})};
   if (message.content === content) return message;
   const readable = message.parts?.filter(part => ['text', 'code', 'web'].includes(part.type));
   let offset = 0;
@@ -41,7 +43,7 @@ export function withCorrectionContent(message: DemoMessage, content: string, cha
 export function hasReadableMessageContent(message: {relationType?:string;parts?:Part[]}) {
   const type=message.relationType?.toLowerCase()??'';
   // Organization bodies belong to their scope card or frame header.
-  if(type==='merge'||type==='arrange'||type==='correct')return false;
+  if(type==='merge'||type==='arrange'||type==='correct'||type==='read'||type==='unread')return false;
   if(message.parts?.some(part=>part.type==='display'&&part.layout==='relation'))return false;
   return !!message.parts?.some(part => part.type === 'text' && part.text.trim().length > 0 || part.type === 'code' || part.type === 'web' || part.type === 'relation' && part.relation === 'amend');
 }
@@ -79,6 +81,8 @@ export type RelationType =
   | "summary"
   | "recommend"
   | "archive"
+  | "read"
+  | "unread"
   | "attention"
   | "block"
   | "proposal"
@@ -103,11 +107,14 @@ export type UnitSelection = {
 
 export type DemoMessage = {
   id: string;
+  sequence?: number;
+  bodyVersion?: BodyVersion;
   revision?: number;
   parts?: Part[];
   executedStance?: ExecutedStance;
   state?: MessageState;
   spending?: CoreMessage['spending'];
+  authorInvestment?:AuthorInvestment;
   author: string;
   authorId?: string;
   createdAt: string;
@@ -131,6 +138,11 @@ export type DemoMessage = {
 };
 
 export type CorrectionVersion = {
+  snapshot?:CoreMessage;
+  bodyVersion?: BodyVersion;
+  applicable?: boolean;
+  adopted?: boolean;
+  exclusionReason?: 'personal'|'public'|'competition'|'revision'|'address'|'authorization';
   changes?: Array<{ start: number; end: number; replacement: string }>;
   appliedCorrectionIds?: string[];
   recommendationTied?: boolean;
@@ -196,7 +208,7 @@ export function demoMessageToRelation(message: DemoMessage): BackendRelation | n
     payload: message.relationPayload,
     createdAt: message.createdAt,
     createdBy: {
-      id: '',
+      id: message.authorId ?? '',
       username: message.author,
       createdAt: message.createdAt,
     },
@@ -318,6 +330,7 @@ export function convertMessagesToDemoModel(
     return {
     id: m.id,
     revision: m.revision,
+    sequence:m.sequence,
     parts: m.parts,
     executedStance: m.executedStance,
     state: m.state,
@@ -376,7 +389,7 @@ export function convertMessagesToDemoModel(
             .map(r => r.kind === 'relation' ? r.relationId : r.messageId),
         };
       } else if (relType === 'correct') {
-        content = rel.payload?.correctionContent ?? '';
+        content = rel.payload?.correctionKind === 'WIDTH' ? `消息卡宽度：${rel.payload.correctionWidth} px` : rel.payload?.correctionContent ?? '';
       } else if (relType === 'classify') {
         content = persistedMessage?.content ?? rel.parts?.filter(part => part.type === 'text').map(part => part.text).join('\n') ?? `分类：${classifyTitle}\n目标：${targetRefsSummary(rel.targetRefs)}`;
       } else if (relType === 'summary') {
@@ -396,6 +409,7 @@ export function convertMessagesToDemoModel(
       demoMessages.push({
         id: relMsgId,
         revision: rel.revision,
+        sequence:rel.sequence,
         parts: rel.parts,
         executedStance: rel.executedStance,
         state: rel.state,
@@ -535,7 +549,7 @@ export function computeCorrectionVersions(
   options: { previewCorrectionId?: string } = {},
 ): Map<string, { current?: CorrectionVersion; versions: CorrectionVersion[] }> {
   const msgMap = new Map(messages.map(message => [message.id, message]));
-  const personal = computeUserActiveStanceRelIds(edges, messages, currentUsername);
+  const personal = computeUserCorrectionChoices(edges, messages, currentUsername);
   const statistics = computeTransitiveVoteStats(edges, messages);
   const score = (version: CorrectionVersion) => {
     const state = msgMap.get(version.correctionId)?.state;
@@ -561,9 +575,12 @@ export function computeCorrectionVersions(
     if (edge.relationType !== 'correct') continue;
     const correction = msgMap.get(edge.relationMessageId);
     const target = msgMap.get(edge.to.messageId);
-    if (!correction || !target) continue;
+    if (!correction || !target || correction.relationPayload?.correctionKind === 'WIDTH') continue;
     const content = correction.relationPayload?.correctionAfterContent ?? correction.relationPayload?.correctionContent ?? correction.content;
     const version: CorrectionVersion = {
+      bodyVersion:bodyVersion(target.id,target.revision??1,[{messageId:correction.id,revision:correction.revision??1,kind:correction.relationPayload?.correctionKind==='MEANING'?'MEANING':'TEXT'}]),
+      applicable:!isCorrectionProposal(correction)&&(!edge.to.reference?.revision||!target.revision||edge.to.reference.revision===target.revision),
+      exclusionReason:isCorrectionProposal(correction)?'authorization':edge.to.reference?.revision&&target.revision&&edge.to.reference.revision!==target.revision?'revision':invalidCorrectionIds.has(correction.id)?personal.get(correction.id)?.type==='disagree'?'personal':'public':undefined,
       correctionKind: correction.relationPayload?.correctionKind ?? 'TEXT',
       correctionId: correction.id,
       targetId: rootTarget(edge.to.messageId),
@@ -608,6 +625,7 @@ export function computeCorrectionVersions(
     for (let index = 0; index < entry.versions.length; index++) {
       const version = entry.versions[index];
       const change = changes[index];
+      if(!change){version.applicable=false;version.valid=false;version.exclusionReason??='address';}
       if (!version.valid || !change) continue;
       const fieldKey = correctionFieldKey(version.selection, originalContent);
       const previous = effectiveChanges.get(fieldKey);
@@ -634,7 +652,9 @@ export function computeCorrectionVersions(
         || candidate.change.start === other.change.start && candidate.change.end === other.change.end);
     }));
     entry.current = latest ? { ...latest, content: currentContent, changes: orderedChanges.map(({ change }) => change),
+      bodyVersion:bodyVersion(latest.targetId,msgMap.get(latest.targetId)?.revision??1,chosen.flatMap(({version})=>version.bodyVersion?.corrections??[])),
       appliedCorrectionIds: chosen.map(({version}) => version.correctionId), recommendationTied } : undefined;
+    for(const version of entry.versions){version.adopted=chosen.some(item=>item.version===version);if(version.valid&&!version.adopted)version.exclusionReason='competition';}
   }
   return result;
 }
@@ -719,6 +739,7 @@ export function unitSelectionToReference(unit: UnitSelection, msgMap: Map<string
   if (unit.reference) return structuredClone(unit.reference);
   const message = msgMap.get(unit.messageId);
   const reference: Reference = { messageId: unit.messageId };
+  if(message?.bodyVersion){reference.context={kind:'BODY',version:message.bodyVersion};reference.revision=message.bodyVersion.revision;}
   if (message?.revision && unit.selection.kind !== 'whole') reference.revision = message.revision;
   if (unit.selection.kind === 'text') {
     reference.partId = message?.parts?.find(part => part.type === 'text' || part.type === 'code' || part.type === 'web')?.id ?? 'content';
@@ -826,7 +847,7 @@ export function buildStanceTargetMap(
 
 /**
  * Walk up the stance chain to find the ultimate non-stance target and effective type.
- * Each DISAGREE hop flips the effective stance.
+ * The new action determines direction; earlier stances only forward the target.
  * Returns null if chain is too deep or circular.
  */
 function resolveUltimateStance(
@@ -837,7 +858,7 @@ function resolveUltimateStance(
   const MAX_DEPTH = 20;
   const visited = new Set<string>();
   let currentId = startTargetId;
-  let effectiveType: 'agree' | 'disagree' = startType;
+  const effectiveType: 'agree' | 'disagree' = startType;
 
   for (let depth = 0; depth < MAX_DEPTH; depth++) {
     const next = stanceMap.get(currentId);
@@ -845,9 +866,6 @@ function resolveUltimateStance(
     if (visited.has(currentId)) return null;
     visited.add(currentId);
 
-    if (next.type === 'disagree') {
-      effectiveType = effectiveType === 'agree' ? 'disagree' : 'agree';
-    }
     currentId = next.targetId;
   }
   return { targetId: currentId, type: effectiveType };
@@ -866,32 +884,34 @@ export function resolveDisplayedStance(edge: DemoEdge, msgMap: Map<string, DemoM
       || (reference.revision !== undefined && reference.revision !== target?.revision)
       ? `reference:${JSON.stringify(reference)}` : reference.messageId;
   };
-  if (executed) return { targetId: addressKey(executed.target), type: executed.side === 'pro' ? 'agree' as const : 'disagree' as const };
+  const targetKey=(reference:Reference)=>addressKey(reference);
+  if (executed) return { targetId: addressKey(executed.target),targetKey:targetKey(executed.target), type: executed.side === 'pro' ? 'agree' as const : 'disagree' as const };
   if (edge.to.reference) {
     const side = edge.relationType === 'agree' ? 'pro' : 'con';
     const resolved = resolveStance(edge.to.reference, side, (id, revision) => {
       const message = msgMap.get(id);
       return message?.parts && (!revision || message.revision === revision) ? message as unknown as CoreMessage : undefined;
     });
-    return { targetId: addressKey(resolved.target), type: resolved.side === 'pro' ? 'agree' as const : 'disagree' as const };
+    return { targetId: addressKey(resolved.target),targetKey:targetKey(resolved.target), type: resolved.side === 'pro' ? 'agree' as const : 'disagree' as const };
   }
-  return resolveUltimateStance(edge.to.messageId, edge.relationType as 'agree' | 'disagree', stanceMap);
+  const resolved=resolveUltimateStance(edge.to.messageId, edge.relationType as 'agree' | 'disagree', stanceMap);
+  return resolved?{...resolved,targetKey:resolved.targetId}:null;
 }
 
 /**
  * Compute the set of relation message IDs that are suppressed for the current user.
  *
  * Walks the user's entire stance chain transitively: for every AGREE/DISAGREE
- * the user has sent, the chain is followed to its ultimate target, flipping
- * the effective stance on each DISAGREE hop.  The latest (by time) effective
+ * the user has sent, the chain is followed to its ultimate target, keeping
+ * the direction of the current action. The latest (by time) effective
  * stance on each ultimate target determines whether it is suppressed.
  *
  * Examples:
  *   DISAGREE rel-arr                          → suppress rel-arr
  *   AGREE rel-arr                             → don't suppress
- *   DISAGREE (AGREE rel-arr)                  → suppress rel-arr (flip once)
- *   DISAGREE (DISAGREE rel-arr)               → don't suppress (flip twice)
- *   AGREE (DISAGREE rel-arr)                  → suppress rel-arr (flip once)
+ *   DISAGREE (AGREE rel-arr)                  → suppress rel-arr
+ *   DISAGREE (DISAGREE rel-arr)               → suppress rel-arr
+ *   AGREE (DISAGREE rel-arr)                  → don't suppress
  *   AGREE (AGREE rel-arr)                     → don't suppress
  */
 export function computeUserSuppressedRelIds(
@@ -933,7 +953,7 @@ export function computeUserSuppressedRelIds(
 
     // Walk the chain to the ultimate target.
     const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
-    const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
+    const ultimateTarget = resolved ? resolved.targetKey??resolved.targetId : e.to.messageId;
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
     const prev = latestEffective.get(ultimateTarget);
@@ -997,7 +1017,7 @@ export function computeUserActiveStanceRelIds(
     }
 
     const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
-    const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
+    const ultimateTarget = resolved ? resolved.targetKey??resolved.targetId : e.to.messageId;
     const effectiveType = resolved ? resolved.type : e.relationType as 'agree' | 'disagree';
 
     const prev = latest.get(ultimateTarget);
@@ -1007,6 +1027,21 @@ export function computeUserActiveStanceRelIds(
   }
 
   return latest;
+}
+
+/** Publishing a body correction selects it for its sender; later explicit stances still take precedence. */
+export function computeUserCorrectionChoices(edges:DemoEdge[],messages:DemoMessage[],username:string|null,
+  stances=computeUserActiveStanceRelIds(edges,messages,username)) {
+  const msgMap=new Map(messages.map(message=>[message.id,message]));
+  const correctionIds=new Set(edges.filter(edge=>edge.relationType==='correct'&&!edge.proposalOnly).map(edge=>edge.relationMessageId));
+  const choices=new Map([...stances].filter(([id])=>correctionIds.has(id)));
+  if(!username)return choices;
+  for(const message of messages){
+    if(message.author!==username||!correctionIds.has(message.id)||message.relationPayload?.correctionKind==='WIDTH'||isCorrectionProposal(message))continue;
+    const explicit=choices.get(message.id),previous=explicit&&msgMap.get(explicit.relMsgId);
+    if(!explicit||(Date.parse(message.createdAt)||0)>(Date.parse(previous?.createdAt??'')||0))choices.set(message.id,{relMsgId:message.id,type:'agree'});
+  }
+  return choices;
 }
 
 /**
@@ -1055,7 +1090,7 @@ export function computeUserOverriddenStanceRelIds(
     }
 
     const resolved = resolveDisplayedStance(e, msgMap, stanceMap);
-    const ultimateTarget = resolved ? resolved.targetId : e.to.messageId;
+    const ultimateTarget = resolved ? resolved.targetKey??resolved.targetId : e.to.messageId;
 
     userStanceRelIds.add(e.relationMessageId);
     const prev = userStanceInfo.get(e.relationMessageId);
@@ -1159,7 +1194,7 @@ export function computeTransitiveRelDecStats(
  * chains of meta-stances and projects them onto the original target.
  *
  * Rule: for each agree/disagree edge, walk the target chain upward using
- * resolveUltimateStance.  Each DISAGREE hop flips the effective stance.
+ * resolveUltimateStance. Direction comes from the current action.
  * The final effective stance is counted against the ultimate target.
  *
  * Examples:
@@ -1237,7 +1272,8 @@ export function computeEffectiveSuppressedRelIds(
 ): Set<string> {
   const suppressed = computeGloballySuppressedRelIds(edges, messages);
   const relationIds = new Set(messages.filter(message => message.kind === 'relation').map(message => message.id));
-  const activeStances = computeUserActiveStanceRelIds(edges, messages, currentUsername);
+  const explicitStances = computeUserActiveStanceRelIds(edges, messages, currentUsername);
+  const activeStances = new Map([...explicitStances,...computeUserCorrectionChoices(edges,messages,currentUsername,explicitStances)]);
   for (const [targetId, stance] of activeStances) {
     if (!relationIds.has(targetId)) continue;
     const target = messages.find(message => message.id === targetId);

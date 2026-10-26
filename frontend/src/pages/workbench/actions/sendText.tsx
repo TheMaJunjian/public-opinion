@@ -14,6 +14,7 @@ interface HandleSendMessageOnlyDependencies {
   newMessageContent: string;
   scopeMessageId: string;
   stakeAmount: number | "";
+  joinContribution?:{wager:number;recommendation:number};
   setSendError: React.Dispatch<React.SetStateAction<string | null>>;
   selectedRelationRef: React.MutableRefObject<RelationType | null>;
   recommendationRef: React.MutableRefObject<number>;
@@ -34,27 +35,35 @@ interface HandleSendMessageOnlyDependencies {
 }
 
 export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyDependencies, overrideContent?: string): Promise<DemoMessage | null> {
-  const { requireAuth, newMessageContent, scopeMessageId, stakeAmount, setSendError, selectedRelationRef, recommendationRef, stakeFeeAmountRef, isInsideClassify, availablePoints, currentClassifyRelMsgId, setMessages, mergeStakeSnapshot, setAuthorStakes, setStakeAmount, minSelfStake, setNewMessageContent, scrollMsgToCenter, setClassifyKey, handleAuthError } = dependencies;
+  const { requireAuth, newMessageContent, scopeMessageId, stakeAmount, setSendError, recommendationRef, stakeFeeAmountRef, isInsideClassify, availablePoints, currentClassifyRelMsgId, setMessages, mergeStakeSnapshot, setAuthorStakes, setStakeAmount, minSelfStake, setNewMessageContent, scrollMsgToCenter, setClassifyKey, handleAuthError } = dependencies;
   if (!requireAuth()) return null;
   const text = overrideContent ?? newMessageContent;
   if (text.trim().length === 0) return null;
   if (!scopeMessageId) return null;
   const pts = typeof stakeAmount === 'number' ? stakeAmount : 0;
   if (pts < 0) {
-    setSendError('自赞押注不能为负数');
+    setSendError('真假投入不能为负数');
     return null;
   }
-  const recommendation = selectedRelationRef.current ? 0 : recommendationRef.current;
-  const totalNeeded = pts + recommendation + stakeFeeAmountRef.current;
+  const recommendation = recommendationRef.current;
+  if (pts === 0 && recommendation === 0) {
+    setSendError('真假和价值至少一项须大于 0');
+    return null;
+  }
+  const join=dependencies.joinContribution??{wager:1,recommendation:0};
+  const inContainer=(currentClassifyRelMsgId??scopeMessageId)!=='root';
+  const totalNeeded = pts + recommendation + stakeFeeAmountRef.current
+    +(inContainer?join.wager+join.recommendation+stakeFeeAmountRef.current:0);
   if (totalNeeded > availablePoints) {
-    const parts = [`文本 ${pts}`, `协议费 ${stakeFeeAmountRef.current}`];
-    if (recommendation > 0) parts.push(`推荐 ${recommendation}`);
+    const parts = [`真假 ${pts}`, `协议费 ${stakeFeeAmountRef.current}`];
+    if (recommendation > 0) parts.push(`价值 ${recommendation}`);
+    if (inContainer) parts.push(`加入消息 ${join.wager+join.recommendation+stakeFeeAmountRef.current}`);
     setSendError(`贡献点余额不足（可用 ${availablePoints}，需要 ${totalNeeded} 点 = ${parts.join(' + ')}）`);
     return null;
   }
   setSendError(null);
   try {
-    const backendMsg = await api.createMessage(currentClassifyRelMsgId ?? scopeMessageId, { content: text, contentType: 'TEXT', stakeAmount: 0, wager: pts, selfAgree: pts > 0, recommendation });
+    const backendMsg = await api.createMessage(currentClassifyRelMsgId ?? scopeMessageId, { content: text, contentType: 'TEXT', stakeAmount: 0, wager: pts, selfAgree: pts > 0, recommendation,...(inContainer?{joinContribution:join}:{}) });
     operationLog('发送消息', `message=${backendMsg.id} length=${text.length} stake=${pts}`);
     const msg: DemoMessage = {
       id: backendMsg.id,
@@ -64,6 +73,7 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
       spending: backendMsg.spending,
       state: backendMsg.state,
       author: backendMsg.createdBy.username,
+      authorId: backendMsg.createdBy.id,
       createdAt: backendMsg.createdAt,
       content: backendMsg.content,
       kind: "normal",
@@ -80,7 +90,9 @@ export async function handleSendMessageOnly(dependencies: HandleSendMessageOnlyD
     if (dependencies.onCreated) dependencies.onCreated(msg.id);
     else scrollMsgToCenter(msg.id);
     window.dispatchEvent(new Event('points-refresh'));
-    if (isInsideClassify) setClassifyKey(key => key + 1);
+    // The committed message/placement updates the existing canvas. Remounting
+    // here briefly collapses its scroll range before final positioning.
+    if (isInsideClassify && !dependencies.onCreated) setClassifyKey(key => key + 1);
     return msg;
   } catch (e) {
     api.cancelCommandBatch(e);

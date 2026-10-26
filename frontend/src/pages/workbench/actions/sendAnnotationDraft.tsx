@@ -34,6 +34,7 @@ export async function sendNotifyDraft(dependencies: Pick<DraftSendDependencies, 
 export async function sendSelectedTagDraft(dependencies: Pick<DraftSendDependencies, "secondaryRelationType" | "msgMap" | "subType" | "newMessageContent" | "createRel" | "scopeMessageId" | "registerCreatedRelationInCurrentClassify" | "edgesRef" | "showAlert" | "setEdges" | "sendTagRelation" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "setNewMessageContent" | "setSubType" | "setRelationType" | "setSecondaryRelationType" | "subTypeCustomBufferRef" | "setSubTypeCustomLabel">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
   const { secondaryRelationType, msgMap, subType, newMessageContent, createRel, scopeMessageId, registerCreatedRelationInCurrentClassify, edgesRef, showAlert, setEdges, sendTagRelation, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setSubType, setRelationType, setSecondaryRelationType, subTypeCustomBufferRef, setSubTypeCustomLabel } = dependencies;
   const secType = secondaryRelationType;
+  if(secType==='read'||secType==='unread'){showAlert('已阅是个人查看状态，请在消息提示中标记已阅');return;}
   const newEdgesList: DemoEdge[] = [];
   if (secType === "recommend" || secType === "archive" || secType === "attention" || secType === "block") {
     // Create inline badge relation (no source message), one per target

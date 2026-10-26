@@ -26,7 +26,7 @@ it('重复片段没有位置时拒绝猜测，已有明确位置时完整保留'
   expect(()=>migrateViewFile(input)).toThrow('片段位置不唯一');
   const exact={messageId:'text',revision:2,partId:'body',range:{start:2,end:4}};
   const explicit={...input,relations:[{...input.relations[0],targetRefs:[{...input.relations[0].targetRefs[0],reference:exact}]}]};
-  expect(migrateViewFile(explicit).relations[0].targetRefs[0].reference).toEqual(exact);
+  expect(migrateViewFile(explicit).relations[0].targetRefs[0].reference).toEqual({...exact,context:{kind:'UNKNOWN'}});
 });
 
 it('旧标签来源与合并次数转换为明确展示位置，保留原消息和精确引用',()=>{
@@ -53,7 +53,7 @@ it('converts the actual Prisma split export shape and keeps every relationship i
   expect(converted.messages.map((message:any)=>message.id)).toEqual(['text','code','group','join','follow']);
   expect(converted.messages.find((message:any)=>message.id==='code').parts[0]).toMatchObject({type:'code',source:'const keep = 1;'});
   expect(converted.messages.find((message:any)=>message.id==='join').parts).toContainEqual(expect.objectContaining({relation:'member-of',roles:{
-    parent:[{id:'parent-0',reference:{messageId:'group'}}],member:[{id:'member-0',reference:{messageId:'code'}}],
+    parent:[{id:'parent-0',reference:{messageId:'group',context:{kind:'MESSAGE'}}}],member:[{id:'member-0',reference:{messageId:'code',context:{kind:'MESSAGE'}}}],
   }}));
   expect(converted.relations.find((relation:any)=>relation.id==='follow').payload.subType).toBe('NO');
   const projection=projectWorkbenchSnapshot(archiveToWorkbenchSnapshot(validateExportForViewing(converted).data));
@@ -83,7 +83,7 @@ it('converts native journal messages and their view projections together while p
   for(const row of converted.messages)expect(row.parts).toEqual(replayed.messages.find(message=>message.id===row.id)?.parts);
   expect(converted.relations[0].parts[0]).toMatchObject({relation:'member-of'});
   expect(converted.relations[1].parts).toContainEqual({id:'corrected-body',type:'text',text:'前替换后'});
-  expect(converted.relations[1].targetRefs[0].reference).toEqual(exact);
+  expect(converted.relations[1].targetRefs[0].reference).toEqual({...exact,context:{kind:'MESSAGE'}});
   expect(replayed.operating).toBe(0);expect(replayed.issued).toBe(0);
   expect(converted.changes[0].ledger).toEqual(change.ledger);
   expect(migrateViewFile(converted)).toEqual(converted);
@@ -92,6 +92,20 @@ it('converts native journal messages and their view projections together while p
   expect(complete.messages.map((message:any)=>message.id)).toEqual(messages.map(message=>message.id));
   expect(complete.relations.map((relation:any)=>relation.id)).toEqual(['group','join','correction']);
   expect(validateExportForViewing(complete).verification).toContain('资金守恒校验通过');
+});
+
+it('turns historical meaning changes into independent linked messages with an append-only money-neutral upgrade',()=>{
+  const base:Message={id:'m',revision:1,parts:[{id:'body',type:'text',text:'旧主张'}],authorId:'user',createdAt:'2026-01-01',updatedAt:'',regionId:'r',ledgerId:'local',programVersion:'2',ruleVersion:1,sequence:1,spending:{protocol:0,recommendation:0,wager:0}};
+  const correction:Message={...base,id:'c',parts:[{id:'relation',type:'relation',relation:'correct',roles:bindRoles({target:[{messageId:'m',revision:1,partId:'body',context:{kind:'MESSAGE'}}]})},{id:'corrected-body',type:'text',text:'不同主张'},{id:'data',type:'data',value:{kind:'RELATION',uiType:'CORRECT',correctionKind:'MEANING',correctionBeforeContent:'旧主张',correctionAfterContent:'不同主张'}}]};
+  const change:Change={sequence:1,previousSequence:0,messages:[base,correction],memberships:[],removedMemberships:[],states:[],ledger:[],treasury:{operating:0,issued:0}};
+  const input={format:'gonglun-2',formatVersion:4,scope:{title:'旧文件',messageId:null},view:{homeFilter:{scope:'related',status:'pending-versions'}},messages:[base,{...correction,kind:'RELATION',relationType:'CORRECT',content:'不同主张'}],relations:[],changes:[change]},before=structuredClone(input);
+  const converted=migrateViewFile(input),replay=replayArchive(converted),current=converted.messages.find((message:any)=>message.id==='c');
+  expect(input).toEqual(before);expect(converted.formatVersion).toBe(5);expect(converted.changes).toHaveLength(2);expect(converted.changes[0]).toEqual(change);
+  expect(current).toMatchObject({revision:1,kind:'TEXT',sequence:2});expect(current.relationType).toBeUndefined();expect(current.parts.some((part:any)=>part.type==='relation')).toBe(false);
+  const reference=converted.messages.find((message:any)=>message.id==='reference:c');expect(reference).toMatchObject({revision:1,kind:'RELATION',relationType:'REFERENCE',sourceMessageId:'c',relationPayload:{label:'修正原意'}});expect(reference.targetRefs[0].messageId).toBe('m');
+  expect(converted.view.homeFilter).toEqual({scope:'related',status:'pending'});
+  expect(converted.changes[1].ledger).toEqual([]);expect(replay.operating).toBe(0);expect(replay.issued).toBe(0);expect(replay.revisions.get('c')).toHaveLength(1);expect(replay.revisions.get('c')![0].parts).toEqual(current.parts);
+  expect(migrateViewFile(converted)).toEqual(converted);
 });
 
 it('refuses future formats and missing historical journal entries instead of rewriting them as current',()=>{

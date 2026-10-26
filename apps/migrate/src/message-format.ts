@@ -1,6 +1,7 @@
 import {relations,replaceReference,textOf,type Message} from '@gonglun/core';
 import {presentationMigration,upgradePresentationParts} from './presentation-format.js';
 import {restoreSettlementTargetParts,type LegacySettlementSource} from './settlement-target-format.js';
+import {restoreDelegationBody} from './delegation-format.js';
 
 /** Shared, pure conversion for database records and offline archives. */
 export function createMessageFormatTransform(latest:Map<string,Message>,originals:Map<string,Message>,settlementSources=new Map<string,LegacySettlementSource>()){
@@ -10,10 +11,11 @@ export function createMessageFormatTransform(latest:Map<string,Message>,original
     if(!input||typeof input!=='object')return input;
     if(typeof input.id!=='string'||!Array.isArray(input.parts))return Object.fromEntries(Object.entries(input).map(([key,value])=>[key,key==='input'||key==='sourceAudit'?value:transform(value)]));
     const message=structuredClone(input) as Message;
+    restoreDelegationBody(message);
     restoreSettlementTargetParts(message,latest,originals,settlementSources.get(message.id));
     message.parts=upgradePresentationParts(message,presentation);
     const meta=message.parts.find(part=>part.type==='data');
-    if(meta?.type!=='data'||!meta.value||typeof meta.value!=='object'||Array.isArray(meta.value))return {...input,parts:message.parts};
+    if(meta?.type!=='data'||!meta.value||typeof meta.value!=='object'||Array.isArray(meta.value))return message;
     const data=meta.value,imported=typeof data.legacyTopicId==='string',relation=relations(message).find(part=>part.relation!=='member-of'||part.roles.member?.length);
     if(imported&&relation){
       if(data.legacyTopicId===message.id&&data.uiType==='CLASSIFY')data.origin={kind:'topic-classification',id:message.id};
@@ -49,7 +51,7 @@ export function createMessageFormatTransform(latest:Map<string,Message>,original
     if(relation&&['classify','summary','merge','arrange'].includes(relation.relation)&&!message.parts.some(part=>part.id==='organization-memberships'))
       message.parts.push({id:'organization-memberships',type:'data',value:{independentMemberships:true}});
     for(const key of Object.keys(data))if(key.startsWith('legacy'))delete data[key];
-    return {...input,parts:message.parts};
+    return message;
   }
   return transform;
 }

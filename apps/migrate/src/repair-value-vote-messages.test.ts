@@ -1,3 +1,4 @@
+import {withTestCommandContributions} from '../../server/src/test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +9,9 @@ import { personalMarks } from '../../server/src/personal.js';
 import { financialFingerprint } from './financial-fingerprint.js';
 import { repairValueVoteMessages, valueVoteMessageRepairPlan } from './repair-value-vote-messages.js';
 import { migrationsFor, runMigrations } from './migrations.js';
+import {Mutation} from '../../server/src/db.js';
+import {placeWager} from '../../server/src/economy.js';
+import {chargeMessage} from '../../server/src/message-spending.js';
 
 afterEach(cleanupTestDatabases);
 async function fixture() {
@@ -16,7 +20,7 @@ async function fixture() {
   expect(registered.status, registered.text).toBe(201);
   const session = registered.body;
   const post = async (path: string, body: object) => {
-    const response = await agent.post(`/api/ui${path}`).set('x-csrf-token', session.csrf).set('x-request-id', randomUUID()).send(body);
+    const response = await agent.post(`/api/ui${path}`).set('x-csrf-token', session.csrf).set('x-request-id', randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));
     expect(response.status, response.text).toBe(201); return response.body;
   };
   const subject = await post('/messages', { content: '原消息' });
@@ -24,11 +28,19 @@ async function fixture() {
   const votes = [];
   for (const relation of ['agree', 'disagree']) {
     const requestId = randomUUID();
-    const response = await agent.post('/api/messages').set('x-csrf-token', session.csrf).send({ requestId, wager: 3, parts: [
+    const input={ requestId, wager: 3, parts: [
       { id: 'relation', type: 'relation', relation, roles: bindRoles({ target: [round.reference] }) },
       { id: 'data', type: 'data', value: { roundId: round.id } },
-    ] });
-    expect(response.status, response.text).toBe(201); votes.push({ message: response.body.message, requestId });
+    ] };
+    // Reproduce the historical contract directly; current sends correctly reject this old input shape.
+    const message=await app.store.transaction(async()=>{
+      const tx=new Mutation(app.store),message=await tx.create(session.user.id,input.parts as import('@gonglun/core').Part[],{protocol:1,wager:3,recommendation:0});
+      await chargeMessage(app.store,message);await placeWager(tx,message,3);
+      const change=await tx.commit(),account=await app.store.account(session.user.id);
+      await app.store.db.prepare('INSERT INTO requests VALUES($1,$2,$3,$4)').run(session.user.id,requestId,JSON.stringify(input),JSON.stringify({message,change,account}));
+      return message;
+    });
+    votes.push({ message, requestId });
   }
   // A later recommendation must remain the user's latest personal choice after repairing the older cold vote.
   await post('/relations', { relationType: 'RECOMMEND', targetRefs: [{ kind: 'message', messageId: subject.id }] });
@@ -104,7 +116,9 @@ it('stops and rolls back if the original round and executed vote disagree instea
   const round = await post(`/messages/${other.id}/rounds`, { settlementType: 'VALUE' });
   await store.transaction(async () => {
     const broken = structuredClone(votes[0].message);
-    broken.parts.find((part: any) => part.type === 'data').value.roundId = round.id;
+    const metadata=broken.parts.find(part=>part.type==='data');
+    if(!metadata?.value||typeof metadata.value!=='object'||Array.isArray(metadata.value))throw new Error('历史投票缺少轮次元数据');
+    metadata.value.roundId=round.id;
     await store.db.prepare('UPDATE revisions SET body=$1 WHERE "messageId"=$2').run(JSON.stringify(broken), broken.id);
     await store.db.prepare('UPDATE messages SET body=$1 WHERE id=$2').run(JSON.stringify(broken), broken.id);
   });
@@ -121,10 +135,10 @@ it('upgrades an already migrated version-8 database through version 9 exactly on
   const { store, subject, votes } = await fixture();
   await store.db.exec('DELETE FROM schema_migrations WHERE version>=9');
   const cursor = await store.latestSequence(), before = await financialFingerprint(store.db);
-  await runMigrations(store.db, migrationsFor(store));
+  await runMigrations(store.db, migrationsFor(store).slice(0,9));
   expect(await store.db.prepare('SELECT name FROM schema_migrations WHERE version=9').get()).toEqual({ name: 'correct-historical-value-vote-messages' });
   expect(await financialFingerprint(store.db)).toBe(before);
   expect((await messageView(store, await store.message(votes[0].message.id))).targetRefs[0].reference?.messageId).toBe(subject.id);
-  await runMigrations(store.db, migrationsFor(store));
+  await runMigrations(store.db, migrationsFor(store).slice(0,9));
   expect(await store.latestSequence()).toBe(cursor + 1);
 });

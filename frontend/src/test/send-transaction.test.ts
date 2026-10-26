@@ -34,6 +34,26 @@ beforeEach(() => {
 });
 
 describe('composer transaction completion', () => {
+  it('guards duplicate clicks and waits for visible progress before capturing or submitting', async () => {
+    const { dependencies } = setupComposer();
+    let painted!: () => void;
+    dependencies.prepare = vi.fn(() => new Promise<void>(resolve => { painted = resolve; }));
+    dependencies.onSettled = vi.fn();
+    const capture = vi.spyOn(dependencies.composer, 'capture');
+    const batch = vi.spyOn(api, 'withCommandBatch').mockResolvedValue(undefined);
+    const pending = handleSendClick(dependencies);
+    expect(dependencies.sendInFlightRef.current).toBe(true);
+    expect(dependencies.prepare).toHaveBeenCalledOnce();
+    expect(capture).not.toHaveBeenCalled();
+    expect(batch).not.toHaveBeenCalled();
+    await handleSendClick(dependencies);
+    expect(dependencies.prepare).toHaveBeenCalledOnce();
+    await act(async () => { painted(); await pending; });
+    expect(capture).toHaveBeenCalledOnce();
+    expect(batch).toHaveBeenCalledOnce();
+    expect(dependencies.onSettled).toHaveBeenCalledOnce();
+    expect(dependencies.sendInFlightRef.current).toBe(false);
+  });
   it('preserves every input and buffer when validation returns without sending a command', async () => {
     const { hook, dependencies, before, rollback } = setupComposer(), commit = vi.fn();
     vi.spyOn(api, 'withCommandBatch').mockImplementation((work, onCommitted) => runCommandBatch(work, commit, onCommitted));

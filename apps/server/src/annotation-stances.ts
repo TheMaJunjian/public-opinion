@@ -1,6 +1,7 @@
 import { annotationAtReference, oppositeAnnotation, ANNOTATION_WITHOUT_OPPOSITE,
   type Part, type SendInput } from '@gonglun/core';
 import { DomainError, type Store } from './db.js';
+import {resolveExecutedStance} from './economy.js';
 
 /** Normalize before charging or executing, for both native and workbench commands. */
 export async function normalizeAnnotationStance(store: Store, input: SendInput): Promise<SendInput> {
@@ -9,7 +10,12 @@ export async function normalizeAnnotationStance(store: Store, input: SendInput):
   if (!stance || stance.roles.target?.length !== 1) return input;
   const reference = stance.roles.target[0]!.reference;
   const original = await store.message(reference.messageId, reference.revision);
-  const annotation = annotationAtReference(original, reference);
+  let annotation = annotationAtReference(original, reference);
+  if(!annotation){
+    const resolved=await resolveExecutedStance(store,reference,stance.relation==='agree'?'pro':'con');
+    if(resolved.target.messageId!==reference.messageId||resolved.target.partId!==reference.partId)
+      annotation=annotationAtReference(await store.message(resolved.target.messageId,resolved.target.revision),resolved.target);
+  }
   if (!annotation) return input;
   const action = stance.relation === 'agree' ? annotation : oppositeAnnotation(annotation);
   if (!action) throw new DomainError(ANNOTATION_WITHOUT_OPPOSITE);
@@ -35,6 +41,6 @@ export async function normalizeAnnotationStance(store: Store, input: SendInput):
   for (let index = 1; parts.some(part => part.id === dataId); index++) dataId = `annotation-data-${index}`;
   parts.push({id:dataId,type:'data',value:{...ownData,...payload,uiType,
     annotationStance:{target:{...reference},side:stance.relation === 'agree' ? 'pro' : 'con'}}});
-  // The user's wager stays on the new annotation, just like a directly sent annotation.
-  return {...input,parts,...(input.wager ? {selfStance:'pro' as const} : {})};
+  // Investment follows the copied annotation's subject and value direction.
+  return {...input,parts};
 }

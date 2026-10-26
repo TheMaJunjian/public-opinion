@@ -1,3 +1,4 @@
+import {withTestCommandContributions} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ async function setup() {
   expect(registered.status, registered.text).toBe(201);
   const session = registered.body;
   const post = async (path: string, body = {}, requestId = randomUUID()) => {
-    const response = await agent.post(`/api/ui${path}`).set('x-csrf-token', session.csrf).set('x-request-id', requestId).send(body);
+    const response = await agent.post(`/api/ui${path}`).set('x-csrf-token', session.csrf).set('x-request-id', requestId).send(withTestCommandContributions(path,body as Record<string,unknown>));
     expect(response.status, response.text).toBe(201); return response.body;
   };
   const message = await post('/messages', { content: '待仲裁的消息' });
@@ -29,7 +30,7 @@ it.each([['TRUE', 'recommend', 'pro'], ['FALSE', 'archive', 'con']] as const)(
     const before = await app.store.account(session.user.id), requestId = randomUUID();
     const created = await post(`/rounds/${round.id}/votes`, { vote, amount: 5 }, requestId);
     expect(created).toMatchObject({ relationType: name.toUpperCase(), targetRefs: [{ reference: { messageId: message.id, revision: 1 } }],
-      spending: { protocol: 1, recommendation: 0, wager: 5 } });
+      spending: { protocol: 1, recommendation: 5, wager: 0 } });
     expect(relations(await app.store.message(created.id)).map(part => part.relation)).toEqual([name]);
     expect(created.executedStance).toMatchObject({ target: round.reference, side });
     expect(await app.store.account(session.user.id)).toMatchObject({ available: before.available - 6, locked: before.locked + 5 });
@@ -48,10 +49,10 @@ it.each([['TRUE', 'recommend', 'pro'], ['FALSE', 'archive', 'con']] as const)(
 
 it('直接发送推荐、冷藏与仲裁面板共用价值轮次，真假投票仍发送赞同、反对', async () => {
   const { app, post, message } = await setup();
-  const recommend = await post('/relations', { relationType: 'RECOMMEND', targetRefs: [{ kind: 'message', messageId: message.id }], wager: 4, selfAgree: true });
+  const recommend = await post('/relations', { relationType: 'RECOMMEND', targetRefs: [{ kind: 'message', messageId: message.id }], recommendation: 4 });
   const value = await post(`/messages/${message.id}/rounds`, { settlementType: 'VALUE' });
   expect(value.votes).toEqual([expect.objectContaining({ id: recommend.id, vote: 'TRUE', amount: 4 })]);
-  const archive = await post('/relations', { relationType: 'ARCHIVE', targetRefs: [{ kind: 'message', messageId: message.id }], wager: 3, selfAgree: true });
+  const archive = await post('/relations', { relationType: 'ARCHIVE', targetRefs: [{ kind: 'message', messageId: message.id }], recommendation: 3 });
   const detail = await roundView(app.store, value.id);
   expect(detail.weights).toEqual({ TRUE: 4, FALSE: 3, UNKNOWN: 0 });
   expect(detail.votes.map((vote: { id: string }) => vote.id)).toEqual([recommend.id, archive.id]);
@@ -65,22 +66,22 @@ it('直接发送推荐、冷藏与仲裁面板共用价值轮次，真假投票�
   expect((await roundView(app.store, truth.id)).weights).toEqual({ TRUE: 2, FALSE: 2, UNKNOWN: 0 });
 });
 
-it('零押注标注也记录价值表态，追加押注和反对标注继续进入同一价值轮次', async () => {
+it('标注的价值投入与反对标注继续进入同一价值轮次', async () => {
   const { app, agent, session, post, message } = await setup();
   const recommend = await post('/relations', { relationType: 'RECOMMEND', targetRefs: [{ kind: 'message', messageId: message.id }] });
   const round = await post(`/messages/${message.id}/rounds`, { settlementType: 'VALUE' });
-  expect(round.weights).toEqual({ TRUE: 0, FALSE: 0, UNKNOWN: 0 });
-  const response = await agent.post('/api/messages').set('x-csrf-token', session.csrf).send({ requestId: randomUUID(), wager: 3,
+  expect(round.weights).toEqual({ TRUE: 1, FALSE: 0, UNKNOWN: 0 });
+  const response = await agent.post('/api/messages').set('x-csrf-token', session.csrf).send({ requestId: randomUUID(), recommendation: 3,
     parts: [{ id: 'relation', type: 'relation', relation: 'disagree', roles: bindRoles({ target: [{ messageId: recommend.id }] }) }] });
   expect(response.status, response.text).toBe(201);
   expect(relations(response.body.message).map(part => part.relation)).toEqual(['archive']);
-  expect((await roundView(app.store, round.id)).weights).toEqual({ TRUE: 0, FALSE: 3, UNKNOWN: 0 });
+  expect((await roundView(app.store, round.id)).weights).toEqual({ TRUE: 1, FALSE: 3, UNKNOWN: 0 });
   expect((await app.store.db.prepare('SELECT COUNT(*)::int AS n FROM rounds').get())?.n).toBe(1);
 });
 
 it('旧版以原消息正文为目标的价值轮次也发送标注并沿用原轮次', async () => {
   const { app, agent, session, post, message } = await setup();
-  const opened = await agent.post('/api/messages').set('x-csrf-token', session.csrf).send({ requestId: randomUUID(), parts: [
+  const opened = await agent.post('/api/messages').set('x-csrf-token', session.csrf).send({ requestId: randomUUID(), recommendation:1, parts: [
     { id: 'relation', type: 'relation', relation: 'open-settlement', roles: bindRoles({ target: [{ messageId: message.id, revision: 1, partId: 'body' }] }) },
   ] });
   expect(opened.status, opened.text).toBe(201);
@@ -98,7 +99,7 @@ it('标注押注失败会回滚消息、价值轮次和个人标记，保持资�
   const { app, agent, session, message } = await setup();
   const before = await app.store.account(session.user.id), sequence = await app.store.latestSequence();
   const response = await agent.post('/api/ui/relations').set('x-csrf-token', session.csrf).set('x-request-id', randomUUID())
-    .send({ relationType: 'ARCHIVE', targetRefs: [{ kind: 'message', messageId: message.id }], wager: before.available + 1 });
+    .send({ relationType: 'ARCHIVE', targetRefs: [{ kind: 'message', messageId: message.id }], recommendation: before.available + 1 });
   expect(response.status).toBe(400);
   expect(await app.store.account(session.user.id)).toEqual(before);
   expect(await app.store.latestSequence()).toBe(sequence);

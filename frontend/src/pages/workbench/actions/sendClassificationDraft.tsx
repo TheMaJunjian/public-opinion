@@ -12,7 +12,7 @@ import { nextId } from '../model/selection';
 import type { DraftSendDependencies } from "./sendDraftTypes";
 
 export async function sendClassificationDraft(dependencies: Pick<DraftSendDependencies, "getGroupedTargetTextMessageIds" | "msgMap" | "relationTypeByRelMsgId" | "relationById" | "showAlert" | "hasCrossNonReferenceTextLinkForClassifyTargets" | "edges" | "newMessageContent" | "getClassifyTargetRefs" | "isInsideClassify" | "currentClassifyRelMsgId" | "classifyStackRef" | "createRel" | "scopeMessageId" | "appendCreatedRelation" | "setEdges" | "setDraftUnits" | "setSourceUnits" | "setTargetUnits" | "setActiveTextSelectId" | "setNewMessageContent" | "setRelationType" | "setSecondaryRelationType" | "setTraceKey">, { effectiveTargets }: { effectiveTargets: UnitSelection[]; }): Promise<void> {
-  const { getGroupedTargetTextMessageIds, msgMap, relationTypeByRelMsgId, relationById, showAlert, hasCrossNonReferenceTextLinkForClassifyTargets, edges, newMessageContent, getClassifyTargetRefs, isInsideClassify, currentClassifyRelMsgId, classifyStackRef, createRel, scopeMessageId, appendCreatedRelation, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType, setTraceKey } = dependencies;
+  const { getGroupedTargetTextMessageIds, msgMap, relationTypeByRelMsgId, relationById, showAlert, hasCrossNonReferenceTextLinkForClassifyTargets, edges, newMessageContent, getClassifyTargetRefs, isInsideClassify, currentClassifyRelMsgId, classifyStackRef, createRel, scopeMessageId, appendCreatedRelation, setEdges, setDraftUnits, setSourceUnits, setTargetUnits, setActiveTextSelectId, setNewMessageContent, setRelationType, setSecondaryRelationType } = dependencies;
   const targetTextIds = getGroupedTargetTextMessageIds(effectiveTargets);
   // Warn if non-grouping relation labels (TAG/RECOMMEND/ARCHIVE etc.) are selected
   // but their target text message is not among the messages being classified.
@@ -123,6 +123,5 @@ export async function sendClassificationDraft(dependencies: Pick<DraftSendDepend
   setRelationType(null); setSecondaryRelationType("none");
   // Bump key to force GraphView clean remount after adding classify edges,
   // avoiding React 18 concurrent reconciliation removeChild errors.
-  setTraceKey(k => k + 1);
   return;
 }

@@ -16,8 +16,8 @@ export function secondaryRelationLabel(t: string): string {
   if (t === 'none') return '无';
   if (t === 'question') return '疑问';
   if (t === 'answer') return '回答';
+  if (t === 'width-adjustment') return '宽度调整';
   if (t === 'text-correction') return '修正文字';
-  if (t === 'meaning-change') return '修改原意';
   if (t === 'notify') return '通知';
   if (t === 'read') return '已读';
   if (t === 'unread') return '未读';
@@ -175,6 +175,7 @@ export function buildRelationDemoMessage(relation: Relation): DemoMessage {
     spending: relation.spending,
     targetRefs: relation.targetRefs,
     author: relation.createdBy.username,
+    authorId: relation.createdBy.id,
     createdAt: relation.createdAt,
     kind: isContainerAddRecord
       ? 'join'

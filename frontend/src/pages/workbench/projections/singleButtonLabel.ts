@@ -68,6 +68,8 @@ export function deriveSingleButtonLabel(input: DeriveSingleButtonLabelInput): st
     return `建立归并关系（用${usingDraft ? "候选" : "目标集合"}作目标，无需文本）`;
   }
   if (relationType === 'correct') {
+    if (secondaryRelationType === 'width-adjustment') return hasInvalidCorrectTarget || !hasTargetsAvailable
+      ? '请选择一条当前完整消息以调整宽度' : '发送宽度调整更正';
     if (!hasTargetsAvailable) return '请选择要更正的原始内容';
     if (hasCorrectionRelationTarget) return '关系消息不能作为更正目标，请选择普通文本消息';
     if (hasInvalidCorrectTarget) return '更正只能选择原始内容中的一个文本字段';

@@ -359,18 +359,10 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       const groups=relationTags.get(edge.to.messageId)??new Map<string,number>();
       groups.set(label,(groups.get(label)??0)+1);relationTags.set(edge.to.messageId,groups);
     }
-    const correctionVotesByReplacement=new Map<string,string[]>();
     const voteBadgeCount=(relId:string)=>{
       const votes=relDecByRelMsgId.get(relId);
       return ((votes?.agreeCount??0)>0?1:0)+((votes?.disagreeCount??0)>0?1:0);
     };
-    for(const edge of edges){
-      if(edge.relationType!=='correct'||edge.proposalOnly
-        ||msgMap.get(edge.from.messageId)?.kind!=='relation'||msgMap.get(edge.to.messageId)?.kind!=='relation')continue;
-      const id=edge.from.messageId;
-      if(voteBadgeCount(edge.relationMessageId)>0)
-        correctionVotesByReplacement.set(id,[...(correctionVotesByReplacement.get(id)??[]),edge.relationMessageId]);
-    }
     for (let idx=0;idx<rawEdges.length;idx++) {
       const pe=rawEdges[idx];
       const { fromBox, toBox, fragRectCanvas, edge } = pe;
@@ -489,8 +481,7 @@ export function routeGraphEdges(input: GraphRoutingInput): PositionedEdge[] {
       if(!decoratedLabels.has(relId)){
         decoratedLabels.add(relId);
         const hasHint=!normalSet.has(relId);
-        const owners=[...(['annotation','reference','reply'].includes(edge.relationType)&&(voteBadgeCount(relId)>0||relationTags.has(relId))?[relId]:[]),
-          ...(correctionVotesByReplacement.get(relId)??[])];
+        const owners=['annotation','reference','reply'].includes(edge.relationType)&&(voteBadgeCount(relId)>0||relationTags.has(relId))?[relId]:[];
         rightWidth=hasHint?DEC_RIGHT_GAP+EDGE_HINT_W:0;
         for(const owner of owners){
           const expanded=!input.visibleDecorationIds||input.visibleDecorationIds.has(owner);

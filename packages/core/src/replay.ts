@@ -28,6 +28,7 @@ export function replayArchive(input: unknown): Replay {
   const accounts = new Map<string, Account>();
   const ledgerIds = new Set<string>();
   const retiredOrganizations = new Set<string>();
+  const removedMessages = new Set<string>();
   let sequence = 0, operating = 0, issued = 0;
   const safe = (value: number) => {
     if (!Number.isSafeInteger(value)) throw new Error('账本包含无效金额');
@@ -40,6 +41,7 @@ export function replayArchive(input: unknown): Replay {
       throw new Error(`记录不连续：游标 ${sequence} 之后的变更缺失或顺序错误`);
     if (!Array.isArray(change.messages) || !Array.isArray(change.ledger) || !Array.isArray(change.memberships) || !Array.isArray(change.removedMemberships) || !Array.isArray(change.states)) throw new Error('变更记录不完整');
     for (const message of change.messages) {
+      if (removedMessages.has(message.id)) throw new Error('已删除的消息不能恢复');
       if (!message || typeof message.id !== 'string' || !message.id || !Number.isSafeInteger(message.revision) || message.revision < 1 || !Array.isArray(message.parts)) throw new Error('消息版本不正确');
       for (const part of message.parts) {
         if (!part || typeof part.id !== 'string') throw new Error('消息部件不正确');
@@ -54,6 +56,10 @@ export function replayArchive(input: unknown): Replay {
       if (!previous || message.revision > previous.revision) {
         const history = revisions.get(message.id) ?? [];
         history.push(message); revisions.set(message.id, history);
+      }else{
+        // Migration can replace a current record without creating a revision.
+        // Original committed evidence remains in the immutable change stream.
+        const history=revisions.get(message.id);if(history?.length)history[history.length-1]=message;
       }
     }
     for (const state of change.states) {
@@ -66,6 +72,8 @@ export function replayArchive(input: unknown): Replay {
     }
     for (const id of change.removedMemberships) memberships.delete(id);
     for (const membership of change.memberships) {
+      if (removedMessages.has(membership.memberId) || removedMessages.has(membership.parentId) || removedMessages.has(membership.sourceId))
+        throw new Error('已删除的消息不能恢复归属');
       if (retiredOrganizations.has(membership.memberId) || retiredOrganizations.has(membership.parentId)) throw new Error('已退役的组织 不能恢复归属');
       memberships.set(membership.memberId, membership);
     }
@@ -89,6 +97,10 @@ export function replayArchive(input: unknown): Replay {
       total += BigInt(account.available) + BigInt(account.locked);
     }
     if (total !== BigInt(issued)) throw new Error(`第 ${change.sequence} 次变更资金不守恒`);
+    for (const id of change.removedMessageIds ?? []) {
+      if (!messages.has(id)) throw new Error('删除记录缺少对应消息');
+      messages.delete(id); states.delete(id); memberships.delete(id); removedMessages.add(id);
+    }
     sequence = change.sequence;
   }
   if (manifest && (manifest.entryCount !== archive.changes.length || manifest.lastSequence !== sequence))

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { OperationProgressDialog } from './OperationFeedback';
 import ErrorBoundary from './ErrorBoundary';
 import { cancelWorkbenchDrawing, manageWorkbenchDrawing } from '../utils/workbenchActivity';
@@ -245,4 +246,11 @@ export function useWorkbenchDrawingPreparation() {
 export function useWorkbenchSendingProgress(sending: boolean) {
   const report = useContext(SendingContext);
   useLayoutEffect(() => { report(sending); }, [report, sending]);
+  const prepare = useCallback(() => {
+    // Commit the lightweight boundary first, before copying or rendering the
+    // workbench. Cross a paint so even synchronous command preparation is covered.
+    flushSync(() => report(true));
+    return new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  }, [report]);
+  return { prepare, finish: () => report(false) };
 }

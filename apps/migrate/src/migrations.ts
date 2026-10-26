@@ -17,8 +17,19 @@ import {repairValueVoteMessages} from './repair-value-vote-messages.js';
 import {repairAnnotationStanceMessages} from './repair-annotation-stance-messages.js';
 import {conversionFailure} from '@gonglun/core';
 import {RollbackUnconfirmedError} from '../../server/src/postgres.js';
+import {backfillMinimumContributions,refundGeneratedContributions,enableMinimumContributionAccess} from './backfill-minimum-contributions.js';
+import { removeDependentMemberships } from './remove-dependent-memberships.js';
+import {removeReadingMessages} from './remove-reading-messages.js';
+import {migrateTargetInvestments} from './target-investments.js';
+import {normalizeTargetValueFields} from './target-value-fields.js';
+import {repairRetainedTargetInvestments} from './retained-target-investments.js';
+import {repairLegacyAnnotationInvestments} from './legacy-annotation-investments.js';
+import {readingStateSchema} from '../../server/src/reading-state.js';
+import {cleanupContainerReadingMarks} from './cleanup-container-reading-marks.js';
+import {migrateVersionContexts} from './version-contexts.js';
+import {migrateSimplifiedCorrections} from './simplified-corrections.js';
 
-export interface Migration { version: number; name: string; up(): Promise<void> }
+export interface Migration { version: number; name: string; changesFinances?: boolean; up(): Promise<void> }
 
 export async function openMigratingStore(databaseUrl:string, options:{schema?:string} = {}):Promise<Store> {
   const store = Store.maintenance(databaseUrl,options);
@@ -29,9 +40,7 @@ export async function openMigratingStore(databaseUrl:string, options:{schema?:st
       await store.db.exec(`CREATE SCHEMA IF NOT EXISTS "${store.db.schema}"`);
       const legacy = await store.db.prepare(`SELECT to_regclass('"User"') AS users,to_regclass('"Message"') AS messages`).get();
       if (legacy?.users || legacy?.messages) throw new Error('请使用旧版迁移命令将数据迁入新版数据库');
-      const before=await financialFingerprint(store.db);
       await runMigrations(store.db,migrationsFor(store));
-      if(before!==null&&before!==await financialFingerprint(store.db))throw new Error('迁移前后余额或账本不一致');
     });
     return store;
   } catch (error) {
@@ -64,7 +73,24 @@ export function migrationsFor(store: Store): Migration[] {
   }},{version:7,name:'complete-historical-message-formats',up:()=>completeMessageFormats(store)},
   {version:8,name:'restore-historical-settlement-targets',up:()=>restoreArchivedSettlementTargets(store).then(()=>{})},
   {version:9,name:'correct-historical-value-vote-messages',up:()=>repairValueVoteMessages(store).then(()=>{})},
-  {version:10,name:'normalize-historical-annotation-stances',up:()=>repairAnnotationStanceMessages(store).then(()=>{})}];
+  {version:10,name:'normalize-historical-annotation-stances',up:()=>repairAnnotationStanceMessages(store).then(()=>{})},
+  {version:11,name:'require-message-contributions',changesFinances:true,up:()=>backfillMinimumContributions(store).then(()=>{})},
+  {version:12,name:'exclude-generated-message-contributions',changesFinances:true,up:()=>refundGeneratedContributions(store).then(()=>{})},
+  // Superseded by v15: later stakes do not satisfy the send-time contribution requirement.
+  {version:13,name:'preserve-previous-message-contributions',up:async()=>{}},
+  {version:14,name:'enable-backfilled-truth-settlements',up:()=>enableMinimumContributionAccess(store)},
+  {version:15,name:'enforce-send-time-message-contributions',changesFinances:true,up:()=>backfillMinimumContributions(store).then(()=>{})},
+  {version:16,name:'remove-dependent-memberships-and-refund',changesFinances:true,up:()=>removeDependentMemberships(store).then(()=>{})},
+  {version:17,name:'restore-historical-delegation-bodies',up:()=>completeMessageFormats(store)},
+  {version:18,name:'route-relationship-investments-to-targets',changesFinances:true,up:()=>migrateTargetInvestments(store).then(()=>{})},
+  {version:19,name:'normalize-target-value-claim-investments',up:()=>normalizeTargetValueFields(store).then(()=>{})},
+  {version:20,name:'repair-retained-minimum-target-investments',changesFinances:true,up:()=>repairRetainedTargetInvestments(store).then(()=>{})},
+  {version:21,name:'recover-original-annotation-agreement-investments',changesFinances:true,up:()=>repairLegacyAnnotationInvestments(store).then(()=>{})},
+  {version:22,name:'private-reading-state',up:()=>store.db.exec(readingStateSchema)},
+  {version:23,name:'remove-public-reading-messages-and-refund',changesFinances:true,up:()=>removeReadingMessages(store).then(()=>{})},
+  {version:24,name:'cleanup-redundant-container-reading-marks',up:()=>cleanupContainerReadingMarks(store).then(()=>{})},
+  {version:25,name:'explicit-body-versions-and-influence-contexts',up:()=>migrateVersionContexts(store)},
+  {version:26,name:'shared-message-reading-and-text-corrections',changesFinances:true,up:()=>migrateSimplifiedCorrections(store)}];
 }
 
 /** Runs under the cross-process write lock. Failed upgrades roll back together. */
@@ -77,8 +103,11 @@ export async function runMigrations(db: Postgres, migrations: Migration[]): Prom
     if (migrations.some((migration, index) => migration.version !== index + 1)
       || applied.some((migration, index) => migration.version !== index + 1
         || migrations[index]?.name !== migration.name)) throw new Error('数据库迁移版本与当前程序不兼容');
+    if(migrations.length>applied.length)await db.exec(`DO $$ BEGIN IF to_regclass('display_stances') IS NOT NULL THEN ALTER TABLE display_stances ADD COLUMN IF NOT EXISTS context JSONB; END IF; END $$`);
     for (const migration of migrations.slice(applied.length)) {
+      const before=migration.changesFinances?null:await financialFingerprint(db);
       await migration.up();
+      if(before!==null&&before!==await financialFingerprint(db))throw new Error('迁移前后余额或账本不一致');
       await db.prepare('INSERT INTO schema_migrations(version,name) VALUES ($1,$2)').run(migration.version, migration.name);
     }
   });

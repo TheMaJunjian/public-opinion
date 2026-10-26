@@ -1,7 +1,8 @@
+import {withTestContribution} from './test-database.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { bindRoles, type Json, type Message, type Part, type Session } from '@gonglun/core';
+import {bodyVersion,messageReadingKey, bindRoles, type Json, type Message, type Part, type Session } from '@gonglun/core';
 import { createTestApp, cleanupTestDatabases } from './test-database.js';
 
 type App = Awaited<ReturnType<typeof createTestApp>>;
@@ -9,7 +10,13 @@ type Actor = { agent: ReturnType<typeof request.agent>; session: Session };
 const instances: App[] = [];
 const setup = async () => { const app = await createTestApp(); instances.push(app); return app; };
 async function register(app: App, name: string): Promise<Actor> { const agent = request.agent(app); const response = await agent.post('/api/register').send({ name, password: 'personal-password' }); expect(response.status).toBe(201); return { agent, session: response.body }; }
-async function send(actor: Actor, parts: Part[]): Promise<Message> { const response = await actor.agent.post('/api/messages').set('x-csrf-token', actor.session.csrf).send({ requestId: randomUUID(), parts }); expect(response.status, response.text).toBe(201); return response.body.message; }
+async function send(actor: Actor, parts: Part[]): Promise<Message> { const response = await actor.agent.post('/api/messages').set('x-csrf-token', actor.session.csrf).send(withTestContribution({ requestId: randomUUID(), parts })); expect(response.status, response.text).toBe(201); return response.body.message; }
+async function viewBody(actor:Actor,messageId:string){
+  const version=bodyVersion(messageId),key=messageReadingKey(version.messageId);
+  const response=await actor.agent.post('/api/ui/reading-state').set('x-csrf-token',actor.session.csrf)
+    .send({marks:[{format:3,version,messageId,scope:'message',key,signature:'display',bodySignature:key}]});
+  expect(response.status,response.text).toBe(200);
+}
 const text = (value: string): Part => ({ id: 'text', type: 'text', text: value });
 const relation = (value: string, target: string, role = 'target', reason: 'YES' | 'NO' = 'YES'): Part => ({ id: 'relation', type: 'relation', relation: value, roles: bindRoles({ [role]: [{ messageId: target }] }),...(['follow','block'].includes(value)?{reason}:{}) });
 afterEach(async () => { for (const app of instances.splice(0)) await app.close(); await cleanupTestDatabases(); });
@@ -27,7 +34,7 @@ describe('authoritative personal views', () => {
     expect(marks.status, marks.text).toBe(200);
     expect(marks.body.personalStates[0].followed).toBe(lastAction?.type === 'relation' && lastAction.reason === 'YES');
     expect(new Set(sent.map(message => message.sequence)).size).toBe(sent.length);
-    expect((await app.store.account(alice.session.user.id)).available).toBe(before.available - sent.length * (await app.store.rules()).protocolFee);
+    expect((await app.store.account(alice.session.user.id)).available).toBe(before.available - sent.length * ((await app.store.rules()).protocolFee+1));
     expect((await app.store.db.prepare('SELECT COUNT(*) AS n FROM personal_actions WHERE "authorId"=$1 AND "targetId"=$2').get(alice.session.user.id, target.id))?.n).toBe(sent.length);
   });
 
@@ -57,7 +64,8 @@ describe('authoritative personal views', () => {
   it('keeps old personal actions across pagination and fresh login, including nested followed messages', async () => {
     const app = await setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
     const target = await send(bob, [text('一个长期关注的问题')]);
-    for (const action of ['follow', 'read', 'block', 'archive']) await send(alice, [relation(action, target.id)]);
+    for (const action of ['follow', 'block', 'archive']) await send(alice, [relation(action, target.id)]);
+    await viewBody(alice,target.id);
     await send(bob, [text('组织'), { id: 'group', type: 'relation', relation: 'classify', roles: bindRoles({ members: [{ messageId: target.id }] }) }]);
     for (let index = 0; index < 35; index++) await send(bob, [text(`新的讨论 ${index}`)]);
     expect((await alice.agent.get('/api/messages?limit=1')).body.messages.some((message: Message) => message.id === target.id)).toBe(false);
@@ -71,12 +79,11 @@ describe('authoritative personal views', () => {
     expect(followed.status, followed.text).toBe(200);
     expect(followed.body.messages.map((message: Message) => message.id)).toEqual([target.id]);
     const freshAlice = { agent: relogin, session: auth.body };
-    await send(freshAlice, [relation('unread', target.id)]);
     await send(freshAlice, [relation('follow', target.id, 'target', 'NO')]);
     await send(freshAlice, [relation('block', target.id, 'target', 'NO')]);
     await send(freshAlice, [relation('unarchive', target.id)]);
-    await send(bob, [relation('read', target.id)]);
-    expect((await relogin.get('/api/me/marks').query({ ids: target.id })).body.personalStates[0]).toEqual({ messageId: target.id, followed: false, read: false, blocked: false, archived: false });
+    await viewBody(bob,target.id);
+    expect((await relogin.get('/api/me/marks').query({ ids: target.id })).body.personalStates[0]).toEqual({ messageId: target.id, followed: false, read: true, blocked: false, archived: false });
     expect((await relogin.get('/api/me/messages?filter=follow')).body.messages).toHaveLength(0);
     expect((await request(app).get('/api/me/marks').query({ ids: target.id })).status).toBe(401);
   });
@@ -85,7 +92,7 @@ describe('authoritative personal views', () => {
     const app = await setup(); const alice = await register(app, 'alice'); const bob = await register(app, 'bob');
     const old = await send(bob, [text('更早的未读记录')]);
     const blocked = await send(bob, [text('屏蔽的记录')]); await send(alice, [relation('block', blocked.id)]);
-    const read = await send(bob, [text('已经读过的记录')]); await send(alice, [relation('read', read.id)]);
+    const read = await send(bob, [text('已经读过的记录')]); await viewBody(alice,read.id);
     const unseen = await alice.agent.get('/api/me/messages').query({ filter: 'unread', q: '记录', limit: 1 });
     expect(unseen.status, unseen.text).toBe(200);
     expect(unseen.body.messages[0].id).toBe(blocked.id);

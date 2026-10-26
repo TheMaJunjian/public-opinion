@@ -1,9 +1,11 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useSceneComputation, type SceneComputationRequest } from '../hooks/useSceneComputation';
 import { planMessageStructures } from '../utils/messageStructurePlan';
 import { createWorkbenchDrawingTasks, WorkbenchDrawingContext } from '../context/WorkbenchDrawingContext';
 import type { DemoMessage } from '../utils/modelBridge';
+import {useMessageWindow} from '../hooks/useMessageWindow';
+import WorkbenchLoadingBoundary,{useWorkbenchLoadingProgress} from '../components/WorkbenchLoadingBoundary';
 
 class FakeWorker {
   static instances: FakeWorker[] = [];
@@ -21,6 +23,28 @@ const job = (id: string) => ({ kind: 'structures' as const, input: {
   messages: [{ id, kind: 'normal', author: 'test', content: id, createdAt: '' } satisfies DemoMessage], edges: [],
 } });
 afterEach(() => { vi.unstubAllGlobals(); FakeWorker.instances = []; });
+
+it('keeps version-switch DOM mounted during an asynchronous structure update without reusing another scope',async()=>{
+  vi.stubGlobal('Worker',FakeWorker);
+  function Window({input,scope}:{input:ReturnType<typeof job>;scope:string}){
+    useWorkbenchLoadingProgress(false,null,scope);
+    const window=useMessageWindow(input.input.messages,input.input.edges,true,scope,[]);
+    return <>{window.messages.map(message=><div key={message.id} data-testid={message.id}>{message.content}</div>)}</>;
+  }
+  const first=job('m'),view=render(<WorkbenchLoadingBoundary><Window input={first} scope="root"/></WorkbenchLoadingBoundary>),worker=FakeWorker.instances[0];
+  act(()=>worker.finish(worker.postMessage.mock.calls[0][0]));
+  await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
+  const card=screen.getByTestId('m'),next={...first,input:{...first.input,messages:[{...first.input.messages[0],content:'更正版本'}]}};
+  view.rerender(<WorkbenchLoadingBoundary><Window input={next} scope="root"/></WorkbenchLoadingBoundary>);
+  expect(screen.getByTestId('m')).toBe(card);expect(card).toHaveTextContent('更正版本');expect(screen.queryByRole('dialog')).toBeNull();
+  act(()=>worker.finish(worker.postMessage.mock.calls[1][0]));
+  expect(screen.getByTestId('m')).toBe(card);
+  view.rerender(<WorkbenchLoadingBoundary><Window input={job('child')} scope="child"/></WorkbenchLoadingBoundary>);
+  expect(screen.queryByTestId('m')).toBeNull();expect(card.isConnected).toBe(false);
+  act(()=>worker.finish(worker.postMessage.mock.calls[2][0]));
+  expect(screen.getByTestId('child')).toHaveTextContent('child');
+  view.unmount();
+});
 
 it('runs one job at a time, skips superseded requests and never publishes stale scope results', () => {
   vi.stubGlobal('Worker', FakeWorker);

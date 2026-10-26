@@ -78,6 +78,7 @@ const WorkbenchScrollViewport = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDi
       boxSizing: 'border-box',
       // 只保留视口自身的滚动条；它已经位于可视区域内，不能再叠加悬浮镜像条。
       overflow: 'auto',
+      overflowAnchor: 'none',
       touchAction: 'pan-x pan-y pinch-zoom',
       WebkitOverflowScrolling: 'touch',
       overscrollBehavior: 'auto',

@@ -37,7 +37,7 @@ export default function ClassificationHeader({ isInsideClassify, isRouteScope = 
               ) : correctionFilterTargetId !== null ? (
                 <span>目标消息 {correctionFilterTargetId} 的全部更正消息</span>
               ) : isTemporaryJoinCategory ? (
-                <span>{joinFilterDirection === 'outgoing' ? `成员加入容器 ${joinFilterTargetId} 的全部记录` : `消息 ${joinFilterTargetId} 加入容器的全部记录`}（含生效和未生效记录）</span>
+                <span>{joinFilterDirection === 'outgoing' ? `成员加入容器 ${joinFilterTargetId} 的全部记录（按当前采用和未采用分组，标明目标消息当前位置）` : `消息 ${joinFilterTargetId} 加入容器的全部记录（含生效和未生效记录）`}</span>
               ) : (
                 <>
                   {currentClassifyRelMsg && <span><span>{currentClassifyRelMsg.id}</span><MessageDisplayMarker messageId={currentClassifyRelMsg.id} /></span>}

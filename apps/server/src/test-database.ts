@@ -10,6 +10,19 @@ export const testDatabaseUrl = () => process.env.TEST_DATABASE_URL ?? 'postgresq
 const schemas = new Set<string>();
 const resources: Array<{ close(): Promise<void> }> = [];
 
+/** Existing scenarios choose one value point when they do not specify another investment. */
+export function withTestContribution<T extends object>(body:T):T {
+  const input=body as Record<string,unknown>;
+  const truth=['AGREE','DISAGREE'].includes(String(input.relationType??'').toUpperCase())
+    ||Array.isArray(input.parts)&&input.parts.some(part=>part.type==='relation'&&['agree','disagree'].includes(part.relation));
+  return Number(input.wager??0)>0||Number(input.recommendation??0)>0||Number(input.stakeAmount??0)>0
+    ? body : truth?{...body,wager:1}:{...body,recommendation:1};
+}
+export function withTestCommandContributions(path:string,body:Record<string,unknown>):Record<string,unknown>{
+  if(path==='/commands'&&Array.isArray(body.commands))return {...body,commands:body.commands.map(command=>({...command,body:withTestCommandContributions(command.path,command.body)}))};
+  return ['/messages','/relations'].includes(path)?withTestContribution(body):body;
+}
+
 export function newTestSchema(): string {
   const schema = `gonglun_test_${randomUUID().replaceAll('-', '')}`;
   schemas.add(schema);

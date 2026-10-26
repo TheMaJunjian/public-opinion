@@ -13,7 +13,7 @@ interface DeriveSendValidationLabelInput {
   joinOnlyAction: boolean;
   relStakeAmount: number | "";
   effectiveMinStake: number;
-  totalConsumption: { stakeTotal: number; protocolFeeTotal: number; recommendationTotal: number; delegationRewardStake: number; total: number; perStake: number; textStake: number; relCount: number; joinCount: number; hasText: boolean; hasRel: boolean; joinStakeTotal: number; joinFeeTotal: number; refCount: number; refStakeTotal: number; newJoinCount: number; existingJoinAgreeCount: number; } | null;
+  totalConsumption: { groups?:unknown[]; contributionError?: string | null; stakeTotal: number; protocolFeeTotal: number; recommendationTotal: number; delegationRewardStake: number; total: number; perStake: number; textStake: number; relCount: number; joinCount: number; hasText: boolean; hasRel: boolean; joinStakeTotal: number; joinFeeTotal: number; refCount: number; refStakeTotal: number; newJoinCount: number; existingJoinAgreeCount: number; } | null;
   availablePoints: number;
   hasCorrectionRelationTarget: boolean;
   hasInvalidCorrectTarget: boolean;
@@ -42,13 +42,14 @@ export function deriveSendValidationLabel(input: DeriveSendValidationLabelInput)
   if (singleButtonEnabled) return null;
   if (relationType === null && !hasTextContent) return "请输入消息内容后发送";
   if (draftUnits.length > 0 && targetUnits.length > 0) return "候选区和目标集合不能同时有内容，请清空其中一方";
-  if (hasTextContent && typeof stakeAmount !== 'number') return "请输入文本消息贡献点";
-  if (hasTextContent && typeof stakeAmount === 'number' && stakeAmount < 0) return `自赞押注不能为负数`;
-  if (!joinOnlyAction && relationType && typeof relStakeAmount !== 'number') return "请输入关系消息贡献点";
-  if (!joinOnlyAction && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
+  if (totalConsumption?.contributionError) return totalConsumption.contributionError;
+  if ((totalConsumption?.hasText ?? hasTextContent) && typeof stakeAmount !== 'number') return "请输入真假投入";
+  if ((totalConsumption?.hasText ?? hasTextContent) && typeof stakeAmount === 'number' && stakeAmount < 0) return `真假投入不能为负数`;
+  if (!joinOnlyAction && !totalConsumption?.groups && relationType && typeof relStakeAmount !== 'number') return "请输入关系消息贡献点";
+  if (!joinOnlyAction && !totalConsumption?.groups && relationType && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) return `关系消息最低押注 ${effectiveMinStake} 点`;
   if (totalConsumption && totalConsumption.total > availablePoints) return `贡献点余额不足：需要 ${totalConsumption.total} 点，可用 ${availablePoints} 点`;
   if (hasCorrectionRelationTarget) return "关系消息不能作为更正目标，请选择普通文本消息";
-  if (hasInvalidCorrectTarget) return "更正只能选择原始内容中的一个文本字段";
+  if (hasInvalidCorrectTarget) return secondaryRelationType === 'width-adjustment' ? '宽度调整需要选择一条当前完整消息，且不能有来源' : "更正只能选择原始内容中的一个文本字段";
   if (hasInvalidContainerSource) return "来源集合必须是当前关系类型对应的容器消息";
   if (hasInvalidJoinTarget) return invalidJoinTargetMessage as string;
   if (hasCrossLinkValidationError) return crossLinkValidationMessage as string;

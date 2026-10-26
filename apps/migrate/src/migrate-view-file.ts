@@ -2,14 +2,17 @@ import {bindRoles,replayArchive,relations,textOf,type Reference,type Message} fr
 import {upgradeAnnotationRecords} from './annotation-format.js';
 import {createMessageFormatTransform} from './message-format.js';
 import {validateRetirementJournal} from './validate-retirement-journal.js';
+import {createVersionContextTransform} from './version-context-format.js';
+import {simplifyCorrectionMessage,synchronizeSimplifiedView,meaningCorrectionTarget,meaningReference} from './simplified-corrections-format.js';
 
 /** Offline conversion shared by the CLI and the application's lazy file loader. */
 export function migrateViewFile(input:any):any{
   if(!input||typeof input!=='object')throw new Error('缺少消息列表');
   const journalOnly=input.format==='gonglun-2'&&input.messages===undefined&&Array.isArray(input.changes);
   if(!journalOnly&&!Array.isArray(input.messages))throw new Error('缺少消息列表');
-  if(input.formatVersion>3||input.format&&!['gonglun-2','gonglun-view-3'].includes(input.format))throw new Error('文件版本比当前程序更新，无法转换');
+  if(input.formatVersion>5||input.format&&!['gonglun-2','gonglun-view-3'].includes(input.format))throw new Error('文件版本比当前程序更新，无法转换');
   if(input.relations!==undefined&&!Array.isArray(input.relations))throw new Error('关系列表格式无效');
+  if(input.formatVersion>=4&&Array.isArray(input.messages)&&input.messages.every((message:any)=>Array.isArray(message.parts)&&Number.isSafeInteger(message.revision)))return migrateSimplifiedViewFile(structuredClone(input));
   const data=upgradeAnnotationRecords(structuredClone(input));
   data.messages??=[];
   if(data.exportKind==='economic-audit'&&Array.isArray(data.stakes)){
@@ -136,6 +139,36 @@ export function migrateViewFile(input:any):any{
   }
   data.messages=[...messages.values()];data.relations=[...relationRecords.values()];
   if(data.format!=='gonglun-2')data.format='gonglun-view-3';
-  data.formatVersion=3;
-  return data;
+  data.formatVersion=5;
+  return migrateSimplifiedViewFile(createVersionContextTransform(latest,originals)(data));
+}
+
+function migrateSimplifiedViewFile(result:any){
+  result.formatVersion=5;
+  result.relations??=[];
+  if(result.view?.homeFilter?.status==='pending-versions')result.view.homeFilter.status='pending';
+  if(result.format==='gonglun-2'){validateRetirementJournal(result);replayArchive(result);}
+  const changed:Message[]=[],created:Message[]=[],used=new Set<string>(result.messages.map((message:Message)=>message.id));
+  result.messages=result.messages.map((view:any)=>{
+    if(!meaningCorrectionTarget(view))return view;
+    const next=simplifyCorrectionMessage(view);
+    created.push(meaningReference(view,used));
+    const converted=synchronizeSimplifiedView(view,next);changed.push(converted);return converted;
+  });
+  result.relations=result.relations.filter((relation:any)=>!changed.some(message=>message.id===relation.id));
+  for(const message of created){
+    const view={...synchronizeSimplifiedView({},message),authorId:message.authorId,content:'',sourceMessageId:relations(message)[0]!.roles.source![0]!.reference.messageId,targetRefs:[{kind:'message',messageId:relations(message)[0]!.roles.target![0]!.reference.messageId,reference:relations(message)[0]!.roles.target![0]!.reference}]};
+    result.messages.push(view);result.relations.push(view);
+  }
+  changed.push(...created);
+  if(result.format==='gonglun-2'&&changed.length){
+    const previous=replayArchive(result),previousSequence=previous.sequence,sequence=previousSequence+1;
+    changed.forEach(message=>message.sequence=sequence);
+    for(const view of [...result.messages,...result.relations])if(changed.some(message=>message.id===view.id))view.sequence=sequence;
+    const change={sequence,previousSequence,messages:changed,memberships:[],removedMemberships:[],states:[],ledger:[],treasury:{operating:previous.operating,issued:previous.issued}};
+    result.changes.push(change);
+    if(result.journal)Object.assign(result.journal,{lastSequence:sequence,entryCount:result.changes.length});
+    replayArchive(result);
+  }
+  return result;
 }

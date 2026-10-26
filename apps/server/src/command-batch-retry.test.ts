@@ -35,8 +35,8 @@ it('reconciles a lost committed response with one database receipt, then accepts
   };
   const completed = vi.fn();
   const send = () => runCommandBatch(async () => {
-    const target = queueCommand('/messages', { method: 'POST', body: JSON.stringify({ content: '合成：同一意图与后续重复发言' }) })!;
-    queueCommand('/relations', { method: 'POST', body: JSON.stringify({ relationType: 'AGREE', targetRefs: [{ kind: 'message', messageId: target.id }] }) });
+    const target = queueCommand('/messages', { method: 'POST', body: JSON.stringify({ content: '合成：同一意图与后续重复发言', recommendation:1 }) })!;
+    queueCommand('/relations', { method: 'POST', body: JSON.stringify({ relationType: 'AGREE', wager:1, targetRefs: [{ kind: 'message', messageId: target.id }] }) });
     return target.id;
   }, commit, completed, { apiBase: 'http://synthetic-retry.invalid/api' });
   await expect(send()).rejects.toMatchObject({ unknownOutcome: true });
@@ -62,8 +62,8 @@ it('commits overlapping retries from separate database connections only once', a
   const other = await createTestStore(app.store.db.schema);
   const messageId = randomUUID();
   const input: CommandEnvelope = { requestId: randomUUID(), commands: [
-    { id: messageId, method: 'POST', path: '/messages', body: { content: '并发重试仅创建一次' } },
-    { id: randomUUID(), method: 'POST', path: '/relations', body: { relationType: 'AGREE', targetRefs: [{ kind: 'message', messageId }] } },
+    { id: messageId, method: 'POST', path: '/messages', body: { content: '并发重试仅创建一次', recommendation:1 } },
+    { id: randomUUID(), method: 'POST', path: '/relations', body: { wager:1, relationType: 'AGREE', targetRefs: [{ kind: 'message', messageId }] } },
   ] };
   const [first, retry] = await Promise.all([executeBatch(app.store, user, input), executeBatch(other, user, input)]);
   expect(retry.results).toEqual(first.results);

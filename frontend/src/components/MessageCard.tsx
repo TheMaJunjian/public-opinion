@@ -1,5 +1,6 @@
 import type { DemoMessage, UnitSelection } from '../utils/modelBridge';
 import { isContentKind } from '../utils/modelBridge';
+import MessageAuthors from './MessageAuthors';
 import { getPresentationSpec } from '../types';
 import { getRelationMessageLabel } from '../utils/attachedRelationLabels';
 import MessageTextPart from './MessageTextPart';
@@ -41,6 +42,7 @@ export interface MessageCardProps {
   onMouseUp?: (e: React.MouseEvent, msgId: string) => void;
   /** Extra content rendered in the header right area (stances, stakes, settlement toggles) */
   headerExtra?: React.ReactNode;
+  headerAuthor?:React.ReactNode;
   /** Override the default message title in the header. */
   headerLabel?: React.ReactNode;
   /** Content rendered at the far left of the header. */
@@ -74,6 +76,7 @@ export default function MessageCard({
   headerBetweenIdAuthor,
   headerLeading,
   headerExtra,
+  headerAuthor,
   headerLabel,
   badges,
   overlays,
@@ -130,7 +133,7 @@ export default function MessageCard({
               : msg.id;
 
   const cardBorder = isWholeSelected ? '2px solid #fbbf24'
-    : isRelationRecord ? isActiveText ? '2px dashed #0b84ff' : '1px solid #444'
+    : isRelationRecord ? isActiveText ? '2px dashed #0b84ff' : '1px dashed #32363d'
     : isOrganizationMessage ? isSummary ? '1px solid rgba(52,211,153,0.7)' : isMerge ? '1px solid rgba(148,163,184,0.75)' : '1px solid #444'
       : isDelegationMsg ? `1px solid ${delegationColor}66` : isGovernanceMsg ? `1px solid ${govColor}44` : isActiveText ? '2px dashed #0b84ff' : '1px solid #444';
 
@@ -150,18 +153,18 @@ export default function MessageCard({
       onMouseUp={e => onMouseUp?.(e, msg.id)}
       style={{
         position: 'relative',
-        borderRadius: isRelationRecord ? 6 : isOrganizationMessage ? 8 : 6,
+        borderRadius: isRelationRecord ? 3 : isOrganizationMessage ? 8 : 6,
         borderTop: cardBorder,
         borderRight: cardBorder,
         borderBottom: cardBorder,
         borderLeft: isWholeSelected
           ? '4px solid #fbbf24'
-          : isRelationRecord ? cardBorder
+          : isRelationRecord ? isActiveText ? '3px solid #0b84ff' : '2px solid #4b5563'
           : isOrganizationMessage ? `4px solid ${isSummary ? '#34d399' : isMerge ? '#94a3b8' : '#6366f1'}`
           : isDelegationMsg ? `3px solid ${delegationColor}` : isGovernanceMsg ? `3px solid ${govColor}` : cardBorder,
         backgroundColor: isWholeSelected
           ? 'rgba(91,65,0,0.55)'
-          : isRelationRecord ? '#1f1f1f'
+          : isRelationRecord ? '#15171a'
           : isDelegationMsg ? 'rgba(249,115,22,0.1)' : isOrganizationMessage ? organizationBackground
           : isGovernanceMsg ? '#1a1f2e' : '#1f1f1f',
         padding: isRelationRecord ? '4px 10px' : isOrganizationMessage ? '10px 12px' : '10px 14px',
@@ -186,8 +189,8 @@ export default function MessageCard({
         flexDirection: 'column',
         color: isOrganizationMessage && !isRelationRecord ? '#94a3b8' : undefined,
       }}>
-        <div style={{ display: 'flex', justifyContent: isRelationRecord ? 'flex-start' : 'space-between', alignItems: 'center', width: '100%', flexWrap: isRelationRecord ? 'wrap' : undefined, gap: isRelationRecord ? '4px 8px' : undefined }}>
-        <span style={isRelationRecord ? { minWidth: 0, overflowWrap: 'anywhere' } : undefined}>
+        <div style={{ display: 'flex', justifyContent: isRelationRecord ? 'flex-start' : 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '4px 8px' }}>
+        <span style={{ minWidth: 0, maxWidth:'100%', overflowWrap: 'anywhere' }}>
           {headerLeading}
           <MessageElement reference={messageTypeReference(msg)} selected={isMessageElementSelected(selectedUnits, messageTypeReference(msg))} label={typeBadgeLabel} style={{ marginRight: 6, padding: '2px 6px', borderRadius: 4, background: isWholeSelected ? '#fbbf24' : 'rgba(148,163,184,0.16)', color: isWholeSelected ? '#111827' : '#cbd5e1', border: isWholeSelected ? '1px solid #fbbf24' : '1px solid rgba(148,163,184,0.35)', fontWeight: 700, opacity: 1 }}>
             {typeBadgeLabel}
@@ -205,20 +208,17 @@ export default function MessageCard({
           )}
           {headerLabel ?? defaultHeaderLabel}
           {headerLeading === undefined && <MessageDisplayMarker messageId={msg.id} />}
+          {headerBetweenIdAuthor && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 6, verticalAlign: 'middle', maxWidth: '100%', flexWrap: 'wrap' }}>{headerBetweenIdAuthor}</span>}
         </span>
         {inlineRelationContent && <div style={{ display: 'contents' }} onMouseUp={e => onContentMouseUp?.(e, msg.id)}>{children}</div>}
         {isRelationRecord && badges}
-        <span style={{ textAlign: 'right', ...(isRelationRecord ? { order: 2, marginLeft: 'auto', maxWidth: '100%' } : {}) }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
-            {headerBetweenIdAuthor}
-            <span>{`作者：${msg.author}`}{headerAfterAuthor && ' '}{headerAfterAuthor}</span>
-            {isRelationRecord && headerExtra}
+        <span style={{ textAlign: 'right', marginLeft: 'auto', maxWidth: '100%', ...(isRelationRecord ? { order: 2 } : {}) }}>
+          <div data-message-author-controls="true" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{minWidth:0,display:'inline-flex',alignItems:'center',gap:5}}>{headerAuthor??<MessageAuthors message={msg} prefix="作者："/>}{headerAfterAuthor}</span>
+            {headerExtra}
           </div>
         </span>
         </div>
-        {!isRelationRecord && <div style={{ width: '100%' }}>
-          {headerExtra}
-        </div>}
       </div>
 
       {!isRelationRecord && badges}
@@ -242,13 +242,12 @@ export default function MessageCard({
               : isMerge ? `归并（${memberCount ?? 0}）`
               : `总结（${memberCount ?? 0}）`)}
           </MessageTextPart></div>
-          <span style={{
+          {isClassification&&<span style={{
             fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 999,
-            background: isMerge ? 'rgba(148,163,184,0.18)' : isSummary ? 'rgba(52,211,153,0.2)' : 'rgba(2,150,80,0.2)',
-            color: isMerge ? '#94a3b8' : isSummary ? '#6ee7b7' : '#86efac',
+            background: 'rgba(2,150,80,0.2)', color: '#86efac',
           }}>
-            {isClassification ? '双击进入分类' : isSummary ? '双击进入总结容器' : '双击进入归并'}
-          </span>
+            双击进入分类
+          </span>}
         </div>
       )}
 
@@ -316,7 +315,6 @@ export default function MessageCard({
       {/* Organization membership */}
       {isOrganizationMessage && (
         <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          {!isRelationRecord && <span>由 <span style={{ fontWeight: 600, color: '#cbd5e1' }}>{msg.author}</span> 发起</span>}
           <MessageElement reference={messageMembersReference(msg)} selected={isMessageElementSelected(selectedUnits, messageMembersReference(msg))} label="所含消息">💬 {memberCount ?? 0} 条观点</MessageElement>
           <span>{new Date(msg.createdAt).toLocaleDateString('zh-CN')}</span>
         </div>

@@ -22,7 +22,15 @@ export interface PersonalQuery {
     filter?: PersonalFilter;
     after?: number;
 }
-const marksCte = "WITH RECURSIVE latest AS (SELECT * FROM personal_marks WHERE \"authorId\"=$1)";
+// Reading is shared per message; the workbench separately counts pending reminders.
+const marksCte = `WITH RECURSIVE viewed AS (
+    SELECT "messageId",body->>'state' AS state FROM reading_marks WHERE "userId"=$1 AND scope='message'
+      AND body->>'format'='3' AND body->>'unknownContext' IS DISTINCT FROM 'true'
+), latest AS (
+    SELECT "targetId",family,action,sequence FROM personal_marks WHERE "authorId"=$1
+      AND (family<>'read' OR NOT EXISTS(SELECT 1 FROM viewed WHERE "messageId"="targetId"))
+    UNION ALL SELECT "messageId",'read',CASE WHEN state='UNREAD' THEN 'unread' ELSE 'read' END,0::bigint FROM viewed
+)`;
 export async function personalMarks(store: Store, userId: string, ids: string[]): Promise<PersonalMark[]> {
     if (!ids.length)
         return [];

@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useCleanView } from '../hooks/useCleanView';
 import type { DemoMessage, DemoEdge } from '../utils/modelBridge';
+import {deriveCleanVisibleIds} from '../utils/cleanProjection';
 
 // ── 测试数据工厂 ──
 
@@ -48,6 +49,17 @@ function makeEdge(
 // ── 测试 ──
 
 describe('useCleanView', () => {
+  it.each(['classify','summary','proposal','delegation','code_change','operations'])('retains a corrected %s body and its correction when filtering by CORRECT',type=>{
+    const body=makeTextMsg('body','作者',{kind:'relation',relationType:type as DemoMessage['relationType']}),correction=makeTextMsg('correction','其他作者',{kind:'relation',relationType:'correct'});
+    const edges=[makeEdge('body-member','body',type,'anon:body','member'),makeEdge('correction-edge','correction','correct','anon:correction','body')];
+    const input={messages:[body,correction,makeTextMsg('member','作者'),makeTextMsg('unrelated','其他作者')],edges,stakeCounts:{},tagCounts:{}};
+    const filtered=deriveCleanVisibleIds(input,[{id:'type',kind:'relationType',relationType:'CORRECT'}])!;
+    expect(filtered.visibleRelIds).toEqual(new Set(['body','correction']));expect(filtered.visibleTextIds.size).toBe(0);
+    const ownType=deriveCleanVisibleIds(input,[{id:'type',kind:'relationType',relationType:type.toUpperCase()}])!;
+    expect(ownType.visibleRelIds.has('body')).toBe(true);
+    const combined=deriveCleanVisibleIds(input,[{id:'type',kind:'relationType',relationType:'CORRECT'},{id:'sender',kind:'sender',username:'其他作者'}])!;
+    expect(combined.visibleRelIds.has('body')).toBe(false);expect(combined.visibleRelIds.has('correction')).toBe(false);
+  });
   it('cleanMode is false when no filters active', () => {
     const { result } = renderHook(() =>
       useCleanView({ messages: [], edges: [], stakeCounts: {}, tagCounts: {} }),

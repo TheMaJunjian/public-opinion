@@ -1,3 +1,4 @@
+import {withTestCommandContributions} from './test-database.js';
 import { afterEach, expect, it } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +14,7 @@ async function setup() {
     const agent = request.agent(app), response = await agent.post('/api/register').send({ username, password: 'test-password-123' });
     expect(response.status, response.text).toBe(201);
     const post = async (path: string, body: object = {}) => {
-      const sent = await agent.post(`/api/ui${path}`).set('x-csrf-token', response.body.csrf).set('x-request-id', randomUUID()).send(body);
+      const sent = await agent.post(`/api/ui${path}`).set('x-csrf-token', response.body.csrf).set('x-request-id', randomUUID()).send(withTestCommandContributions(path,body as Record<string,unknown>));
       expect(sent.status, sent.text).toBe(201); return sent.body;
     };
     actors.push({ agent, post, id: response.body.user.id, csrf: response.body.csrf });
@@ -65,21 +66,10 @@ it('pins an unversioned text correction to the original revision used for its co
   expect(snapshot.relations.find((record: { id: string }) => record.id === correction.id).targetRefs[0].reference).toEqual(expected);
 });
 
-it('preserves a stance’s meaning-correction context through both relation and round voting',async()=>{
-  const {app,author,editor,voter,original,originalRef}=await setup();
-  const correction=await editor.post('/relations',{relationType:'CORRECT',targetRefs:[{kind:'message',messageId:original.id,reference:{...originalRef,partId:'body',path:['text']}}],
-    payload:{correctionContent:'地球是平的。',correctionKind:'MEANING'}});
-  const stanceCorrections={[original.id]:[correction.id]};
-  const direct=await author.post('/relations',{relationType:'AGREE',targetRefs:[{kind:'message',messageId:original.id,reference:originalRef}],
-    payload:{stanceCorrections},stakeAmount:4});
-  expect(direct.payload.stanceCorrections).toEqual(stanceCorrections);
-  const rounds=await author.agent.get(`/api/ui/messages/${original.id}/rounds`);
-  const active=rounds.body.data.find((round:{status:string})=>round.status!=='SETTLED');
-  const vote=await voter.post(`/rounds/${active.id}/votes`,{vote:'TRUE',amount:3,stanceCorrections});
-  expect(vote.payload.stanceCorrections).toEqual(stanceCorrections);
-  expect((await app.store.message(vote.id)).spending).toMatchObject({protocol:1,wager:3});
-  const snapshot=await author.agent.get('/api/ui/snapshot');
-  expect(snapshot.body.messages.find((message:{id:string})=>message.id===vote.id).payload.stanceCorrections).toEqual(stanceCorrections);
+it('rejects meaning changes before charging and directs the user to a new message',async()=>{
+  const {app,author,original,originalRef}=await setup(),before=await app.store.account(author.id),sequence=await app.store.latestSequence();
+  const result=await author.agent.post('/api/ui/relations').set('x-csrf-token',author.csrf).set('x-request-id',randomUUID()).send({relationType:'CORRECT',targetRefs:[{kind:'message',messageId:original.id,reference:{...originalRef,partId:'body'}}],payload:{correctionKind:'MEANING',correctionContent:'新主张'},recommendation:1});
+  expect(result.status).toBe(400);expect(await app.store.account(author.id)).toEqual(before);expect(await app.store.latestSequence()).toBe(sequence);
 });
 
 it('rejects malformed stance context before charging or saving a relation', async () => {
@@ -100,12 +90,12 @@ it('keeps original and correction wagers separate through the existing settlemen
   const correctionVote = await stance(editor, correctionRef, 'DISAGREE', 10);
   await stance(voter, correctionRef, 'AGREE');
   expect((await stakes(originalRef)).pool).toEqual({ lockedPro: 20, lockedCon: 0 });
-  expect((await stakes(correctionRef)).pool).toEqual({ lockedPro: 0, lockedCon: 10 });
+  expect((await stakes(correctionRef)).pool).toEqual({ lockedPro: 1, lockedCon: 10 });
   const rounds = await editor.agent.get(`/api/ui/messages/${corrected.id}/rounds`);
   expect(rounds.status, rounds.text).toBe(200);
   const active = rounds.body.data.find((round: { status: string }) => round.status !== 'SETTLED');
   const settled = await editor.post(`/rounds/${active.id}/close-and-settle`);
-  expect(settled).toMatchObject({ result: 'FALSE', totalPro: 0, totalCon: 10 });
+  expect(settled).toMatchObject({ result: 'FALSE', totalPro: 1, totalCon: 10 });
   expect((await app.store.account(author.id)).locked).toBe(20);
   expect((await app.store.account(editor.id)).locked).toBe(0);
   const bets = await app.store.db.prepare('SELECT "targetKey","messageId" FROM bets WHERE "messageId"=ANY($1::text[])').all([originalVote.id, correctionVote.id]);
@@ -115,7 +105,7 @@ it('keeps original and correction wagers separate through the existing settlemen
   expect(saved.parts.find(part => part.type === 'text')).toMatchObject({ text: '地求是圆的。' });
 });
 
-it.each(['TEXT', 'MEANING'] as const)('records %s as the correction attachment without changing the original or its pool', async correctionKind => {
+it.each(['TEXT'] as const)('records %s as the correction attachment without changing the original or its pool', async correctionKind => {
   const { app, author, editor, original, originalRef, stance, stakes } = await setup();
   await stance(author, originalRef, 'AGREE', 12);
   const correction = await editor.post('/relations', { relationType: 'CORRECT', targetRefs: [{ kind: 'message', messageId: original.id,

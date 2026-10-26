@@ -2,6 +2,7 @@ import type { ExportData } from '../api/client';
 import type { WorkbenchSnapshot } from '../data/workbench';
 import type { Message, Relation } from '../types';
 import { convertMessagesToDemoModel } from './modelBridge';
+import {messageAuthorInvestment} from './messageAuthorship';
 
 /** Online snapshots and archive viewing must derive exactly the same display data. */
 export function projectWorkbenchSnapshot(snapshot: WorkbenchSnapshot) {
@@ -13,9 +14,11 @@ export function projectWorkbenchSnapshot(snapshot: WorkbenchSnapshot) {
   const authorAmounts: Record<string, number> = {};
   const bettors: Record<string, number> = {};
   const byId = new Map(converted.messages.map(message => [message.id, message]));
+  for(const message of converted.messages)message.authorInvestment=messageAuthorInvestment(message,snapshot.stakes[message.id]);
   for (const [id, stakes] of Object.entries(snapshot.stakes)) {
     counts[id] = { truth: stakes.countsByType?.TRUTH ?? stakes.counts, value: stakes.countsByType?.VALUE ?? { pro: 0, con: 0 } };
-    authorAmounts[id] = stakes.stakes.filter(stake => stake.side === 'PRO' && stake.user.username === byId.get(id)?.author).reduce((sum, stake) => sum + stake.amount, 0);
+    const authorId=byId.get(id)?.authorId;
+    authorAmounts[id] = authorId?stakes.stakes.filter(stake => stake.side === 'PRO' && stake.user.id === authorId).reduce((sum, stake) => sum + stake.amount, 0):0;
     bettors[id] = new Set(stakes.stakes.map(stake => stake.user.id)).size;
   }
   return { ...converted, relations, counts, authorAmounts, bettors };

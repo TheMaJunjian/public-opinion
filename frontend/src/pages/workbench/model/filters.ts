@@ -5,18 +5,20 @@ import type { DemoEdge, DemoMessage } from '../../../utils/modelBridge';
 export const READ_STATUS_RELATION_TYPES = new Set(['read', 'unread']);
 
 export function getLatestUserReadStatusByMessageId(
-  relations: Pick<Relation, 'relationType' | 'createdAt' | 'createdBy' | 'targetRefs'>[],
+  relations: Pick<Relation, 'relationType' | 'createdAt' | 'createdBy' | 'targetRefs' | 'sequence'>[],
   isCurrentUser: (relation: Pick<Relation, 'createdBy'>) => boolean,
 ): Map<string, 'READ' | 'UNREAD'> {
-  const latest = new Map<string, { type: 'READ' | 'UNREAD'; createdAt: string }>();
+  const latest = new Map<string, { type: 'READ' | 'UNREAD'; createdAt: string; sequence?: number }>();
   for (const relation of relations) {
     const type = relation.relationType?.toUpperCase();
     if ((type !== 'READ' && type !== 'UNREAD') || !isCurrentUser(relation)) continue;
     for (const target of relation.targetRefs) {
       const targetId = target.kind === 'relation' ? target.relationId : target.messageId;
       const previous = latest.get(targetId);
-      if (!previous || new Date(relation.createdAt).getTime() >= new Date(previous.createdAt).getTime()) {
-        latest.set(targetId, { type, createdAt: relation.createdAt });
+      if (!previous || (relation.sequence && previous.sequence
+        ? relation.sequence > previous.sequence
+        : new Date(relation.createdAt).getTime() >= new Date(previous.createdAt).getTime())) {
+        latest.set(targetId, { type, createdAt: relation.createdAt, sequence: relation.sequence });
       }
     }
   }

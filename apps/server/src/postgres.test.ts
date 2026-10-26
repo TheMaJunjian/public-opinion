@@ -43,11 +43,11 @@ describe('PostgreSQL transactions across API instances', () => {
     expect(await first.store.setting('region')).toBe(await second.store.setting('region'));
     const identities = await Promise.all([register(first,'alice'),register(second,'bob')]);
     expect(identities.filter(actor=>actor.session.user.founder)).toHaveLength(1);
-    const actor=identities[0], input={requestId:randomUUID(),parts:[text('并发重试')]};
+    const actor=identities[0], input={requestId:randomUUID(),parts:[text('并发重试')],recommendation:1};
     const responses=await Promise.all(Array.from({length:12},(_,index)=>request(index%2?first:second).post('/api/messages').set('Cookie',actor.cookie).set('x-csrf-token',actor.session.csrf).send(input)));
     for(const response of responses){expect(response.status,response.text).toBe(201);expect(response.body).toEqual(responses[0].body);}
-    expect(await second.store.account(actor.session.user.id)).toMatchObject({available:999,locked:0});
-    expect(await first.store.setting('operating')).toBe(1);
+    expect(await second.store.account(actor.session.user.id)).toMatchObject({available:998,locked:0});
+    expect(await first.store.setting('operating')).toBe(2);
     expect((await first.store.db.prepare('SELECT COUNT(*) AS n FROM requests').get())!.n).toBe(1);
   });
 
@@ -100,7 +100,7 @@ describe('PostgreSQL transactions across API instances', () => {
     let sentId='';
     await first.store.read(async()=>{
       const before=await listMessages(first.store,{});
-      const result=await send(second.store,actor.session.user,{requestId:randomUUID(),parts:[text('读取期间提交')]});
+      const result=await send(second.store,actor.session.user,{requestId:randomUUID(),parts:[text('读取期间提交')],recommendation:1});
       sentId=result.message.id;
       const after=await listMessages(first.store,{});
       expect(after).toEqual(before);
@@ -112,7 +112,7 @@ describe('PostgreSQL transactions across API instances', () => {
 
   it('settles an elapsed round once when two API instances run the settlement worker', async () => {
     const [first,second]=await pair(), alice=await register(first,'alice'), bob=await register(second,'bob');
-    const publish=(app:App,actor:typeof alice,parts:Part[],wager=0)=>send(app.store,actor.session.user,{requestId:randomUUID(),parts,wager});
+    const publish=(app:App,actor:typeof alice,parts:Part[],wager=0)=>send(app.store,actor.session.user,{requestId:randomUUID(),parts,wager,recommendation:wager>0?0:1});
     await first.store.transaction(async()=>first.store.set('rules',{...await first.store.rules(),settlementDelayMs:20}));
     const claim=(await publish(first,alice,[text('结算并发')])).message;
     await publish(first,alice,[relation('agree',claim.id)],10);
@@ -121,7 +121,7 @@ describe('PostgreSQL transactions across API instances', () => {
     await new Promise(resolve=>setTimeout(resolve,30));
     const settled=await Promise.all([processDue(first.store),processDue(second.store)]);
     expect(settled.filter(Boolean)).toHaveLength(1);
-    expect(await first.store.account(alice.session.user.id)).toMatchObject({available:1002,locked:0});
+    expect(await first.store.account(alice.session.user.id)).toMatchObject({available:1000,locked:0});
     expect(await second.store.account(bob.session.user.id)).toMatchObject({available:994,locked:0});
   });
 
@@ -138,7 +138,7 @@ describe('PostgreSQL transactions across API instances', () => {
       const stream=response.body!.getReader();
       const cursorResponse=await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/events?after=${after}&mode=cursor`,{signal:controller.signal});
       const cursorStream=cursorResponse.body!.getReader();
-      const message=(await send(writer.store,actor.session.user,{requestId:randomUUID(),parts:[text('跨实例同步')]})).message;
+      const message=(await send(writer.store,actor.session.user,{requestId:randomUUID(),recommendation:1,parts:[text('跨实例同步')]})).message;
       let output='';
       while(!output.includes(message.id)){
         const {value,done}=await stream.read();

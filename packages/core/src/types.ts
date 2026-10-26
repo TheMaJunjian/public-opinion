@@ -1,8 +1,20 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+export type BodyVersion = {
+  format: 2;
+  messageId: string;
+  revision: number;
+  corrections: Array<{ messageId: string; revision: number; kind: 'TEXT' | 'MEANING' }>;
+}
+export type ReferenceContext =
+  | { kind: 'BODY' | 'MEANING'; version: BodyVersion; follow?: true }
+  | { kind:'MESSAGE';version?:BodyVersion }
+  | { kind: 'CORRECTION' | 'ROUND' | 'UNKNOWN' };
+
 /** A reference addresses identity, a pinned revision, a component, or a value inside it. */
 export interface Reference {
   messageId: string;
+  context?: ReferenceContext;
   revision?: number;
   partId?: string;
   memberId?: string;
@@ -69,6 +81,7 @@ export interface Distribution {
   total: number; ruleVersion: number; ledgerId: string; programVersion: string; inputs: Json; allocations: Allocation[];
 }
 export interface SendInput {
+  joinContribution?: { wager: number; recommendation: number };
   requestId: string;
   parts: Part[];
   recommendation?: number;
@@ -82,6 +95,8 @@ export interface ExecutedStance {
   side: 'pro' | 'con';
 }
 export interface MessageState {
+  contextCounts?: Record<string,{supportCount:number;oppositionCount:number;recommendationTotal:number}>;
+  contextStakes?: Record<string,{truth:{pro:number;con:number};value:{pro:number;con:number}}>;
   messageId: string; revision: number; suppressed: boolean;
   supportCount: number; oppositionCount: number; recommendationTotal: number;
   executedStance?: ExecutedStance;
@@ -97,6 +112,8 @@ export interface Change {
   previousSequence?: number;
   messages: Message[]; memberships: Membership[];
   removedMemberships: string[];
+  /** One-time migrations may remove obsolete records while retaining their financial history. */
+  removedMessageIds?: string[];
   states: MessageState[];
   ledger: LedgerEntry[];
   treasury: { operating: number; issued: number };

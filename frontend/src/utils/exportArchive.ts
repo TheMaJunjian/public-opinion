@@ -1,11 +1,12 @@
 import { archiveChangeFingerprint, replayArchive, type Archive, type ArchiveCheckpoint } from '@gonglun/core';
 import type { ExportData, ExportUpdateData } from '../api/client';
+import {isHomeFilterMode} from '../pages/workbench/model/homeFilter';
 
 /** Convert old files locally, on demand, without adding a migration dialog. */
 export async function prepareExportForViewing(input:unknown){
   const archive=input as ExportData|null;
-  if(archive&&archive.formatVersion>3)throw new Error('文件版本比当前程序更新，请更新程序后再打开');
-  const historical=archive&&typeof archive==='object'&&(archive.formatVersion<3
+  if(archive&&archive.formatVersion>5)throw new Error('文件版本比当前程序更新，请更新程序后再打开');
+  const historical=archive&&typeof archive==='object'&&(archive.formatVersion<5
     ||archive.format==='gonglun-2'&&!Array.isArray(archive.messages)&&Array.isArray((archive as unknown as Archive).changes)
     ||Array.isArray(archive.messages)&&archive.messages.some(message=>!Array.isArray(message.parts)||!Number.isSafeInteger(message.revision)
       ||message.parts.some(part=>part.type==='relation'&&['legacy-join','unfollow','unblock'].includes(part.relation)
@@ -41,7 +42,7 @@ export function validateExportForViewing(input: unknown): { data: ExportData; ve
     || !(view.username === null || typeof view.username === 'string')
     || !['list', 'graph'].includes(view.mode)
     || typeof view.messageFilter?.hideSettlement !== 'boolean' || typeof view.messageFilter?.hideJoin !== 'boolean'
-    || ![null, 'read-self', 'read-related', 'unread-related', 'unread-other'].includes(view.homeFilter)
+    || !isHomeFilterMode(view.homeFilter)
     || !Array.isArray(view.cleanFilters) || view.cleanFilters.some(rule => !rule || !['sender', 'tag', 'stake', 'rounds', 'participants', 'relationType'].includes(rule.kind))
     || !(view.classificationId === null || typeof view.classificationId === 'string'))) {
     throw new Error('阅览设置格式无效');

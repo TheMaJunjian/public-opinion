@@ -34,7 +34,7 @@ async function verifyCheckpoint(store: Store, base: ArchiveCheckpoint): Promise<
 export async function sendExport(store: Store, req: Request, res: Response, parent: string, base?: ArchiveCheckpoint): Promise<void> {
   if (base) await verifyCheckpoint(store, base);
   const scope = await scopeView(store, parent), journal = await journalManifest(store);
-  const metadata = { format: base ? 'gonglun-2-update' : 'gonglun-2', formatVersion: 3, exportedAt: new Date().toISOString(), scope,
+  const metadata = { format: base ? 'gonglun-2-update' : 'gonglun-2', formatVersion: 5, exportedAt: new Date().toISOString(), scope,
     viewerUsername: (await currentSession(store, req))?.user.username ?? null, rules: await store.rules(),
     regionId: await store.setting('region'), ledgerId: 'local', programVersion: '2.0.0',
     sequence: journal.lastSequence, auditScope: 'region', viewScope: { parent }, journal, ...(base ? { base } : {}) };

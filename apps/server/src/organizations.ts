@@ -2,6 +2,9 @@ import { bindRoles, ORGANIZATIONS, relations, resolveMemberships, type Json, typ
 import { DomainError, Mutation, type Store } from './db.js';
 import { statesFor } from './projections.js';
 import { retiredOrganizationIds } from './retired-organizations.js';
+import {chargeMessage} from './message-spending.js';
+import {placeWager} from './economy.js';
+import { messageDisplayDependency } from '@gonglun/core';
 
 const whole = (ref: { revision?: number; partId?: string; memberId?: string; path?: unknown[]; range?: unknown }) =>
     ref.revision === undefined && !ref.partId && !ref.memberId && !ref.path?.length && !ref.range;
@@ -9,7 +12,7 @@ async function parent(tx: Mutation, memberId: string): Promise<string | null> {
     const row = await tx.store.db.prepare('SELECT "parentId" FROM memberships WHERE "memberId"=$1').get(memberId);
     return row ? String(row.parentId) : null;
 }
-async function containerRejectedForUser(store: Store, parentId: string, userId: string) {
+async function containerRejectedForUser(store: Pick<Store,'db'|'message'>, parentId: string, userId: string) {
     const message = await store.message(parentId), group = relations(message).find(part => ORGANIZATIONS.has(part.relation) || part.relation === 'members');
     if (!group) return false;
     const own = await store.db.prepare(`SELECT side FROM display_stances WHERE "targetId"=$1 AND "targetRevision"=$2 AND "authorId"=$3
@@ -33,7 +36,8 @@ async function validateMove(tx: Mutation, memberId: string, parentId: string, us
     if (retired.has(parentId) || retired.has(memberId)) throw new DomainError('组织已退役，保留记录仅供历史查看', 409);
     if (memberId === parentId) throw new DomainError('消息不能包含自身');
     const organization = await tx.store.message(parentId);
-    await tx.store.message(memberId);
+    if (messageDisplayDependency(await tx.store.message(memberId)) !== null)
+        throw new DomainError('附属关系消息跟随其依赖消息显示，不能独立加入组织');
     if (!relations(organization).some(p => ORGANIZATIONS.has(p.relation) || p.relation === 'members'))
         throw new DomainError('父消息必须是组织');
     if (await containerRejectedForUser(tx.store, parentId, userId))
@@ -48,12 +52,15 @@ async function validateMove(tx: Mutation, memberId: string, parentId: string, us
 }
 
 /** Check the resolved stance, including opposition to an opposing stance. */
-export async function validateJoinApproval(store: Store, target: Reference, side: 'pro' | 'con', userId: string) {
+export async function validateJoinApproval(store: Pick<Store,'db'|'message'>, target: Reference, side: 'pro' | 'con', userId: string) {
     if (side !== 'pro' || target.memberId || target.path?.length || target.range) return;
     const message = await store.message(target.messageId);
     if (target.revision !== undefined && target.revision !== message.revision) return;
     const placement = relations(message).find(part => part.relation === 'member-of' && part.roles.member?.length);
     if (!placement || target.partId && target.partId !== placement.id) return;
+    const memberId = placement.roles.member?.[0]?.reference.messageId;
+    if (memberId && messageDisplayDependency(await store.message(memberId)) !== null)
+        throw new DomainError('附属关系消息不能独立加入组织，历史加入消息不能恢复', 409);
     const parentId = placement.roles.parent?.[0]?.reference.messageId;
     if (parentId && (await retiredOrganizationIds(store)).has(parentId))
         throw new DomainError('组织已退役，历史加入消息不能恢复', 409);
@@ -80,8 +87,17 @@ async function recordJoin(tx: Mutation, message: Message, memberId: string, pare
 async function createJoin(tx: Mutation, origin: Message, memberId: string, parentId: string) {
     const parts: Part[] = [{ id: 'relation', type: 'relation', relation: 'member-of', roles: bindRoles({ parent: [{ messageId: parentId }], member: [{ messageId: memberId }] }) },
         { id: 'data', type: 'data', value: { uiType: 'JOIN', generatedBy: origin.id } }];
-    const message = await tx.create(origin.authorId, parts);
+    const publishing=tx.publication;
+    const spending=publishing?{protocol:(await tx.store.rules()).protocolFee,...publishing.joinContribution}:undefined;
+    const message = await tx.create(publishing?.authorId??origin.authorId, parts,spending);
+    if(spending?.wager){
+        message.parts.push({id:'self-stance',type:'relation',relation:'agree',roles:bindRoles({target:[{messageId:message.id}]})});
+    }
     await recordJoin(tx, message, memberId, parentId);
+    if(publishing){
+        await chargeMessage(tx.store,message);
+        if(message.spending.wager)await placeWager(tx,message,message.spending.wager);
+    }
     return message;
 }
 

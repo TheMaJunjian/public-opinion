@@ -9,15 +9,15 @@ type Result = ReturnType<typeof computeSceneLayout> | ReturnType<typeof planMess
 const compute = (job: Job): Result => job.kind === 'layout' ? computeSceneLayout(job.input) : planMessageStructures(job.input);
 
 /** One active worker job plus one latest replacement; stale results never reach the scene. */
-export function useSceneComputation<K extends Job['kind']>(job: Extract<Job, { kind: K }> | null, retainPrevious = false) {
+export function useSceneComputation<K extends Job['kind']>(job: Extract<Job, { kind: K }> | null, retainPrevious = false, retentionKey?: unknown) {
   const startTask = useWorkbenchDrawingTask('projection');
   const workerRef = useRef<Worker | null>(null);
   const latest = useRef<{ job: Job; id: number; finish(result: Result): void; fail(error: unknown): void } | null>(null);
   const active = useRef<number | null>(null);
   const revision = useRef(0);
   const [workerUnavailable, setWorkerUnavailable] = useState(() => typeof Worker !== 'function');
-  const [completed, setCompleted] = useState<{ job: Job; result: Result } | null>(null);
-  const fallback = useMemo(() => workerUnavailable && job ? { job, result: compute(job) } : null, [workerUnavailable, job]);
+  const [completed, setCompleted] = useState<{ job: Job; result: Result; retentionKey: unknown } | null>(null);
+  const fallback = useMemo(() => workerUnavailable && job ? { job, result: compute(job), retentionKey } : null, [workerUnavailable, job, retentionKey]);
   useLayoutEffect(() => {
     if (workerUnavailable) return;
     let worker: Worker;
@@ -44,14 +44,14 @@ export function useSceneComputation<K extends Job['kind']>(job: Extract<Job, { k
     if (!job || workerUnavailable || !workerRef.current) return;
     const task = startTask();
     const id = ++revision.current;
-    latest.current = { job, id, finish(result) { if (task.active) { setCompleted({ job, result }); task.complete(); } }, fail: task.fail };
+    latest.current = { job, id, finish(result) { if (task.active) { setCompleted({ job, result, retentionKey }); task.complete(); } }, fail: task.fail };
     if (active.current === null) {
       active.current = id;
       try { workerRef.current.postMessage({ id, job }); }
       catch { active.current = null; setWorkerUnavailable(true); }
     }
     return () => { if (latest.current?.id === id) latest.current = null; task.cancel(); };
-  }, [job, workerUnavailable, startTask]);
+  }, [job, workerUnavailable, startTask, retentionKey]);
   const value = fallback ?? completed;
-  return (value && (value.job === job || retainPrevious) ? value.result : null) as (K extends 'layout' ? ReturnType<typeof computeSceneLayout> : ReturnType<typeof planMessageStructures>) | null;
+  return (job && value && (value.job === job || retainPrevious && value.retentionKey === retentionKey) ? value.result : null) as (K extends 'layout' ? ReturnType<typeof computeSceneLayout> : ReturnType<typeof planMessageStructures>) | null;
 }

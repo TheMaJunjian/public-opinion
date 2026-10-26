@@ -9,7 +9,7 @@ import { loadLastExport, saveLastExport } from '../utils/exportViewerCache';
 vi.mock('../utils/exportViewerCache', () => ({ loadLastExport: vi.fn(), saveLastExport: vi.fn() }));
 
 const data: ExportData = {
-  formatVersion: 3, exportedAt: '', scope: { messageId: null, title: '相同阅览文件' },
+  formatVersion: 5, exportedAt: '', scope: { messageId: null, title: '相同阅览文件' },
   messages: [{ id: 'm', kind: 'TEXT', contentType: 'TEXT', content: '保存的正文', createdAt: '', author: '甲', authorId: 'a',revision:1,parts:[{id:'body',type:'text',text:'保存的正文'}] }],
   relations: [], view: { username: '甲', mode: 'list', classificationId: null,
     messageFilter: { hideJoin: false, hideSettlement: true }, homeFilter: 'read-self', cleanFilters: [] },
@@ -63,7 +63,7 @@ it.each(['file','cache'])('automatically converts an old %s without a migration 
   await screen.findByTestId('location');
   await vi.waitFor(()=>expect(saveLastExport).toHaveBeenCalled());
   const converted=vi.mocked(saveLastExport).mock.calls[0][0];
-  expect(converted.formatVersion).toBe(3);
+  expect(converted.formatVersion).toBe(5);
   expect(converted.messages).toHaveLength(2);
   expect(converted.relations[0].payload).toMatchObject({subType:'NO'});
   expect(screen.queryByText(/确认迁移|需要转换/)).toBeNull();

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import GraphView, { type GraphViewProps } from '../components/GraphView';
 import { projectGraphScene } from '../utils/graphProjection';
@@ -26,6 +26,24 @@ function renderScene(messages: DemoMessage[], edges: DemoEdge[],extra:Partial<Gr
 }
 
 describe('rendered graph scene', () => {
+  it('uses the same statistic and arbitration order as the message list', () => {
+    const onTruth = vi.fn(), onValue = vi.fn();
+    const view = renderScene([message('target')], [], {
+      stakeCounts: { target: { truth: { pro: 7, con: 2 }, value: { pro: 11, con: 3 } } },
+      onSettlementToggleTruth: onTruth, onSettlementToggleValue: onValue,
+    });
+    const actions = view.container.querySelector('[data-message-settlement-actions="target"]')!;
+    expect([...actions.querySelectorAll('[title]')].map(element => element.getAttribute('title')))
+      .toEqual(['真假统计', '真假仲裁', '价值统计', '价值仲裁']);
+    expect(within(actions as HTMLElement).getByTitle('真假统计')).toHaveTextContent('✓7✕2');
+    expect(within(actions as HTMLElement).getByTitle('价值统计')).toHaveTextContent('▲11▼3');
+    for (const title of ['真假统计', '价值统计']) expect(within(actions as HTMLElement).getByTitle(title)).not.toHaveTextContent(/⚖️|💎/);
+    fireEvent.click(within(actions as HTMLElement).getByTitle('真假仲裁'));
+    expect(onTruth).toHaveBeenCalledExactlyOnceWith('target');
+    fireEvent.click(within(actions as HTMLElement).getByTitle('价值仲裁'));
+    expect(onValue).toHaveBeenCalledExactlyOnceWith('target');
+  });
+
   it.each(['normal','classify','summary','arrange','merge'] as const)('keeps %s votes on the right and annotations at the upper right independently collapsible', type => {
     const target:DemoMessage=type==='normal'?message('target'):{...message('target'),kind:'relation',relationType:type};
     const relations=(['agree','disagree','recommend','tag'] as const).map(type=>({...message(type),kind:'relation' as const,relationType:type}));
@@ -64,7 +82,7 @@ describe('rendered graph scene', () => {
   });
   it('folds multiple annotations on the first classification and reveals each jump target within the canvas', () => {
     const target:DemoMessage={...message('category'),kind:'relation',relationType:'classify'};
-    const types=['recommend','archive','attention','block'] as const;
+    const types=['recommend','archive','attention','block','read','unread'] as const;
     const annotations=types.map(type=>({...message(type),kind:'relation' as const,relationType:type,relationPayload:{subType:'YES' as const}}));
     const view=renderScene([target,...annotations],annotations.map(annotation=>relation(annotation.id,annotation.relationType,`anon:${annotation.id}`,target.id)));
     for(const type of types)expect(findMessageElements(view.container,type)).toHaveLength(0);
@@ -103,7 +121,7 @@ describe('rendered graph scene', () => {
     view.unmount();
   });
 
-  it.each(['recommend','archive'] as const)('keeps votes on grouped %s badges independently reachable and collapsible',type=>{
+  it.each(['recommend','archive','read','unread'] as const)('keeps votes on grouped %s badges independently reachable and collapsible',type=>{
     const annotations=['annotation-1','annotation-2'].map(id=>({...message(id),kind:'relation' as const,relationType:type}));
     const stances=(['agree-1','disagree-1','agree-2'] as const).map(id=>({...message(id),kind:'relation' as const,
       relationType:id==='disagree-1'?'disagree' as const:'agree' as const}));
@@ -135,6 +153,17 @@ describe('rendered graph scene', () => {
     expect(findMessageElements(view.container,'agree-1')).toHaveLength(0);
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
     expect(findMessageElements(view.container,'agree-2')).toHaveLength(0);
+  });
+
+  it.each(['read','unread'] as const)('renders an existing %s label body as an annotation beside its target instead of a separate card',type=>{
+    const annotation:DemoMessage={...message('read-annotation'),kind:'relation',relationType:type,
+      parts:[{id:'body',type:'text',text:type},{id:'relation',type:'relation',relation:type,roles:{target:[{id:'target',reference:{messageId:'target'}}]}}]};
+    const view=renderScene([message('target'),annotation],[relation(annotation.id,type,`anon:${annotation.id}`,'target')]);
+    expect(view.container.querySelector('[data-msgid="read-annotation"]:not([data-rel-overlay])')).toBeNull();
+    fireEvent.click(view.getByRole('button',{name:'显示标注 target'}));
+    const badge=findMessageElements(view.container,annotation.id)[0];
+    expect(badge).toHaveAttribute('data-rel-overlay','true');
+    expect(badge).toHaveTextContent(type==='read'?'已读':'未读');
   });
 
   it.each([false, true])('keeps arrangement controls visible independently of selection and restores their state after a pulse (empty=%s)', empty => {
@@ -363,10 +392,7 @@ describe('rendered graph scene', () => {
     act(()=>{canvas.dispatchEvent(new CustomEvent(REVEAL_VIRTUAL_MESSAGE,{detail:{ids:[]}}));});
     expect(graph.queryByTitle(/^标注：/)).toBeNull();
     expect(graph.queryByTitle(/^赞同更正：/)).toBeNull();
-    fireEvent.click(graph.getByRole('button',{name:'显示装饰 correction'}));
-    expect(graph.getByTitle(/^赞同更正：/).parentElement).toHaveStyle({flexDirection:'column'});
-    expect(graph.getByTitle(/^反对更正：/)).toBeInTheDocument();
-    fireEvent.click(graph.getByRole('button',{name:'收起装饰 correction'}));
+    expect(graph.queryByRole('button',{name:'显示装饰 correction'})).toBeNull();
     expect(graph.queryByTitle(/^反对更正：/)).toBeNull();
     expect(select).not.toHaveBeenCalled();graph.unmount();
     const list=render(<MessageCard msg={shown} ctx={{}}/>);
@@ -571,9 +597,10 @@ it("renders each side's own cross-canvas relations and opens its relation trace"
   });
   const agree=dom.querySelector('[data-comparison-view="agree"]')!,disagree=dom.querySelector('[data-comparison-view="disagree"]')!;
   expect(disagree.querySelector('[data-cross-canvas-related-messages]')).toBeNull();
-  fireEvent.click(within(agree as HTMLElement).getByRole('button',{name:/相关消息：1/}));
-  expect(within(agree as HTMLElement).getByRole('group',{name:'指向本消息的关联'})).toHaveTextContent('【引用】 R');
-  fireEvent.click(within(agree as HTMLElement).getByRole('button',{name:'查看'}));expect(open).toHaveBeenCalledWith('R');
+  fireEvent.click(within(agree as HTMLElement).getByRole('button',{name:/其他相关消息：1/}));
+  const popup=within(screen.getByRole('dialog',{name:'其他相关消息：1'}));
+  expect(popup.getByRole('group',{name:'指向本消息的关联'})).toHaveTextContent('【引用】 R');
+  fireEvent.click(popup.getByRole('button',{name:'查看'}));expect(open).toHaveBeenCalledWith('R');
 });
 
 it.each(['reference','reply','annotation'] as const)('shows both endpoints of a cross-canvas %s and hides rows once its complete edge is rendered',type=>{
@@ -583,8 +610,8 @@ it.each(['reference','reply','annotation'] as const)('shows both endpoints of a 
   for(const [endpoint,direction] of [[source,'发出的关联'],[target,'指向本消息的关联']] as const){
     const view=renderScene([endpoint],[],{relatedMessages:[source,target,rel],relatedEdges:[link]});
     const card=within(view.container.querySelector(`[data-msgid="${endpoint.id}"]`) as HTMLElement);
-    fireEvent.click(card.getByRole('button',{name:/相关消息：1/}));
-    expect(card.getByRole('group',{name:direction})).toHaveTextContent('relation');
+    fireEvent.click(card.getByRole('button',{name:/其他相关消息：1/}));
+    expect(within(view.getByRole('dialog',{name:'其他相关消息：1'})).getByRole('group',{name:direction})).toHaveTextContent('relation');
     view.unmount();
   }
   const sameCanvas=renderScene([source,target,rel],[link],{relatedMessages:[source,target,rel],relatedEdges:[link]});

@@ -131,7 +131,8 @@ export async function sendGovernanceDraft(dependencies: Pick<DraftSendDependenci
             sourceMessageId: backendRel.id,
             targetRefs: [targetRef],
             stakeAmount: 0,
-            wager: 0,
+            wager: 1,
+            selfAgree: true,
             recommendation: 0,
           });
           await registerCreatedRelationInCurrentClassify(refRel);

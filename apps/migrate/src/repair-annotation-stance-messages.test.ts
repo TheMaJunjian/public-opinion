@@ -110,9 +110,9 @@ it('applies version 10 to a version-9 database exactly once', async () => {
   await oldStance('old-agreement', 'agree', { messageId: 'annotation' });
   await store.db.exec('DELETE FROM schema_migrations WHERE version>=10');
   const cursor = await store.latestSequence();
-  await runMigrations(store.db, migrationsFor(store));
+  await runMigrations(store.db, migrationsFor(store).filter(migration=>migration.version<=10));
   expect(await store.db.prepare('SELECT name FROM schema_migrations WHERE version=10').get()).toEqual({ name: 'normalize-historical-annotation-stances' });
   expect((await statesFor(store, ['annotation']))[0]?.supportCount).toBe(0);
-  await runMigrations(store.db, migrationsFor(store));
+  await runMigrations(store.db, migrationsFor(store).filter(migration=>migration.version<=10));
   expect(await store.latestSequence()).toBe(cursor + 1);
 });

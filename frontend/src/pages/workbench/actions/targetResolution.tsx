@@ -11,7 +11,8 @@ import type {
 import { isContentKind, unitSelectionToTargetRef } from "../../../utils/modelBridge";
 import { createContainerOwnership, getContainerAncestorChain } from '../model/ownership';
 import type { ContainerEffect } from '../model/containerEffect';
-import { mergeUnits } from '../model/selection';
+import { mergeUnits,relationTargetUnits } from '../model/selection';
+import { displayDependencyIds, edgeDisplayDependencyIds } from '../../../utils/displayDependency';
 
 interface ContainerTargetDependencies {
   containerEffect?: Pick<ContainerEffect, 'ownership' | 'rejectedContainerIds' | 'joinByTarget'>;
@@ -30,6 +31,7 @@ export function collectExclusiveRelationMsgIds(context: CollectExclusiveRelation
   const { edges, msgMap } = context;
   const ids = new Set<string>();
   const edgesByRel = new Map<string, DemoEdge[]>();
+  const attachedByHost = new Map<string, string[]>();
   for (const e of edges) {
     const arr = edgesByRel.get(e.relationMessageId) ?? [];
     arr.push(e);
@@ -37,27 +39,22 @@ export function collectExclusiveRelationMsgIds(context: CollectExclusiveRelation
   }
   for (const [relMsgId, relEdges] of edgesByRel) {
     const relType = String(relEdges[0]?.relationType ?? '').toLowerCase();
-    if (relType === 'classify' || relType === 'summary' || relType === 'merge' || relType === 'join') continue;
+    if (getPresentationSpec(relType).isContainer || relType === 'join') continue;
     if (ownedRelationIds.has(relMsgId)) continue;
+    const hosts = edgeDisplayDependencyIds(msgMap.get(relMsgId), relEdges);
+    if (hosts !== null) {
+      for (const host of hosts) {
+        const attached = attachedByHost.get(host) ?? [];
+        attached.push(relMsgId); attachedByHost.set(host, attached);
+      }
+      if (hosts.some(id => hiddenTextIds.has(id) || ownedRelationIds.has(id) || ids.has(id))) ids.add(relMsgId);
+      continue;
+    }
     const textEndpoints = relEdges
       .flatMap(e => [e.from.messageId, e.to.messageId])
       .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
     if (textEndpoints.length > 0) {
-      if (relType === 'reference') {
-        // Cross-scope REFERENCE: only hide the relation message when its source
-        // (from) message is classified/hidden.  If the source is visible but the
-        // target is in another classify scope, the reference should still appear
-        // alongside the source in the linear and graph views.
-        const sourceHidden = relEdges.some(e => {
-          const fromM = msgMap.get(e.from.messageId);
-          return fromM && isContentKind(fromM.kind) && (hiddenTextIds.has(e.from.messageId) || ownedRelationIds.has(e.from.messageId));
-        });
-        if (sourceHidden) {
-          ids.add(relMsgId);
-        }
-      } else if (textEndpoints.some(mid => hiddenTextIds.has(mid))) {
-        ids.add(relMsgId);
-      }
+      if (textEndpoints.some(mid => hiddenTextIds.has(mid))) ids.add(relMsgId);
       continue;
     }
     // No text endpoints — all targets are relation messages.
@@ -67,6 +64,13 @@ export function collectExclusiveRelationMsgIds(context: CollectExclusiveRelation
       .filter(mid => msgMap.get(mid)?.kind === 'relation');
     if (relEndpoints.some(mid => ownedRelationIds.has(mid))) {
       ids.add(relMsgId);
+    }
+  }
+  const queue = [...hiddenTextIds, ...ownedRelationIds, ...ids];
+  for (let index = 0; index < queue.length; index++) {
+    for (const attached of attachedByHost.get(queue[index]) ?? []) {
+      if (ids.has(attached)) continue;
+      ids.add(attached); queue.push(attached);
     }
   }
   return ids;
@@ -152,7 +156,9 @@ interface ResolveEffectiveTargetUnitsDependencies {
 
 export function resolveEffectiveTargetUnits(context: ResolveEffectiveTargetUnitsDependencies, draft: UnitSelection[], targets: UnitSelection[], currentRelationType: string | null): UnitSelection[] {
   const { msgMap, promoteCompleteContainerSelections } = context;
-  const rawTargets = draft.length > 0 ? draft : targets;
+  const selected = draft.length > 0 ? draft : targets;
+  const rawTargets = currentRelationType&&!['classify','summary','merge','arrange'].includes(currentRelationType)
+    ?relationTargetUnits(selected,msgMap):selected;
   if (currentRelationType === 'correct') {
     const textTargets = rawTargets.filter(unit => unit.selection.kind === 'text');
     if (textTargets.length === 1 && rawTargets.every(unit => unit === textTargets[0] || isWholeMessageSelection(unit, textTargets[0].messageId))) {
@@ -233,6 +239,8 @@ export function getContainerMembershipTargetError(context: GetContainerMembershi
   if (units.some(unit => !isWholeMessageSelection(unit, unit.messageId) || unit.reference?.revision !== undefined)) {
     return '组织成员需选择当前完整消息；已选元素、文本片段和历史版本可用于引用或讨论。';
   }
+  const attached = getDependentDisplayTargets({ relationById: new Map(relations.map(relation => [relation.id, relation])) }, units)[0];
+  if (attached) return `消息 ${attached.messageId} 跟随依赖消息显示，不能作为容器的独立成员。`;
   const selectedIds = new Set(wholeMessageUnits(units).map(unit => unit.messageId));
   const blockedContainerIds = new Set(
     relations
@@ -331,27 +339,11 @@ interface GetDependentDisplayTargetsDependencies {
 export function getDependentDisplayTargets(input: GetDependentDisplayTargetsDependencies, units: UnitSelection[]): { messageId: string; dependencyId: string; }[] {
   const { relationById } = input;
   const dependencies: Array<{ messageId: string; dependencyId: string }> = [];
-  const dependentTypes = new Set(['ANNOTATION', 'REFERENCE', 'REPLY', 'CORRECT', 'AGREE', 'DISAGREE', 'TAG', 'JOIN']);
-  const getFirstTargetId = (targetRefs: TargetRef[]): string | undefined => {
-    const target = targetRefs.find(ref => ref.kind === 'relation' || ref.kind === 'message' || ref.kind === 'text-fragment');
-    return target?.kind === 'relation' ? target.relationId : target?.messageId;
-  };
   for (const unit of wholeMessageUnits(units)) {
     const relation = relationById.get(unit.messageId);
     if (!relation) continue;
-    const relationType = relation.relationType.toUpperCase();
-    if (!dependentTypes.has(relationType)) continue;
-    const dependencyId = relationType === 'ANNOTATION'
-      || relationType === 'REFERENCE'
-      || relationType === 'REPLY'
-      || relationType === 'CORRECT'
-      ? relation.sourceMessageId
-      : relationType === 'JOIN'
-        ? relation.sourceMessageId
-        : getFirstTargetId(relation.targetRefs);
-    if (dependencyId && dependencyId !== unit.messageId) {
-      dependencies.push({ messageId: unit.messageId, dependencyId });
-    }
+    const ids = displayDependencyIds(relation);
+    if (ids !== null) dependencies.push({ messageId: unit.messageId, dependencyId: ids[0] ?? unit.messageId });
   }
   return dependencies;
 }

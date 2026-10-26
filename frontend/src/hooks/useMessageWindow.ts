@@ -13,7 +13,9 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
   const tasks = useContext(WorkbenchDrawingContext);
   const request = useRef<{ key: string; limit: number; task: WorkbenchDrawingTask; promise: Promise<void>; finish(): void; cancelPreparation(): void; started?: boolean } | null>(null);
   const job = useMemo(() => organize ? { kind: 'structures' as const, input: { messages, edges } } : null, [messages, edges, organize]);
-  const structure = useSceneComputation(job);
+  // A body-version change must not unmount the existing canvas while its new
+  // structure order is computed. Never reuse another scope's paging plan.
+  const structure = useSceneComputation(job, true, key);
   const limit = limits.get(key) ?? 50;
   const pinnedKey = pinned.join('\0');
   const effectiveLimit = useMemo(() => {
@@ -31,7 +33,9 @@ export function useMessageWindow(messages: DemoMessage[], edges: DemoEdge[], ena
     if (!structure) return [];
     const selected = new Set(structure.units.slice(0, enabled ? effectiveLimit : undefined));
     const records = new Map(messages.map(message => [message.id, message]));
-    return structure.order.filter(id => selected.has(structure.byId.get(id)!)).map(id => records.get(id)!);
+    return structure.order.filter(id => selected.has(structure.byId.get(id)!)).flatMap(id => {
+      const message=records.get(id);return message?[message]:[];
+    });
   }, [messages, structure, effectiveLimit, enabled, organize]);
   const visibleIds = useMemo(() => new Set(visible.map(message => message.id)), [visible]);
   const visibleEdges = useMemo(() => enabled ? edges.filter(edge => visibleIds.has(edge.relationMessageId)

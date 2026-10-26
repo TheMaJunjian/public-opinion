@@ -107,6 +107,8 @@ interface HandleComparisonVoteDependencies {
   draftUnits: UnitSelection[];
   scopeMessageId: string;
   relStakeAmount: number | "";
+  recommendationAmount: number | "";
+  protocolFee: number;
   effectiveMinStake: number;
   setSendError: React.Dispatch<React.SetStateAction<string | null>>;
   availablePoints: number;
@@ -123,13 +125,19 @@ export async function handleComparisonVote(dependencies: HandleComparisonVoteDep
   const targetId = comparisonTargetId ?? (draftUnits.length === 1 ? draftUnits[0].messageId : null);
   if (!scopeMessageId || !targetId) return;
   const amount = typeof relStakeAmount === 'number' ? relStakeAmount : 0;
+  const recommendation = 0;
+  if (amount === 0 && recommendation === 0) {
+    setSendError('真假和价值至少一项须大于 0');
+    return;
+  }
   const minimum = effectiveMinStake;
   if (amount < minimum) {
     setSendError(`关系消息最低押注 ${minimum} 点（当前 ${amount}）`);
     return;
   }
-  if (amount > availablePoints) {
-    setSendError(`贡献点余额不足：需要 ${amount} 点，可用 ${availablePoints} 点`);
+  const total = amount + recommendation + dependencies.protocolFee;
+  if (total > availablePoints) {
+    setSendError(`贡献点余额不足：需要 ${total} 点，可用 ${availablePoints} 点`);
     return;
   }
   setSendError(null);
@@ -139,6 +147,7 @@ export async function handleComparisonVote(dependencies: HandleComparisonVoteDep
       sourceMessageId: null,
       targetRefs: [unitSelectionToTargetRef({ messageId: targetId, selection: { kind: 'whole' } }, msgMap)],
       stakeAmount: amount,
+      recommendation,
     });
     await registerCreatedRelationInCurrentClassify(relation);
   } catch (e: any) {
@@ -226,7 +235,7 @@ export function handleDecorationDoubleClick(dependencies: HandleDecorationDouble
   const allHighlightIds = [messageId, ...sourceMsgIds, ...evidenceMsgIds];
   setStanceHighlight({ stanceMsgId: messageId, evidenceMsgIds: allHighlightIds });
   if (stanceHighlightTimerRef.current) clearTimeout(stanceHighlightTimerRef.current);
-  stanceHighlightTimerRef.current = setTimeout(() => {
+  stanceHighlightTimerRef.current = window.setTimeout(() => {
     setStanceHighlight(null);
   }, 3000);
 

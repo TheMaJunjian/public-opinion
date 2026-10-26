@@ -3,7 +3,6 @@ import React from "react";
 import { api } from "../../../api";
 import type { Relation, TargetRef } from "../../../types";
 import { operationLog } from "../../../utils/debugLog";
-import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 import type {
   DemoEdge,
   DemoMessage,
@@ -12,7 +11,7 @@ import type {
 } from "../../../utils/modelBridge";
 import { unitSelectionToReference, unitSelectionToTargetRef } from "../../../utils/modelBridge";
 import { buildRelationPayload, secondaryRelationLabel } from '../model/relationComposition';
-import { mergeUnits, nextId } from '../model/selection';
+import { mergeUnits, nextId,relationTargetUnits } from '../model/selection';
 
 interface SendTagRelationDependencies {
   scopeMessageId: string;
@@ -31,7 +30,7 @@ export async function sendTagRelation(dependencies: SendTagRelationDependencies,
   try {
     const isReadStatus = secondaryRelationType === 'read' || secondaryRelationType === 'unread';
     const statusType = secondaryRelationType.toUpperCase();
-    const payload: Record<string, unknown> = { relationType: isReadStatus ? statusType : 'TAG', label: tagLabel };
+    const payload: Record<string, unknown> = { relationType: isReadStatus ? statusType : 'TAG', ...(isReadStatus ? {} : { label: tagLabel }) };
     if (subType) { payload.subType = subType; if (subType === 'CUSTOM') { const ct = (customLabel || newMessageContent).trim(); if (ct) payload.customLabel = ct.slice(0, 20); } }
     const backendRel = await createRel(scopeMessageId, {
       relationType: isReadStatus ? statusType : 'TAG',
@@ -76,14 +75,7 @@ export async function handleCreateRelationWithSourcesAndTargets(dependencies: Ha
   // Deduplicate relation-message targets: when both a whole and edge selection exist for the same
   // relation message, keep only the whole (it covers all edges, preventing duplicate
   // targetRefs that the backend would reject and that GraphView would render as extra arrows).
-  const wholeRelIds = new Set(
-    params.targets
-      .filter(t => msgMap.get(t.messageId)?.kind === "relation" && isWholeMessageSelection(t, t.messageId))
-      .map(t => t.messageId)
-  );
-  const targets = params.targets.filter(t =>
-    !(msgMap.get(t.messageId)?.kind === "relation" && t.selection.kind === 'edge' && wholeRelIds.has(t.messageId))
-  );
+  const targets = relationTargetUnits(params.targets,msgMap);
   const newEdgesList: DemoEdge[] = [];
 
   const buildEdges = (src: UnitSelection, tgt: UnitSelection, type: RelationType, lbl: string, relId: string) => {
@@ -305,8 +297,9 @@ export async function createJoinRelationsForContainer(dependencies: CreateJoinRe
     setSendError('加入消息必须选择当前完整消息，不能选择部件、文本片段或历史版本');
     return false;
   }
-  const joinStake = 0;
-  for (const target of targetMids) {
+  const joinStake = 1;
+  const uniqueTargets=[...new Map(targetMids.map(target=>[typeof target==='string'?target:target.kind==='relation'?target.relationId:target.messageId,target])).values()];
+  for (const target of uniqueTargets) {
     try {
       const tgtMid = typeof target === 'string' ? target : target.kind === 'relation' ? target.relationId : target.messageId;
       const targetMessage = msgMap.get(tgtMid);
@@ -322,13 +315,7 @@ export async function createJoinRelationsForContainer(dependencies: CreateJoinRe
         relation.relationType?.toUpperCase() === 'JOIN' &&
         (effectiveJoinRelationIds ? effectiveJoinRelationIds.has(relation.id) : relation.state?.membershipActive === true) &&
         relation.sourceMessageId === containerId &&
-        relation.targetRefs.some(ref =>
-          targetRef.kind === 'relation'
-            ? ref.kind === 'relation' && ref.relationId === tgtMid && (ref.part ?? 'whole') === (targetRef.part ?? 'whole')
-            : targetRef.kind === 'text-fragment'
-              ? ref.kind === 'text-fragment' && ref.messageId === tgtMid && ref.hash === targetRef.hash
-              : ref.kind === 'message' && ref.messageId === tgtMid
-        )
+        relation.targetRefs.some(ref => (ref.kind==='relation'?ref.relationId:ref.messageId)===tgtMid)
       );
       // Reusing a historical, inactive JOIN would leave the member outside the
       // requested container. Only an already effective placement is a no-op.

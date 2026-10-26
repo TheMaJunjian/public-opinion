@@ -1,7 +1,8 @@
 import type { CleanFilterRule } from '../types';
 import type { CleanVisibleIds } from '../hooks/useCleanView';
 import type { DemoMessage, DemoEdge } from './modelBridge';
-import { isContentKind } from './modelBridge';
+import { isCardMessage, isContentKind } from './modelBridge';
+import { getPresentationSpec } from '../types';
 
 /** 单条规则对单条消息的判定 */
 function rulePassesMessage(
@@ -47,14 +48,15 @@ function rulePassesMessage(
       // relationType 规则：消息内容类型匹配指定的关系类型
       // 从 edges 中查找该消息作为 source 或 target 的关系，匹配 relationType
       const targetType = rule.relationType.toUpperCase();
+      const msg = ctx.msgMap.get(msgId);
+      if(msg?.relationType?.toUpperCase()===targetType)return true;
       if (ctx.edges.some(
         e => e.relationType.toUpperCase() === targetType &&
-          (e.from.messageId === msgId || e.to.messageId === msgId),
+          (e.relationMessageId === msgId || e.from.messageId === msgId || e.to.messageId === msgId),
       )) return true;
 
       // 治理/运营类消息（PROPOSAL / CODE_CHANGE / OPERATIONS）不产生自身类型的边，
       // 它们通过 REFERENCE 边连接目标，因此需直接检查消息的 kind
-      const msg = ctx.msgMap.get(msgId);
       if (msg) {
         if (targetType === 'PROPOSAL' && msg.kind === 'governance') return true;
         if (targetType === 'CODE_CHANGE' && msg.kind === 'code') return true;
@@ -103,18 +105,19 @@ export function deriveCleanVisibleIds({ messages, edges, stakeCounts, tagCounts 
 
     const ctx = { msgMap, stakeCounts, edges, roundCounts, participantCounts, tagCounts };
 
-    // Step 1: 找出通过所有规则的内容消息
+    // Readable relation bodies and organization headers are filter candidates
+    // too, including when a CORRECT edge targets the relation itself.
     const visibleTextIds = new Set<string>();
+    const visibleRelIds = new Set<string>();
     for (const m of messages) {
-      if (!isContentKind(m.kind)) continue;
+      if (!isCardMessage(m)&&!getPresentationSpec(m.relationType??'').isContainer) continue;
       const passes = cleanFilters.every(rule => rulePassesMessage(rule, m.id, ctx));
-      if (passes) visibleTextIds.add(m.id);
+      if (passes)(isContentKind(m.kind)?visibleTextIds:visibleRelIds).add(m.id);
     }
 
     // Step 2: 纳入端点都可见的关系消息。
     // 关系消息也可以引用另一条关系消息，不能只检查 visibleTextIds；
     // 用固定点迭代把 relation -> relation 的显示依赖闭包算出来。
-    const visibleRelIds = new Set<string>();
     let changed = true;
     while (changed) {
       changed = false;

@@ -60,6 +60,23 @@ export function projectContainer(messages:DemoMessage[],edges:DemoEdge[],relatio
   return deriveGraphMessagesToRender({messages,edges,messagesToShow:messages,edgesToShow:edges,relations,relationById:new Map(relations.map(r=>[r.id,r])),msgMap:new Map(messages.map(m=>[m.id,m])),traceEntries:[],traceContainerMemberships:[],effectiveSuppressedRelIdsForLayout:empty(),traceDistance:1,traceExpandedFrameIds:empty(),isInsideClassify:true,currentClassifyRelMsgId:id,rejectedContainerIds:empty(),rejectedJoinRelationIds:empty(),activeClassifyOwnership:owned(),activeSummaryOwnership:owned(),classifiedTargetSummaryRelMsgIds:empty(),listExclusiveRelMsgIds:empty(),replacedRelationMsgIds:empty(),classifiedTargetTextIds:empty(),graphOwnedRelationIds:empty(),traceRelationMsgIds:empty(),classifiedTargetClassifyRelMsgIds:empty(),classifiedTargetMergeRelMsgIds:empty(),classifiedTargetARRANGERelMsgIds:empty(),graphExclusiveRelMsgIds:empty(),graphHiddenTextIds:empty()});
 }
 
+it('follows source references and target corrections across scopes and through dependent chains',()=>{
+  const relations=[rel('inside','CLASSIFY',['a']),rel('outside','CLASSIFY',['b']),
+    rel('correction-of-reference','CORRECT',['reference']),rel('correction','CORRECT',['a'],'b'),
+    rel('foreign-reference','REFERENCE',['a'],'b'),rel('reference','REFERENCE',['b'],'a')];
+  relations.find(relation=>relation.id==='correction')!.payload={correctionKind:'WIDTH',correctionWidth:640};
+  const model=convertMessagesToDemoModel(['a','b'].map(text),relations);
+  const inside=projectContainer(model.messages,model.edges,relations,'inside');
+  const visible=inside.listMessagesToRender.map(message=>message.id);
+  expect(visible).toEqual(expect.arrayContaining(['a','reference','correction','correction-of-reference']));
+  expect(visible).not.toContain('foreign-reference');
+  expect(visible).not.toContain('b');
+  expect(inside.graphEdgesToRender.some(edge=>edge.relationMessageId==='reference')).toBe(true);
+  const dependencies={relations,relationById:new Map(relations.map(relation=>[relation.id,relation])),rejectedContainerIds:new Set<string>(),rejectedJoinRelationIds:new Set<string>()};
+  expect(findContainingClassification(dependencies,'correction')).toBe('inside');
+  expect(findContainingClassification(dependencies,'correction-of-reference')).toBe('inside');
+});
+
 it('keeps a JOIN-only classification inside its frame and its member behind that card despite a Topic annotation',()=>{
   const relations=[rel('topic','CLASSIFY',['merge','annotation']),rel('merge','MERGE'),rel('category','CLASSIFY'),rel('join-category','JOIN',['category'],'merge'),rel('join-leaf','JOIN',['leaf'],'category'),rel('annotation','ANNOTATION',['leaf'],'note')];
   const model=convertMessagesToDemoModel(['leaf','note'].map(text),relations);

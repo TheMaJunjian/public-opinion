@@ -26,6 +26,8 @@ export function expandTextIdsWithCorrections(
     visited.add(tid);
     for (const e of edges) {
       if (e.relationType !== 'correct' || e.proposalOnly) continue;
+      const record = msgMap.get(e.relationMessageId);
+      if (record?.parts?.length || record?.relationPayload?.correctionKind === 'WIDTH') continue;
       if (msgMap.get(e.from.messageId)?.kind !== 'normal' || msgMap.get(e.to.messageId)?.kind !== 'normal') continue;
       if (e.from.messageId === tid && !expanded.has(e.to.messageId)) {
         expanded.add(e.to.messageId);

@@ -45,9 +45,29 @@ function Preparation({ onReady }: { onReady(prepare: ReturnType<typeof useWorkbe
   return null;
 }
 
+function SendPreparation({ work }: { work: () => void }) {
+  const progress = useWorkbenchSendingProgress(false);
+  return <button onClick={() => { void progress.prepare().then(() => { work(); progress.finish(); }); }}>测试发送</button>;
+}
+
 describe('workbench loading through registered drawing tasks', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => { resetWorkbenchActivity(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('commits the sending dialog immediately and paints it before synchronous send preparation', async () => {
+    const work = vi.fn();
+    render(<WorkbenchLoadingBoundary><Content /><SendPreparation work={work} /></WorkbenchLoadingBoundary>);
+    advance(34);
+    fireEvent.click(screen.getByRole('button', { name: '测试发送' }));
+    expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+    expect(work).not.toHaveBeenCalled();
+    advance(16);
+    expect(work).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(18); });
+    expect(work).toHaveBeenCalledOnce();
+    advance(34);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
 
   it('keeps progress visible without collapse controls until drawing completes, preserving focus and background guards', () => {
     let tasks!: Tasks;

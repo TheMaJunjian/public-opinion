@@ -30,7 +30,7 @@ export interface DraftSendDependencies {
   subType: string;
   subTypeStakeMap: React.MutableRefObject<Record<string, number>>;
   relationStakeMap: React.MutableRefObject<Record<string, number>>;
-  totalConsumption: { stakeTotal: number; protocolFeeTotal: number; recommendationTotal: number; delegationRewardStake: number; total: number; perStake: number; textStake: number; relCount: number; joinCount: number; hasText: boolean; hasRel: boolean; joinStakeTotal: number; joinFeeTotal: number; refCount: number; refStakeTotal: number; newJoinCount: number; existingJoinAgreeCount: number; } | null;
+  totalConsumption: { groups?:unknown[];contributionError?: string | null; stakeTotal: number; protocolFeeTotal: number; recommendationTotal: number; delegationRewardStake: number; total: number; perStake: number; textStake: number; relCount: number; joinCount: number; hasText: boolean; hasRel: boolean; joinStakeTotal: number; joinFeeTotal: number; refCount: number; refStakeTotal: number; newJoinCount: number; existingJoinAgreeCount: number; } | null;
   availablePoints: number;
   handleSendMessageOnly: (overrideContent?: string) => Promise<DemoMessage | null>;
   guideTargetIdRef: React.MutableRefObject<string | null>;
@@ -53,6 +53,7 @@ export interface DraftSendDependencies {
   relationLabel: string;
   handleCreateRelationWithSourcesAndTargets: (params: { sources: UnitSelection[]; targets: UnitSelection[]; label: string; }) => Promise<void>;
   secondaryRelationType: string;
+  correctionWidth?: number;
   msgMap: Map<string, DemoMessage>;
   createRel: (scopeMessageId: string, data: Parameters<typeof api.createRelation>[1]) => Promise<Relation>;
   scopeMessageId: string;

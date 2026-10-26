@@ -1,4 +1,5 @@
 import { sendExport } from './export-response.js';
+import { readingState, markReading, readingUpdateSchema } from './reading-state.js';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { relations, textOf, type Message } from '@gonglun/core';
 import { z } from 'zod';
@@ -8,12 +9,28 @@ import { dataOf } from './economy.js';
 import { executeBatch, executeCommand } from './ui-commands.js';
 import { sendSnapshot } from './snapshot-response.js';
 import { windowSnapshot } from './window-snapshot.js';
+import {bodyVersionSchema} from './reference-schema.js';
+import {validateBodyVersion} from './validation.js';
 import { accountView, allUsers, attentionUsers, relationViewType, messageView, paginate, parentOf, roundView, scopeMessages, snapshot, stakesFor, tagCounts, tagCountsFor, scopeView, userView, viewsFor, type RecordData } from './ui-projections.js';
 /** Transport views for the established interaction model. The domain contains messages only. */
 export function createUiRouter(store: Store, publish: () => Promise<void>) {
     const router = Router();
+    router.post('/body-versions/resolve',(req,res,next)=>{
+        void store.read(async()=>{const version=bodyVersionSchema.parse(req.body);res.json({message:await validateBodyVersion(store,version)});}).catch(next);
+    });
     const get=(path:string,handler:(req:Request,res:Response,next:NextFunction)=>Promise<unknown>)=>
         router.get(path,(req,res,next)=>{void store.read(()=>handler(req,res,next)).catch(next);});
+    get('/reading-state',async(req,res)=>{
+        const session=await requireSession(store,req);
+        res.set('Cache-Control','private, no-store').json({marks:await readingState(store,session.user.id)});
+    });
+    router.post('/reading-state',async(req,res,next)=>{
+        try {
+            const session=await requireCsrf(store,req),{marks}=readingUpdateSchema.parse(req.body);
+            const saved=await store.sessionTransaction(()=>markReading(store,session.user.id,marks));
+            res.set('Cache-Control','private, no-store').json({marks:saved});
+        } catch(error){next(error);}
+    });
     router.post('/snapshot/query', (req, res, next) => {
         void store.read(async () => sendSnapshot(req, res, await windowSnapshot(store, req.body))).catch(next);
     });

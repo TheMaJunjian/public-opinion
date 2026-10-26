@@ -4,6 +4,13 @@ import type { Change, Message } from './types.js';
 const source: Message = { id: 'grant', revision: 1, authorId: 'system', createdAt: '', updatedAt: '', regionId: 'local', ledgerId: 'local', programVersion: '2.0.0', ruleVersion: 1, parts: [{ id: 'body', type: 'text', text: '发放' }], spending: { protocol: 0, recommendation: 0, wager: 0 }, sequence: 1 };
 const first: Change = { sequence: 1, previousSequence:0, messages: [source], memberships: [], removedMemberships: [], states: [], treasury: { operating: 0, issued: 100 }, ledger: [{ id: 'entry', userId: 'user', messageId: 'grant', messageRevision: 1, amount: 100, lockedDelta: 0, reason: '初始发放', createdAt: '', ruleVersion: 1 }] };
 const archive = (changes: Change[]) => ({ format: 'gonglun-2', regionId: 'local', ledgerId: 'local', programVersion: '2.0.0', changes });
+it('removes obsolete records from current views while retaining auditable versions and preventing resurrection',()=>{
+  const removal:Change={...first,sequence:2,previousSequence:1,messages:[],ledger:[],removedMessageIds:[source.id]};
+  const result=replayArchive(archive([first,removal]));
+  expect(result.messages).toEqual([]);expect(result.revisions.get(source.id)).toEqual([source]);
+  expect(result.accounts.get('user')?.available).toBe(100);
+  expect(()=>replayArchive(archive([first,removal,{...first,sequence:3,previousSequence:2,ledger:[]}]))).toThrow('已删除的消息不能恢复');
+});
 it('replays actual historical amounts and checks each committed transaction', () => {
   const next: Change = { ...first, sequence: 2, previousSequence:1, messages: [], treasury: { operating: 1, issued: 100 }, ledger: [{ ...first.ledger[0], id: 'fee', amount: -11, lockedDelta: 10, reason: '协议与押注' }] };
   const result = replayArchive(archive([first, next]));

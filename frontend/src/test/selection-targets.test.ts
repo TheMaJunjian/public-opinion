@@ -115,6 +115,15 @@ describe('classification boundaries for agreement on an organization', () => {
 });
 
 describe('visible element selection preserves its exact target',()=>{
+  it('attaches corrections to their target and references to their source, rejecting independent membership',()=>{
+    const correct:Relation={...relation,id:'correction',relationType:'CORRECT',sourceMessageId:'other',targetRefs:[{kind:'message',messageId:'a'}]};
+    const reference:Relation={...correct,id:'reference',relationType:'REFERENCE',sourceMessageId:'b'};
+    const relations=[correct,reference];
+    expect(getDependentDisplayTargets({relationById:new Map(relations.map(item=>[item.id,item]))},[whole('correction'),whole('reference')]))
+      .toEqual([{messageId:'correction',dependencyId:'a'},{messageId:'reference',dependencyId:'b'}]);
+    expect(getContainerMembershipTargetError({relations},[whole('correction')])).toContain('不能作为容器的独立成员');
+    expect(getContainerMembershipTargetError({relations},[whole('reference')])).toContain('不能作为容器的独立成员');
+  });
   it('shows members/type selections separately from the containing whole card',()=>{
     const part=element('group');
     expect(groupDraftSelections([part])).toEqual([{messageId:'group',wholeSelected:false,wholeUnits:[],fragments:[part]}]);

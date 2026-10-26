@@ -5,6 +5,7 @@ import { getContainerAncestorChain } from '../pages/workbench/model/ownership';
 import { buildTraceProjection } from '../utils/traceProjection';
 import { deriveHomeFilterResult } from '../pages/workbench/projections/homeFilterResult';
 import type { DemoEdge, DemoMessage } from '../utils/modelBridge';
+import {bodyVersion,messageReadingKey} from '@gonglun/core';
 
 const user = { id: 'user-1', username: 'alice', createdAt: '2026-01-01T00:00:00.000Z' };
 const otherUser = { id: 'user-2', username: 'bob', createdAt: '2026-01-01T00:00:00.000Z' };
@@ -21,14 +22,15 @@ describe('correction discovery for the original author', () => {
     const input = { displayUser: user, msgMap: new Map([[original.id, original], [correction.id, correction]]),
       messages: [original, correction], edges, traceContainerMemberships: [], readStatusByMessageId: new Map<string, 'READ' | 'UNREAD'>() };
     const unread = deriveHomeFilterResult({ ...input, homeFilterMode: 'unread-related' })!;
-    expect(unread.matchIds).toEqual(new Set([correction.id]));
+    expect(unread.matchIds).toEqual(new Set([original.id,correction.id]));
     expect(unread.displayIds).toEqual(new Set([correction.id, original.id]));
     expect(deriveHomeFilterResult({ ...input, displayUser: { ...user, username: 'unrelated' }, homeFilterMode: 'unread-related' })!.matchIds.size).toBe(0);
     const mark: Relation = { id: 'read-correction', relationType: 'READ', sourceMessageId: null,
       targetRefs: [{ kind: 'relation', relationId: correction.id }], createdAt: '2026-10-21', createdBy: user };
     const readStatusByMessageId = getLatestUserReadStatusByMessageId([mark], record => record.createdBy.id === user.id);
-    expect(deriveHomeFilterResult({ ...input, readStatusByMessageId, homeFilterMode: 'unread-related' })!.matchIds.size).toBe(0);
-    const read = deriveHomeFilterResult({ ...input, readStatusByMessageId, homeFilterMode: 'read-related' })!;
+    const version=bodyVersion(correction.id),key=messageReadingKey(version.messageId),readingMarks=[{format:3 as const,messageId:correction.id,scope:'message' as const,version,key,bodySignature:key,signature:'seen'}];
+    expect(deriveHomeFilterResult({ ...input, readingMarks,readStatusByMessageId, homeFilterMode: 'unread-related' })!.matchIds).toEqual(new Set([original.id]));
+    const read = deriveHomeFilterResult({ ...input, readingMarks,readStatusByMessageId, homeFilterMode: 'read-related' })!;
     expect(read.matchIds.has(correction.id)).toBe(true);
     expect(read.displayIds.has(original.id)).toBe(true);
   });
@@ -51,6 +53,18 @@ function relation(
 }
 
 describe('getLatestUserReadStatusByMessageId', () => {
+  it('uses commit order for rapidly toggled statuses even when the history arrives backwards with equal timestamps', () => {
+    const records = [
+      { ...relation('READ', '2026-01-02T00:00:00.000Z', user, 'message-1'), sequence: 3 },
+      { ...relation('UNREAD', '2026-01-02T00:00:00.000Z', user, 'message-1'), sequence: 2 },
+      { ...relation('READ', '2026-01-02T00:00:00.000Z', user, 'message-1'), sequence: 1 },
+    ];
+    const own = (record: Pick<Relation, 'createdBy'>) => record.createdBy.id === user.id;
+    expect(getLatestUserReadStatusByMessageId(records.slice(1), own).get('message-1')).toBe('UNREAD');
+    expect(getLatestUserReadStatusByMessageId(records, own).get('message-1')).toBe('READ');
+    expect(getLatestUserReadStatusByMessageId([...records].reverse(), own).get('message-1')).toBe('READ');
+  });
+
   it('uses the latest status when READ and UNREAD history overlap', () => {
     const statuses = getLatestUserReadStatusByMessageId([
       relation('UNREAD', '2026-01-02T00:00:00.000Z', user, 'message-1'),

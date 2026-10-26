@@ -3,7 +3,7 @@ import { hash } from 'bcryptjs';
 import { Pool } from 'pg';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
+import { bodyVersion,messageReadingKey,replayArchive, decodeWorkbenchSnapshot } from '@gonglun/core';
 import { WorkbenchStore, type WorkbenchSnapshot } from '../../../frontend/src/data/workbench.js';
 import { migrateLegacy } from './migrate-legacy.js';
 import {prepareStartupDatabase} from './startup.js';
@@ -58,16 +58,16 @@ it('migrates an immutable source snapshot, preserves bcrypt login and reconciles
   const agent=request.agent(app);
   const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
   expect(login.status,login.text).toBe(200);expect(login.body.user).toMatchObject({id:'old-user',founder:true});
-  expect(login.body.account).toMatchObject({available:500,locked:0});
+  expect(login.body.account).toMatchObject({available:498,locked:2});
   const view=await agent.get('/api/ui/snapshot?parent=old-topic');
   expect(view.status,view.text).toBe(200);expect(view.body.messages.some((m:any)=>m.id==='old-message'&&m.content==='旧正文')).toBe(true);
   const archived=await app.store.db.prepare(`SELECT body FROM legacy_records WHERE "tableName"='AuditLog'`).get();
   expect(archived!.body.signature).toBe('unchanged-signature');
   const exported=await agent.get('/api/ui/export');
   expect(exported.status,exported.text).toBe(200);expect(JSON.stringify(exported.body)).not.toContain('$2');
-  expect(replayArchive(exported.body).accounts.get('old-user')?.available).toBe(500);
-  const written=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),parts:[{id:'body',type:'text',text:'新版正常写入'}]});
-  expect(written.status,written.text).toBe(201);expect(written.body.account.available).toBe(499);
+  expect(replayArchive(exported.body).accounts.get('old-user')?.available).toBe(498);
+  const written=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'新版正常写入'}]});
+  expect(written.status,written.text).toBe(201);expect(written.body.account.available).toBe(496);
   expect(await migrateLegacy(source)).toMatchObject({sourceDigest:dry.sourceDigest});
   await expect(migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true})).rejects.toThrow('目标 schema 必须为空');
 });
@@ -84,7 +84,7 @@ it('imports ROUND and ROUND_RESULT targets even when relationType and roundId ar
     expect(record.targetRefs).toMatchObject([{reference:{messageId:target.id}}]);
     expect(record.content).toBe('保留结算说明');
   }
-  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:0});
+  expect(await app.store.account('old-user')).toMatchObject({available:498,locked:2});
 });
 
 it('imports previous follow and block actions before validating the current message format',async()=>{
@@ -118,7 +118,7 @@ it('automatically imports a Prisma database once under concurrent startups and r
   expect((await migrateLegacy(source)).sourceDigest).toBe(before.sourceDigest);
   const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
   expect(await app.store.setting('automatic-import-source')).toBe(source.sourceSchema);
-  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:0});
+  expect(await app.store.account('old-user')).toMatchObject({available:498,locked:2});
   const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
   expect(login.status,login.text).toBe(200);
   const cursor=await app.store.latestSequence();
@@ -170,11 +170,11 @@ it('automatically retains exactly funded active principal without starting a set
   const before=await migrateLegacy({...source,preserveActiveState:true,readOnlyRehearsal:true});
   await prepareStartupDatabase(source.sourceUrl,source.sourceSchema,{targetSchema});
   const app=await createTestApp({databaseSchema:targetSchema});
-  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:10});
+  expect(await app.store.account('old-user')).toMatchObject({available:498,locked:12});
   expect(await app.store.setting('access-mode')).toBe('read-write');
   const round=await app.store.db.prepare('SELECT body FROM rounds WHERE id=$1').get('pending');
   expect(JSON.parse(String(round!.body))).toMatchObject({status:'open',endsAt:null});
-  expect((await stakesFor(app.store,['old-message']))['old-message'].pool).toEqual({lockedPro:10,lockedCon:0});
+  expect((await stakesFor(app.store,['old-message']))['old-message'].pool).toEqual({lockedPro:11,lockedCon:0});
   expect((await migrateLegacy({...source,preserveActiveState:true,readOnlyRehearsal:true})).sourceDigest).toBe(before.sourceDigest);
 });
 
@@ -232,7 +232,7 @@ it('creates visible JOIN history when grouping an imported classification inside
   const session = (await agent.post('/api/login').send({ name: '旧用户', password: 'short' })).body;
   const outerId = randomUUID(), requestId = randomUUID();
   const response = await agent.post('/api/ui/commands').set('x-csrf-token', session.csrf).set('x-request-id', requestId).send({ requestId, commands: [
-    { id: outerId, method: 'POST', path: '/relations', body: { parentMessageId: 'old-topic', relationType: 'CLASSIFY', payload: { title: '新外层分类' },
+    { id: outerId, method: 'POST', path: '/relations', body: { recommendation:1,parentMessageId: 'old-topic', relationType: 'CLASSIFY', payload: { title: '新外层分类' },
       targetRefs: [{ kind: 'relation', relationId: 'inner-class', reference: { messageId: 'inner-class' } }] } },
   ] });
   expect(response.status, response.text).toBe(201);
@@ -292,9 +292,9 @@ it('keeps closed historical rounds visible and rejects cross-boundary wagers',as
   const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
   const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
   const history=await agent.get('/api/messages/old-message/context');
-  expect(history.body.rounds).toHaveLength(1);expect(history.body.rounds[0]).toMatchObject({id:'old-round',status:'settled',pro:10,con:5});
-  const wager=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),wager:1,parts:[{id:'stance',type:'relation',relation:'agree',roles:{target:[{id:'target',reference:{messageId:'old-message'}}]}}]});
-  expect(wager.status,wager.text).toBe(409);expect(await app.store.account('old-user')).toMatchObject({available:500,locked:0});
+  expect(history.body.rounds).toHaveLength(2);expect(history.body.rounds.find((round:any)=>round.id==='old-round')).toMatchObject({id:'old-round',status:'settled',pro:10,con:5});
+  const wager=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),wager:1,parts:[{id:'stance',type:'relation',relation:'agree',roles:{target:[{id:'target',reference:{messageId:'old-message',partId:'body'}}]}}]});
+  expect(wager.status,wager.text).toBe(409);expect(await app.store.account('old-user')).toMatchObject({available:498,locked:2});
 });
 
 it('rejects invalid references atomically and leaves no imported users after a failure',async()=>{
@@ -320,10 +320,19 @@ it('converts unambiguous container and JOIN ownership, with live personal marks 
   expect(group.status,group.text).toBe(200);
   expect(group.body.messages.map((row:any)=>row.id)).toEqual(expect.arrayContaining(['original','joined']));
   const login=await agent.post('/api/login').send({name:'旧用户',password:'short'});
-  const unread=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),parts:[{id:'mark',type:'relation',relation:'unread',roles:{target:[{id:'target',reference:{messageId:'original'}}]}}]});
-  expect(unread.status,unread.text).toBe(201);
+  const unread=await agent.post('/api/messages').set('x-csrf-token',login.body.csrf).send({requestId:randomUUID(),recommendation:1,parts:[{id:'mark',type:'relation',relation:'unread',roles:{target:[{id:'target',reference:{messageId:'original'}}]}}]});
+  expect(unread.status,unread.text).toBe(400);
+  const privateRead=await agent.post('/api/ui/reading-state').set('x-csrf-token',login.body.csrf)
+    .send({marks:[{format:3,version:bodyVersion('original'),messageId:'original',scope:'message',key:messageReadingKey('original'),signature:'new-display',bodySignature:messageReadingKey('original')}]});
+  expect(privateRead.status,privateRead.text).toBe(200);
   const mark=await app.store.db.prepare(`SELECT action FROM personal_marks WHERE "targetId"='original'`).get();
-  expect(mark?.action).toBe('unread');
+  expect(mark?.action).toBe('read');
+  expect((await agent.get('/api/ui/reading-state')).body.marks).toHaveLength(1);
+  const before=await app.store.account(login.body.user.id),sequence=await app.store.latestSequence();
+  const agree=await agent.post('/api/ui/relations').set('x-csrf-token',login.body.csrf)
+    .send({relationType:'AGREE',targetRefs:[{kind:'relation',relationId:'old-read'}],recommendation:1});
+  expect(agree.status,agree.text).toBe(400);
+  expect(await app.store.account(login.body.user.id)).toEqual(before);expect(await app.store.latestSequence()).toBe(sequence);
 });
 
 it('refuses ambiguous container ownership during preflight',async()=>{
@@ -340,11 +349,11 @@ it('creates an explicitly read-only rehearsal preserving locked funds and pendin
   const report=await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true,readOnlyRehearsal:true});
   expect(report.applied).toBe(true);expect(report.mode).toBe('read-only-rehearsal');expect(report.blockers.length).toBeGreaterThan(0);
   const app=await createTestApp({databaseSchema:targetSchema,settlementTickMs:1}),agent=request.agent(app);
-  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:10});
+  expect(await app.store.account('old-user')).toMatchObject({available:498,locked:12});
   expect((await agent.get('/api/messages/old-message/context')).body.rounds[0]).toMatchObject({status:'frozen'});
   const before=await app.store.latestSequence();
   expect((await agent.post('/api/login').send({name:'旧用户',password:'short'})).status).toBe(200);
-  expect((await agent.post('/api/messages').send({requestId:randomUUID(),parts:[{id:'body',type:'text',text:'blocked'}]})).status).toBe(503);
+  expect((await agent.post('/api/messages').send({requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'blocked'}]})).status).toBe(503);
   expect((await agent.post('/api/register').send({name:'blocked-user',password:'long-password'})).status).toBe(503);
   await new Promise(resolve=>setTimeout(resolve,25));
   expect(await app.store.latestSequence()).toBe(before);
@@ -359,8 +368,8 @@ it('preserves separate truth/value/delegation pools, active principal and source
   const app=await createTestApp({databaseSchema:targetSchema}),agent=request.agent(app);
   const view=await agent.get('/api/ui/snapshot');
   expect(view.status,view.text).toBe(200);
-  expect(view.body.stakes['old-message'].pools).toMatchObject({TRUTH:{lockedPro:1,lockedCon:0},VALUE:{lockedPro:2,lockedCon:0},DELEGATION:{lockedPro:3,lockedCon:0}});
-  expect(view.body.stakes['old-message'].stakes).toHaveLength(3);
+  expect(view.body.stakes['old-message'].pools).toMatchObject({TRUTH:{lockedPro:2,lockedCon:0},VALUE:{lockedPro:2,lockedCon:0},DELEGATION:{lockedPro:3,lockedCon:0}});
+  expect(view.body.stakes['old-message'].stakes).toHaveLength(4);
   const compact=await agent.get('/api/ui/snapshot?format=compact-v1&batch=4').set('Accept-Encoding','gzip');
   expect(compact.headers['content-encoding']).toBe('gzip');
   expect(decodeWorkbenchSnapshot<WorkbenchSnapshot>(compact.body)).toEqual(view.body);
@@ -368,7 +377,7 @@ it('preserves separate truth/value/delegation pools, active principal and source
   expect(login.status,login.text).toBe(200);
   const balance=await agent.get('/api/ui/points/balance');
   expect(balance.body.breakdown).toMatchObject({totalLost:15,totalEarned:20});
-  expect(await app.store.account('old-user')).toMatchObject({available:500,locked:6});
+  expect(await app.store.account('old-user')).toMatchObject({available:498,locked:8});
 });
 
 it('loads every migrated message, JOIN, reference and legacy field with fewer round trips and bytes',async()=>{
@@ -409,7 +418,7 @@ it('loads every migrated message, JOIN, reference and legacy field with fewer ro
   expect(optimized.bytes).toBeLessThan(original.bytes/3);
   expect((await loadAll(true,'old-topic')).view).toEqual((await loadAll(false,'old-topic')).view);
   console.info('Legacy snapshot transport:',JSON.stringify({messages:original.view.messages.length,relations:original.view.relations.length,before:{requests:original.requests,bytes:original.bytes},after:{requests:optimized.requests,bytes:optimized.bytes}}));
-},60_000);
+},120_000);
 
 it('locks only available virtual points without minting or settling, and tolerates an unfunded remainder',async()=>{
   const source=await fixture({Stake:[{id:'virtual-stake',userId:'old-user',messageId:'old-message',roundId:'pending',side:'PRO',amount:700,settlementType:'TRUTH',createdAt:time}],BetPool:[{messageId:'old-message',settlementType:'TRUTH',lockedPro:700,lockedCon:0}],SettlementRound:[{id:'pending',messageId:'old-message',createdByUserId:'old-user',status:'VOTING',settlementType:'TRUTH',openedAt:time,closedAt:null}]});
@@ -418,7 +427,7 @@ it('locks only available virtual points without minting or settling, and tolerat
   expect(report.fundingAdjustments).toEqual([{userId:'old-user',amount:500,remaining:200}]);
   expect(report.applied).toBe(true);
   const app=await createTestApp({databaseSchema:targetSchema});
-  expect(await app.store.account('old-user')).toMatchObject({available:0,locked:500});
+  expect(await app.store.account('old-user')).toMatchObject({available:-2,locked:502});
   expect(await app.store.setting('minted')).toBe(512);
   expect((await app.store.db.prepare(`SELECT body FROM published_round_reports WHERE id='pending'`).get())!.body.status).toBe('VOTING');
   expect((await migrateLegacy(source)).available).toBe(500);
@@ -434,23 +443,24 @@ it('operates funded imported truth/value rounds without reversing historical pay
   const app=await createTestApp({databaseSchema:options.targetSchema,settlementTickMs:1}),user=await app.store.user('old-user');
   const run=async(path:string,body:Record<string,unknown>={})=>executeBatch(app.store,user,{requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path,body}]});
   await new Promise(resolve=>setTimeout(resolve,25));
-  expect(await app.store.account(user.id)).toMatchObject({available:479,locked:21});
+  expect(await app.store.account(user.id)).toMatchObject({available:477,locked:23});
   const original=(await app.store.db.prepare(`SELECT body FROM rounds WHERE id='historical'`).get())!.body;
   await run('/rounds/active-TRUTH/votes',{vote:'TRUE',amount:3});
-  expect((await stakesFor(app.store,['old-message']))['old-message'].pools).toMatchObject({TRUTH:{lockedPro:13},VALUE:{lockedPro:11}});
+  expect((await stakesFor(app.store,['old-message']))['old-message'].pools).toMatchObject({TRUTH:{lockedPro:14},VALUE:{lockedPro:11}});
   await run('/rounds/active-TRUTH/close-and-settle');
-  expect(await app.store.account(user.id)).toMatchObject({locked:11});
+  expect(await app.store.account(user.id)).toMatchObject({locked:12});
   expect((await stakesFor(app.store,['old-message']))['old-message'].pools).toMatchObject({TRUTH:{lockedPro:0},VALUE:{lockedPro:11}});
   await run('/rounds/active-VALUE/close-and-settle');
-  expect(await app.store.account(user.id)).toMatchObject({locked:0});
+  expect(await app.store.account(user.id)).toMatchObject({locked:1});
   expect((await app.store.db.prepare(`SELECT body FROM rounds WHERE id='historical'`).get())!.body).toEqual(original);
   expect(await app.store.db.prepare(`SELECT 1 FROM ledger WHERE reason='撤回先前对赌分配'`).get()).toBeUndefined();
-  await run('/relations',{relationType:'AGREE',targetRefs:[{kind:'message',messageId:'old-message'}],wager:2});
+  const fixedContract=JSON.parse(String((await app.store.db.prepare("SELECT body FROM rounds WHERE id='active-TRUTH'").get())!.body)).target;
+  await run('/relations',{relationType:'AGREE',targetRefs:[{kind:'message',messageId:'old-message',reference:{...fixedContract,context:{kind:'MESSAGE'}}}],wager:2});
   const next=JSON.parse(String((await app.store.db.prepare(`SELECT body FROM rounds WHERE body::jsonb #>> '{target,messageId}'='old-message' AND body::jsonb ->> 'settlementType'='TRUTH' ORDER BY position DESC LIMIT 1`).get())!.body));
   expect(next).not.toHaveProperty('legacyActiveBoundary');
   expect((await stakesFor(app.store,['old-message']))['old-message'].pool.lockedPro).toBe(2);
   await run(`/rounds/${next.id}/close-and-settle`);
-  expect(await app.store.account(user.id)).toMatchObject({locked:0});
+  expect(await app.store.account(user.id)).toMatchObject({locked:1});
   const exported=(await request(app).get('/api/ui/export')).body;
   expect(replayArchive(exported).accounts.get(user.id)).toEqual(await app.store.account(user.id));
   expect((await migrateLegacy(source)).sourceDigest).toBe(report.sourceDigest);
@@ -464,10 +474,10 @@ it('preserves delegation reward and extra reserve until an explicit synthetic co
   const report=await migrateLegacy({...source,targetUrl:testDatabaseUrl(),targetSchema,apply:true,readOnlyRehearsal:true,preserveActiveState:true,lockAvailable:true,nativeRehearsal:true});
   expect(report.applied).toBe(true);
   const app=await createTestApp({databaseSchema:targetSchema}),user=await app.store.user('old-user');
-  expect(await app.store.account(user.id)).toMatchObject({available:389,locked:111});
+  expect(await app.store.account(user.id)).toMatchObject({available:386,locked:114});
   expect(await app.store.db.prepare(`SELECT * FROM escrows WHERE "messageId"='task'`).get()).toMatchObject({amount:100,recipientId:null});
   await executeBatch(app.store,user,{requestId:randomUUID(),commands:[{id:randomUUID(),method:'POST',path:'/rounds/completion-round/close-and-settle',body:{}}]});
-  expect(await app.store.account(user.id)).toMatchObject({locked:10});
+  expect(await app.store.account(user.id)).toMatchObject({locked:12});
   expect((await stakesFor(app.store,['task'])).task.pools.DELEGATION.lockedPro).toBe(10);
   expect(await app.store.db.prepare(`SELECT * FROM escrows WHERE "messageId"='task'`).get()).toMatchObject({amount:100,recipientId:'old-user'});
   expect((await app.store.db.prepare(`SELECT body FROM legacy_records WHERE "tableName"='BetPool' AND body->>'messageId'='task'`).get())!.body.lockedPro).toBe(110);

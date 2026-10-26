@@ -1,8 +1,10 @@
 import type { UnitSelection } from '../../utils/modelBridge';
+import type {DisplayHintWindowSnapshot} from './model/displayHintWindow';
 
 export type ViewMode = "list" | "graph";
 
 export type TraceSnapshot = {
+  displayHintWindow?:DisplayHintWindowSnapshot;
   /** Restore the local scope history captured with this viewport, using cached records. */
   restoreScope?: () => void;
   viewMode: ViewMode;

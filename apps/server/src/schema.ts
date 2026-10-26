@@ -1,4 +1,5 @@
 import {querySchema} from './query-schema.js';
+import {readingStateSchema} from './reading-state.js';
 /** Fresh PostgreSQL schema with explicit insertion positions. */
 export const schemaSql = `
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -22,9 +23,9 @@ CREATE INDEX IF NOT EXISTS membership_action_member ON membership_actions((body-
 CREATE TABLE IF NOT EXISTS refs("sourceId" TEXT NOT NULL,"targetId" TEXT NOT NULL,PRIMARY KEY("sourceId","targetId"));
 CREATE INDEX IF NOT EXISTS refs_target ON refs("targetId","sourceId");
 CREATE TABLE IF NOT EXISTS rounds(id TEXT PRIMARY KEY,"targetKey" TEXT NOT NULL,body TEXT NOT NULL,"createdAt" TEXT NOT NULL,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);
-CREATE INDEX IF NOT EXISTS round_target ON rounds("targetKey","createdAt");
+CREATE INDEX IF NOT EXISTS round_target ON rounds USING hash("targetKey");
 CREATE TABLE IF NOT EXISTS bets(id TEXT PRIMARY KEY,"roundId" TEXT NOT NULL,"targetKey" TEXT NOT NULL,"userId" TEXT NOT NULL,"messageId" TEXT NOT NULL,side TEXT NOT NULL,amount BIGINT NOT NULL,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);
-CREATE INDEX IF NOT EXISTS bets_target ON bets("targetKey");
+CREATE INDEX IF NOT EXISTS bets_target ON bets USING hash("targetKey");
 CREATE TABLE IF NOT EXISTS execution_stances("sourceId" TEXT NOT NULL,revision INTEGER NOT NULL,"partId" TEXT NOT NULL,target TEXT NOT NULL,side TEXT NOT NULL,PRIMARY KEY("sourceId",revision,"partId"));
 CREATE TABLE IF NOT EXISTS ledger(id TEXT PRIMARY KEY,"userId" TEXT NOT NULL,"messageId" TEXT NOT NULL,amount BIGINT NOT NULL,"lockedDelta" BIGINT NOT NULL,reason TEXT NOT NULL,"createdAt" TEXT NOT NULL,"ruleVersion" INTEGER NOT NULL,"messageRevision" INTEGER NOT NULL,position BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE);
 CREATE INDEX IF NOT EXISTS ledger_user ON ledger("userId",position);
@@ -33,4 +34,4 @@ CREATE TABLE IF NOT EXISTS requests("userId" TEXT NOT NULL,"requestId" TEXT NOT 
 CREATE TABLE IF NOT EXISTS command_requests("userId" TEXT NOT NULL,"requestId" TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY("userId","requestId"));
 CREATE TABLE IF NOT EXISTS effects(key TEXT PRIMARY KEY,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS escrows("messageId" TEXT PRIMARY KEY,"ownerId" TEXT NOT NULL,amount BIGINT NOT NULL,"recipientId" TEXT,"fulfillmentId" TEXT);
-` + querySchema;
+` + querySchema + readingStateSchema;

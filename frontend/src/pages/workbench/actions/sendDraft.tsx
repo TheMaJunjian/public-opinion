@@ -15,6 +15,9 @@ import { sendMergeDraft } from './sendMergeDraft';
 import { sendOrganizationJoin } from './sendOrganizationJoin';
 import { sendStanceDraft } from './sendStanceDraft';
 import { sendSummaryDraft } from './sendSummaryDraft';
+import { CARD_W } from '../../../utils/layout';
+import { isCardWidth } from '../../../utils/cardWidth';
+import { isWholeMessageSelection } from '../../../utils/messageElementSelection';
 
 
 
@@ -40,11 +43,12 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
   const effectiveTargets = resolveEffectiveTargetUnits(draftUnits, targetUnits, relationType);
   // Validate both stakes — collect all errors
   const errors: string[] = [];
-  if (hasTextContent) {
+  if (totalConsumption?.contributionError) errors.push(totalConsumption.contributionError);
+  if (totalConsumption?.hasText ?? hasTextContent) {
     if (typeof stakeAmount !== 'number') {
-      errors.push('请输入文本消息贡献点');
+      errors.push('请输入真假投入');
     } else if (stakeAmount < 0) {
-      errors.push(`自赞押注不能为负数（当前 ${stakeAmount}）`);
+      errors.push(`真假投入不能为负数（当前 ${stakeAmount}）`);
     }
   }
   if (relationType) {
@@ -54,26 +58,18 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
       setSendError('加入消息的来源必须是当前关系类型对应的容器消息，目标消息来自当前选择');
       return;
     }
-    if (typeof relStakeAmount !== 'number') {
+    if (!joinOnlyAction && !totalConsumption?.groups && typeof relStakeAmount !== 'number') {
       errors.push('请输入关系消息贡献点');
     }
-    if (typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
+    if (!joinOnlyAction && !totalConsumption?.groups && typeof relStakeAmount === 'number' && relStakeAmount < effectiveMinStake) {
       const subTypeNote = (subType && subTypeStakeMap.current[subType] && subTypeStakeMap.current[subType] > (relationStakeMap.current[relationType.toUpperCase()] ?? 0))
         ? `（「${subTypeLabel(subType)}」理由要求最低 ${effectiveMinStake} 点）` : '';
       errors.push(`关系消息最低押注 ${effectiveMinStake} 点（当前 ${relStakeAmount}）${subTypeNote}`);
     }
     // Check total consumption (text stake + relation stakes × count + all burn fees) against available balance
     if (totalConsumption && totalConsumption.total > availablePoints) {
-      const parts: string[] = [];
-      if (totalConsumption.hasText) parts.push(`文本 ${totalConsumption.textStake}`);
-      if (totalConsumption.hasRel) parts.push(`关系 ${totalConsumption.perStake}×${totalConsumption.relCount}`);
-      if (totalConsumption.refCount > 0) parts.push(`引用 ${totalConsumption.refStakeTotal}`);
-      if (totalConsumption.joinCount > 0) {
-        const newCount = totalConsumption.newJoinCount ?? totalConsumption.joinCount;
-        const agreeCount = totalConsumption.existingJoinAgreeCount ?? 0;
-        parts.push(`加入 ${(totalConsumption.joinStakeTotal ?? 0) + (totalConsumption.joinFeeTotal ?? 0)}（新建 ${newCount}，赞同已有 ${agreeCount}）`);
-      }
-      if (totalConsumption.protocolFeeTotal > 0) parts.push(`协议费 ${totalConsumption.protocolFeeTotal}`);
+      const parts = [`真假 ${totalConsumption.stakeTotal}`, `价值 ${totalConsumption.recommendationTotal}`, `协议费 ${totalConsumption.protocolFeeTotal}`];
+      if (totalConsumption.delegationRewardStake > 0) parts.push(`委托报酬 ${totalConsumption.delegationRewardStake}`);
       errors.push(`贡献点余额不足（可用 ${availablePoints}，总计需要 ${totalConsumption.total} 点 = ${parts.join(' + ')}）`);
     }
   }
@@ -148,6 +144,27 @@ export async function handleQuickSendAndRelateFromDraftTargets(dependencies: Dra
     return;
   }
 
+  if (relationType === 'correct' && secondaryRelationType === 'width-adjustment') {
+    const target = effectiveTargets[0], width = dependencies.correctionWidth ?? CARD_W;
+    if (sourceUnits.length || effectiveTargets.length !== 1 || !target || !isWholeMessageSelection(target, target.messageId) || target.reference?.revision !== undefined || !isCardWidth(width)) {
+      setSendError('宽度调整需要选择一条当前完整消息，宽度须为 320–2400 的整数');
+      return;
+    }
+    const backendRel = await dependencies.createRel(dependencies.scopeMessageId, {
+      relationType: 'CORRECT', sourceMessageId: null,
+      targetRefs: [{ kind: 'message', messageId: target.messageId }],
+      payload: { correctionKind: 'WIDTH', correctionWidth: width },
+    });
+    await dependencies.registerCreatedRelationInCurrentClassify(backendRel);
+    dependencies.setEdges(previous => previous.some(edge => edge.relationMessageId === backendRel.id) ? previous : [...previous, {
+      id: `${backendRel.id}:width`, relationMessageId: backendRel.id, relationType: 'correct', relationLabel: '宽度调整',
+      from: { messageId: `anon:${backendRel.id}`, selection: { kind: 'whole' } },
+      to: { messageId: target.messageId, selection: { kind: 'whole' } },
+    }]);
+    setDraftUnits([]); setTargetUnits([]); setActiveTextSelectId(null); clearBrowserSelection();
+    setNewMessageContent(''); setRelationType(null); setSecondaryRelationType('none');
+    return;
+  }
   if (relationType === 'correct' && effectiveTargets.length === 1 && msgMap.get(effectiveTargets[0].messageId)?.parts) {
     await prepareAddressedCorrection(dependencies, { effectiveTargets });
     return;

@@ -35,7 +35,7 @@ it('registers, logs in and sends through the actual development proxy while reje
     const session = await login.json() as Session;
     expect(login.status).toBe(200);
     const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
-    const input = { requestId: randomUUID(), parts: [{ id: 'body', type: 'text', text: '通过开发页面发言' }] };
+    const input = { recommendation: 1, requestId: randomUUID(), parts: [{ id: 'body', type: 'text', text: '通过开发页面发言' }] };
     const headers = { Cookie: cookie, 'x-csrf-token': session.csrf };
     expect((await post('/messages', input, headers)).status).toBe(201);
     const before = (await app.store.latestSequence());

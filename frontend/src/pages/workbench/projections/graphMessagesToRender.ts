@@ -9,6 +9,7 @@ import { applyTraceFrameVisibility, buildTraceProjection, type TraceContainerMem
 import { collectContainerVisibleIds,collectOwnedByRelation,type ContainerOwnership } from '../model/ownership';
 import { filterMessageListContext } from './messageListContext';
 import type { TraceEntry } from "../types";
+import { edgeDisplayDependencyIds } from '../../../utils/displayDependency';
 
 interface DeriveGraphMessagesToRenderInput {
   containerOwnership?: ContainerOwnership;
@@ -186,6 +187,8 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
         correctVisited.add(tid);
         for (const e of baseEdges) {
           if (e.relationType !== 'correct') continue;
+          const record = msgMap.get(e.relationMessageId);
+          if (record?.parts?.length || record?.relationPayload?.correctionKind === 'WIDTH') continue;
           if (msgMap.get(e.from.messageId)?.kind !== 'normal' || msgMap.get(e.to.messageId)?.kind !== 'normal') continue;
           if (e.from.messageId !== tid && e.to.messageId !== tid) continue;
           classificationRelationIds.add(e.relationMessageId);
@@ -203,30 +206,40 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
       arr.push(e);
       edgesByRel.set(e.relationMessageId, arr);
     }
-    for (const [relMsgId, relEdges] of edgesByRel) {
-      if (relMsgId === currentClassifyRelMsgId || classificationRelationIds.has(relMsgId)) continue;
-      // Organization membership is explicit. Sharing a visible endpoint must
-      // not pull an ancestor container back into its own descendant canvas.
-      if(getPresentationSpec(relEdges[0]?.relationType??'').isContainer)continue;
-      const textEndpoints = relEdges
-        .flatMap(e => [e.from.messageId, e.to.messageId])
-        .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
-      if (textEndpoints.length > 0) {
-        // A content-kind endpoint is "in scope" if it's in classificationTextIds
-        // OR in classificationRelationIds (governance/code/ops are relation targets).
-        const endpointInClassification = (mid: string) =>
-          classificationTextIds.has(mid) || classificationRelationIds.has(mid);
-        if (textEndpoints.every(mid => endpointInClassification(mid))) {
-          classificationRelationIds.add(relMsgId);
+    let attachedAdded = true;
+    while (attachedAdded) {
+      attachedAdded = false;
+      for (const [relMsgId, relEdges] of edgesByRel) {
+        if (relMsgId === currentClassifyRelMsgId || classificationRelationIds.has(relMsgId)) continue;
+        // Organization membership is explicit. Sharing a visible endpoint must
+        // not pull an ancestor container back into its own descendant canvas.
+        if(getPresentationSpec(relEdges[0]?.relationType??'').isContainer)continue;
+        const hosts = edgeDisplayDependencyIds(msgMap.get(relMsgId), relEdges);
+        if (hosts !== null) {
+          if (hosts.some(id => classificationTextIds.has(id) || classificationRelationIds.has(id))) {
+            classificationRelationIds.add(relMsgId);
+            attachedAdded = true;
+          }
+          continue;
         }
-        continue;
-      }
-      // All endpoints are relation messages — include if any target is in the scope
-      const relEndpoints = relEdges
-        .flatMap(e => [e.from.messageId, e.to.messageId])
-        .filter(mid => msgMap.get(mid)?.kind === 'relation');
-      if (relEndpoints.some(mid => classificationRelationIds.has(mid))) {
-        classificationRelationIds.add(relMsgId);
+        const textEndpoints = relEdges
+          .flatMap(e => [e.from.messageId, e.to.messageId])
+          .filter(mid => { const m = msgMap.get(mid); return m && isContentKind(m.kind); });
+        if (textEndpoints.length > 0) {
+          // Governance/code/ops can be content-like relation targets.
+          if (textEndpoints.every(mid => classificationTextIds.has(mid) || classificationRelationIds.has(mid))) {
+            classificationRelationIds.add(relMsgId);
+            attachedAdded = true;
+          }
+          continue;
+        }
+        const relEndpoints = relEdges
+          .flatMap(e => [e.from.messageId, e.to.messageId])
+          .filter(mid => msgMap.get(mid)?.kind === 'relation');
+        if (relEndpoints.some(mid => classificationRelationIds.has(mid))) {
+          classificationRelationIds.add(relMsgId);
+          attachedAdded = true;
+        }
       }
     }
     const visibleIds = new Set<string>([...classificationTextIds, ...classificationRelationIds]);
@@ -259,6 +272,8 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
       // Keep membership edges for counts and navigation. GraphView already
       // renders nested classifications as opaque cards, not expanded frames.
       if (e.relationType === 'classify' || e.relationType === 'summary') return true;
+      const hosts = edgeDisplayDependencyIds(msgMap.get(e.relationMessageId), edgesByRel.get(e.relationMessageId) ?? [e]);
+      if (hosts !== null) return hosts.some(id => visibleIds.has(id));
       return (e.from.messageId.startsWith("anon:") || visibleIds.has(e.from.messageId)) &&
         visibleIds.has(e.to.messageId);
     });
@@ -506,7 +521,7 @@ export function deriveGraphMessagesToRender(input: DeriveGraphMessagesToRenderIn
   return {
     graphMessagesToRender: graphMessagesToRender,
     graphEdgesToRender: graphEdges,
-    listMessagesToRender: listMessages,
+    listMessagesToRender: filterMessageListContext(listMessages, baseMessages, baseEdges),
     listEdgesToRender: listEdges,
     hideMessageIds: hideMessageIds.size > 0 ? hideMessageIds : undefined,
   };

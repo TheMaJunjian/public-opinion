@@ -1,4 +1,4 @@
-import { decodeWorkbenchSnapshot, type CompactSnapshot, type WorkbenchSnapshot } from '@gonglun/core';
+import { decodeWorkbenchSnapshot, type CompactSnapshot, type WorkbenchSnapshot, type ReadingMark } from '@gonglun/core';
 import { syncGlobalCatalog, type CatalogProgress } from './globalCatalog';
 import { createGlobalCatalogCache } from './globalCatalogCache';
 import { projectWorkbenchSnapshot } from '../utils/workbenchProjection';
@@ -8,6 +8,7 @@ import { deriveCleanVisibleIds } from '../utils/cleanProjection';
 import { deriveHomeFilterResult } from '../pages/workbench/projections/homeFilterResult';
 import { deriveContainerEffect } from '../pages/workbench/model/containerEffect';
 import { getLatestUserReadStatusByMessageId } from '../pages/workbench/model/filters';
+import {computeCorrectionVersions,computeEffectiveSuppressedRelIds} from '../utils/modelBridge';
 import type { CleanFilterRule, User } from '../types';
 import type { HomeFilterMode } from '../components/HomeFilterPanel';
 import { fetchJsonWithDeadline } from '../utils/requestLifecycle';
@@ -18,7 +19,7 @@ export interface CatalogData {
   projected: ReturnType<typeof projectWorkbenchSnapshot>;
   rows: ReturnType<typeof buildLeaderboardRows>;
 }
-export interface CatalogFilterQuery { rules: CleanFilterRule[]; home: HomeFilterMode | null; user: User | null }
+export interface CatalogFilterQuery { rules: CleanFilterRule[]; home: HomeFilterMode | null; user: User | null; readingMarks?:ReadingMark[] }
 export interface CatalogFilterResult {
   clean: ReturnType<typeof deriveCleanVisibleIds>;
   home: ReturnType<typeof deriveHomeFilterResult>;
@@ -62,11 +63,13 @@ export function createCatalogEngine(options: CatalogOptions, callbacks: {
       if (!published) throw new Error('正在准备全局消息');
       const { projected, snapshot } = published;
       const { messages, edges, relations, counts } = projected;
-      const memberships = query.home ? deriveContainerEffect({ messages, edges, relations, username: query.user?.username ?? null, stakeCounts:counts }).memberships : [];
+      const effect = query.home ? deriveContainerEffect({ messages, edges, relations, username: query.user?.username ?? null, stakeCounts:counts }) : undefined;
+      const memberships=effect?.memberships??[];
       return {
         clean: deriveCleanVisibleIds({ messages, edges, stakeCounts: counts, tagCounts: snapshot.tagCounts }, query.rules),
         home: deriveHomeFilterResult({ messages, edges, msgMap: new Map(messages.map(message => [message.id, message])),
-          displayUser: query.user, homeFilterMode: query.home, traceContainerMemberships: memberships,
+          displayUser: query.user, homeFilterMode: query.home, traceContainerMemberships: memberships,relations,readingMarks:query.readingMarks,
+          corrections:effect?computeCorrectionVersions(messages,edges,computeEffectiveSuppressedRelIds(edges,messages,query.user?.username??null),query.user?.username??null):undefined,
           readStatusByMessageId: getLatestUserReadStatusByMessageId(relations, relation => relation.createdBy.id === query.user?.id) }),
       };
     },

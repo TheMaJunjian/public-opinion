@@ -8,9 +8,12 @@ import * as leaderboardMetrics from '../utils/leaderboardMetrics';
 import { LEADERBOARD_PREFERENCES_KEY } from '../utils/leaderboardPreferences';
 import GestureShortcutManager from '../components/GestureShortcutManager';
 import { WORKBENCH_DRAWING_TIMEOUT_MS } from '../context/WorkbenchDrawingContext';
+import {bodyVersion,messageReadingKey} from '@gonglun/core';
 
 const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi.hoisted(() => {
   const mockApi = {
+    getReadingState:vi.fn().mockResolvedValue({marks:[]}),
+    markReading:vi.fn().mockImplementation(async(marks)=>({marks:marks.map((mark:object)=>({...mark,updatedAt:'2026-10-24T10:00:00Z'}))})),
     getScope: vi.fn(),
     getMessages: vi.fn(),
     getAllMessages: vi.fn(),
@@ -50,6 +53,7 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
         ...messages.data,
         ...relations.data.map((relation: Relation) => ({
           id: relation.id,
+          revision:relation.revision,parts:relation.parts,state:relation.state,executedStance:relation.executedStance,sequence:relation.sequence,
           kind: 'RELATION',
           contentType: 'TEXT',
           content: '',
@@ -70,6 +74,7 @@ const { mockApi, mockNavigate, mockGraphView, graphRendering, viewerRoute } = vi
       scope, messages: records,
       relations: records.filter(message => message.kind === 'RELATION').map(message => ({
         id: message.id, relationType: message.relationType,
+        revision:message.revision,parts:message.parts,state:message.state,executedStance:message.executedStance,sequence:message.sequence,
         sourceMessageId: message.relSourceId ?? null, targetRefs: message.targetRefs ?? [],
         payload: message.relationPayload, createdAt: message.createdAt, createdBy: message.createdBy,
       })),
@@ -95,7 +100,7 @@ vi.mock('../data/catalogClient', async () => {
     home: query.home ? deriveHomeFilterResult({ ...catalogHarness.data.projected, displayUser: query.user, homeFilterMode: query.home,
       msgMap: new Map(catalogHarness.data.projected.messages.map((message: Message) => [message.id, message])),
       traceContainerMemberships: deriveContainerEffect({ ...catalogHarness.data.projected, username: query.user?.username ?? null }).memberships,
-      readStatusByMessageId: getLatestUserReadStatusByMessageId(catalogHarness.data.projected.relations, relation => relation.createdBy.id === query.user?.id) }) : null,
+      readingMarks:query.readingMarks,readStatusByMessageId: getLatestUserReadStatusByMessageId(catalogHarness.data.projected.relations, relation => relation.createdBy.id === query.user?.id) }) : null,
   }));
   return { createCatalogClient: (_user: string, _scope: string, callbacks: any) => {
     catalogHarness.callbacks = callbacks;
@@ -342,8 +347,10 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     const relation = (id: string, type: string, ids: string[], source: string | null = null): Relation => ({ id, relationType: type,
       sourceMessageId: source, targetRefs: ids.map(messageId => ({ kind: 'message', messageId })), payload: { title: id },
       createdAt: '2024-01-02', createdBy: makeUser() });
-    const relations = [relation('other-category', 'CLASSIFY', [hidden.id]), { ...relation('cross-unread', 'REFERENCE', ['unread-74'], hidden.id), createdBy: other },
-      ...peers.slice(0, 74).map(message => relation(`read-${message.id}`, 'READ', [message.id]))];
+    const relations = [relation('other-category', 'CLASSIFY', [hidden.id]), { ...relation('cross-unread', 'REFERENCE', ['unread-74'], hidden.id), createdBy: other }];
+    mockApi.getReadingState.mockResolvedValue({marks:peers.slice(0,74).map(message=>{
+      const version=bodyVersion(message.id),key=messageReadingKey(version.messageId);return {format:3,version,messageId:message.id,scope:'message',key,bodySignature:key,signature:'display:test',state:'READ'};
+    })});
     const relationMessages: Message[] = relations.map(item => ({ ...makeMessage(item.id, ''), kind: 'RELATION', relationType: item.relationType,
       relSourceId: item.sourceMessageId, targetRefs: item.targetRefs, relationPayload: item.payload, createdAt: item.createdAt, createdBy: item.createdBy }));
     const full = { regionId: 'region', scope: { messageId: 'classification-1', title: '未读与相关分页' }, sequence: 10,
@@ -362,15 +369,15 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await waitFor(() => expect(card('unread-0')).not.toBeNull());
       expect(card('unread-74')).toBeNull(); expect(card(hidden.id)).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: '主页' }));
-      fireEvent.click(screen.getByRole('radio', { name: /未读 · 其他/ }));
-      await waitFor(() => expect(catalogHarness.filters).toHaveBeenCalledWith(expect.objectContaining({ home: 'unread-other' })));
+      fireEvent.click(screen.getByRole('radio', { name: /^待阅或有新提醒$/ }));
+      await waitFor(() => expect(catalogHarness.filters).toHaveBeenCalledWith(expect.objectContaining({ home: {scope:'all',status:'pending'} })));
       const filtered = await catalogHarness.filters.mock.results.at(-1)!.value;
       expect([...filtered.home.matchIds]).toContain('unread-74');
       await waitFor(() => expect(card('unread-74')).not.toBeNull());
       expect(card('unread-0')).toBeNull(); expect(card(hidden.id)).toBeNull();
       const target = within(card('unread-74')!);
-      fireEvent.click(target.getByRole('button', { name: /相关消息：1/ }));
-      await act(async () => fireEvent.click(target.getByRole('button', { name: '查看' })));
+      fireEvent.click(target.getByRole('button', { name: /其他相关消息：1/ }));
+      await act(async () => fireEvent.click(within(screen.getByRole('dialog',{name:'其他相关消息：1'})).getByRole('button', { name: '查看' })));
       await waitFor(() => expect(card(hidden.id)).not.toBeNull());
       expect(card('unread-74')).not.toBeNull();
       expect(screen.getByText('追溯距离：1')).toBeInTheDocument();
@@ -621,14 +628,14 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       await act(async()=>latest().onMessageDoubleClick(event(),scope));
       await waitFor(()=>expect(document.querySelector('[aria-busy="true"]')).toBeNull());
       if(viewMode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
-      const {card,toggle}=await waitFor(()=>{
+      const {toggle}=await waitFor(()=>{
         expect(document.querySelector('[aria-busy="true"]')).toBeNull();
         const card=within(document.querySelector<HTMLElement>(`[data-workbench-left-panel] [data-msgid="${side}"]`)!);
-        return {card,toggle:card.getByRole('button',{name:/相关消息：1/})};
+        return {card,toggle:card.getByRole('button',{name:/其他相关消息：1/})};
       });
       expect(toggle).toHaveAttribute('aria-expanded','false');
       fireEvent.click(toggle);
-      const group=within(card.getByRole('group',{name:side==='source'?'发出的关联':'指向本消息的关联'}));
+      const group=within(within(screen.getByRole('dialog',{name:'其他相关消息：1'})).getByRole('group',{name:side==='source'?'发出的关联':'指向本消息的关联'}));
       expect(group.getByRole('button',{name:/选择相关.*消息部件/})).toHaveTextContent('cross');
       fireEvent.click(group.getByRole('button',{name:/选择相关.*消息部件/}));
       await act(async()=>fireEvent.click(group.getByRole('button',{name:'查看'})));
@@ -668,7 +675,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     try{
       render(<MessageWorkbenchPage/>);
       await waitFor(()=>expect(latest()?.messages.some((message:Message)=>message.id==='source')).toBe(true));
-      fireEvent.click(screen.getByRole('button',{name:/相关消息：1/}));
+      fireEvent.click(screen.getByRole('button',{name:/其他相关消息：1/}));
       await act(async()=>fireEvent.click(screen.getByRole('button',{name:'查看'})));
       expect(mockApi.getMessageContext).toHaveBeenCalledWith(['remote'],expect.any(AbortSignal));
       expect(document.querySelector('[data-workbench-left-panel] [data-msgid="remote"]')).not.toBeNull();
@@ -706,7 +713,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     await act(async()=>latest().onMessageDoubleClick(event(),'A'));
     await act(async()=>latest().onMessageDoubleClick(event(),'C'));
     fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
-    fireEvent.click(screen.getByRole('button',{name:'查看加入消息（2条）'}));
+    fireEvent.click(await screen.findByRole('button',{name:'查看加入消息（2条）'}));
     expect(screen.getByText('加入记录临时分类（2）')).toBeInTheDocument();
     expect(document.querySelector('[data-msgid="join-B"]')).not.toBeNull();
     expect(document.querySelector('[data-msgid="older-B"]')).not.toBeNull();
@@ -723,8 +730,8 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(latest().comparisonSingle).toBe(true);
     await act(async()=>latest().onJoinFilterClick('C','outgoing'));
     expect(screen.getByText('被加入记录临时分类（1）')).toBeInTheDocument();
-    expect(latest().messages.map((message:Message)=>message.id)).toEqual(['join-B']);
-    expect(latest().comparisonSingle).toBe(false);
+    await waitFor(()=>expect(document.querySelector('[data-container-join-records="C"] [data-msgid="join-B"]')).not.toBeNull());
+    expect(screen.getByRole('button',{name:'切换为消息图'})).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'退出临时分类'}));
     expect(latest().comparisonSingle).toBe(true);
     expect(latest().messages.map((message:Message)=>message.id)).toContain('C');
@@ -1169,7 +1176,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
     expect(document.querySelector('[data-guide-selection-staging]')).toHaveTextContent('join-B');
     fireEvent.click(screen.getByRole('button',{name:'反对'}));
     fireEvent.click(screen.getByRole('button',{name:'发送'}));
-    await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledWith('C',expect.objectContaining({relationType:'DISAGREE',targetRefs:[expect.objectContaining({reference:{messageId:'join-B'}})]})));
+    await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledWith('C',expect.objectContaining({relationType:'DISAGREE',targetRefs:[expect.objectContaining({reference:{messageId:'join-B',context:{kind:'MESSAGE'}}})]})));
   });
 
   it.each(['CLASSIFY','SUMMARY','ARRANGE','MERGE'])('keeps released B within A when its child %s C is rejected',async type=>{
@@ -1309,7 +1316,7 @@ describe('rejected child container boundaries and single-side comparison',()=>{
       expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
       fireEvent.click(screen.getByRole('button',{name:'发送'}));
       await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledWith('A',expect.objectContaining({
-        relationType:'AGREE',targetRefs:[expect.objectContaining({reference:{messageId:'C'}})],
+        relationType:'AGREE',targetRefs:[expect.objectContaining({reference:{messageId:'C',context:{kind:'MESSAGE'}}})],
       })));
     }finally{geometry.mockRestore();graphRendering.actual=false;}
   });
@@ -1561,7 +1568,7 @@ describe('MessageWorkbenchPage home filter container projection', () => {
     await waitFor(() => expect(mockGraphView).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole('button', { name: '主页' }));
-    fireEvent.click(screen.getByRole('radio', { name: /已读 · 自发/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^自发$/ }));
 
     await waitFor(() => {
       const graphProps = mockGraphView.mock.calls[mockGraphView.mock.calls.length - 1][0];
@@ -1603,6 +1610,139 @@ describe('MessageWorkbenchPage composer refresh', () => {
     mockApi.getRelations.mockResolvedValue({ data: [makeRelation()] });
   });
 
+  it.each(['graph','list'])('updates body authors and keeps each sender investment separate through version switching in %s',async mode=>{
+    localStorage.setItem('token','test-token');
+    const original:Message={...makeMessage('msg-1','开头旧字结尾'),revision:1,parts:[{id:'body',type:'text',text:'开头旧字结尾'}],spending:{protocol:1,wager:2,recommendation:3}};
+    const correction:Relation={...makeRelation(),id:'author-correction',relationType:'CORRECT',sourceMessageId:null,
+      createdBy:{id:'bob',username:'bob',createdAt:''},spending:{protocol:1,wager:5,recommendation:7},
+      targetRefs:[{kind:'text-fragment',messageId:'msg-1',text:'旧字',hash:'fragment',reference:{messageId:'msg-1',revision:1,partId:'body',range:{start:2,end:4}}}],
+      payload:{correctionBeforeContent:'开头旧字结尾',correctionAfterContent:'开头新字结尾'}};
+    mockApi.getMessages.mockResolvedValue({data:[original]});mockApi.getRelations.mockResolvedValue({data:[correction]});
+    const snapshotLoader=mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    mockApi.getWorkbenchSnapshot.mockResolvedValue({scope:{messageId:'classification-1',title:'测试分类'},
+      messages:[original,{...makeMessage(correction.id,''),kind:'RELATION',createdBy:correction.createdBy,spending:correction.spending,relationType:'CORRECT',targetRefs:correction.targetRefs,relationPayload:correction.payload}],
+      relations:[correction],users:[makeUser(),correction.createdBy],stakes:{},tagCounts:{},attentionUsers:{},sequence:1,nextCursor:null,hasMore:false});
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));await waitForWorkbenchIdle();
+      const card=()=>view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="msg-1"]')!;
+      expect(card()).toHaveTextContent('开头新字结尾');
+      expect(card().querySelector('[data-message-self-stake="msg-1"]')).toHaveTextContent('自押 2/3');
+      const authors=within(card()).getByRole('button',{name:/当前正文作者：tester，共 2 人/});
+      fireEvent.wheel(authors,{deltaY:100});
+      expect(authors).toHaveAccessibleName(/当前正文作者：bob，共 2 人/);
+      expect(card().querySelector('[data-message-self-stake="msg-1"]')).toHaveTextContent('自押 5/7');
+      fireEvent.wheel(authors,{deltaY:-100});
+      expect(card().querySelector('[data-message-self-stake="msg-1"]')).toHaveTextContent('自押 2/3');
+      fireEvent.click(authors);
+      const dialog=screen.getByRole('dialog',{name:'消息 msg-1 的当前正文作者'});
+      expect(dialog.querySelector('[data-author-contribution="author-correction"]')).toHaveTextContent('自押 5/7');
+      expect(dialog).not.toHaveTextContent('开头');expect(dialog).not.toHaveTextContent('新字');
+      mockApi.getMessageStakes.mockResolvedValueOnce({messageId:'msg-1',pool:{lockedPro:0,lockedCon:0},counts:{pro:6,con:0},
+        countsByType:{TRUTH:{pro:6,con:0},VALUE:{pro:4,con:0}},stakes:[
+          {id:'initial',side:'PRO',settlementType:'TRUTH',amount:2,user:makeUser(),createdAt:''},
+          {id:'later-truth',side:'PRO',settlementType:'TRUTH',amount:4,user:makeUser(),createdAt:''},
+          {id:'later-value',side:'PRO',settlementType:'VALUE',amount:4,user:makeUser(),createdAt:''},
+        ]});
+      act(()=>window.dispatchEvent(new CustomEvent('stakes-refresh',{detail:{messageId:'msg-1'}})));
+      await waitFor(()=>expect(dialog.querySelector('[data-author-contribution="msg-1"]')).toHaveTextContent('自押 6/7'));await waitForWorkbenchIdle();
+      expect(card().querySelector('[data-message-self-stake="msg-1"]')).toHaveTextContent('自押 6/7');
+      expect(dialog.querySelector('[data-author-contribution="msg-1"]')).toHaveTextContent('首次 2/3 · 追加 4/4');
+      fireEvent.click(within(dialog).getByRole('button',{name:'关闭作者详情'}));
+      fireEvent.click(screen.getByRole('button',{name:'切换消息 msg-1 的版本'}));fireEvent.click(screen.getByRole('radio',{name:'原文'}));await waitForWorkbenchIdle();
+      expect(within(card()).getByRole('button',{name:'查看消息 msg-1 的当前正文作者：tester'})).toBeInTheDocument();
+      expect(card()).toHaveTextContent('开头旧字结尾');
+      fireEvent.click(screen.getByRole('radio',{name:'推荐选择'}));await waitForWorkbenchIdle();
+      expect(within(card()).getByRole('button',{name:/当前正文作者：tester，共 2 人/})).toBeInTheDocument();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.markReading).not.toHaveBeenCalled();
+    }finally{view.unmount();graphRendering.actual=false;mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader);}
+  },15000);
+
+  it('does not offer version back or forward when viewing a correction that already supplies the displayed body',async()=>{
+    localStorage.setItem('token','test-token');mockApi.getMessages.mockResolvedValue({data:[makeMessage('msg-1','原文')]});
+    mockApi.getRelations.mockResolvedValue({data:[{...makeRelation(),id:'same-correction',relationType:'CORRECT',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:'msg-1'}],payload:{correctionBeforeContent:'原文',correctionAfterContent:'当前更正正文'}}]});
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      const card=()=>view.container.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')!;
+      expect(card()).toHaveTextContent('当前更正正文');
+      fireEvent.doubleClick(view.container.querySelector('[data-workbench-left-panel] [data-jump-msgids~="same-correction"]')!);await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:/^查看消息 same-correction：/}));await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('当前更正正文');
+      fireEvent.click(screen.getByRole('button',{name:'切换消息 msg-1 的版本'}));
+      expect(screen.queryByRole('button',{name:'版本后退 msg-1'})).toBeNull();expect(screen.queryByRole('button',{name:'版本前进 msg-1'})).toBeNull();
+      expect(screen.getByRole('button',{name:'切换消息 msg-1 的版本'})).toHaveAttribute('data-reading-version-override','false');
+      expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.markReading).not.toHaveBeenCalled();
+    }finally{view.unmount();graphRendering.actual=false;}
+  },15000);
+
+  it('keeps arbitration on correction history records without extra stance or expression disclosures',async()=>{
+    localStorage.setItem('token','test-token');mockApi.getMessages.mockResolvedValue({data:[makeMessage('msg-1','原文')]});
+    const relation=(id:string,type:string,target:string,author:string):Relation=>({...makeRelation(),id,relationType:type,sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:target}],createdBy:{id:author,username:author,createdAt:''}});
+    mockApi.getRelations.mockResolvedValue({data:[
+      {...relation('correction-one','CORRECT','msg-1','作者甲'),payload:{correctionBeforeContent:'原文',correctionAfterContent:'更正正文'}},
+      relation('foreign-stance','DISAGREE','correction-one','用户乙'),
+      {...relation('expression','TAG','correction-one','用户丙'),payload:{label:'重要'}},
+    ]});
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'切换消息 msg-1 的版本'}));
+      expect(screen.getByRole('dialog')).toHaveTextContent('当前用户尚未选择');expect(screen.getByRole('dialog')).not.toHaveTextContent('当前用户选择');
+      fireEvent.click(screen.getByRole('button',{name:'关闭版本选择'}));
+      expect(screen.queryByRole('button',{name:'显示装饰 correction-one'})).toBeNull();
+      fireEvent.doubleClick(view.container.querySelector('[data-workbench-left-panel] [data-jump-msgids~="correction-one"]')!);
+      await waitForWorkbenchIdle();expect(screen.getByText('更正记录临时分类（1）')).toBeInTheDocument();
+      expect(screen.queryByRole('button',{name:'查看消息 correction-one 的站队'})).toBeNull();
+      expect(screen.queryByRole('button',{name:'查看消息 correction-one 的表态'})).toBeNull();
+      const record=view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="correction-one"]')!;
+      expect(within(record).getByTitle('真假仲裁')).toBeInTheDocument();
+      expect(within(record).getByTitle('价值仲裁')).toBeInTheDocument();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();expect(mockApi.markReading).not.toHaveBeenCalled();
+    }finally{view.unmount();graphRendering.actual=false;}
+  },15000);
+
+  it('previews and sends a width correction from the attachment before text correction', async () => {
+    localStorage.setItem('token', 'test-token');
+    mockApi.getRelations.mockResolvedValue({ data: [] });
+    mockApi.createRelation.mockImplementationOnce(async (_scope, input) => ({ ...makeRelation(), ...input,
+      id: 'width-correction', sourceMessageId: null, payload: input.payload,
+      parts: [{ id: 'relation', type: 'relation', relation: 'correct', roles: { target: [{ id: 'target', reference: { messageId: 'msg-1' } }] } },
+        { id: 'data', type: 'data', value: input.payload }] }));
+    graphRendering.actual = true;
+    const view = render(<MessageWorkbenchPage />);
+    try {
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）'); await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button', { name: /^更正$/ }));
+      const widthOption = screen.getByRole('button', { name: '宽度调整' });
+      expect(widthOption.compareDocumentPosition(screen.getByRole('button', { name: '修正文字' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      fireEvent.click(widthOption);
+      const card = () => view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="msg-1"]:not([data-rel-overlay])')!;
+      fireEvent.click(card());
+      await waitFor(() => expect(screen.getByRole('separator', { name: '调整消息 msg-1 的宽度' })).toBeInTheDocument());
+      fireEvent.change(screen.getByRole('spinbutton', { name: '消息卡宽度' }), { target: { value: '640' } });
+      await waitFor(() => expect(card().style.width).toBe('640px'));
+      fireEvent.keyDown(screen.getByRole('separator', { name: '调整消息 msg-1 的宽度' }), { key: 'ArrowRight' });
+      await waitFor(() => expect(card().style.width).toBe('650px'));
+      expect(card()).toHaveTextContent('第一条');
+      expect(mockApi.createRelation).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await waitFor(() => expect(mockApi.createRelation).toHaveBeenCalledOnce());
+      expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1', expect.objectContaining({
+        relationType: 'CORRECT', sourceMessageId: null, targetRefs: [expect.objectContaining({ kind: 'message', messageId: 'msg-1', reference: { messageId: 'msg-1' } })],
+        payload: { correctionKind: 'WIDTH', correctionWidth: 650 },
+      }));
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      await waitForWorkbenchIdle();
+      expect(card().style.width).toBe('650px');
+      expect(card()).toHaveTextContent('第一条');
+      expect(screen.queryByRole('separator', { name: '调整消息 msg-1 的宽度' })).toBeNull();
+    } finally { view.unmount(); graphRendering.actual = false; }
+  });
+
   it.each(['graph','list'])('keeps status hints in place in %s without navigating, sending or marking read',async mode=>{
     localStorage.setItem('token','test-token');
     mockApi.getMessages.mockResolvedValue({data:[{...makeMessage('msg-1','未读正文'),createdBy:{id:'bob',username:'bob',createdAt:''}},makeMessage('msg-2','本人正文')]});
@@ -1614,7 +1754,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await waitForWorkbenchIdle();
       if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
       await waitForWorkbenchIdle();
-      const marker=await screen.findByRole('button',{name:/显示提示 msg-1：待阅/});
+      const marker=await screen.findByRole('button',{name:/显示提示 msg-1：消息待阅/});
       const card=marker.closest('[data-msgid="msg-1"]')!;
       expect(card.getAttribute('aria-label')).toContain('未选中');
       fireEvent.mouseDown(marker);fireEvent.click(marker);
@@ -1624,28 +1764,179 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(mockApi.createMessage).not.toHaveBeenCalled();
       expect(mockApi.createRelation).not.toHaveBeenCalled();
       expect(mockApi.castVote).not.toHaveBeenCalled();
-      expect(await screen.findByRole('button',{name:/显示提示 msg-1：待阅/})).toBeInTheDocument();
+      expect(await screen.findByRole('button',{name:/显示提示 msg-1：消息待阅/})).toBeInTheDocument();
       expect(screen.getByRole('button',{name:mode==='graph'?'切换为消息表':'切换为消息图'})).toBeInTheDocument();
     } finally {view.unmount();graphRendering.actual=false;}
   });
 
-  it('stores only a comparison code when explicitly sending a paid read annotation',async()=>{
-    localStorage.setItem('token','test-token');mockApi.getRelations.mockResolvedValue({data:[]});
-    mockApi.createRelation.mockImplementationOnce(async (_scope,data)=>({...makeRelation(),...data,id:'read-record'}));
+  it.each(['graph','list'])('returns from an influence to the pinned hint and its saved scroll positions in %s',async mode=>{
+    localStorage.setItem('token','test-token');
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('msg-1','目标正文'),makeMessage('msg-2','其他正文')]});
+    mockApi.getRelations.mockResolvedValue({data:Array.from({length:12},(_,index)=>({...makeRelation(),id:`hint-impact-${index}`,sourceMessageId:null,
+      relationType:'REPLY',targetRefs:[{kind:'message',messageId:'msg-1'}],createdBy:{id:'bob',username:'bob',createdAt:''}}))});
     graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
     try{
       await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
-      fireEvent.click(view.container.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')!);
-      fireEvent.click(screen.getByRole('button',{name:'标注'}));fireEvent.click(screen.getByRole('button',{name:'已读'}));
-      fireEvent.click(screen.getByRole('button',{name:'发送'}));
-      await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledTimes(1));
-      expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1',expect.objectContaining({relationType:'READ',
-        payload:expect.objectContaining({readDisplay:{'msg-1':expect.stringMatching(/^display:1:/)}})}));
-      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:/显示提示 msg-1：/}));
+      const tooltip=screen.getByRole('tooltip'),list=tooltip.querySelector<HTMLElement>('[data-display-hint-influences]')!;
+      tooltip.scrollTop=24;list.scrollTop=106;fireEvent.scroll(list);
+      fireEvent.click(within(tooltip).getByRole('button',{name:'回复 · hint-impact-5'}));
+      await waitFor(()=>expect(screen.getByRole('button',{name:'返回'})).toBeEnabled());
+      await waitForWorkbenchIdle();
+      expect(screen.queryByRole('tooltip')).toBeNull();
+      fireEvent.click(screen.getByRole('button',{name:'返回'}));
+      await waitForWorkbenchIdle();
+      const restored=await screen.findByRole('tooltip');
+      expect(restored).toHaveTextContent('12 条影响待阅');
+      expect(restored.scrollTop).toBe(24);expect(restored.querySelector('[data-display-hint-influences]')!.scrollTop).toBe(106);
+      expect(screen.getByRole('button',{name:mode==='graph'?'切换为消息表':'切换为消息图'})).toBeInTheDocument();
     }finally{view.unmount();graphRendering.actual=false;}
-  });
-
-  it.each(['CLASSIFY', 'SUMMARY'].flatMap(type => ['graph', 'list'].flatMap(mode => (['TEXT', 'MEANING'] as const).map(correctionKind => ({ type, mode, correctionKind })))))(
+  },15000);
+  it.each(['graph','list'])('switches corrected versions in place with back/forward and requires the original in %s',async mode=>{
+    localStorage.setItem('token','test-token');
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('msg-1','版本测试原文')]});
+    mockApi.getRelations.mockResolvedValue({data:[
+      {...makeRelation(),id:'version-1',relationType:'CORRECT',sourceMessageId:null,targetRefs:[{kind:'message',messageId:'msg-1'}],
+        createdAt:'2026-10-21T00:00:00Z',payload:{correctionBeforeContent:'版本测试原文',correctionAfterContent:'版本测试更正一'}},
+      {...makeRelation(),id:'version-2',relationType:'CORRECT',sourceMessageId:null,targetRefs:[{kind:'message',messageId:'msg-1'}],
+        createdAt:'2026-10-22T00:00:00Z',state:{messageId:'version-2',revision:1,suppressed:false,supportCount:3,oppositionCount:0,recommendationTotal:0},payload:{correctionBeforeContent:'版本测试原文',correctionAfterContent:'版本测试更正二'}},
+      {...makeRelation(),id:'version-choice',relationType:'AGREE',sourceMessageId:null,targetRefs:[{kind:'message',messageId:'version-1'}],createdAt:'2026-10-23T00:00:00Z',payload:{}},
+      ...Array.from({length:3},(_,index)=>({...makeRelation(),id:`public-choice-${index}`,relationType:'AGREE',sourceMessageId:null,targetRefs:[{kind:'message' as const,messageId:'version-2'}],createdBy:{id:`voter-${index}`,username:`voter-${index}`,createdAt:''},payload:{}})),
+    ]});
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    const card=()=>view.container.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')!;
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+      await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试更正一');
+      expect(card().querySelector('[data-display-hint-scope="corrections"]')).toBeNull();
+      fireEvent.click(screen.getByRole('button',{name:/^显示提示 msg-1：/}));
+      expect(screen.getByRole('button',{name:'标记当前消息已阅'})).toBeDisabled();
+      fireEvent.click(screen.getByRole('button',{name:'切回原文 msg-1'}));await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试原文');expect(card()).not.toHaveTextContent('版本测试更正二');
+      fireEvent.click(screen.getByRole('button',{name:'确认原文已阅'}));
+      await waitFor(()=>expect(mockApi.markReading).toHaveBeenCalledOnce());await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'切换消息 msg-1 的版本'}));
+      fireEvent.click(screen.getByRole('button',{name:'版本后退 msg-1'}));await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试更正一');
+      fireEvent.click(screen.getByRole('button',{name:/^显示提示 msg-1：/}));
+      expect(screen.getByRole('button',{name:'标记当前消息已阅'})).toBeDisabled();
+      expect(screen.getByRole('tooltip')).toHaveTextContent('首次确认还需阅读更正');
+      fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'}));
+      await waitFor(()=>expect(mockApi.markReading).toHaveBeenCalledTimes(1));await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'切换消息 msg-1 的版本'}));
+      expect(screen.getAllByRole('radio')).toHaveLength(3);
+      fireEvent.click(screen.getByRole('radio',{name:'推荐选择'}));await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试更正二');expect(screen.getByRole('radio',{checked:true})).toHaveTextContent('推荐选择');
+      fireEvent.click(screen.getByRole('button',{name:'版本后退 msg-1'}));await waitForWorkbenchIdle();expect(card()).toHaveTextContent('版本测试更正一');
+      fireEvent.click(screen.getByRole('button',{name:'版本前进 msg-1'}));await waitForWorkbenchIdle();expect(card()).toHaveTextContent('版本测试更正二');
+      expect(mockNavigate).not.toHaveBeenCalled();expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
+      const marker=()=>screen.getByRole('button',{name:'切换消息 msg-1 的版本'});
+      expect(marker()).toHaveAttribute('data-reading-version-override','true');
+      fireEvent.click(screen.getByRole('button',{name:'恢复默认显示 msg-1'}));await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试更正一');expect(marker()).toHaveAttribute('data-reading-version-override','false');
+      fireEvent.click(screen.getByRole('button',{name:'关闭版本选择'}));
+      const newChoice:Relation={...makeRelation(),id:'new-own-choice',relationType:'AGREE',sourceMessageId:null,
+        targetRefs:[{kind:'message',messageId:'version-2'}],createdAt:'2026-10-24T00:00:00Z',payload:{}};
+      mockApi.createRelation.mockResolvedValueOnce(newChoice);
+      await act(async()=>{mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},'version-2');});
+      fireEvent.click(screen.getByRole('button',{name:'赞同'}));fireEvent.click(screen.getByRole('button',{name:'发送'}));
+      await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledOnce());await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试更正二');expect(marker()).toHaveAttribute('data-reading-version-override','false');
+      fireEvent.click(marker());
+      expect(screen.getAllByRole('radio')).toHaveLength(3);
+      expect(screen.getByRole('radio',{checked:true})).toHaveTextContent('与当前用户选择相同');
+      fireEvent.click(screen.getByRole('radio',{name:'原文'}));await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试原文');expect(marker()).toHaveAttribute('data-reading-version-override','true');
+      fireEvent.click(screen.getByRole('button',{name:'恢复默认显示 msg-1'}));await waitForWorkbenchIdle();
+      expect(card()).toHaveTextContent('版本测试更正二');expect(marker()).toHaveAttribute('data-reading-version-override','false');
+      expect(mockNavigate).not.toHaveBeenCalled();expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
+    }finally{view.unmount();graphRendering.actual=false;}
+  },15000);
+  it.each(['CLASSIFY','SUMMARY'].flatMap(type=>['graph','list'].map(mode=>({type,mode}))))('retains corrected $type through relation type filtering in $mode',async({type,mode})=>{
+    localStorage.setItem('token','test-token');
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('msg-1','无关正文')]});
+    mockApi.getRelations.mockResolvedValue({data:[
+      {...makeRelation(),id:'filter-body',relationType:type,sourceMessageId:null,targetRefs:[],payload:{title:'过滤正文',independentMemberships:true}},
+      {...makeRelation(),id:'filter-correction',relationType:'CORRECT',sourceMessageId:null,targetRefs:[{kind:'message',messageId:'filter-body'}],
+        createdAt:'2026-10-22T00:00:00Z',payload:{correctionBeforeContent:'过滤正文',correctionAfterContent:'过滤更正后'}},
+    ]});
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:'过滤'}));fireEvent.click(screen.getByRole('button',{name:'按关系类型'}));
+      const editor=screen.getByText('选择关系类型：').parentElement!;
+      fireEvent.change(within(editor).getByRole('combobox'),{target:{value:'CORRECT'}});
+      fireEvent.click(within(editor).getByRole('button',{name:'确认'}));await waitForWorkbenchIdle();
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="filter-body"]')).toHaveTextContent('过滤更正后');
+      expect(view.container.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')).toBeNull();
+      expect(screen.getByText(/^匹配 1 条/)).toBeInTheDocument();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();
+    }finally{view.unmount();graphRendering.actual=false;}
+  },15000);
+  it.each(['graph','list'])('confirms reading privately from the hint in %s without sending a message',async mode=>{
+    localStorage.setItem('token','test-token');
+    mockApi.getMessages.mockResolvedValue({data:[{...makeMessage('msg-1','待阅正文'),createdBy:{id:'bob',username:'bob',createdAt:''}},makeMessage('msg-2','本人正文')]});
+    mockApi.getRelations.mockResolvedValue({data:[{...makeRelation(),id:'earlier-reply',createdAt:'2026-10-23T00:00:00.000Z',createdBy:{id:'bob',username:'bob',createdAt:''}}]});
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+      await waitForWorkbenchIdle();
+      fireEvent.click(screen.getByRole('button',{name:/显示提示 msg-1：消息待阅/}));
+      fireEvent.click(screen.getByRole('button',{name:'标记当前消息已阅'}));
+      await waitFor(()=>expect(mockApi.markReading).toHaveBeenCalledOnce());
+      expect(mockApi.markReading.mock.calls[0][0]).toContainEqual(expect.objectContaining({messageId:'msg-1',scope:'message',signature:expect.stringMatching(/^display:1:/),bodySignature:expect.stringMatching(/^message:3:/)}));
+      await waitFor(()=>expect(screen.getByRole('button',{name:/显示提示 msg-1：消息已阅/})).toHaveAttribute('data-display-reading','related-unread'));
+      const marker=screen.getByRole('button',{name:/显示提示 msg-1：消息已阅/});fireEvent.click(marker);
+      expect(screen.getByRole('tooltip')).toHaveTextContent('1 条影响待阅');
+      expect(screen.getByRole('tooltip')).toHaveTextContent('earlier-reply');
+      fireEvent.click(screen.getByRole('button',{name:/标记回复 earlier-reply 已阅/}));
+      await waitFor(()=>expect(mockApi.markReading).toHaveBeenCalledTimes(2));
+      await waitFor(()=>expect(screen.getByRole('button',{name:/显示提示 msg-1：消息已阅/})).toHaveAttribute('data-display-reading','read'));
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
+      fireEvent.pointerDown(document.body);
+      fireEvent.click(view.container.querySelector('[data-workbench-left-panel] [data-msgid="msg-1"]')!);
+      fireEvent.click(screen.getByRole('button',{name:'标注'}));
+      expect(screen.queryByRole('button',{name:'已读'})).toBeNull();expect(screen.queryByRole('button',{name:'未读'})).toBeNull();
+    }finally{view.unmount();graphRendering.actual=false;}
+  },15000);
+  it.each(['CLASSIFY','SUMMARY'].flatMap(type=>['graph','list'].map(mode=>({type,mode}))))('confirms a single JOIN privately inside $type in $mode without an extra container read',async({type,mode})=>{
+    localStorage.setItem('token','test-token');
+    mockApi.getMessages.mockResolvedValue({data:[makeMessage('msg-1','当前成员'),makeMessage('msg-2','仍待阅的成员')]});
+    mockApi.getRelations.mockResolvedValue({data:[
+      {...makeRelation(),id:'classification-1',relationType:type,sourceMessageId:null,targetRefs:[{kind:'message',messageId:'msg-1'},{kind:'message',messageId:'msg-2'}],payload:{title:'当前容器'}},
+      {...makeRelation(),id:'current-join',relationType:'JOIN',sourceMessageId:'classification-1',targetRefs:[{kind:'message',messageId:'msg-1'}]},
+    ]});
+    graphRendering.actual=true;const view=render(<MessageWorkbenchPage/>);
+    try{
+      await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');await waitForWorkbenchIdle();
+      if(mode==='list')fireEvent.click(screen.getByRole('button',{name:'切换为消息表'}));
+      await waitForWorkbenchIdle();
+      if(!screen.queryByRole('button',{name:/显示提示 msg-1：消息待阅/})){
+        fireEvent.doubleClick(view.container.querySelector('[data-workbench-left-panel] [data-msgid="classification-1"]')!);
+        await waitForWorkbenchIdle();
+      }
+      fireEvent.click(screen.getByRole('button',{name:/显示提示 msg-1：消息待阅/}));
+      const tooltip=screen.getByRole('tooltip');expect(tooltip).toHaveTextContent('1 条影响待阅');expect(tooltip).toHaveTextContent('current-join');
+      expect(within(tooltip).queryByRole('button',{name:/^(分类|总结) · classification-1/})).toBeNull();
+      fireEvent.click(within(tooltip).getByRole('button',{name:'标记当前消息已阅'}));
+      await waitFor(()=>expect(mockApi.markReading).toHaveBeenCalledOnce());
+      const marks=mockApi.markReading.mock.calls[0][0];
+      for(const id of ['msg-1','current-join'])expect(marks).toContainEqual(expect.objectContaining({messageId:id,scope:'message'}));
+      expect(marks.filter((mark:{scope:string})=>mark.scope!=='influence')).toHaveLength(2);expect(marks.some((mark:{messageId:string;scope:string})=>mark.messageId==='classification-1'&&mark.scope!=='influence')).toBe(false);
+      expect(marks.some((mark:{messageId:string;scope:string})=>mark.messageId==='msg-2'&&mark.scope!=='influence')).toBe(false);
+      await waitFor(()=>expect(screen.getByRole('button',{name:/显示提示 msg-1：消息已阅/})).toHaveAttribute('data-display-reading','read'));
+      expect(screen.getByRole('button',{name:/显示提示 msg-2：消息待阅/})).toBeInTheDocument();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();expect(mockApi.createRelation).not.toHaveBeenCalled();expect(mockApi.castVote).not.toHaveBeenCalled();
+    }finally{view.unmount();graphRendering.actual=false;}
+  },15000);
+  it.each(['CLASSIFY', 'SUMMARY'].flatMap(type => ['graph', 'list'].flatMap(mode => (['TEXT'] as const).map(correctionKind => ({ type, mode, correctionKind })))))(
     'displays a body correction of $type from $mode ($correctionKind), restores the original on personal rejection and keeps correction history', async ({ type, mode, correctionKind }) => {
     localStorage.setItem('token', 'test-token');
     const replacement = '加长的新正文';
@@ -1662,13 +1953,19 @@ describe('MessageWorkbenchPage composer refresh', () => {
       createdAt: '2026-10-21T00:00:00Z' };
     const oldVote:Relation={...makeRelation(),id:'old-body-agreement',relationType:'AGREE',sourceMessageId:null,
       targetRefs:[{kind:'message',messageId:container.id}],spending:{protocol:1,recommendation:0,wager:7}};
-    mockApi.getRelations.mockResolvedValue({ data: [container,oldVote] });
-    mockApi.createRelation.mockResolvedValueOnce(correction);
-    mockApi.getWorkbenchSnapshot.mockResolvedValueOnce({ scope: { messageId: 'classification-1', title: '测试分类' },
-      messages: [makeMessage('msg-1', '成员'), { ...makeMessage(container.id, before), kind: 'RELATION', revision: 1,
-        relationType: type, targetRefs: container.targetRefs, relationPayload: container.payload, parts: container.parts },
-        {...makeMessage(oldVote.id,''),kind:'RELATION',relationType:'AGREE',targetRefs:oldVote.targetRefs,spending:oldVote.spending}],
-      relations: [container,oldVote], users: [makeUser()], stakes: {[container.id]:{messageId:container.id,pool:{lockedPro:7,lockedCon:0},stakes:[],counts:{pro:7,con:0}}}, tagCounts: {}, attentionUsers: {}, sequence: 1, hasMore: false, nextCursor: null });
+    const snapshotLoader=mockApi.getWorkbenchSnapshot.getMockImplementation()!;
+    let savedRelations:Relation[]=[container,oldVote],sequence=1;
+    const saveRelation=(relation:Relation)=>{savedRelations=[...savedRelations,relation];sequence++;
+      mockApi.getRelations.mockResolvedValue({data:savedRelations});return relation;};
+    mockApi.getRelations.mockResolvedValue({data:savedRelations});
+    mockApi.createRelation.mockReset().mockImplementationOnce(async()=>saveRelation(correction));
+    // Background reads must include committed records and native parts, as the real server does.
+    mockApi.getWorkbenchSnapshot.mockImplementation(async()=>({scope:{messageId:'classification-1',title:'测试分类'},
+      messages:[makeMessage('msg-1','成员'),...savedRelations.map(relation=>({...makeMessage(relation.id,relation.id===container.id?before:''),
+        kind:'RELATION',revision:relation.revision,relationType:relation.relationType,targetRefs:relation.targetRefs,relSourceId:relation.sourceMessageId,
+        relationPayload:relation.payload,parts:relation.parts,state:relation.state,spending:relation.spending,createdBy:relation.createdBy,createdAt:relation.createdAt}))],
+      relations:savedRelations,users:[makeUser()],stakes:{[container.id]:{messageId:container.id,pool:{lockedPro:7,lockedCon:0},stakes:[],counts:{pro:7,con:0}}},
+      tagCounts:{},attentionUsers:{},sequence,hasMore:false,nextCursor:null}));
     const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 120, 600, 400));
     graphRendering.actual = true;
     const view = render(<MessageWorkbenchPage />);
@@ -1681,7 +1978,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       const exits = screen.queryAllByRole('button', { name: /^退出分类$|^退出总结$/ }).length;
       const card = view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="editable-container"]:not([data-rel-overlay])')!;
       expect(screen.getByRole('button', { name: '修正文字' })).toHaveAttribute('aria-pressed', 'true');
-      if (correctionKind === 'MEANING') fireEvent.click(screen.getByRole('button', { name: '修改原意' }));
+
       fireEvent.doubleClick(card);
       expect(screen.queryAllByRole('button', { name: /^退出分类$|^退出总结$/ })).toHaveLength(exits);
       expect(within(card).getByText('拖选文字即可选择片段，或点击已有高亮片段')).toBeInTheDocument();
@@ -1706,9 +2003,18 @@ describe('MessageWorkbenchPage composer refresh', () => {
       const correctedCard = view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="editable-container"]:not([data-rel-overlay])')!;
       expect(correctedCard).toHaveTextContent(`需要更正的${replacement}`);
       expect(correctedCard).not.toHaveTextContent('需要更正的旧正文');
+      expect(within(correctedCard).getByRole('button',{name:'查看消息 editable-container 的当前正文作者：tester，共 1 人'})).toHaveTextContent('✎ 1人');
       expect(screen.queryByRole('combobox', { name: '正文版本' })).toBeNull();
+      fireEvent.click(within(correctedCard).getByRole('button',{name:'切换消息 editable-container 的版本'}));
+      expect(screen.getByRole('dialog',{name:'消息 editable-container 的版本'})).not.toHaveTextContent('当前用户尚未选择');
+      expect(screen.getByRole('radio',{checked:true})).toHaveTextContent('与当前用户选择相同');
+      fireEvent.click(screen.getByRole('button',{name:'关闭版本选择'}));
       if (mode === 'graph') expect(correctedCard.querySelector('[data-jump-msgids~="body-correction"]')).not.toBeNull();
-      else expect(view.container.querySelector('[data-msgid="body-correction"]')).toHaveTextContent(`将「旧正文」修改为「${replacement}」`);
+      else {
+        expect(view.container.querySelector('[data-msgid="body-correction"]')).toHaveTextContent(`将「旧正文」修改为「${replacement}」`);
+        expect(within(correctedCard).getByTitle('双击查看更正记录')).toHaveTextContent('✏ 1');
+        expect(within(correctedCard).getByTitle('双击查看更正记录')).not.toHaveTextContent('更正');
+      }
       // Keep the corrected body visible while selecting a suffix whose offset shifted.
       fireEvent.click(screen.getByRole('button', { name: /^更正$/ }));
       fireEvent.doubleClick(correctedCard);
@@ -1732,7 +2038,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await waitFor(() => expect(Date.now() - clearedAt).toBeGreaterThan(350));
       const opposition: Relation = { ...makeRelation(), id: 'against-correction', relationType: 'DISAGREE', sourceMessageId: null,
         targetRefs: [{ kind: 'relation', relationId: correction.id }], createdAt: '2026-10-21T01:00:00Z' };
-      mockApi.createRelation.mockResolvedValueOnce(opposition);
+      mockApi.createRelation.mockImplementationOnce(async()=>saveRelation(opposition));
       const record = mode === 'graph' ? correctedCard.querySelector('[data-jump-msgids~="body-correction"]')!
         : view.container.querySelector('[data-workbench-left-panel] [data-msgid="body-correction"]')!;
       fireEvent.click(record);
@@ -1742,6 +2048,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await waitForWorkbenchIdle();
       const restoredCard = view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="editable-container"]:not([data-rel-overlay])')!;
       expect(restoredCard).toHaveTextContent('需要更正的旧正文');
+      expect(within(restoredCard).getByRole('button',{name:/^显示提示 editable-container：/})).toHaveAttribute('data-display-comparison','same');
+      expect(within(restoredCard).getByRole('button',{name:'切换消息 editable-container 的版本'}).querySelector('[data-reading-version-recommendation-difference]')).not.toBeNull();
       if (mode === 'graph') expect(restoredCard.querySelector('[data-jump-msgids~="body-correction"]')).not.toBeNull();
       else expect(view.container.querySelector('[data-msgid="body-correction"]')).toHaveTextContent(`将「旧正文」修改为「${replacement}」`);
       if (mode === 'graph') {
@@ -1752,15 +2060,15 @@ describe('MessageWorkbenchPage composer refresh', () => {
         expect(historyCard).toHaveTextContent(`将「旧正文」修改为「${replacement}」`);
         expect(historyCard).toHaveTextContent(`start=${start} len=3`);
         expect(historyCard).not.toHaveTextContent(/具体更改|修改前全文|修改后全文|开头保留|结尾也保留/);
-        expect(historyCard).toHaveTextContent(correctionKind === 'MEANING' ? '修改原意' : '修正文字');
+        expect(historyCard).toHaveTextContent('修正文字');
         const targetButton=within(historyCard).getByRole('button',{name:container.id});
         expect(targetButton.parentElement).toHaveTextContent(`目标：${container.id}`);
         expect(targetButton.parentElement).not.toHaveTextContent(makeUser().username);
         expect(historyCard).not.toHaveTextContent('更正了消息');
         expect(historyCard.querySelectorAll('pre')).toHaveLength(0);
-        const viewTag=within(historyCard).getByRole('button',{name:/查看消息 body-correction/});
+        const viewTag=within(historyCard).getByRole('button',{name:/^查看消息 body-correction：/});
         expect(viewTag).toHaveTextContent('查看');
-        expect(viewTag.getAttribute('aria-label')).toContain('选择无效');
+        expect(viewTag.getAttribute('aria-label')).toContain('选择不显示');
         expect(within(historyCard).getByRole('link',{name:correction.id}).nextElementSibling).toBe(viewTag);
         fireEvent.click(viewTag);
         await waitForWorkbenchIdle();
@@ -1769,15 +2077,17 @@ describe('MessageWorkbenchPage composer refresh', () => {
         expect(screen.queryByRole('dialog',{name:'显示提示与差别'})).toBeNull();
         const previewCard=view.container.querySelector<HTMLElement>('[data-workbench-left-panel] [data-msgid="editable-container"]:not([data-rel-overlay])')!;
         expect(previewCard).toHaveTextContent('需要更正的加长的新正文');
-        expect(previewCard.textContent?.includes('👍7')).toBe(correctionKind==='TEXT');
+        expect(previewCard.textContent?.includes('✓7')).toBe(correctionKind==='TEXT');
         const graph=mockGraphView.mock.lastCall![0];
         const priorVote=graph.edges.find((edge:{relationMessageId:string})=>edge.relationMessageId===oldVote.id);
         expect(priorVote).toBeDefined();
-        expect(graph.excludedStanceEdges.has(priorVote.id)).toBe(correctionKind==='MEANING');
+        expect(graph.excludedStanceEdges.has(priorVote.id)).toBe(false);
         const ownHint=previewCard.querySelector('[data-display-hint-scope="message"]')!;
-        expect(ownHint.previousSibling?.textContent).toBe(container.id);
-        expect(previewCard.querySelectorAll('[data-display-hint-scope="corrections"]')).toHaveLength(1);
-        expect(within(previewCard).getByRole('button',{name:/更正显示提示 editable-container/}).getAttribute('aria-label')).toContain('选择无效');
+        const versionEntry=ownHint.previousElementSibling!;
+        expect(versionEntry).toHaveAttribute('data-reading-versions',container.id);
+        expect(versionEntry.previousSibling?.textContent).toBe(container.id);
+        expect(previewCard.querySelectorAll('[data-display-hint-scope="corrections"]')).toHaveLength(0);
+        expect(within(versionEntry as HTMLElement).getByRole('button',{name:'切换消息 editable-container 的版本'})).toBeInTheDocument();
         expect(mockApi.createRelation).toHaveBeenCalledTimes(2);
         await act(async()=>mockGraphView.mock.lastCall![0].onDecorationBodyClick({stopPropagation:vi.fn()},container.id,'agree'));
         expect(mockGraphView.mock.lastCall![0].draftUnits.map((unit:{messageId:string})=>unit.messageId)).toEqual(correctionKind==='TEXT'?[oldVote.id]:[]);
@@ -1797,8 +2107,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
         expect(screen.getByText(/消息卡按本人立场及公共统计显示有效正文/)).toBeInTheDocument();
       }
       expect(mockApi.createMessage).not.toHaveBeenCalled();
-    } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; }
-  });
+    } finally { window.getSelection()?.removeAllRanges(); view.unmount(); geometry.mockRestore(); graphRendering.actual = false; mockApi.getWorkbenchSnapshot.mockImplementation(snapshotLoader); }
+  },15000);
 
   it.each(['RECOMMEND', 'ARCHIVE'])('displays the %s returned by a value vote immediately in the annotation group', async type => {
     localStorage.setItem('token', 'test-token');
@@ -1848,9 +2158,11 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.click(screen.getByRole('button',{name:'显示标注 msg-1'}));
       fireEvent.click(view.container.querySelector('[data-msgid="annotation-target"][data-rel-overlay]')!);
       fireEvent.click(screen.getByRole('button',{name:stanceType==='AGREE'?'赞同':'反对'}));
+      expect(screen.getByLabelText(`${effectiveType==='RECOMMEND'?'推荐':'冷藏'}真假投入`)).toBeDisabled();
+      expect(screen.getByLabelText(`${effectiveType==='RECOMMEND'?'推荐':'冷藏'}真假投入`)).toHaveValue(0);
       fireEvent.click(screen.getByRole('button',{name:'发送'}));
       await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledExactlyOnceWith('classification-1',expect.objectContaining({
-        relationType:stanceType,targetRefs:[expect.objectContaining({reference:{messageId:annotation.id}})],
+        relationType:stanceType,targetRefs:[expect.objectContaining({reference:{messageId:annotation.id,revision:1,context:{kind:'MESSAGE',version:bodyVersion(annotation.id)}}})],
       })));
       await waitFor(()=>expect(document.querySelector('[data-message-jump-target="annotation-stance"]')).not.toBeNull());
       await waitForWorkbenchIdle();
@@ -1902,8 +2214,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
 
   it('finishes agreeing with a custom annotation and temporarily reveals the new tag',async()=>{
     localStorage.setItem('token','test-token');
-    const annotation:Relation={...makeRelation(),id:'custom-annotation',relationType:'TAG',sourceMessageId:null,
-      targetRefs:[{kind:'message',messageId:'msg-1'}],payload:{label:'可靠'}};
+    const annotation:Relation={...makeRelation(),revision:1,id:'custom-annotation',relationType:'TAG',sourceMessageId:null,
+      targetRefs:[{kind:'message',messageId:'msg-1'}],payload:{label:'可靠'},parts:[{id:'relation',type:'relation',relation:'tag',roles:{target:[{id:'t',reference:{messageId:'msg-1',revision:1,context:{kind:'MESSAGE',version:bodyVersion('msg-1')}}}]}}]};
     const result:Relation={...annotation,id:'new-custom-annotation',payload:{label:'可靠',
       annotationStance:{target:{messageId:annotation.id},side:'pro'}}};
     mockApi.getRelations.mockResolvedValue({data:[annotation]});
@@ -1916,11 +2228,15 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await waitForWorkbenchIdle();
       act(()=>window.dispatchEvent(new CustomEvent(PART_SELECTION_EVENT,{detail:{reference:{messageId:annotation.id},label:'可靠'}})));
       fireEvent.click(screen.getByRole('button',{name:'赞同'}));
+      expect(screen.getByLabelText('标注真假投入')).toBeDisabled();
+      expect(screen.getByLabelText('标注真假投入')).toHaveValue(0);
+      fireEvent.change(screen.getByLabelText('标注价值投入'),{target:{value:'4'}});
       fireEvent.click(screen.getByRole('button',{name:'发送'}));
       await waitFor(()=>expect(document.querySelector('[data-message-jump-target="new-custom-annotation"]')).not.toBeNull());
       await waitForWorkbenchIdle();
       expect(view.container.querySelector('[data-jump-msgids*="new-custom-annotation"]')).toHaveTextContent(result.payload!.label!);
       expect(mockApi.createRelation).toHaveBeenCalledOnce();
+      expect(mockApi.createRelation).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({relationType:'AGREE',wager:0,recommendation:4,selfAgree:false}));
       await waitFor(()=>expect(document.querySelector('[data-message-jump-target="new-custom-annotation"]')).toBeNull());
       expect(screen.getByRole('button',{name:'显示标注 msg-1'})).toHaveAttribute('aria-expanded','false');
       expect(screen.queryByText(/绘制超时|绘制或定位尚未完成/)).toBeNull();
@@ -1943,6 +2259,8 @@ describe('MessageWorkbenchPage composer refresh', () => {
       await waitForWorkbenchIdle();
       fireEvent.click(screen.getByRole('group',{name:'关系消息 voted-reference'}));
       fireEvent.click(screen.getByRole('button',{name:stanceType==='AGREE'?'赞同':'反对'}));
+      expect(screen.getByLabelText(`${stanceType==='AGREE'?'赞同':'反对'}价值投入`)).toBeDisabled();
+      expect(screen.getByLabelText(`${stanceType==='AGREE'?'赞同':'反对'}价值投入`)).toHaveValue(0);
       fireEvent.click(screen.getByRole('button',{name:'发送'}));
       await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledOnce());
       await waitFor(()=>expect(document.querySelector('[data-message-jump-target="reference-stance"]')).not.toBeNull());
@@ -2353,7 +2671,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     await act(async () => latest().onMessageClick({ button: 0, stopPropagation: vi.fn() }, 'msg-1'));
     fireEvent.click(screen.getByRole('button', { name: '分类' }));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })));
-    expect(mockApi.createRelation).toHaveBeenCalledWith(current.id, expect.objectContaining({ relationType: 'JOIN', sourceMessageId: destination.id }));
+    await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledWith(current.id, expect.objectContaining({ relationType: 'JOIN', sourceMessageId: destination.id })));
     expect(latest().lastClickedMessageId).toBe('msg-1');
     expect(screen.getByRole('button', { name: '退出分类' }).parentElement).toHaveTextContent('当前分类');
     expect(screen.queryByText('已定位目标消息')).toBeNull();
@@ -2501,7 +2819,9 @@ describe('MessageWorkbenchPage composer refresh', () => {
       const send = screen.getByRole('button', { name: '发送' });
       fireEvent.change(input, { target: { value: sent[0].content } });
       fireEvent.click(send); fireEvent.click(send);
-      await tick(0);
+      expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+      expect(mockApi.createMessage).not.toHaveBeenCalled();
+      await frames(3);
       expect(commits).toHaveLength(1);
       expect(mockApi.createMessage).toHaveBeenCalledOnce();
       expect(screen.queryByRole('button', { name: /收起进度|显示进度/ })).toBeNull();
@@ -2521,7 +2841,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       expect(root.inert).toBe(false);
       expect(send).toBeEnabled();
       fireEvent.click(send);
-      await tick(0);
+      await frames(3);
       expect(commits).toHaveLength(2);
       expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
       // The previous message's highlight expires while this request is still pending.
@@ -2576,6 +2896,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await tick(0);
       expect(screen.getByRole('dialog', { name: '正在发送' })).toBeInTheDocument();
+      await frames(3);
       for (let index = 0; index < 5; index++) {
         await tick(5000);
         await publish(index + 2, [sent]);
@@ -2621,7 +2942,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: '清空' }));
     fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'), { target: { value: '追溯中发送' } });
     await act(async () => fireEvent.click(screen.getByRole('button', { name: '发送' })));
-    expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1', expect.objectContaining({ content: '追溯中发送' }));
+    await waitFor(()=>expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1', expect.objectContaining({ content: '追溯中发送' })));
     await waitFor(() => expect(screen.queryByText('正在发送消息并更新关联结构，请稍候…')).toBeNull(), { timeout: 2000 });
     expect(screen.getByRole('button', { name: '退出追溯' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '退出追溯' }));
@@ -2655,7 +2976,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => expect(finishCommit).toBeDefined());
       await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
-      expect(screen.getByText('正在等待服务器确认发送，请勿重复提交。')).toBeInTheDocument();
+      expect(screen.getByRole('dialog',{name:'正在发送'})).toBeInTheDocument();
       expect(screen.queryByText('已定位目标消息')).toBeNull();
       expect(panel.scrollTop).toBe(0);
       await act(async () => finishCommit());
@@ -2772,7 +3093,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     fireEvent.change(textarea, { target: { value: '外层分类' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1', expect.objectContaining({
-      relationType: 'CLASSIFY', targetRefs: [expect.objectContaining({ kind: 'relation', relationId: inner.id, reference: { messageId: inner.id } })],
+      relationType: 'CLASSIFY', targetRefs: [expect.objectContaining({ kind: 'relation', relationId: inner.id, reference: { messageId: inner.id,context:{kind:'MESSAGE'} } })],
     })));
     fireEvent.click(screen.getByRole('button', { name: '切换为消息表' }));
     fireEvent.click(screen.getByRole('button', { name: '查看被加入消息（1条）' }));
@@ -2804,7 +3125,129 @@ describe('MessageWorkbenchPage composer refresh', () => {
     const latest = () => mockGraphView.mock.lastCall![0];
     await act(async () => latest().onJoinFilterClick(classification.id, 'outgoing'));
     expect(screen.getByText('被加入记录临时分类（2）')).toBeInTheDocument();
-    expect(latest().messages.map((message: Message) => message.id).sort()).toEqual(joins.map(join => join.id).sort());
+    expect([...document.querySelectorAll('[data-container-join-records] [data-msgid]')].map(element=>element.getAttribute('data-msgid')).sort()).toEqual(joins.map(join=>join.id).sort());
+  });
+
+  it('prices a new classification and its member placements separately and submits both configurations',async()=>{
+    localStorage.setItem('token','test-token');
+    mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.createRelation.mockImplementation(async (_scope,data)=>({...makeRelation(),...data,id:'new-classification'}));
+    render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    await waitForWorkbenchIdle();
+    for(const id of ['msg-1','msg-2'])await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},id));
+    fireEvent.click(screen.getByRole('button',{name:'分类'}));
+    fireEvent.change(screen.getByPlaceholderText('输入分类名称（不能为空）'),{target:{value:'新建分类'}});
+    expect(screen.getByText('分类消息 × 1')).toBeInTheDocument();
+    expect(screen.getByText('加入消息 × 2')).toBeInTheDocument();
+    for(const [label,value] of [['分类真假投入','2'],['分类价值投入','1'],['加入真假投入','4'],['加入价值投入','2']])
+      fireEvent.change(screen.getByLabelText(label),{target:{value}});
+    expect(screen.getByText(/本次 3 条消息，预计 18 点/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'发送'}));
+    await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledTimes(1));
+    expect(mockApi.createMessage).not.toHaveBeenCalled();
+    expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1',expect.objectContaining({relationType:'CLASSIFY',wager:2,recommendation:1,joinContribution:{wager:4,recommendation:2},
+      targetRefs:[expect.objectContaining({messageId:'msg-1'}),expect.objectContaining({messageId:'msg-2'})]}));
+  });
+
+  it('only shows and sends JOIN messages when adding several members to an existing classification',async()=>{
+    localStorage.setItem('token','test-token');
+    const container={...makeRelation(),id:'existing-classification',relationType:'CLASSIFY',sourceMessageId:null,targetRefs:[],payload:{title:'已有分类'}};
+    mockApi.getRelations.mockResolvedValue({data:[container]});
+    mockApi.createRelation.mockImplementation(async (_scope,data)=>({...makeRelation(),...data,id:'new-join-'+data.targetRefs[0].messageId}));
+    render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    await waitForWorkbenchIdle();
+    await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},container.id));
+    fireEvent.click(screen.getByRole('button',{name:'加入来源集合'}));
+    for(const id of ['msg-1','msg-2'])await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},id));
+    fireEvent.click(screen.getByRole('button',{name:'分类'}));
+    expect(screen.getByText('加入消息 × 2')).toBeInTheDocument();
+    expect(screen.queryByText('分类消息 × 1')).toBeNull();
+    fireEvent.change(screen.getByLabelText('加入真假投入'),{target:{value:'4'}});
+    fireEvent.change(screen.getByLabelText('加入价值投入'),{target:{value:'2'}});
+    expect(screen.getByText(/本次 2 条消息，预计 14 点/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'发送'}));
+    await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledTimes(2));
+    expect(mockApi.createMessage).not.toHaveBeenCalled();
+    for(const [,data] of mockApi.createRelation.mock.calls)expect(data).toMatchObject({relationType:'JOIN',sourceMessageId:container.id,wager:4,recommendation:2});
+  });
+
+  it('groups two references into one pair of inputs while text and placement retain their own contributions',async()=>{
+    localStorage.setItem('token','test-token');
+    mockApi.getRelations.mockResolvedValue({data:[]});
+    mockApi.createMessage.mockResolvedValue({...makeMessage('new-reference-body','同时引用'),revision:1});
+    mockApi.createRelation.mockImplementation(async (_scope,data)=>({...makeRelation(),...data,id:'new-'+data.targetRefs[0].messageId}));
+    render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    await waitForWorkbenchIdle();
+    for(const id of ['msg-1','msg-2'])await act(async()=>mockGraphView.mock.lastCall![0].onMessageClick({button:0,stopPropagation:vi.fn()},id));
+    fireEvent.click(screen.getByRole('button',{name:'引用'}));
+    fireEvent.change(screen.getByPlaceholderText('输入一条新文本消息（支持自由换行）'),{target:{value:'同时引用'}});
+    expect(screen.getByText('文本消息 × 1')).toBeInTheDocument();
+    expect(screen.getByText('引用消息 × 2')).toBeInTheDocument();
+    expect(screen.getByText('加入消息 × 1')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('引用真假投入')).toHaveLength(1);
+    for(const [label,value] of [['真假投入','2'],['价值投入','1'],['引用真假投入','4'],['引用价值投入','3'],['加入真假投入','5'],['加入价值投入','2']])
+      fireEvent.change(screen.getByLabelText(label),{target:{value}});
+    expect(screen.getByText(/本次 4 条消息，预计 28 点/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'发送'}));
+    await waitFor(()=>expect(mockApi.createRelation).toHaveBeenCalledTimes(2));
+    expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1',expect.objectContaining({wager:2,recommendation:1,joinContribution:{wager:5,recommendation:2}}));
+    for(const [,data] of mockApi.createRelation.mock.calls)expect(data).toMatchObject({relationType:'REFERENCE',wager:4,recommendation:3});
+  });
+
+  it('does not validate a hidden text contribution when only a classification and its placement will be sent',async()=>{
+    render(<MessageWorkbenchPage/>);
+    await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    fireEvent.change(screen.getByLabelText('真假投入'),{target:{value:''}});
+    fireEvent.click(screen.getByRole('button',{name:'分类'}));
+    fireEvent.change(screen.getByPlaceholderText('输入分类名称（不能为空）'),{target:{value:'独立分类'}});
+    expect(screen.getByText('分类消息 × 1')).toBeInTheDocument();
+    expect(screen.getByText('加入消息 × 1')).toBeInTheDocument();
+    expect(screen.queryByText('文本消息 × 1')).toBeNull();
+    expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
+  });
+
+  it('shows truth before value, rejects both zero and permits investing in both', async () => {
+    localStorage.setItem('token','test-token');
+    mockApi.createMessage.mockResolvedValue({...makeMessage('invested-message','同时投入'),revision:1});
+    render(<MessageWorkbenchPage />);
+    const textarea=await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
+    fireEvent.change(textarea,{target:{value:'同时投入'}});
+    const truth=screen.getByLabelText('真假投入'),value=screen.getByLabelText('价值投入');
+    const policy=screen.getByText('协议费 1 点/条').parentElement!;
+    expect(policy).toHaveAttribute('data-contribution-policy','true');
+    expect(policy.children).toHaveLength(2);
+    expect(policy.children[1]).toHaveTextContent('每条消息的真假、价值至少一项大于 0');
+    expect(policy).toHaveStyle({whiteSpace:'nowrap'});
+    expect(policy.querySelector('input')).toBeNull();
+    expect(policy.nextElementSibling).toContainElement(truth);
+    expect(truth.compareDocumentPosition(value)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.change(truth,{target:{value:'0'}});
+    fireEvent.change(value,{target:{value:'0'}});
+    expect(screen.getByRole('button',{name:'发送'})).toBeDisabled();
+    expect(screen.getByText('真假和价值至少一项须大于 0')).toBeInTheDocument();
+    fireEvent.change(value,{target:{value:'2'}});
+    expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
+    fireEvent.change(truth,{target:{value:'3'}});
+    fireEvent.click(screen.getByRole('button',{name:'发送'}));
+    await waitFor(()=>expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1',expect.objectContaining({wager:3,recommendation:2,selfAgree:true})));
+  });
+
+  it('refreshes both the protocol fee and estimated total when the rules change with the same account balance',async()=>{
+    const getRules=mockApi.getCurrentRules.getMockImplementation()!;
+    try{
+      mockApi.getCurrentRules.mockResolvedValue({parameters:{minStake:1,stakeFeeAmount:1}});
+      render(<MessageWorkbenchPage/>);
+      fireEvent.change(await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）'),{target:{value:'协议费刷新'}});
+      expect(await screen.findByText('协议费 1 点/条')).toBeInTheDocument();
+      expect(screen.getByText(/本次 2 条消息，预计 4 点/)).toBeInTheDocument();
+      mockApi.getCurrentRules.mockResolvedValue({parameters:{minStake:1,stakeFeeAmount:3}});
+      await act(async()=>{window.dispatchEvent(new Event('points-refresh'));});
+      expect(await screen.findByText('协议费 3 点/条')).toBeInTheDocument();
+      expect(screen.getByText(/本次 2 条消息，预计 8 点/)).toBeInTheDocument();
+    }finally{mockApi.getCurrentRules.mockImplementation(getRules);}
   });
 
   it('disables the send button while a message request is pending', async () => {
@@ -2833,7 +3276,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     await waitFor(() => expect(textarea).toHaveValue(''));
     expect(sendButton).toBeDisabled();
     expect(mockApi.createMessage).toHaveBeenCalledTimes(1);
-    expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1', expect.objectContaining({ wager: 0, recommendation: 0, selfAgree: false }));
+    expect(mockApi.createMessage).toHaveBeenCalledWith('classification-1', expect.objectContaining({ wager: 1, recommendation: 0, selfAgree: true }));
   });
 
   it('preserves a pinned body range through the original stance and send controls', async () => {
@@ -2847,7 +3290,7 @@ describe('MessageWorkbenchPage composer refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: '反对' }));
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(mockApi.createRelation).toHaveBeenCalledWith('classification-1', expect.objectContaining({
-      relationType: 'DISAGREE', targetRefs: [expect.objectContaining({ reference })], wager: 0, recommendation: 0,
+      relationType: 'DISAGREE', targetRefs: [expect.objectContaining({ reference:{...reference,context:{kind:'MESSAGE',version:bodyVersion('msg-1',3)}} })], wager: 1, recommendation: 0,
     })));
   });
 
@@ -2857,11 +3300,11 @@ describe('MessageWorkbenchPage composer refresh', () => {
     render(<MessageWorkbenchPage />);
     const textarea = await screen.findByPlaceholderText('输入一条新文本消息（支持自由换行）');
     fireEvent.change(textarea, { target: { value: '尚未提交' } });
-    fireEvent.change(screen.getByLabelText('推荐投入'), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText('价值投入'), { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('整批提交失败');
     expect(textarea).toHaveValue('尚未提交');
-    expect(screen.getByLabelText('推荐投入')).toHaveValue(4);
+    expect(screen.getByLabelText('价值投入')).toHaveValue(4);
     expect(mockGraphView.mock.calls.at(-1)![0].messages.some((message: { id: string }) => message.id === 'uncommitted')).toBe(false);
   });
 
@@ -4316,7 +4759,7 @@ describe('MessageWorkbenchPage trace and temporary view history', () => {
       const exit = () => traceMode ? screen.getByRole('button', { name: exitName })
         : within(document.querySelector<HTMLElement>('[data-workbench-view-toolbar]')!).getByRole('button', { name: exitName });
       expect(exit()).toBeInTheDocument();
-      const transientList = flow === 'comparison' || flow === 'correction' || mode === 'list';
+      const transientList = flow === 'comparison' || flow === 'correction' || flow === 'join-outgoing' || mode === 'list';
       if (traceMode) {
         fireEvent.click(screen.getByRole('button', { name: '+' }));
         expect(screen.getByText('追溯距离：2')).toBeInTheDocument();

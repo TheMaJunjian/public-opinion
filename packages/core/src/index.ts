@@ -7,3 +7,5 @@ export * from './workbench.js';
 export * from './archive-update.js';
 export * from './annotations.js';
 export * from './conversion-failure.js';
+export * from './display-dependency.js';
+export * from './body-versions.js';

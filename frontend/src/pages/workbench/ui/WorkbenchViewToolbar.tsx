@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, type ComponentProps, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import DeferredWorkbench from '../../../components/DeferredWorkbench';
+import HistoryArrowIcon from '../../../components/HistoryArrowIcon';
 import HomeFilterPanel from '../../../components/HomeFilterPanel';
 import MessageFilterPanel from '../../../components/MessageFilterPanel';
 import { Z_INDEX } from '../../../constants/zIndex';
@@ -80,9 +81,7 @@ export default function WorkbenchViewToolbar({ top, scopeHeader, scopeMessageId,
                   className="workbench-history-button" aria-label={direction === 'back' ? '返回' : '前进'}
                   title={direction === 'back' ? '返回上一个浏览位置' : '前进到下一个浏览位置'}
                 >
-                  <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d={direction === 'back' ? 'M19 12H5m7 7-7-7 7-7' : 'M5 12h14m-7-7 7 7-7 7'} />
-                  </svg>
+                  <HistoryArrowIcon direction={direction}/>
                 </button>;
               })}
             </div>}

@@ -1,8 +1,12 @@
+import {readingInfluences,influenceReadingMarks} from '../pages/workbench/model/readingProgress';
+import {bodyVersion,messageReadingKey} from '@gonglun/core';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createCatalogEngine, type CatalogData } from '../data/catalogEngine';
 import type { Message, Relation, User } from '../types';
-import type { WorkbenchSnapshot } from '@gonglun/core';
+import type { WorkbenchSnapshot, ReadingMark } from '@gonglun/core';
+import {computeCorrectionVersions,computeEffectiveSuppressedRelIds} from '../utils/modelBridge';
+import {} from '../pages/workbench/model/readingProgress';
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -39,7 +43,7 @@ it('uses closed-container members, marks, rounds, references and stakes in globa
     { id: 'round', kind: 'rounds' as const, minRounds: 1 },
     { id: 'participants', kind: 'participants' as const, minCount: 1 },
     { id: 'tag', kind: 'tag' as const, tagType: 'RECOMMEND', minCount: 3 },
-  ], home: 'read-related' as const, user: alice };
+  ], home: {scope:'related' as const,status:'all' as const}, user: alice };
   try {
     await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
     expect(engine.filters(query).clean?.visibleTextIds).toEqual(new Set(['closed-member']));
@@ -55,4 +59,38 @@ it('uses closed-container members, marks, rounds, references and stakes in globa
     await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
     expect(engine.filters(query).clean?.visibleTextIds.size).toBe(0);
   } finally { engine.stop(); }
+});
+
+it('uses the viewer\'s chosen composition for home reading filters when public recommendations differ',async()=>{
+  vi.stubGlobal('indexedDB',new IDBFactory());
+  const alice:User={id:'alice',username:'甲',createdAt:''},bob:User={id:'bob',username:'乙',createdAt:''},carol:User={id:'carol',username:'丙',createdAt:''};
+  const text:Message={id:'m',revision:1,kind:'TEXT',content:'原文',contentType:'TEXT',createdAt:'2026-01-01',createdBy:alice};
+  const correction=(id:string,before:string,after:string):Relation=>({id,relationType:'CORRECT',sourceMessageId:null,
+    targetRefs:[{kind:'text-fragment',messageId:'m',text:before,hash:id}],payload:{correctionBeforeContent:'原文',correctionAfterContent:after},createdAt:`2026-01-0${id.slice(1)}`,createdBy:bob});
+  const agree=(id:string,target:string,user:User):Relation=>({id,relationType:'AGREE',sourceMessageId:null,
+    targetRefs:[{kind:'message',messageId:target}],createdAt:'2026-01-05',createdBy:user});
+  const relations=[correction('c1','原','新文'),correction('c2','原','古文'),correction('c3','文','原稿'),
+    agree('personal','c1',alice),agree('public-1','c2',bob),agree('public-2','c2',carol)];
+  const records:Message[]=[text,...relations.map(record=>({...text,id:record.id,kind:'RELATION',content:'',relationType:record.relationType,
+    targetRefs:record.targetRefs,relationPayload:record.payload,createdAt:record.createdAt,createdBy:record.createdBy}))];
+  const snapshot:WorkbenchSnapshot={regionId:'personal-reading',sequence:1,scope:{messageId:null,title:'公论'},messages:records,relations,
+    users:[alice,bob,carol],stakes:{},tagCounts:{},attentionUsers:{}};
+  vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify(snapshot))));
+  const ready=vi.fn<(data:CatalogData)=>void>();
+  const engine=createCatalogEngine({parent:'root',key:'personal-reading-corrections',baseUrl:'https://example.invalid/api',deviceId:'device'},
+    {idle:async()=>{},onReady:ready,onProgress:vi.fn()});
+  try{
+    await vi.waitFor(()=>expect(ready).toHaveBeenCalledOnce());
+    const {messages,edges}=ready.mock.lastCall![0].projected;
+    const personal=computeCorrectionVersions(messages,edges,computeEffectiveSuppressedRelIds(edges,messages,alice.username),alice.username).get('m')!;
+    expect(personal.current?.content).toBe('新稿');expect(computeCorrectionVersions(messages,edges).get('m')?.current?.content).toBe('古稿');
+    const mark=(messageId:string,content:string,versions:string[]=[]):ReadingMark=>{
+      const version=bodyVersion(messageId,1,versions.map(messageId=>({messageId,revision:1,kind:'TEXT' as const}))),key=messageReadingKey(version.messageId);void content;return {format:3,version,messageId,scope:'message',key,bodySignature:key,signature:'seen'};
+    };
+    const marks=[...messages.map(message=>mark(message.id,message.content)),...personal.versions.map(version=>mark('m',version.content,[version.correctionId])),
+      mark('m',personal.current!.content,personal.current!.appliedCorrectionIds),...([...readingInfluences({messages,edges,relations})].flatMap(([id,items])=>influenceReadingMarks(id,items)))];
+    const query={rules:[],user:alice,readingMarks:marks};
+    expect(engine.filters({...query,home:{scope:'all',status:'confirmed'}}).home?.matchIds.has('m')).toBe(true);
+    expect(engine.filters({...query,home:{scope:'all',status:'pending'}}).home?.matchIds.has('m')).toBe(false);
+  }finally{engine.stop();}
 });

@@ -116,7 +116,7 @@ try {
   const cookie=registered.headers['set-cookie'][0].split(';')[0];
   const headers={cookie,'x-csrf-token':registered.body.csrf};
   assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'text',type:'text',text:'blocked'}]},{cookie})).status,403);
-  const created=await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'text',type:'text',text:'production smoke persistence'}]},headers);
+  const created=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[{id:'text',type:'text',text:'production smoke persistence'}]},headers);
   assert.equal(created.status,201);
   compose('restart','api');
   for(let attempt=0;;attempt++) {
@@ -163,7 +163,7 @@ try {
     catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
   }
   const oldLogin=await request('/api/login','POST',{name:'legacy-user',password:'old'});
-  assert.equal(oldLogin.status,200);assert.equal(oldLogin.body.account.available,300);
+  assert.equal(oldLogin.status,200);assert.equal(oldLogin.body.account.available,298);
   const legacyView=await request('/api/ui/snapshot?parent=legacy-topic');
   assert.equal(legacyView.status,200);
   assert.ok(legacyView.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
@@ -173,8 +173,8 @@ try {
   assert.ok(compact.body.messages.some(message=>message.id==='legacy-message'&&message.content==='Legacy message preserved'));
   assert.ok(compact.body.relationRecords.length>0);
   assert.ok(compact.body.relationRecords.every(index=>Number.isInteger(index)&&compact.body.messages[index]));
-  const migratedWrite=await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'Migrated production write'}]},{cookie:oldLogin.headers['set-cookie'][0].split(';')[0],'x-csrf-token':oldLogin.body.csrf});
-  assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,299);
+  const migratedWrite=await request('/api/messages','POST',{requestId:randomUUID(),recommendation:1,parts:[{id:'body',type:'text',text:'Migrated production write'}]},{cookie:oldLogin.headers['set-cookie'][0].split(';')[0],'x-csrf-token':oldLogin.body.csrf});
+  assert.equal(migratedWrite.status,201);assert.equal(migratedWrite.body.account.available,296);
   // The packaged server launches its separate migrator automatically on restart.
   const upgradePool=new Pool({connectionString:databaseUrl});
   try{
@@ -192,7 +192,7 @@ try {
     catch(error){if(attempt>=40)throw error;await new Promise(r=>setTimeout(r,500));}
   }
   const afterUpgrade=await request('/api/login','POST',{name:'legacy-user',password:'old'});
-  assert.equal(afterUpgrade.status,200);assert.equal(afterUpgrade.body.account.available,299);
+  assert.equal(afterUpgrade.status,200);assert.equal(afterUpgrade.body.account.available,migratedWrite.body.account.available);
   const upgradedPool=new Pool({connectionString:databaseUrl});
   try{
     assert.equal((await upgradedPool.query('SELECT MAX(version) AS version FROM migrated_fixture.schema_migrations')).rows[0].version,DATABASE_MIGRATIONS.length);
@@ -228,7 +228,7 @@ try {
   compose('up','-d','--no-deps','--no-build','--pull','never','--wait','api');
   assert.equal(capturePostgres(),originalPostgres);
   const preserved=await request('/api/login','POST',{name:'legacy-user',password:'old'});
-  assert.equal(preserved.status,200);assert.equal(preserved.body.account.available,299);
+  assert.equal(preserved.status,200);assert.equal(preserved.body.account.available,migratedWrite.body.account.available);
   assert.ok((await request('/api/ui/snapshot?parent=legacy-topic')).body.messages.some(message=>message.id==='legacy-message'));
   assert.equal((await request('/api/messages','POST',{requestId:randomUUID(),parts:[{id:'body',type:'text',text:'must remain read only'}]})).status,503);
   // The shipped tools must inspect without running migrations, then retire an

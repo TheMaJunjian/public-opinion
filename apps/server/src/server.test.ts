@@ -1,8 +1,9 @@
+import {withTestContribution} from './test-database.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { bindRoles, replayArchive, type Change, type Message, type Part, type Reference, type Session } from '@gonglun/core';
+import { bodyVersion, bindRoles, replayArchive, type Change, type Message, type Part, type Reference, type Session } from '@gonglun/core';
 import { createApp } from './app.js';
 import { createTestApp, cleanupTestDatabases, newTestSchema } from './test-database.js';
 import { processDue } from './messages.js';
@@ -17,7 +18,7 @@ const rel=(name:string,target?:Reference,role='target'):Part=>({id:'relation',ty
 const data=(value:Record<string,any>):Part=>({id:'data',type:'data',value});
 async function actor(app:App,name:string):Promise<Actor>{const agent=request.agent(app);const response=await agent.post('/api/register').send({name,password:'a-good-password'});expect(response.status,response.text).toBe(201);return {agent,session:response.body};}
 async function post(user:Actor,parts:Part[],spending:{wager?:number;recommendation?:number;requestId?:string}={}){
-  return user.agent.post('/api/messages').set('x-csrf-token',user.session.csrf).send({requestId:randomUUID(),parts,...spending});
+  return user.agent.post('/api/messages').set('x-csrf-token',user.session.csrf).send(withTestContribution({requestId:randomUUID(),parts,...spending}));
 }
 async function message(user:Actor,parts:Part[],spending:{wager?:number;recommendation?:number}={}):Promise<Message>{const response=await post(user,parts,spending);expect(response.status,response.text).toBe(201);return response.body.message;}
 async function terminate(user:Actor,target:Message){return message(user,[rel('terminate',{messageId:target.id})]);}
@@ -25,7 +26,7 @@ async function conserved(app:App){const balances=(await app.store.db.prepare('SE
 afterEach(async ()=>{vi.restoreAllMocks();vi.unstubAllEnvs();for(const app of apps.splice(0))(await app.close());await cleanupTestDatabases();});
 
 describe('公论事务与经济',()=>{
-  it('只付协议费发言，推荐单独入运营池；幂等重试不重复收费，失败完全回滚',async()=>{
+  it('发言必须投入，价值单独入运营池；幂等重试不重复收费，失败完全回滚',async()=>{
     const server=(await app()),user=await actor(server,'founder'),other=await actor(server,'other');
     const requestId=randomUUID(),input=[text('一个问题')];
     const first=await post(user,input,{requestId,recommendation:7});expect(first.status).toBe(201);
@@ -48,7 +49,7 @@ describe('公论事务与经济',()=>{
     await message(a,[rel('agree',{messageId:claim.id})],{wager:10});
     await message(b,[rel('disagree',{messageId:claim.id})],{wager:5});
     await terminate(a,claim);
-    expect((await server.store.account(a.session.user.id)).available).toBe(1002);
+    expect((await server.store.account(a.session.user.id)).available).toBe(1000);
     expect((await server.store.account(b.session.user.id)).available).toBe(994);
     let view=(await a.agent.get(`/api/messages/${claim.id}/context`)).body;
     expect(view.rounds[0]).toMatchObject({status:'settled',result:'pro',pro:10,con:5});
@@ -57,8 +58,8 @@ describe('公论事务与经济',()=>{
     view=(await a.agent.get(`/api/messages/${claim.id}/context`)).body;
     expect(view.rounds[0]).toMatchObject({status:'settled',result:'con',pro:10,con:25});
     expect(view.rounds[0].previousRoundId).toBe(view.rounds[1].id);
-    expect((await server.store.account(a.session.user.id))).toMatchObject({available:987,locked:0});
-    expect((await server.store.account(b.session.user.id))).toMatchObject({available:1007,locked:0});
+    expect((await server.store.account(a.session.user.id))).toMatchObject({available:985,locked:0});
+    expect((await server.store.account(b.session.user.id))).toMatchObject({available:1006,locked:0});
     const reversals=(await server.store.db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE reason='撤回先前对赌分配'").get())!;
     expect(reversals.n).toBeGreaterThan(0);(await conserved(server));
   });
@@ -66,12 +67,12 @@ describe('公论事务与经济',()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob');
     const solo=await message(a,[text('只有一方')]);
     await message(a,[rel('agree',{messageId:solo.id})],{wager:17});await terminate(a,solo);
-    expect((await server.store.account(a.session.user.id))).toMatchObject({available:997,locked:0});
+    expect((await server.store.account(a.session.user.id))).toMatchObject({available:995,locked:0});
     expect((await a.agent.get(`/api/messages/${solo.id}/context`)).body.rounds[0].result).toBe('pro');
     const tie=await message(a,[text('平局')]);
     await message(a,[rel('agree',{messageId:tie.id})],{wager:8});await message(b,[rel('disagree',{messageId:tie.id})],{wager:8});await terminate(a,tie);
     expect((await a.agent.get(`/api/messages/${tie.id}/context`)).body.rounds[0].result).toBe('tie');
-    expect((await server.store.account(a.session.user.id))).toMatchObject({available:994,locked:0});
+    expect((await server.store.account(a.session.user.id))).toMatchObject({available:990,locked:0});
     expect((await server.store.account(b.session.user.id))).toMatchObject({available:999,locked:0});(await conserved(server));
   });
   it('低质量处罚单独入运营池，评价翻案平反，不改原消息对赌资金',async()=>{
@@ -102,10 +103,10 @@ describe('公论事务与经济',()=>{
     const work=await message(b,[rel('fulfill',{messageId:task.id}),text('工作成果')]);
     await message(a,[rel('agree',{messageId:work.id})],{wager:1});await terminate(a,work);
     expect((await server.store.account(a.session.user.id)).locked).toBe(0);
-    expect((await server.store.account(b.session.user.id)).available).toBe(1019);
+    expect((await server.store.account(b.session.user.id)).available).toBe(1018);
     await message(a,[rel('disagree',{messageId:work.id})],{wager:2});await terminate(a,work);
     expect((await server.store.account(a.session.user.id)).locked).toBe(20);
-    expect((await server.store.account(b.session.user.id)).available).toBe(999);(await conserved(server));
+    expect((await server.store.account(b.session.user.id)).available).toBe(998);(await conserved(server));
   });
   it('运营收入只分实际可用部分，分配消息留下权重和每笔归因',async()=>{
     const server=(await app()),a=await actor(server,'alice'),b=await actor(server,'bob');
@@ -115,7 +116,7 @@ describe('公论事务与经济',()=>{
     const related=(await a.agent.get(`/api/messages/${proposal.id}/context`)).body.messages as Message[];
     const payout=related.find(m=>m.authorId==='system')!;
     const value=payout.parts.find(p=>p.type==='data');
-    expect(value?.type==='data'&&value.value).toMatchObject({source:'operations',total:33,ruleVersion:1,ledgerId:'local'});
+    expect(value?.type==='data'&&value.value).toMatchObject({source:'operations',total:35,ruleVersion:1,ledgerId:'local'});
     expect((await server.store.setting('operating'))).toBe(100);(await conserved(server));
   });
   it('早期表态高于未认可的重复内容，同作者拆分封顶且不同组织独立',async()=>{
@@ -180,7 +181,7 @@ describe('身份、组织和消息版本',()=>{
     await message(a,[rel('disagree',{messageId:objection.id,partId:'relation'})],{wager:3});
     await message(a,[rel('disagree',{messageId:objection.id,partId:'text'})],{wager:4});
     const rounds=(await a.agent.get(`/api/messages/${original.id}/context`)).body.rounds;
-    expect(rounds[0]).toMatchObject({pro:3,con:2});
+    expect(rounds[0]).toMatchObject({pro:0,con:5});
     const reasons=(await a.agent.get(`/api/messages/${objection.id}/context`)).body.rounds;
     expect(reasons[0]).toMatchObject({target:{messageId:objection.id,partId:'text'},pro:0,con:4});(await conserved(server));
   });
@@ -193,7 +194,7 @@ describe('身份、组织和消息版本',()=>{
     await message(a,[rel('disagree',{messageId:statement.id,revision:1,partId:'relation'})],{wager:4});
     const view=(await a.agent.get(`/api/messages/${original.id}/context`)).body;
     expect(view.rounds).toHaveLength(1);expect(view.rounds[0]).toMatchObject({targetRevision:1,target:{messageId:original.id,revision:1},pro:2,con:4});
-    expect(statement.parts).toEqual([rel('agree',{messageId:original.id})]);
+    expect(statement.parts).toEqual([rel('agree',{messageId:original.id,revision:1,context:{kind:'MESSAGE'}})]);
     await message(a,[rel('terminate',{messageId:original.id,revision:1})]);(await conserved(server));
   });
   it('页面及增量返回每条表态的执行依据，编辑后仍区分原立场与反对理由',async()=>{
@@ -202,15 +203,16 @@ describe('身份、组织和消息版本',()=>{
     const objection=await message(b,[rel('disagree',{messageId:original.id}),text('原反对理由')]);
     const reversal=await post(a,[rel('disagree',{messageId:objection.id,partId:'relation'})]);expect(reversal.status).toBe(201);
     const reversed=reversal.body.message as Message;
-    expect(reversal.body.change.states.find((state:any)=>state.messageId===reversed.id)?.executedStance).toEqual({partId:'relation',sourceRevision:1,target:{messageId:original.id,revision:1},side:'pro'});
+    const subject={messageId:original.id,revision:1,context:{kind:'MESSAGE'}};
+    expect(reversal.body.change.states.find((state:any)=>state.messageId===reversed.id)?.executedStance).toEqual({partId:'relation',sourceRevision:1,target:subject,side:'con'});
     const reasonReply=await message(a,[rel('disagree',{messageId:objection.id,partId:'text'})]);
     const amendment=await message(a,[rel('amend',{messageId:objection.id}),data({expectedRevision:1,parts:[text('修改后的理由'),{...rel('agree',{messageId:original.id}),id:'new-stance'}]})]);
     await message(a,[rel('authorize',{messageId:amendment.id})]);
     const page=(await a.agent.get('/api/messages?limit=100')).body;
     expect(page.states.find((state:any)=>state.messageId===objection.id)).toMatchObject({revision:2,executedStance:{partId:'relation',sourceRevision:1,target:{messageId:original.id,revision:1},side:'con'}});
     const context=(await a.agent.get(`/api/messages/${objection.id}/context`)).body;
-    expect(context.states.find((state:any)=>state.messageId===reasonReply.id)?.executedStance).toEqual({partId:'relation',sourceRevision:1,target:{messageId:objection.id,revision:1,partId:'text'},side:'con'});
-    expect(context.states.find((state:any)=>state.messageId===reversed.id)?.executedStance).toEqual({partId:'relation',sourceRevision:1,target:{messageId:original.id,revision:1},side:'pro'});
+    expect(context.states.find((state:any)=>state.messageId===reasonReply.id)?.executedStance).toEqual({partId:'relation',sourceRevision:1,target:{messageId:objection.id,revision:1,partId:'text',context:{kind:'MESSAGE',version:bodyVersion(objection.id)}},side:'con'});
+    expect(context.states.find((state:any)=>state.messageId===reversed.id)?.executedStance).toEqual({partId:'relation',sourceRevision:1,target:subject,side:'con'});
     expect(page.states.find((state:any)=>state.messageId===original.id)?.executedStance).toBeUndefined();
   });
   it('连续编辑组织不再次移除已经释放到父级的成员',async()=>{

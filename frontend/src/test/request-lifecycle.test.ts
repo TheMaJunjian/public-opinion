@@ -17,6 +17,20 @@ beforeEach(async () => {
 });
 afterEach(() => { resetRequestOperations(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it('saves private viewing state with CSRF but without signing keys or a public command batch',async()=>{
+  localStorage.removeItem('privateKey:device:alice');vi.mocked(signPayloadWithPrivateJwk).mockClear();
+  const marks=[{messageId:'m',scope:'message' as const,key:'body',signature:'display',bodySignature:'body'}];
+  const fetcher=vi.fn(async()=>new Response(JSON.stringify({marks})));vi.stubGlobal('fetch',fetcher);
+  const committed=vi.fn();
+  await api.withCommandBatch(async()=>{expect(await api.markReading(marks)).toEqual({marks});},committed);
+  expect(fetcher).toHaveBeenCalledOnce();
+  const [url,options]=fetcher.mock.calls[0] as unknown as [string,RequestInit];
+  expect(url).toMatch(/\/ui\/reading-state$/);
+  expect(options.headers).toMatchObject({'X-CSRF-Token':'csrf'});
+  expect(options.headers).not.toHaveProperty('X-Signature');
+  expect(committed).not.toHaveBeenCalled();expect(signPayloadWithPrivateJwk).not.toHaveBeenCalled();
+});
+
 it('bounds a response body that never completes, even after the headers arrived', async () => {
   const json = vi.fn(() => new Promise(() => {}));
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json })));

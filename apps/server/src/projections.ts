@@ -1,4 +1,4 @@
-import { organization, referenceKey, relations, type Message, type MessageState, type Reference } from '@gonglun/core';
+import { contextKey,annotationValueSide, targetInvestmentDimension, organization, referenceKey, relations, type Message, type MessageState, type Reference, type ReferenceContext } from '@gonglun/core';
 import type { Store } from './db.js';
 import { retiredOrganizationIds } from './retired-organizations.js';
 /** Execution-time statements survive edits to their source messages and bounded views. */
@@ -11,12 +11,13 @@ export async function initializeProjections(store: Store): Promise<void> {
             "targetRevision" INTEGER NOT NULL,
             "targetKey" TEXT NOT NULL,
             "targetPartId" TEXT,
+            context JSONB,
             "wholeComponent" INTEGER NOT NULL,
             side TEXT NOT NULL CHECK (side IN ('pro', 'con')),
             sequence BIGINT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS display_stances_target
-            ON display_stances("targetId", "targetRevision", "authorId", "targetKey", sequence DESC, "sourceId" DESC);
+            ON display_stances("targetId", "targetRevision", "authorId", md5("targetKey"), sequence DESC, "sourceId" DESC);
     `);
 }
 /** The caller resolves the complete historical stance chain before executing this once. */
@@ -31,15 +32,16 @@ export async function recordStance(store: Store, source: Message, resolved: {
     const wholeComponent = !target.memberId && !target.path?.length && !target.range;
     await store.db.prepare(`
         INSERT INTO display_stances
-            ("sourceId", "authorId", "targetId", "targetRevision", "targetKey", "targetPartId", "wholeComponent", side, sequence)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ("sourceId", "authorId", "targetId", "targetRevision", "targetKey", "targetPartId", "wholeComponent", side, sequence,context)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,$10::jsonb)
         ON CONFLICT ("sourceId") DO NOTHING
-    `).run(source.id, source.authorId, target.messageId, target.revision!, referenceKey(target), target.partId ?? null, wholeComponent ? 1 : 0, resolved.side, source.sequence || (await store.latestSequence()) + 1);
+    `).run(source.id, source.authorId, target.messageId, target.revision!, referenceKey(target), target.partId ?? null, wholeComponent ? 1 : 0, resolved.side, source.sequence || (await store.latestSequence()) + 1,JSON.stringify(target.context??{kind:'UNKNOWN'}));
     await store.db.prepare('DELETE FROM message_state_checkpoints WHERE "messageId"=$1').run(target.messageId);
     return target.messageId;
 }
 
 interface StanceRow {
+  context?:ReferenceContext;
   authorId: string;
   targetId: string;
   targetPartId: string | null;
@@ -64,7 +66,7 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
                 suppressed: false,
                 supportCount: 0,
                 oppositionCount: 0,
-                recommendationTotal: message.spending.recommendation,
+                recommendationTotal: relations(message).some(part => targetInvestmentDimension(part.relation)) ? 0 : message.spending.recommendation,
             }]));
         // A stance executes only on send. Return that original basis even when its
         // source has subsequently been edited; clients can label the older revision.
@@ -86,9 +88,10 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             };
         }
         const stances = (await store.db.prepare(`
-      SELECT "authorId", "targetId", "targetPartId", "wholeComponent", side FROM (
+      SELECT "authorId", "targetId", "targetPartId", "wholeComponent", side,context FROM (
         SELECT stance.*, ROW_NUMBER() OVER (
-          PARTITION BY stance."authorId", stance."targetKey"
+          PARTITION BY stance."authorId", stance."targetId",
+            CASE WHEN stance."wholeComponent"=1 THEN COALESCE(stance."targetPartId",'') ELSE stance."targetKey" END
           ORDER BY stance.sequence DESC, stance."sourceId" DESC
         ) AS position
         FROM display_stances stance
@@ -104,6 +107,9 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             const message = byId.get(stance.targetId);
             if (!state || !message)
                 continue;
+            const scoped=contextKey(stance.context??{kind:'UNKNOWN'});
+            const contexts=state.contextCounts??={},counts=contexts[scoped]??={supportCount:0,oppositionCount:0,recommendationTotal:0};
+            if(stance.side==='pro')counts.supportCount++;else counts.oppositionCount++;
             const correction = relations(message).find(part => part.relation === 'correct' || part.relation === 'amend');
             if (correction) {
                 // Whole-card and relation-label votes express the same decision;
@@ -127,6 +133,19 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
             const state = states.get(messageId)!;
             state.suppressed = state.oppositionCount > state.supportCount;
         }
+        const investments=await store.db.prepare('SELECT "subjectId","settlementType",side,amount,reference FROM stake_positions WHERE "subjectId"=ANY($1::text[])').all(batch);
+        const claims=new Map<string,Message>();
+        for(const row of investments){
+            const state=states.get(String(row.subjectId));if(!state)continue;
+            let reference=row.reference as Reference|null;
+            if(row.settlementType==='VALUE'&&reference){
+                let claim=claims.get(reference.messageId);if(!claim){claim=await store.message(reference.messageId,reference.revision);claims.set(reference.messageId,claim);}
+                reference=relations(claim).find(part=>part.relation==='open-value-settlement')?.roles.target?.[0]?.reference??reference;
+            }
+            const key=contextKey(reference?.context??{kind:'UNKNOWN'}),scopes=state.contextStakes??={};
+            const total=scopes[key]??={truth:{pro:0,con:0},value:{pro:0,con:0}};
+            total[row.settlementType==='VALUE'?'value':'truth'][row.side==='pro'?'pro':'con']+=Number(row.amount);
+        }
         const recommendations = await store.db.prepare(`
       SELECT DISTINCT source.id, source.body FROM refs
       JOIN messages source ON source.id = refs."sourceId"
@@ -136,7 +155,7 @@ export async function statesFor(store: Store, ids: string[]): Promise<MessageSta
         for (const row of recommendations) {
             const source = JSON.parse(String(row.body)) as Message;
             const recommended = new Set(relations(source)
-                .filter(part => part.relation === 'recommend')
+                .filter(part => targetInvestmentDimension(part.relation) === 'VALUE' && annotationValueSide(part) === 'pro')
                 .flatMap(part => (part.roles.target ?? []).map(binding => binding.reference))
                 .filter(reference => reference.revision === undefined || reference.revision === byId.get(reference.messageId)?.revision)
                 .map(reference => reference.messageId));

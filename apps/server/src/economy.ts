@@ -138,7 +138,7 @@ export async function placeWager(tx: Mutation, message: Message, amount: number,
     if (stance.length !== 1 || stance[0]!.roles.target?.length !== 1)
         throw new DomainError('押注必须对应一项明确的赞同或反对');
     const resolved = await resolveExecutedStance(tx.store, stance[0]!.roles.target![0]!.reference, stance[0]!.relation === 'agree' ? 'pro' : 'con');
-    await placeResolvedWager(tx, message, amount, stance[0]!.id, resolved, false, allowDebt);
+    await placeResolvedWager(tx, message, amount, stance[0]!.id, resolved, {allowDebt});
 }
 export async function placeValueWager(tx: Mutation, message: Message, annotation: RelationPart, amount: number, allowDebt = false) {
     const reference = relationTarget(annotation);
@@ -157,15 +157,15 @@ export async function placeValueWager(tx: Mutation, message: Message, annotation
         ]);
         target = { messageId: claim.id, revision: claim.revision, partId: 'relation' };
     }
-    await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotationValueSide(annotation) }, false, allowDebt);
+    await placeResolvedWager(tx, message, amount, annotation.id, { target, side: annotationValueSide(annotation) }, {allowDebt});
 }
 /** Maintenance only: backfill an author's self-agreement without replaying the message's actions. */
 export async function placeHistoricalSelfWager(tx: Mutation, message: Message, partId: string) {
-    await placeResolvedWager(tx, message, 1, partId, { target: { messageId: message.id, revision: message.revision }, side: 'pro' }, true);
+    await placeResolvedWager(tx, message, 1, partId, { target: { messageId: message.id, revision: message.revision }, side: 'pro' }, {historical:true,validateRequestedRound:false});
 }
 /** Reassign existing principal while preserving the original execution address and version. */
 export async function relocateHistoricalTargetWager(tx:Mutation,message:Message,amount:number,partId:string,target:Reference,side:'pro'|'con'){
-    await placeResolvedWager(tx,message,amount,partId,{target,side},false,true);
+    await placeResolvedWager(tx,message,amount,partId,{target,side},{allowDebt:true,validateRequestedRound:false});
 }
 /** Maintenance can fund an already executed JOIN without executing or approving it again. */
 export async function relocateRecordedTargetWager(tx:Mutation,message:Message,amount:number,partId:string,target:Reference,side:'pro'|'con'){
@@ -175,7 +175,7 @@ export async function relocateRecordedTargetWager(tx:Mutation,message:Message,am
     if(!execution||referenceKey(JSON.parse(String(execution.target)))!==key||execution.side!==side||display?.targetKey!==key||display.side!==side)
         throw new Error('历史投入缺少一致的原始执行和展示记录');
     await tx.store.db.prepare('DELETE FROM execution_stances WHERE "sourceId"=$1 AND revision=$2 AND "partId"=$3').run(message.id,message.revision,partId);
-    await placeResolvedWager(tx,message,amount,partId,{target,side},false,true,false);
+    await placeResolvedWager(tx,message,amount,partId,{target,side},{allowDebt:true,validateApproval:false,validateRequestedRound:false});
 }
 /** Reverse only an unsettled migration stake mistakenly attached to an automatic record. */
 export async function refundHistoricalSelfWager(tx: Mutation, message: Message, partId: string, reason='系统自动记录真假补扣退回') {
@@ -195,7 +195,8 @@ export async function refundHistoricalSelfWager(tx: Mutation, message: Message, 
     // Close the migration's now-empty round without affecting any prior settlement.
     if(!round.previousRoundId&&!await tx.store.db.prepare('SELECT 1 FROM bets WHERE "targetKey"=$1').get(key))await settle(tx,round,message.id);
 }
-async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }, historical = false, allowDebt = false, validateApproval = true) {
+async function placeResolvedWager(tx: Mutation, message: Message, amount: number, partId: string, resolved: { target: Reference; side: 'pro' | 'con' }, options: {historical?:boolean;allowDebt?:boolean;validateApproval?:boolean;validateRequestedRound?:boolean} = {}) {
+    const {historical=false,allowDebt=false,validateApproval=true,validateRequestedRound=true}=options;
     if (!historical && validateApproval) await validateJoinApproval(tx.store, resolved.target, resolved.side, message.authorId);
     if(amount===0 && await tx.store.db.prepare('SELECT 1 FROM settlement_access WHERE "messageId"=$1').get(resolved.target.messageId)) {
         const target={...resolved.target,revision:(await tx.store.message(resolved.target.messageId,resolved.target.revision)).revision};
@@ -216,8 +217,8 @@ async function placeResolvedWager(tx: Mutation, message: Message, amount: number
         const previous = history.at(-1);
         round = (await newRound(tx, selected, message, previous));
     }
-    // A historical self-contribution is separate from the old action's round.
-    const requested=dataOf(message).roundId;if(!historical&&requested!==undefined&&requested!==round.id)throw new DomainError('投票目标与轮次固定依据不一致',409);
+    // Maintenance verifies the relocated target independently of the old request.
+    const requested=dataOf(message).roundId;if(validateRequestedRound&&requested!==undefined&&requested!==round.id)throw new DomainError('投票目标与轮次固定依据不一致',409);
     round[resolved.side] = integer(round[resolved.side] + amount);
     if (amount > 0) {
         await tx.store.ledger(message.authorId, message.id, -amount, amount, historical ? '历史消息真假补扣' : '对赌锁定', historical || allowDebt);

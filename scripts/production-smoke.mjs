@@ -93,6 +93,14 @@ async function checkFailedUpgrade(databaseUrl,label){
 }
 try {
   compose('up','-d','--build','--wait','--wait-timeout','120');
+  // Migrations run before the HTTP listener opens. Keep the real entrypoint
+  // unavailable past the old health deadline, then require Compose to finish.
+  const delayedStartup=join(directory,'delayed-startup.yml');
+  writeFileSync(delayedStartup,`services:\n  api:\n    command: ${JSON.stringify(['node','-e',"setTimeout(()=>import('./apps/server/dist/main.js'),60000)"])}\n`);
+  const delayed=spawnSync('docker',[...args,'-f',delayedStartup,'up','-d','--no-deps','--no-build','--wait','--wait-timeout','120','api'],{stdio:'inherit'});
+  assert.equal(delayed.status,0,'A slow database startup must remain starting until the API is healthy');
+  console.log('PASS: delayed API startup remains eligible for Compose readiness after the previous health deadline');
+  compose('up','-d','--no-deps','--no-build','--wait','api');
   for (let attempt = 0; ; attempt++) {
     try { assert.equal((await request('/api/health')).status,200); break; }
     catch(error) { if(attempt >= 20) throw error; await new Promise(r=>setTimeout(r,500)); }

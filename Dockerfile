@@ -19,5 +19,7 @@ COPY --from=build /app/frontend/dist ./frontend/dist
 COPY scripts/image-database.mjs scripts/start-existing.mjs ./scripts/
 USER node
 EXPOSE 3000
-HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+# Database upgrades finish before the HTTP listener opens; allow that startup
+# window without counting failed probes. A successful probe ends it immediately.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=5m --retries=3 CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 CMD ["node", "apps/server/dist/main.js"]
